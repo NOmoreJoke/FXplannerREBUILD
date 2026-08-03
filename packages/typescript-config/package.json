@@ -1,0 +1,11 @@
+{
+  "name": "@fxplanner-new/typescript-config",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared TypeScript configuration for FXPlanner-new monorepo",
+  "files": [
+    "base.json",
+    "nextjs.json",
+    "nestjs.json"
+  ]
+}

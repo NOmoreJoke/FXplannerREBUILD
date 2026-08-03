@@ -1,0 +1,62 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        "dist/**"
+      ],
+      "env": [
+        "NODE_ENV",
+        "API_PORT",
+        "WEB_PORT",
+        "CORS_ORIGIN",
+        "NEXT_PUBLIC_API_BASE_URL"
+      ]
+    },
+    "dev": {
+      "dependsOn": [
+        "^build"
+      ],
+      "cache": false,
+      "persistent": true,
+      "env": [
+        "NODE_ENV",
+        "API_PORT",
+        "WEB_PORT",
+        "CORS_ORIGIN",
+        "NEXT_PUBLIC_API_BASE_URL",
+        "DEV_LOG_PORT",
+        "NEXT_PUBLIC_DEV_LOG_URL"
+      ]
+    },
+    "start": {
+      "dependsOn": [
+        "^build"
+      ],
+      "cache": false,
+      "persistent": true,
+      "env": [
+        "NODE_ENV",
+        "API_PORT",
+        "WEB_PORT",
+        "CORS_ORIGIN",
+        "NEXT_PUBLIC_API_BASE_URL"
+      ]
+    },
+    "typecheck": {
+      "dependsOn": [
+        "^typecheck"
+      ]
+    },
+    "lint": {},
+    "test": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    }
+  }
+}

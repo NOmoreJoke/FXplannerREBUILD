@@ -1,0 +1,18 @@
+services:
+  chat:
+    # 工作目录指向子包，bun run dev 才会跑 services/chat 自己的 dev(nest start --watch)，
+    # 而不是仓库根的 dev(它会 clean:ports + turbo 并行起全部服务，在容器里会崩)。
+    working_dir: /app/services/chat
+    command: bun run dev
+    volumes:
+      - ../../services/chat/src:/app/services/chat/src
+      - ../../packages/contracts:/app/packages/contracts
+
+  chat-web:
+    working_dir: /app/clients/chat-web
+    # 直接跑 next dev，跳过子包 dev 脚本里的 wait-on tcp:4001
+    # (容器内 localhost:4001 无服务会卡死；启动顺序已由 depends_on: service_healthy 保证)。
+    command: bunx next dev --port ${WEB_PORT:-3001}
+    volumes:
+      - ../../clients/chat-web/app:/app/clients/chat-web/app
+      - ../../packages/contracts:/app/packages/contracts

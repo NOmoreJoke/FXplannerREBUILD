@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # 测试数据库服务（与 compose.yaml test-db 配置一致）
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fxplanner_new_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.15
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Backend tests
+        env:
+          # CI 直接注入独立测试库连接串，不读取本地环境文件
+          DATABASE_URL: >-
+            postgresql://postgres:postgres@localhost:5433/fxplanner_new_test?schema=public
+          NODE_ENV: test
+        run: |
+          cd services/chat
+          bunx prisma migrate deploy
+          bun run test
+
+      - name: Frontend tests
+        run: |
+          cd clients/chat-web
+          bun run test
+
+      - name: Scripts tests
+        run: bun test scripts/__tests__/
+
+      # E2E 暂不接入 CI
+      # 原因：依赖真实前后端服务与 AI 调用，需要完整环境与 API 密钥
+      # 本地运行：bun run test:e2e（需先启动服务）

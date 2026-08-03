@@ -1,0 +1,56 @@
+# deps
+node_modules/
+
+# build outputs
+dist/
+.next/
+.turbo/
+*.tsbuildinfo
+
+# logs
+*.log
+logs/
+
+# env
+# 12-Factor：允许提交所有 .env*.example 模板，禁止提交所有实际配置
+.env
+.env.*
+!.env*.example
+
+# os
+.DS_Store
+
+# verify artifacts
+e2e-verified.png
+
+# test artifacts（统一收敛到 e2e/ 下，根目录禁止出现）
+e2e/test-results/
+**/test-screenshots/
+e2e/screenshots/
+**/test-results/
+
+.claude.worktrees/
+.worktrees/
+output/
+
+.qoder
+CLAUDE.local.md
+
+# worktree/IDE 临时软链接备份产物（如 .claude~feat_xxx）
+# 成因：worktree 中 .claude 为软链接、主仓库为真目录，git 类型不一致时留下的备份
+.claude~*
+*~feat_*
+*~fix_*
+*~chore_*
+
+.codegraph
+
+AGENT.md
+
+# .pi 运行时状态不入库（skills/extensions/pi-cast 模板入库）
+# .pi/pi-cast/sessions.json
+# .pi/pi-cast/audit.jsonl
+# .pi/archived/
+
+.pi/**
+docs/learning-notes/**

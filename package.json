@@ -1,0 +1,60 @@
+{
+  "name": "fxplanner-new",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "clients/*",
+    "services/*",
+    "packages/*"
+  ],
+  "packageManager": "bun@1.2.15",
+  "scripts": {
+    "clean:ports": "dotenv -e .env.local -- sh -c 'lsof -ti :${API_PORT} 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :${WEB_PORT} 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :${DEV_LOG_PORT} 2>/dev/null | xargs kill -9 2>/dev/null; echo Ports cleaned'",
+    "dev:clean": "bun run clean:ports && bun run dev",
+    "test:env": "echo WEB_PORT=$WEB_PORT API_PORT=$API_PORT",
+    "dev": "dotenv -e .env.local turbo dev",
+    "dev:chat-web": "dotenv -e .env.local -- turbo dev --filter=@fxplanner-new/chat-web...",
+    "dev:chat": "dotenv -e .env.local -- turbo dev --filter=@fxplanner-new/chat...",
+    "start": "turbo start --filter=@fxplanner-new/chat --filter=@fxplanner-new/chat-web",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "bun run scripts/test.ts",
+    "lint": "turbo run lint",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:report": "playwright show-report e2e/test-results/playwright-report",
+    "test:e2e:video": "node e2e/scripts/generate-video-report.js && open e2e/test-results/video-report.html",
+    "docs:codemap": "bun run scripts/code-map/generate-code-map.ts",
+    "worktree:create": "WORKTREE_BASE_DIR=../Worktrees SYMLINK_DIRS=changes INSTALL_CMD='bun install' bash scripts/worktree/worktree-create.sh",
+    "worktree:remove": "bash scripts/worktree/worktree-remove.sh",
+    "commit": "cz",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "changeset tag",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.31.1",
+    "@commitlint/cli": "^21.2.1",
+    "@commitlint/config-conventional": "^21.2.0",
+    "@playwright/test": "^1.61.1",
+    "click-to-react-component": "^1.1.3",
+    "commitizen": "^4.3.2",
+    "cz-conventional-changelog": "^3.3.0",
+    "dotenv-cli": "^11.0.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.2.0",
+    "playwright-core": "^1.61.1",
+    "ts-morph": "^28.0.0",
+    "turbo": "^2.8.20",
+    "wait-on": "^9.0.5"
+  },
+  "dependencies": {},
+  "config": {
+    "commitizen": {
+      "path": "cz-conventional-changelog"
+    }
+  }
+}

@@ -1,0 +1,32 @@
+# Chat Web 镜像（Next）。next.config.ts 已开启 output:"standalone" 与
+# outputFileTracingRoot，最终镜像只需 .next/standalone + .next/static + public。
+FROM oven/bun:1.2.15-alpine AS base
+WORKDIR /app
+# monorepo：必须把根配置 + 所有 workspace 成员的 package.json 一起复制，
+# 否则 Bun 发现 workspace 结构与 bun.lock 不符，--frozen-lockfile 会报错。
+COPY package.json bun.lock bunfig.toml ./
+COPY packages/contracts/package.json ./packages/contracts/
+COPY services/chat/package.json ./services/chat/
+COPY clients/chat-web/package.json ./clients/chat-web/
+RUN bun install --frozen-lockfile
+COPY . .
+# 12-Factor：构建期变量必须显式注入，不在 Dockerfile 里硬编码。
+# docker build --build-arg NEXT_PUBLIC_API_BASE_URL=https://api.example.com .
+ARG NEXT_PUBLIC_API_BASE_URL
+RUN test -n "$NEXT_PUBLIC_API_BASE_URL" || \
+  (echo "ERROR: NEXT_PUBLIC_API_BASE_URL build arg is required" && exit 1)
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+# 只构建前端自己的包，不触发 turbo 构建全部包。
+RUN bun run build --filter=@fxplanner-new/chat-web
+
+FROM base AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=base --chown=bun:bun /app/clients/chat-web/.next/standalone ./
+COPY --from=base --chown=bun:bun /app/clients/chat-web/.next/static ./clients/chat-web/.next/static
+COPY --from=base --chown=bun:bun /app/clients/chat-web/public ./clients/chat-web/public
+ARG WEB_PORT=3001
+ENV WEB_PORT=${WEB_PORT}
+EXPOSE ${WEB_PORT}
+USER bun
+CMD ["sh", "-c", "node clients/chat-web/server.js"]

@@ -1,0 +1,67 @@
+{
+  // ============================================================
+  // permission-gate 权限配置（JSONC，支持 // 和 块注释、尾逗号）
+  // 查找顺序：项目 .pi/permissions.jsonc → ~/.pi/agent/permissions.jsonc
+  // 修改后在 pi 里执行 /permissions 即可重载，无需重启
+  //
+  // 当前模式：YOLO（全部放行）
+  // 想恢复保护：把下方注释掉的规则取消注释即可
+  // ============================================================
+
+  // 未命中任何规则时的默认策略：
+  //   "allow"   = 流动模式，全部放行
+  //   "confirm" = 所有工具调用都要人工确认（最严格）
+  //   "block"   = 未明确允许的一律阻断
+  "defaultPolicy": "allow",
+
+  // 关闭全局 security.ts 扩展，仅对当前项目生效。
+  // 恢复保护：删除此项或改为 "on"，然后执行 /reload。
+  "securityExtension": "off",
+
+  // 无交互界面时（-p / --mode json）confirm 降级为：
+  //   "block" = 阻断（fail-safe）｜ "allow" = 放行（CI/自动化）
+  "nonInteractive": "allow",
+
+  // 阻断时是否弹通知提示
+  "notify": true,
+
+  // 按工具设置整体策略（可选）："bash" | "read" | "write" | "edit"
+  "tools": {},
+
+  // bash 规则。判定优先级：blockPatterns > allowPatterns（剥离豁免）> confirmPatterns > 默认策略
+  "bash": {
+    "blockPatterns": [],
+    "allowPatterns": [],
+    "confirmPatterns": [],
+
+    // ---------- 以下为备查规则，取消注释即恢复 ----------
+    // blockPatterns 候选：
+    //   "\\brm\\s+(-[a-zA-Z]*[rf]|--recursive|--force).*\\s/\\s*$"  // rm -rf /
+    //   "\\bmkfs\\b"                                                // 格式化磁盘
+    //   "\\bdd\\b.*of=/dev/"                                        // dd 写磁盘设备
+    // confirmPatterns 候选：
+    //   "\\brm\\s+(-[a-zA-Z]*r|--recursive)"                        // 递归删除
+    //   "\\bsudo\\b"                                                // 提权
+    //   "\\bgit\\s+push\\b.*(--force|-f\\b)"                        // 强制推送
+    //   "\\bgit\\s+reset\\s+--hard\\b"                              // 硬重置
+    //   "\\b(npm|bun|pnpm|yarn)\\s+(publish|unpublish)\\b"          // 发包
+    // allowPatterns 候选（删构建缓存不问）：
+    //   "\\brm\\s+-[a-zA-Z]*[rf]\\s+[^&|;]*(\\.next|/dist|/coverage|/build|node_modules/\\.cache)\\s*(?=&|;|\\||$)"
+  },
+
+  // write / edit 路径规则
+  "files": {
+    "blockPaths": [],
+    "confirmPaths": [],
+    // 候选：
+    //   blockPaths:   "(^|/)\\.env(\\.|$)"  "(^|/)(id_rsa|id_ed25519|credentials)$"
+    //   confirmPaths: "(^|/)package\\.json$"  "\\.github/workflows/"
+  },
+
+  // read 路径规则（防止敏感文件进入上下文发给模型）
+  "read": {
+    "blockPaths": [],
+    "confirmPaths": [],
+    // 候选："(^|/)\\.env(\\.|$)"  "(^|/)(id_rsa|id_ed25519)$"  "\\.pi/agent/(keys|credentials)"
+  },
+}
