@@ -31,7 +31,7 @@
 │  │  ├─ api/                       # 后端 API 客户端
 │  │  ├─ stores/                    # zustand 状态
 │  │  └─ utils.ts                   # 工具函数
-│  ├─ middleware.ts                 # 边缘路由守卫
+│  ├─ proxy.ts                    # 边缘路由守卫
 │  └─ public/                       # 静态资源
 │
 ├─ services/chat/                   # NestJS 后端
@@ -51,7 +51,7 @@
 │     ├─ helpers/                   # 共享测试工具
 │     └─ prisma.spec.ts             # 基础设施测试
 │
-├─ packages/contracts/              # 跨端共享契约的唯一出口
+├─ packages/money/                  # 跨端共享精度计算纯函数库（币种常量、金额/汇率舍入规则；零 IO）
 ├─ packages/eslint-config/          # 共享 ESLint 配置
 ├─ packages/typescript-config/      # 共享 tsconfig
 │
@@ -75,7 +75,7 @@
 
 - 单一职责原则（SRP）
 - **禁止自己启动服务**：不允许 AI 自行启动 dev 服务，人类会自行启动
-- 共享类型只放 `packages/contracts`，两端 import `@fxplanner-new/contracts`，禁止跨层重复定义
+- 前后端共享类型由后端 DTO 为唯一来源，前端 `bun run generate:api` 从 OpenAPI 生成（禁止手写共享类型）；跨端共享计算逻辑进 `packages/money`（仅限纯函数）
 - 根目录整洁：一次性交付文档、过程文档禁止放根目录，变更文档进 `changes/{功能名称}/`，长期规范进 `docs/`
 
 ### 文件归属规则
@@ -88,7 +88,8 @@
 | 跨领域复用组件   | `components/base/`（2 处以上复用才准进）                                  |
 | shadcn 原语      | `bunx shadcn add`，进 `components/ui/`，不手改                          |
 | 新后端模块       | `services/chat/src/<模块>/`，在 `app.module.ts` 注册一次                |
-| 新共享类型       | `packages/contracts/src/`，桶文件导出                                     |
+| 新共享类型       | 后端 DTO 为唯一来源，前端 `bun run generate:api` 从 OpenAPI 生成（禁止手写共享类型） |
+| 跨端共享计算逻辑 | `packages/money/`（仅限纯函数：精度、舍入、币种常量；有 IO 的逻辑禁止进包）        |
 | 接口测试         | `services/chat/test/api/<模块名>.spec.ts`（一个 controller 一个文件）     |
 | 集成测试         | `services/chat/test/integration/<模块组合>.spec.ts`（一个业务流一个文件） |
 | 单元测试         | 与源码同目录`<被测文件>.spec.ts`                                          |

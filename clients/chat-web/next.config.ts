@@ -38,7 +38,6 @@ if (!parsed.success) {
 }
 
 const nextConfig: NextConfig = {
-	transpilePackages: ["@fxplanner-new/contracts"],
 	output: "standalone",
 	outputFileTracingRoot: path.join(process.cwd(), "../../"),
 	env: {

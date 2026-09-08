@@ -1,10 +1,11 @@
-import { INestApplication } from '@nestjs/common';
+import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { createTestApp, TestContext } from '../helpers/test-app';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createTestApp, type TestContext } from '../helpers/test-app';
 
 /**
  * 接口测试 ↔ src/app.controller.ts
- * 骨架探针：health 与共享包闭环（hello）
+ * 系统探针：只保留 health，hello 示例接口已移除
  */
 describe('AppController（e2e）', () => {
   let ctx: TestContext;
@@ -31,13 +32,8 @@ describe('AppController（e2e）', () => {
   });
 
   describe('GET /api/hello', () => {
-    it('应该返回共享包常量（验证 contracts 闭环）', () => {
-      return request(app.getHttpServer())
-        .get('/api/hello')
-        .expect(200)
-        .expect((res) => {
-          expect(res.body.message).toContain('APP_NAME=');
-        });
+    it('示例 hello 路由应该已经移除', () => {
+      return request(app.getHttpServer()).get('/api/hello').expect(404);
     });
   });
 });

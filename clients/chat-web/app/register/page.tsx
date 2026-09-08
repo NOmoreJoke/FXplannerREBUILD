@@ -55,7 +55,7 @@ export default function RegisterPage() {
 			toast.success("注册成功");
 
 			// 跳转到首页
-			router.push("/projects");
+			router.push("/home");
 		} catch (error: any) {
 			toast.error(error.message || "注册失败");
 		} finally {
@@ -69,7 +69,9 @@ export default function RegisterPage() {
 				<div className="bg-white rounded-lg shadow-lg p-8">
 					{/* 头部 */}
 					<div className="text-center mb-8">
-						<h1 className="text-3xl font-bold text-blue-600 mb-2">FXPlanner-new</h1>
+						<h1 className="text-3xl font-bold text-blue-600 mb-2">
+							FXPlanner-new
+						</h1>
 						<p className="text-gray-600">创建您的账户</p>
 					</div>
 

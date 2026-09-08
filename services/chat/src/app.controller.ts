@@ -1,19 +1,16 @@
 import { Controller, Get } from "@nestjs/common";
-import { AppService } from "./app.service";
+import { ApiOperation, ApiTags } from "@nestjs/swagger";
 
+@ApiTags("System")
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
-
-  // 健康探针：为 Compose/监控提供稳定入口
   @Get("health")
-  getHealth() {
-    return this.appService.getHealth();
-  }
-
-  // 验证「共享包 + API 返回 + 前端消费」的最小闭环
-  @Get("hello")
-  getHello() {
-    return this.appService.getHello();
+  @ApiOperation({
+    summary: "检查服务健康状态",
+    description:
+      "供本地开发、部署探针和监控系统确认 API 服务可用；服务正常时返回 ok=true。",
+  })
+  getHealth(): { ok: boolean } {
+    return { ok: true };
   }
 }

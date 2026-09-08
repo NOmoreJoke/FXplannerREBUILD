@@ -7,6 +7,8 @@ const root = path.resolve(__dirname, "../..");
 
 dotenvConfig({ path: path.join(root, ".env.local") });
 dotenvConfig({ path: path.join(__dirname, ".env.local") });
+process.env.OTP_CODE_SECRET ??=
+	"test-otp-code-secret-with-at-least-32-characters";
 
 export default defineConfig({
 	test: {
@@ -16,16 +18,8 @@ export default defineConfig({
 		include: ["**/*.spec.ts", "**/*.e2e-spec.ts"], // Colocation: 测试文件和源码放一起，包含E2E测试
 		server: {
 			deps: {
-				inline: ["@fxplanner-new/contracts"],
+				inline: ["@fxplanner-new/money"],
 			},
-		},
-	},
-	resolve: {
-		alias: {
-			"@fxplanner-new/contracts": path.resolve(
-				__dirname,
-				"../../packages/contracts/dist",
-			),
 		},
 	},
 });

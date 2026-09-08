@@ -1,4 +1,5 @@
 import {
+  Inject,
   Injectable,
   ConflictException,
   UnauthorizedException,
@@ -6,19 +7,21 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
-import { RegisterDto, LoginDto, AuthResponseDto, UserDto } from './dto';
+import type { RegisterDto, LoginDto, AuthResponseDto, UserDto } from './dto';
 
 @Injectable()
 export class AuthService {
   constructor(
-    private prisma: PrismaService,
-    private jwtService: JwtService,
+    @Inject(PrismaService) private prisma: PrismaService,
+    @Inject(JwtService) private jwtService: JwtService,
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthResponseDto> {
+    const email = this.normalizeEmail(dto.email);
+
     // 1. 检查邮箱是否已存在
     const existingUser = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+      where: { email },
     });
     if (existingUser) {
       throw new ConflictException('该邮箱已被注册');
@@ -31,7 +34,7 @@ export class AuthService {
     // 3. 创建用户
     const user = await this.prisma.user.create({
       data: {
-        email: dto.email,
+        email,
         passwordHash,
       },
     });
@@ -47,11 +50,13 @@ export class AuthService {
   }
 
   async login(dto: LoginDto): Promise<AuthResponseDto> {
+    const email = this.normalizeEmail(dto.email);
+
     // 1. 查询用户
     const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+      where: { email },
     });
-    if (!user) {
+    if (!user || !user.passwordHash) {
       throw new UnauthorizedException('邮箱或密码错误');
     }
 
@@ -74,6 +79,71 @@ export class AuthService {
     };
   }
 
+  async loginWithOtp(verification: {
+    channel: string;
+    target: string;
+  }): Promise<AuthResponseDto> {
+    const findIdentity = () =>
+      this.prisma.otpIdentity.findUnique({
+        where: {
+          channel_target: {
+            channel: verification.channel,
+            target: verification.target,
+          },
+        },
+        include: { user: true },
+      });
+
+    let identity = await findIdentity();
+    let user = identity?.user;
+
+    if (!user) {
+      try {
+        user = await this.prisma.$transaction(async (tx) => {
+          const existing = await tx.otpIdentity.findUnique({
+            where: {
+              channel_target: {
+                channel: verification.channel,
+                target: verification.target,
+              },
+            },
+            include: { user: true },
+          });
+          if (existing) return existing.user;
+
+          const created = await tx.user.create({ data: {} });
+          await tx.otpIdentity.create({
+            data: {
+              userId: created.id,
+              channel: verification.channel,
+              target: verification.target,
+            },
+          });
+          return created;
+        });
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'P2002') {
+          throw error;
+        }
+        identity = await findIdentity();
+        user = identity?.user;
+      }
+    }
+
+    if (!user) {
+      throw new ConflictException('OTP 账号创建失败');
+    }
+
+    return {
+      user: this.toUserDto(user),
+      accessToken: this.generateToken(user.id, user.email),
+      identity: {
+        channel: verification.channel,
+        target: verification.target,
+      },
+    };
+  }
+
   async getMe(userId: string): Promise<UserDto> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -88,10 +158,14 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException('用户不存在');
     }
-    return user;
+    return this.toUserDto(user);
   }
 
-  private generateToken(userId: string, email: string): string {
+  private normalizeEmail(email: string): string {
+    return email.trim().toLowerCase();
+  }
+
+  private generateToken(userId: string, email: string | null): string {
     const payload = { userId, email };
     return this.jwtService.sign(payload);
   }

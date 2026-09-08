@@ -6,7 +6,6 @@ services:
     command: bun run dev
     volumes:
       - ../../services/chat/src:/app/services/chat/src
-      - ../../packages/contracts:/app/packages/contracts
 
   chat-web:
     working_dir: /app/clients/chat-web
@@ -15,4 +14,3 @@ services:
     command: bunx next dev --port ${WEB_PORT:-3001}
     volumes:
       - ../../clients/chat-web/app:/app/clients/chat-web/app
-      - ../../packages/contracts:/app/packages/contracts

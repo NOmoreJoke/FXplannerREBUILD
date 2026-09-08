@@ -1,11 +1,11 @@
 # Chat 服务镜像（Nest）。构建上下文为仓库根（context: ../..），
-# 以便容器内 Bun 能按 workspace 解析 packages/contracts 等共享包。
+# 以便容器内 Bun 能按 workspace 解析 packages/money 等共享包。
 FROM oven/bun:1.2.15-alpine AS base
 WORKDIR /app
 # monorepo：必须把根配置 + 所有 workspace 成员的 package.json 一起复制，
 # 否则 Bun 发现 workspace 结构与 bun.lock 不符，--frozen-lockfile 会报错。
 COPY package.json bun.lock bunfig.toml ./
-COPY packages/contracts/package.json ./packages/contracts/
+COPY packages/money/package.json ./packages/money/
 COPY services/chat/package.json ./services/chat/
 COPY clients/chat-web/package.json ./clients/chat-web/
 RUN bun install --frozen-lockfile

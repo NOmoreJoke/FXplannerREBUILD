@@ -1,13 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { AuthUser } from "@/lib/api/contract";
 import { authApi } from "@/lib/api/auth";
-
-interface User {
-	id: string;
-	email: string;
-	name: string | null;
-	avatar: string | null;
-	createdAt: string;
-}
 
 /**
  * 当前用户查询 Key
@@ -20,7 +13,7 @@ export const CURRENT_USER_QUERY_KEY = ["auth", "me"];
  * - 401 错误不重试（由 apiClient 自动跳转登录）
  */
 export function useCurrentUser() {
-	return useQuery<User>({
+	return useQuery<AuthUser>({
 		queryKey: CURRENT_USER_QUERY_KEY,
 		queryFn: authApi.getMe,
 		staleTime: 10 * 60 * 1000, // 用户信息缓存 10 分钟

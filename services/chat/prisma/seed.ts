@@ -1,65 +1,68 @@
-import { PrismaClient } from '@prisma/client';
-import * as bcrypt from 'bcrypt';
+import { PrismaClient } from "@prisma/client";
+import * as bcrypt from "bcrypt";
+import { CURRENCIES } from "@fxplanner-new/money";
 
 // 生产环境保护：禁止在生产环境运行 seed
-if (process.env.NODE_ENV === 'production') {
-  console.error('❌ 禁止在生产环境运行种子数据脚本');
-  process.exit(1);
+if (process.env.NODE_ENV === "production") {
+	console.error("❌ 禁止在生产环境运行种子数据脚本");
+	process.exit(1);
 }
 
 const prisma = new PrismaClient();
 
 /**
  * 种子数据：骨架最小集
+ * - 15 个币种（从 @fxplanner-new/money 的 CURRENCIES 导入，单一事实来源；upsert 幂等）
  * - 1 个演示用户
- * - 2 个示例项目（L2 示例模块数据）
  */
 async function main() {
-  console.log('🌱 开始种子数据...');
+	console.log("🌱 开始种子数据...");
 
-  // 清空现有数据（按外键依赖顺序）
-  await prisma.project.deleteMany();
-  await prisma.user.deleteMany();
+	for (const currency of CURRENCIES) {
+		await prisma.currency.upsert({
+			where: { code: currency.code },
+			create: {
+				code: currency.code,
+				nameZh: currency.nameZh,
+				nameEn: currency.nameEn,
+				decimalPlaces: currency.decimalPlaces,
+				sortOrder: currency.sortOrder,
+			},
+			update: {
+				nameZh: currency.nameZh,
+				nameEn: currency.nameEn,
+				decimalPlaces: currency.decimalPlaces,
+				sortOrder: currency.sortOrder,
+			},
+		});
+		console.log(
+			`  ✓ 币种: ${currency.code}（${currency.nameZh}，${currency.decimalPlaces} 位小数）`,
+		);
+	}
 
-  // 1. 演示用户
-  const demoPassword = process.env.SEED_DEMO_PASSWORD || 'demo123456';
-  const passwordHash = await bcrypt.hash(demoPassword, 10);
-  const user = await prisma.user.create({
-    data: {
-      email: 'demo@example.com',
-      passwordHash,
-      name: '演示用户',
-    },
-  });
-  console.log(`  ✓ 用户: ${user.email}`);
+	await prisma.user.deleteMany();
 
-  // 2. 示例项目
-  const project1 = await prisma.project.create({
-    data: {
-      userId: user.id,
-      name: '示例项目 A',
-      description: '演示示例模块的列表与详情',
-    },
-  });
-  const project2 = await prisma.project.create({
-    data: {
-      userId: user.id,
-      name: '示例项目 B',
-      description: null,
-    },
-  });
-  console.log(`  ✓ 项目: ${project1.name}, ${project2.name}`);
+	const demoPassword = process.env.SEED_DEMO_PASSWORD || "demo123456";
+	const passwordHash = await bcrypt.hash(demoPassword, 10);
+	const user = await prisma.user.create({
+		data: {
+			email: "demo@example.com",
+			passwordHash,
+			name: "演示用户",
+		},
+	});
 
-  console.log('✅ 种子数据完成');
-  console.log(`  - 用户: 1 个（${user.email} / ${demoPassword}）`);
-  console.log(`  - 项目: 2 个`);
+	console.log(`  ✓ 用户: ${user.email}`);
+	console.log("✅ 种子数据完成");
+	console.log(`  - 币种: ${CURRENCIES.length} 个`);
+	console.log(`  - 用户: 1 个（${user.email} / ${demoPassword}）`);
 }
 
 main()
-  .catch((e) => {
-    console.error('❌ 种子数据失败:', e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+	.catch((e) => {
+		console.error("❌ 种子数据失败:", e);
+		process.exit(1);
+	})
+	.finally(async () => {
+		await prisma.$disconnect();
+	});

@@ -1,11 +1,11 @@
-import { Page } from '@playwright/test';
+import type { Page } from "@playwright/test";
 
 /**
  * E2E 测试辅助函数
  * 提供通用的测试操作，如注册、登录等
  */
 
-const BASE_URL = process.env.CORS_ORIGIN || 'http://localhost:3001';
+const BASE_URL = process.env.CORS_ORIGIN || "http://localhost:3001";
 
 /**
  * 注册测试用户
@@ -14,30 +14,34 @@ const BASE_URL = process.env.CORS_ORIGIN || 'http://localhost:3001';
  * @param password 密码
  * @returns 是否注册成功
  */
-export async function registerTestUser(page: Page, email: string, password: string): Promise<boolean> {
-  try {
-    await page.goto(`${BASE_URL}/register`);
-    await page.waitForLoadState('networkidle');
+export async function registerTestUser(
+	page: Page,
+	email: string,
+	password: string,
+): Promise<boolean> {
+	try {
+		await page.goto(`${BASE_URL}/register`);
+		await page.waitForLoadState("networkidle");
 
-    await page.fill('input[name="email"]', email);
-    await page.fill('input[name="password"]', password);
-    await page.fill('input[name="confirmPassword"]', password);
+		await page.fill('input[name="email"]', email);
+		await page.fill('input[name="password"]', password);
+		await page.fill('input[name="confirmPassword"]', password);
 
-    await page.click('button[type="submit"]');
+		await page.click('button[type="submit"]');
 
-    // 等待跳转或错误提示
-    await Promise.race([
-      page.waitForURL(`${BASE_URL}/projects`, { timeout: 5000 }),
-      page.waitForTimeout(5000),
-    ]);
+		// 等待跳转或错误提示
+		await Promise.race([
+			page.waitForURL(`${BASE_URL}/`, { timeout: 5000 }),
+			page.waitForTimeout(5000),
+		]);
 
-    // 检查是否注册成功（跳转到项目列表页）
-    const url = page.url();
-    return url.startsWith(`${BASE_URL}/projects`);
-  } catch (error) {
-    console.log(`⚠️ 注册用户失败: ${email}`, error);
-    return false;
-  }
+		// 检查是否注册成功（跳转到公开首页）
+		const url = page.url();
+		return url === `${BASE_URL}/`;
+	} catch (error) {
+		console.log(`⚠️ 注册用户失败: ${email}`, error);
+		return false;
+	}
 }
 
 /**
@@ -47,34 +51,40 @@ export async function registerTestUser(page: Page, email: string, password: stri
  * @param password 密码
  * @returns 是否登录成功
  */
-export async function loginTestUser(page: Page, email: string, password: string): Promise<boolean> {
-  try {
-    // 清除现有 token
-    await page.goto(`${BASE_URL}/login`);
-    await page.evaluate(() => localStorage.clear());
-    await page.reload();
-    await page.waitForLoadState('networkidle');
+export async function loginTestUser(
+	page: Page,
+	email: string,
+	password: string,
+): Promise<boolean> {
+	try {
+		// 清除现有 token
+		await page.goto(`${BASE_URL}/login`);
+		await page.evaluate(() => localStorage.clear());
+		await page.reload();
+		await page.waitForLoadState("networkidle");
 
-    await page.fill('input[name="email"]', email);
-    await page.fill('input[name="password"]', password);
+		await page.fill('input[name="email"]', email);
+		await page.fill('input[name="password"]', password);
 
-    await page.click('button[type="submit"]');
+		await page.click('button[type="submit"]');
 
-    // 等待跳转或错误提示
-    await Promise.race([
-      page.waitForURL(`${BASE_URL}/projects`, { timeout: 10000 }),
-      page.waitForTimeout(10000),
-    ]);
+		// 等待跳转或错误提示
+		await Promise.race([
+			page.waitForURL(`${BASE_URL}/`, { timeout: 10000 }),
+			page.waitForTimeout(10000),
+		]);
 
-    // 检查是否登录成功
-    const url = page.url();
-    const token = await page.evaluate(() => localStorage.getItem('accessToken'));
+		// 检查是否登录成功
+		const url = page.url();
+		const token = await page.evaluate(() =>
+			localStorage.getItem("accessToken"),
+		);
 
-    return url.startsWith(`${BASE_URL}/projects`) && !!token;
-  } catch (error) {
-    console.log(`⚠️ 登录失败: ${email}`, error);
-    return false;
-  }
+		return url === `${BASE_URL}/` && !!token;
+	} catch (error) {
+		console.log(`⚠️ 登录失败: ${email}`, error);
+		return false;
+	}
 }
 
 /**
@@ -85,23 +95,27 @@ export async function loginTestUser(page: Page, email: string, password: string)
  * @param password 密码
  * @returns 是否成功
  */
-export async function ensureTestUser(page: Page, email: string, password: string): Promise<boolean> {
-  // 先尝试登录
-  const loginSuccess = await loginTestUser(page, email, password);
-  if (loginSuccess) {
-    console.log(`✓ 用户已存在，登录成功: ${email}`);
-    return true;
-  }
+export async function ensureTestUser(
+	page: Page,
+	email: string,
+	password: string,
+): Promise<boolean> {
+	// 先尝试登录
+	const loginSuccess = await loginTestUser(page, email, password);
+	if (loginSuccess) {
+		console.log(`✓ 用户已存在，登录成功: ${email}`);
+		return true;
+	}
 
-  // 登录失败，尝试注册
-  console.log(`⚠️ 用户不存在，开始注册: ${email}`);
-  const registerSuccess = await registerTestUser(page, email, password);
+	// 登录失败，尝试注册
+	console.log(`⚠️ 用户不存在，开始注册: ${email}`);
+	const registerSuccess = await registerTestUser(page, email, password);
 
-  if (registerSuccess) {
-    console.log(`✓ 注册成功: ${email}`);
-    return true;
-  }
+	if (registerSuccess) {
+		console.log(`✓ 注册成功: ${email}`);
+		return true;
+	}
 
-  console.log(`❌ 注册和登录都失败: ${email}`);
-  return false;
+	console.log(`❌ 注册和登录都失败: ${email}`);
+	return false;
 }

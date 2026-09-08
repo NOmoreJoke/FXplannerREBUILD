@@ -10,53 +10,51 @@
  */
 
 import {
-  Project,
-  SyntaxKind,
-  Node,
-  SourceFile,
-  ClassDeclaration,
-  FunctionDeclaration,
-  InterfaceDeclaration,
-  TypeAliasDeclaration,
-} from 'ts-morph';
-import * as fs from 'fs';
-import * as path from 'path';
+	Project,
+	type SourceFile,
+	type ClassDeclaration,
+	type FunctionDeclaration,
+	type InterfaceDeclaration,
+	type TypeAliasDeclaration,
+} from "ts-morph";
+import * as fs from "fs";
+import * as path from "path";
 
 // ============= 数据结构 =============
 
 interface SymbolInfo {
-  name: string;
-  type: 'class' | 'function' | 'interface' | 'type';
-  description?: string;
-  isExported: boolean;
-  decorators?: string[];
-  params?: string[];
+	name: string;
+	type: "class" | "function" | "interface" | "type";
+	description?: string;
+	isExported: boolean;
+	decorators?: string[];
+	params?: string[];
 }
 
 interface FileInfo {
-  path: string;
-  relativePath: string;
-  description?: string;
-  category: 'core' | 'helper' | 'type' | 'test' | 'config';
-  exports: SymbolInfo[];
+	path: string;
+	relativePath: string;
+	description?: string;
+	category: "core" | "helper" | "type" | "test" | "config";
+	exports: SymbolInfo[];
 }
 
 interface ModuleInfo {
-  name: string;
-  displayName: string;
-  description: string;
-  files: FileInfo[];
+	name: string;
+	displayName: string;
+	description: string;
+	files: FileInfo[];
 }
 
 interface ProjectData {
-  name: string;
-  generatedAt: string;
-  modules: ModuleInfo[];
-  stats: {
-    totalFiles: number;
-    totalExports: number;
-    moduleCount: number;
-  };
+	name: string;
+	generatedAt: string;
+	modules: ModuleInfo[];
+	stats: {
+		totalFiles: number;
+		totalExports: number;
+		moduleCount: number;
+	};
 }
 
 // ============= 工具函数 =============
@@ -64,243 +62,258 @@ interface ProjectData {
 /**
  * 提取 JSDoc 描述（只取第一行）
  */
-function getDescription(node: Node): string | undefined {
-  const jsDocs = node.getJsDocs();
-  if (jsDocs.length > 0) {
-    const desc = jsDocs[0].getDescription().trim();
-    const firstLine = desc.split('\n')[0];
-    return firstLine || undefined;
-  }
-  return undefined;
+function getDescription(
+	node:
+		| ClassDeclaration
+		| FunctionDeclaration
+		| InterfaceDeclaration
+		| TypeAliasDeclaration,
+): string | undefined {
+	const jsDocs = node.getJsDocs();
+	if (jsDocs.length > 0) {
+		const desc = jsDocs[0].getDescription().trim();
+		const firstLine = desc.split("\n")[0];
+		return firstLine || undefined;
+	}
+	return undefined;
 }
 
 /**
  * 判断文件类别（按重要性分类）
  */
-function categorizeFile(filePath: string, exports: SymbolInfo[]): 'core' | 'helper' | 'type' | 'test' | 'config' {
-  // 测试文件
-  if (filePath.includes('.spec.') || filePath.includes('.test.')) {
-    return 'test';
-  }
+function categorizeFile(
+	filePath: string,
+	exports: SymbolInfo[],
+): "core" | "helper" | "type" | "test" | "config" {
+	// 测试文件
+	if (filePath.includes(".spec.") || filePath.includes(".test.")) {
+		return "test";
+	}
 
-  // 配置文件
-  if (filePath.includes('config') || filePath.endsWith('.config.ts')) {
-    return 'config';
-  }
+	// 配置文件
+	if (filePath.includes("config") || filePath.endsWith(".config.ts")) {
+		return "config";
+	}
 
-  // 类型定义文件（只有接口和类型，没有逻辑）
-  const hasOnlyTypes = exports.every(e => e.type === 'interface' || e.type === 'type');
-  if (hasOnlyTypes && exports.length > 0) {
-    return 'type';
-  }
+	// 类型定义文件（只有接口和类型，没有逻辑）
+	const hasOnlyTypes = exports.every(
+		(e) => e.type === "interface" || e.type === "type",
+	);
+	if (hasOnlyTypes && exports.length > 0) {
+		return "type";
+	}
 
-  // 辅助工具（包含 utils, helpers, hooks 等）
-  if (filePath.includes('utils') || filePath.includes('helpers') || filePath.includes('hooks')) {
-    return 'helper';
-  }
+	// 辅助工具（包含 utils, helpers, hooks 等）
+	if (
+		filePath.includes("utils") ||
+		filePath.includes("helpers") ||
+		filePath.includes("hooks")
+	) {
+		return "helper";
+	}
 
-  // 核心业务逻辑（控制器、服务、主要组件、页面）
-  return 'core';
+	// 核心业务逻辑（控制器、服务、主要组件、页面）
+	return "core";
 }
 
 /**
  * 分析类
  */
 function analyzeClass(cls: ClassDeclaration): SymbolInfo {
-  return {
-    name: cls.getName() || '<anonymous>',
-    type: 'class',
-    description: getDescription(cls),
-    isExported: cls.isExported(),
-    decorators: cls.getDecorators().map((d) => d.getName()),
-  };
+	return {
+		name: cls.getName() || "<anonymous>",
+		type: "class",
+		description: getDescription(cls),
+		isExported: cls.isExported(),
+		decorators: cls.getDecorators().map((d) => d.getName()),
+	};
 }
 
 /**
  * 分析函数
  */
 function analyzeFunction(fn: FunctionDeclaration): SymbolInfo {
-  return {
-    name: fn.getName() || '<anonymous>',
-    type: 'function',
-    description: getDescription(fn),
-    isExported: fn.isExported(),
-    params: fn.getParameters().map((p) => p.getName()),
-  };
+	return {
+		name: fn.getName() || "<anonymous>",
+		type: "function",
+		description: getDescription(fn),
+		isExported: fn.isExported(),
+		params: fn.getParameters().map((p) => p.getName()),
+	};
 }
 
 /**
  * 分析接口
  */
 function analyzeInterface(iface: InterfaceDeclaration): SymbolInfo {
-  return {
-    name: iface.getName(),
-    type: 'interface',
-    description: getDescription(iface),
-    isExported: iface.isExported(),
-  };
+	return {
+		name: iface.getName(),
+		type: "interface",
+		description: getDescription(iface),
+		isExported: iface.isExported(),
+	};
 }
 
 /**
  * 分析类型别名
  */
 function analyzeTypeAlias(typeAlias: TypeAliasDeclaration): SymbolInfo {
-  return {
-    name: typeAlias.getName(),
-    type: 'type',
-    description: getDescription(typeAlias),
-    isExported: typeAlias.isExported(),
-  };
+	return {
+		name: typeAlias.getName(),
+		type: "type",
+		description: getDescription(typeAlias),
+		isExported: typeAlias.isExported(),
+	};
 }
 
 /**
  * 分析文件
  */
 function analyzeFile(sourceFile: SourceFile, projectRoot: string): FileInfo {
-  const filePath = sourceFile.getFilePath();
-  const relativePath = path.relative(projectRoot, filePath);
+	const filePath = sourceFile.getFilePath();
+	const relativePath = path.relative(projectRoot, filePath);
 
-  // 文件描述
-  let fileDescription: string | undefined;
-  const statements = sourceFile.getStatements();
-  if (statements.length > 0) {
-    const firstStatement = statements[0];
-    const leadingComments = firstStatement.getLeadingCommentRanges();
-    if (leadingComments.length > 0) {
-      const commentText = leadingComments[0].getText();
-      fileDescription = commentText
-        .replace(/^\/\*\*|\*\/$/g, '')
-        .replace(/^\s*\*\s?/gm, '')
-        .trim()
-        .split('\n')[0];
-    }
-  }
+	// 文件描述
+	let fileDescription: string | undefined;
+	const statements = sourceFile.getStatements();
+	if (statements.length > 0) {
+		const firstStatement = statements[0];
+		const leadingComments = firstStatement.getLeadingCommentRanges();
+		if (leadingComments.length > 0) {
+			const commentText = leadingComments[0].getText();
+			fileDescription = commentText
+				.replace(/^\/\*\*|\*\/$/g, "")
+				.replace(/^\s*\*\s?/gm, "")
+				.trim()
+				.split("\n")[0];
+		}
+	}
 
-  // 收集导出的符号
-  const exports: SymbolInfo[] = [];
+	// 收集导出的符号
+	const exports: SymbolInfo[] = [];
 
-  sourceFile.getClasses().forEach((cls) => {
-    if (cls.isExported()) {
-      exports.push(analyzeClass(cls));
-    }
-  });
+	sourceFile.getClasses().forEach((cls) => {
+		if (cls.isExported()) {
+			exports.push(analyzeClass(cls));
+		}
+	});
 
-  sourceFile.getFunctions().forEach((fn) => {
-    if (fn.isExported()) {
-      exports.push(analyzeFunction(fn));
-    }
-  });
+	sourceFile.getFunctions().forEach((fn) => {
+		if (fn.isExported()) {
+			exports.push(analyzeFunction(fn));
+		}
+	});
 
-  sourceFile.getInterfaces().forEach((iface) => {
-    if (iface.isExported()) {
-      exports.push(analyzeInterface(iface));
-    }
-  });
+	sourceFile.getInterfaces().forEach((iface) => {
+		if (iface.isExported()) {
+			exports.push(analyzeInterface(iface));
+		}
+	});
 
-  sourceFile.getTypeAliases().forEach((typeAlias) => {
-    if (typeAlias.isExported()) {
-      exports.push(analyzeTypeAlias(typeAlias));
-    }
-  });
+	sourceFile.getTypeAliases().forEach((typeAlias) => {
+		if (typeAlias.isExported()) {
+			exports.push(analyzeTypeAlias(typeAlias));
+		}
+	});
 
-  return {
-    path: filePath,
-    relativePath,
-    description: fileDescription,
-    category: categorizeFile(relativePath, exports),
-    exports,
-  };
+	return {
+		path: filePath,
+		relativePath,
+		description: fileDescription,
+		category: categorizeFile(relativePath, exports),
+		exports,
+	};
 }
 
 // ============= 主分析流程 =============
 
 async function analyzeProject(): Promise<ProjectData> {
-  console.log('🔍 分析项目结构...\n');
+	console.log("🔍 分析项目结构...\n");
 
-  const projectRoot = path.resolve(__dirname, '..');
+	const projectRoot = path.resolve(__dirname, "..");
 
-  const moduleConfigs = [
-    {
-      name: 'clients/chat-web',
-      displayName: '前端应用',
-      description: 'Next.js 前端，包含海报编辑器和 AI 对话',
-      tsConfigPath: 'clients/chat-web/tsconfig.json',
-      sourcePath: 'clients/chat-web',
-    },
-    {
-      name: 'services/chat',
-      displayName: '后端服务',
-      description: 'NestJS API 服务，AI 对话和图片生成',
-      tsConfigPath: 'services/chat/tsconfig.json',
-      sourcePath: 'services/chat/src',
-    },
-    {
-      name: 'packages/contracts',
-      displayName: '共享契约',
-      description: '前后端共享的类型定义和数据结构',
-      tsConfigPath: 'packages/contracts/tsconfig.json',
-      sourcePath: 'packages/contracts/src',
-    },
-  ];
+	const moduleConfigs = [
+		{
+			name: "clients/chat-web",
+			displayName: "前端应用",
+			description: "Next.js 前端，包含海报编辑器和 AI 对话",
+			tsConfigPath: "clients/chat-web/tsconfig.json",
+			sourcePath: "clients/chat-web",
+		},
+		{
+			name: "services/chat",
+			displayName: "后端服务",
+			description: "NestJS API 服务，AI 对话和图片生成",
+			tsConfigPath: "services/chat/tsconfig.json",
+			sourcePath: "services/chat/src",
+		},
+		{
+			name: "packages/money",
+			displayName: "共享精度库",
+			description: "币种常量与金额/汇率精度计算纯函数，前后端共用",
+			tsConfigPath: "packages/money/tsconfig.json",
+			sourcePath: "packages/money/src",
+		},
+	];
 
-  const modules: ModuleInfo[] = [];
+	const modules: ModuleInfo[] = [];
 
-  for (const config of moduleConfigs) {
-    const tsConfigPath = path.join(projectRoot, config.tsConfigPath);
-    const sourcePath = path.join(projectRoot, config.sourcePath);
+	for (const config of moduleConfigs) {
+		const tsConfigPath = path.join(projectRoot, config.tsConfigPath);
+		const sourcePath = path.join(projectRoot, config.sourcePath);
 
-    if (!fs.existsSync(tsConfigPath) || !fs.existsSync(sourcePath)) {
-      console.log(`⚠️  跳过：${config.name}`);
-      continue;
-    }
+		if (!fs.existsSync(tsConfigPath) || !fs.existsSync(sourcePath)) {
+			console.log(`⚠️  跳过：${config.name}`);
+			continue;
+		}
 
-    console.log(`📂 ${config.displayName}`);
+		console.log(`📂 ${config.displayName}`);
 
-    const project = new Project({
-      tsConfigFilePath: tsConfigPath,
-      skipAddingFilesFromTsConfig: true,
-    });
+		const project = new Project({
+			tsConfigFilePath: tsConfigPath,
+			skipAddingFilesFromTsConfig: true,
+		});
 
-    project.addSourceFilesAtPaths([
-      `${sourcePath}/**/*.ts`,
-      `${sourcePath}/**/*.tsx`,
-      `!${sourcePath}/**/node_modules/**`,
-    ]);
+		project.addSourceFilesAtPaths([
+			`${sourcePath}/**/*.ts`,
+			`${sourcePath}/**/*.tsx`,
+			`!${sourcePath}/**/node_modules/**`,
+		]);
 
-    const sourceFiles = project
-      .getSourceFiles()
-      .filter((sf) => !sf.getFilePath().includes('node_modules'));
+		const sourceFiles = project
+			.getSourceFiles()
+			.filter((sf) => !sf.getFilePath().includes("node_modules"));
 
-    const files: FileInfo[] = sourceFiles
-      .map((sf) => analyzeFile(sf, projectRoot))
-      .filter((f) => f.exports.length > 0); // 只保留有导出的文件
+		const files: FileInfo[] = sourceFiles
+			.map((sf) => analyzeFile(sf, projectRoot))
+			.filter((f) => f.exports.length > 0); // 只保留有导出的文件
 
-    console.log(`   找到 ${files.length} 个文件\n`);
+		console.log(`   找到 ${files.length} 个文件\n`);
 
-    modules.push({
-      name: config.name,
-      displayName: config.displayName,
-      description: config.description,
-      files,
-    });
-  }
+		modules.push({
+			name: config.name,
+			displayName: config.displayName,
+			description: config.description,
+			files,
+		});
+	}
 
-  const totalFiles = modules.reduce((sum, m) => sum + m.files.length, 0);
-  const totalExports = modules.reduce(
-    (sum, m) => sum + m.files.reduce((s, f) => s + f.exports.length, 0),
-    0
-  );
+	const totalFiles = modules.reduce((sum, m) => sum + m.files.length, 0);
+	const totalExports = modules.reduce(
+		(sum, m) => sum + m.files.reduce((s, f) => s + f.exports.length, 0),
+		0,
+	);
 
-  return {
-    name: 'FXPlanner-new',
-    generatedAt: new Date().toISOString(),
-    modules,
-    stats: {
-      totalFiles,
-      totalExports,
-      moduleCount: modules.length,
-    },
-  };
+	return {
+		name: "FXPlanner-new",
+		generatedAt: new Date().toISOString(),
+		modules,
+		stats: {
+			totalFiles,
+			totalExports,
+			moduleCount: modules.length,
+		},
+	};
 }
 
 // ============= 生成简洁树状文本 =============
@@ -309,156 +322,164 @@ async function analyzeProject(): Promise<ProjectData> {
  * 生成简洁树状文本（纯缩进，中文标记，无特殊符号）
  */
 function generateSimpleTree(data: ProjectData, outputDir: string): void {
-  let md = `# ${data.name} 项目代码地图\n\n`;
-  md += `生成时间：${new Date(data.generatedAt).toLocaleString('zh-CN')}\n\n`;
-  md += `## 统计\n\n`;
-  md += `模块：${data.stats.moduleCount} 个  \n`;
-  md += `文件：${data.stats.totalFiles} 个  \n`;
-  md += `导出：${data.stats.totalExports} 个\n\n`;
-  md += `---\n\n`;
+	let md = `# ${data.name} 项目代码地图\n\n`;
+	md += `生成时间：${new Date(data.generatedAt).toLocaleString("zh-CN")}\n\n`;
+	md += `## 统计\n\n`;
+	md += `模块：${data.stats.moduleCount} 个  \n`;
+	md += `文件：${data.stats.totalFiles} 个  \n`;
+	md += `导出：${data.stats.totalExports} 个\n\n`;
+	md += `---\n\n`;
 
-  data.modules.forEach((module) => {
-    md += `## ${module.displayName}\n\n`;
-    md += `${module.description}\n\n`;
+	data.modules.forEach((module) => {
+		md += `## ${module.displayName}\n\n`;
+		md += `${module.description}\n\n`;
 
-    // 按类别分组
-    const coreFiles = module.files.filter(f => f.category === 'core');
-    const helperFiles = module.files.filter(f => f.category === 'helper');
-    const typeFiles = module.files.filter(f => f.category === 'type');
+		// 按类别分组
+		const coreFiles = module.files.filter((f) => f.category === "core");
+		const helperFiles = module.files.filter((f) => f.category === "helper");
+		const typeFiles = module.files.filter((f) => f.category === "type");
 
-    if (coreFiles.length > 0) {
-      md += `### 核心功能\n\n`;
-      md += renderFilesSimple(coreFiles, module.name);
-    }
+		if (coreFiles.length > 0) {
+			md += `### 核心功能\n\n`;
+			md += renderFilesSimple(coreFiles, module.name);
+		}
 
-    if (helperFiles.length > 0) {
-      md += `### 辅助工具\n\n`;
-      md += renderFilesSimple(helperFiles, module.name);
-    }
+		if (helperFiles.length > 0) {
+			md += `### 辅助工具\n\n`;
+			md += renderFilesSimple(helperFiles, module.name);
+		}
 
-    if (typeFiles.length > 0) {
-      md += `### 类型定义\n\n`;
-      md += renderFilesSimple(typeFiles, module.name);
-    }
+		if (typeFiles.length > 0) {
+			md += `### 类型定义\n\n`;
+			md += renderFilesSimple(typeFiles, module.name);
+		}
 
-    md += '\n---\n\n';
-  });
+		md += "\n---\n\n";
+	});
 
-  const filePath = path.join(outputDir, 'tree.md');
-  fs.writeFileSync(filePath, md, 'utf-8');
-  console.log(`✅ tree.md (${(fs.statSync(filePath).size / 1024).toFixed(1)} KB)`);
+	const filePath = path.join(outputDir, "tree.md");
+	fs.writeFileSync(filePath, md, "utf-8");
+	console.log(
+		`✅ tree.md (${(fs.statSync(filePath).size / 1024).toFixed(1)} KB)`,
+	);
 }
 
 /**
  * 渲染文件列表（简洁格式）
  */
 function renderFilesSimple(files: FileInfo[], modulePrefix: string): string {
-  let result = '';
+	let result = "";
 
-  // 按目录组织
-  const tree = buildSimpleTree(files, modulePrefix);
-  result += renderTreeNode(tree, 0);
+	// 按目录组织
+	const tree = buildSimpleTree(files, modulePrefix);
+	result += renderTreeNode(tree, 0);
 
-  return result;
+	return result;
 }
 
 interface SimpleTreeNode {
-  name: string;
-  type: 'dir' | 'file';
-  file?: FileInfo;
-  children: Map<string, SimpleTreeNode>;
+	name: string;
+	type: "dir" | "file";
+	file?: FileInfo;
+	children: Map<string, SimpleTreeNode>;
 }
 
-function buildSimpleTree(files: FileInfo[], modulePrefix: string): SimpleTreeNode {
-  const root: SimpleTreeNode = { name: '', type: 'dir', children: new Map() };
+function buildSimpleTree(
+	files: FileInfo[],
+	modulePrefix: string,
+): SimpleTreeNode {
+	const root: SimpleTreeNode = { name: "", type: "dir", children: new Map() };
 
-  files.forEach((file) => {
-    const relativePath = file.relativePath.replace(modulePrefix + '/', '');
-    const parts = relativePath.split('/');
-    let current = root;
+	files.forEach((file) => {
+		const relativePath = file.relativePath.replace(modulePrefix + "/", "");
+		const parts = relativePath.split("/");
+		let current = root;
 
-    parts.forEach((part, index) => {
-      if (!current.children.has(part)) {
-        current.children.set(part, {
-          name: part,
-          type: index === parts.length - 1 ? 'file' : 'dir',
-          file: index === parts.length - 1 ? file : undefined,
-          children: new Map(),
-        });
-      }
-      current = current.children.get(part)!;
-    });
-  });
+		parts.forEach((part, index) => {
+			if (!current.children.has(part)) {
+				current.children.set(part, {
+					name: part,
+					type: index === parts.length - 1 ? "file" : "dir",
+					file: index === parts.length - 1 ? file : undefined,
+					children: new Map(),
+				});
+			}
+			current = current.children.get(part)!;
+		});
+	});
 
-  return root;
+	return root;
 }
 
 function renderTreeNode(node: SimpleTreeNode, depth: number): string {
-  let result = '';
-  const indent = '  '.repeat(depth);
-  const entries = Array.from(node.children.entries()).sort(([a], [b]) => a.localeCompare(b));
+	let result = "";
+	const indent = "  ".repeat(depth);
+	const entries = Array.from(node.children.entries()).sort(([a], [b]) =>
+		a.localeCompare(b),
+	);
 
-  entries.forEach(([name, child]) => {
-    if (child.type === 'dir') {
-      result += `${indent}${name}/\n`;
-      result += renderTreeNode(child, depth + 1);
-    } else if (child.file) {
-      const file = child.file;
-      result += `${indent}${name}`;
-      if (file.description) {
-        result += ` - ${file.description}`;
-      }
-      result += '\n';
+	entries.forEach(([name, child]) => {
+		if (child.type === "dir") {
+			result += `${indent}${name}/\n`;
+			result += renderTreeNode(child, depth + 1);
+		} else if (child.file) {
+			const file = child.file;
+			result += `${indent}${name}`;
+			if (file.description) {
+				result += ` - ${file.description}`;
+			}
+			result += "\n";
 
-      // 列出导出（限制3个）
-      if (file.exports.length > 0) {
-        const exportsToShow = file.exports.slice(0, 3);
-        exportsToShow.forEach((exp) => {
-          const typeLabel = getTypeLabel(exp.type);
-          const paramStr = exp.params && exp.params.length > 0 ? `(${exp.params.join(', ')})` : '';
-          const decorators = exp.decorators && exp.decorators.length > 0
-            ? ` @${exp.decorators.join(' @')}`
-            : '';
+			// 列出导出（限制3个）
+			if (file.exports.length > 0) {
+				const exportsToShow = file.exports.slice(0, 3);
+				exportsToShow.forEach((exp) => {
+					const typeLabel = getTypeLabel(exp.type);
+					const paramStr =
+						exp.params && exp.params.length > 0
+							? `(${exp.params.join(", ")})`
+							: "";
+					const decorators =
+						exp.decorators && exp.decorators.length > 0
+							? ` @${exp.decorators.join(" @")}`
+							: "";
 
-          result += `${indent}  ${typeLabel} ${exp.name}${paramStr}${decorators}`;
-          if (exp.description) {
-            result += ` - ${exp.description}`;
-          }
-          result += '\n';
-        });
+					result += `${indent}  ${typeLabel} ${exp.name}${paramStr}${decorators}`;
+					if (exp.description) {
+						result += ` - ${exp.description}`;
+					}
+					result += "\n";
+				});
 
-        if (file.exports.length > 3) {
-          result += `${indent}  ... 还有 ${file.exports.length - 3} 个\n`;
-        }
-      }
-    }
-  });
+				if (file.exports.length > 3) {
+					result += `${indent}  ... 还有 ${file.exports.length - 3} 个\n`;
+				}
+			}
+		}
+	});
 
-  return result;
+	return result;
 }
 
 function getTypeLabel(type: string): string {
-  switch (type) {
-    case 'class': return '[类]';
-    case 'function': return '[函数]';
-    case 'interface': return '[接口]';
-    case 'type': return '[类型]';
-    default: return '[其他]';
-  }
-}
-
-// ============= 生成 JSON =============
-
-function generateJSON(data: ProjectData, outputDir: string): void {
-  const filePath = path.join(outputDir, 'data.json');
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
-  console.log(`✅ data.json (${(fs.statSync(filePath).size / 1024).toFixed(1)} KB)`);
+	switch (type) {
+		case "class":
+			return "[类]";
+		case "function":
+			return "[函数]";
+		case "interface":
+			return "[接口]";
+		case "type":
+			return "[类型]";
+		default:
+			return "[其他]";
+	}
 }
 
 // ============= 生成可折叠 HTML =============
 
 function generateCollapsibleHTML(data: ProjectData, outputDir: string): void {
-  const html = `<!DOCTYPE html>
+	const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -576,7 +597,7 @@ function generateCollapsibleHTML(data: ProjectData, outputDir: string): void {
   <div class="container">
     <header>
       <h1>📚 ${data.name} 代码地图</h1>
-      <p>生成时间：${new Date(data.generatedAt).toLocaleString('zh-CN')}</p>
+      <p>生成时间：${new Date(data.generatedAt).toLocaleString("zh-CN")}</p>
       <div class="stats">
         <span>模块：${data.stats.moduleCount} 个</span>
         <span>文件：${data.stats.totalFiles} 个</span>
@@ -723,78 +744,82 @@ function generateCollapsibleHTML(data: ProjectData, outputDir: string): void {
 </body>
 </html>`;
 
-  const filePath = path.join(outputDir, 'index.html');
-  fs.writeFileSync(filePath, html, 'utf-8');
-  console.log(`✅ index.html (${(fs.statSync(filePath).size / 1024).toFixed(1)} KB)`);
+	const filePath = path.join(outputDir, "index.html");
+	fs.writeFileSync(filePath, html, "utf-8");
+	console.log(
+		`✅ index.html (${(fs.statSync(filePath).size / 1024).toFixed(1)} KB)`,
+	);
 }
 
 // ============= 生成拆分 Markdown =============
 
 function generateSplitMarkdown(data: ProjectData, outputDir: string): void {
-  // 生成概览索引
-  let indexMd = `# ${data.name} 代码地图 - 概览\n\n`;
-  indexMd += `生成时间：${new Date(data.generatedAt).toLocaleString('zh-CN')}\n\n`;
-  indexMd += `## 统计\n\n`;
-  indexMd += `- 模块：${data.stats.moduleCount} 个\n`;
-  indexMd += `- 文件：${data.stats.totalFiles} 个\n`;
-  indexMd += `- 导出：${data.stats.totalExports} 个\n\n`;
-  indexMd += `## 模块列表\n\n`;
+	// 生成概览索引
+	let indexMd = `# ${data.name} 代码地图 - 概览\n\n`;
+	indexMd += `生成时间：${new Date(data.generatedAt).toLocaleString("zh-CN")}\n\n`;
+	indexMd += `## 统计\n\n`;
+	indexMd += `- 模块：${data.stats.moduleCount} 个\n`;
+	indexMd += `- 文件：${data.stats.totalFiles} 个\n`;
+	indexMd += `- 导出：${data.stats.totalExports} 个\n\n`;
+	indexMd += `## 模块列表\n\n`;
 
-  data.modules.forEach(module => {
-    const fileName = module.name.replace(/\//g, '-') + '.md';
-    const coreCount = module.files.filter(f => f.category === 'core').length;
-    const helperCount = module.files.filter(f => f.category === 'helper').length;
-    const typeCount = module.files.filter(f => f.category === 'type').length;
+	data.modules.forEach((module) => {
+		const fileName = module.name.replace(/\//g, "-") + ".md";
+		const coreCount = module.files.filter((f) => f.category === "core").length;
+		const helperCount = module.files.filter(
+			(f) => f.category === "helper",
+		).length;
+		const typeCount = module.files.filter((f) => f.category === "type").length;
 
-    indexMd += `### [${module.displayName}](${fileName})\n\n`;
-    indexMd += `${module.description}\n\n`;
-    indexMd += `- 核心功能：${coreCount} 个文件\n`;
-    indexMd += `- 辅助工具：${helperCount} 个文件\n`;
-    indexMd += `- 类型定义：${typeCount} 个文件\n\n`;
-  });
+		indexMd += `### [${module.displayName}](${fileName})\n\n`;
+		indexMd += `${module.description}\n\n`;
+		indexMd += `- 核心功能：${coreCount} 个文件\n`;
+		indexMd += `- 辅助工具：${helperCount} 个文件\n`;
+		indexMd += `- 类型定义：${typeCount} 个文件\n\n`;
+	});
 
-  fs.writeFileSync(path.join(outputDir, 'index.md'), indexMd, 'utf-8');
-  console.log(`✅ index.md (概览)`);
+	fs.writeFileSync(path.join(outputDir, "index.md"), indexMd, "utf-8");
+	console.log(`✅ index.md (概览)`);
 
-  // 生成各模块详细文档
-  data.modules.forEach(module => {
-    const fileName = module.name.replace(/\//g, '-') + '.md';
-    let md = `# ${module.displayName}\n\n`;
-    md += `${module.description}\n\n`;
-    md += `[返回概览](index.md)\n\n`;
-    md += `---\n\n`;
+	// 生成各模块详细文档
+	data.modules.forEach((module) => {
+		const fileName = module.name.replace(/\//g, "-") + ".md";
+		let md = `# ${module.displayName}\n\n`;
+		md += `${module.description}\n\n`;
+		md += `[返回概览](index.md)\n\n`;
+		md += `---\n\n`;
 
-    const coreFiles = module.files.filter(f => f.category === 'core');
-    const helperFiles = module.files.filter(f => f.category === 'helper');
-    const typeFiles = module.files.filter(f => f.category === 'type');
+		const coreFiles = module.files.filter((f) => f.category === "core");
+		const helperFiles = module.files.filter((f) => f.category === "helper");
+		const typeFiles = module.files.filter((f) => f.category === "type");
 
-    if (coreFiles.length > 0) {
-      md += `## 核心功能\n\n`;
-      md += renderFilesSimple(coreFiles, module.name);
-    }
+		if (coreFiles.length > 0) {
+			md += `## 核心功能\n\n`;
+			md += renderFilesSimple(coreFiles, module.name);
+		}
 
-    if (helperFiles.length > 0) {
-      md += `## 辅助工具\n\n`;
-      md += renderFilesSimple(helperFiles, module.name);
-    }
+		if (helperFiles.length > 0) {
+			md += `## 辅助工具\n\n`;
+			md += renderFilesSimple(helperFiles, module.name);
+		}
 
-    if (typeFiles.length > 0) {
-      md += `## 类型定义\n\n`;
-      md += renderFilesSimple(typeFiles, module.name);
-    }
+		if (typeFiles.length > 0) {
+			md += `## 类型定义\n\n`;
+			md += renderFilesSimple(typeFiles, module.name);
+		}
 
-    fs.writeFileSync(path.join(outputDir, fileName), md, 'utf-8');
-  });
+		fs.writeFileSync(path.join(outputDir, fileName), md, "utf-8");
+	});
 
-  console.log(`✅ 拆分模块文档 (${data.stats.moduleCount} 个)`);
+	console.log(`✅ 拆分模块文档 (${data.stats.moduleCount} 个)`);
 }
 
 // ============= 生成嵌套 Treemap（真正的块状图）=============
 
 function generateCSSTreemap(data: ProjectData, outputDir: string): void {
-  const treeData = buildNestedTreemapData(data);
+	const treeData = buildNestedTreemapData(data);
 
-  const html = `<!DOCTYPE html>
+	const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -1169,168 +1194,188 @@ function generateCSSTreemap(data: ProjectData, outputDir: string): void {
 </body>
 </html>`;
 
-  const filePath = path.join(outputDir, 'treemap.html');
-  fs.writeFileSync(filePath, html, 'utf-8');
-  console.log(`✅ treemap.html (${(fs.statSync(filePath).size / 1024).toFixed(1)} KB)`);
+	const filePath = path.join(outputDir, "treemap.html");
+	fs.writeFileSync(filePath, html, "utf-8");
+	console.log(
+		`✅ treemap.html (${(fs.statSync(filePath).size / 1024).toFixed(1)} KB)`,
+	);
 }
 
 function buildNestedTreemapData(data: ProjectData) {
-  // 构建完整嵌套结构
-  const children = data.modules.map(module => ({
-    name: module.displayName,
-    type: 'module',
-    children: buildModuleChildren(module)
-  }));
+	// 构建完整嵌套结构
+	const children = data.modules.map((module) => ({
+		name: module.displayName,
+		type: "module",
+		children: buildModuleChildren(module),
+	}));
 
-  return {
-    name: data.name,
-    type: 'root',
-    children
-  };
+	return {
+		name: data.name,
+		type: "root",
+		children,
+	};
 }
 
 function buildModuleChildren(module: ModuleInfo) {
-  const categories = [
-    { name: '核心', type: 'category', files: module.files.filter(f => f.category === 'core') },
-    { name: '辅助', type: 'category', files: module.files.filter(f => f.category === 'helper') },
-    { name: '类型', type: 'category', files: module.files.filter(f => f.category === 'type') },
-  ].filter(cat => cat.files.length > 0);
+	const categories = [
+		{
+			name: "核心",
+			type: "category",
+			files: module.files.filter((f) => f.category === "core"),
+		},
+		{
+			name: "辅助",
+			type: "category",
+			files: module.files.filter((f) => f.category === "helper"),
+		},
+		{
+			name: "类型",
+			type: "category",
+			files: module.files.filter((f) => f.category === "type"),
+		},
+	].filter((cat) => cat.files.length > 0);
 
-  return categories.map(cat => ({
-    name: cat.name,
-    type: cat.type,
-    children: buildFileNodes(cat.files, module.name)
-  }));
+	return categories.map((cat) => ({
+		name: cat.name,
+		type: cat.type,
+		children: buildFileNodes(cat.files, module.name),
+	}));
 }
 
-function buildFileNodes(files: FileInfo[], modulePrefix: string) {
-  const result: any[] = [];
+function buildFileNodes(files: FileInfo[], _modulePrefix: string) {
+	const result: any[] = [];
 
-  files.forEach(file => {
-    const fileName = path.basename(file.relativePath);
+	files.forEach((file) => {
+		const fileName = path.basename(file.relativePath);
 
-    // 文件节点
-    const fileNode: any = {
-      name: fileName,
-      type: 'file',
-      description: file.description,
-      value: Math.max(1, file.exports.length * 2), // 文件基础大小
-      children: []
-    };
+		// 文件节点
+		const fileNode: any = {
+			name: fileName,
+			type: "file",
+			description: file.description,
+			value: Math.max(1, file.exports.length * 2), // 文件基础大小
+			children: [],
+		};
 
-    // 添加导出的符号作为子节点
-    file.exports.forEach(exp => {
-      fileNode.children.push({
-        name: exp.name,
-        type: exp.type,
-        description: exp.description,
-        value: 1
-      });
-    });
+		// 添加导出的符号作为子节点
+		file.exports.forEach((exp) => {
+			fileNode.children.push({
+				name: exp.name,
+				type: exp.type,
+				description: exp.description,
+				value: 1,
+			});
+		});
 
-    result.push(fileNode);
-  });
+		result.push(fileNode);
+	});
 
-  return result;
+	return result;
 }
 
 // ============= 生成 Mermaid 块图 =============
 
 function generateMermaidBlock(data: ProjectData, outputDir: string): void {
-  let md = `# ${data.name} 项目结构图\n\n`;
-  md += `> 生成于 ${new Date(data.generatedAt).toLocaleString('zh-CN')}\n\n`;
-  md += `## 模块关系图\n\n`;
-  md += `\`\`\`mermaid\ngraph TB\n`;
-  md += `  FXPlanner-new[${data.name}项目]\n`;
-  md += `  style FXPlanner-new fill:#667eea,stroke:#333,stroke-width:2px,color:#fff\n\n`;
+	let md = `# ${data.name} 项目结构图\n\n`;
+	md += `> 生成于 ${new Date(data.generatedAt).toLocaleString("zh-CN")}\n\n`;
+	md += `## 模块关系图\n\n`;
+	md += `\`\`\`mermaid\ngraph TB\n`;
+	md += `  FXPlanner-new[${data.name}项目]\n`;
+	md += `  style FXPlanner-new fill:#667eea,stroke:#333,stroke-width:2px,color:#fff\n\n`;
 
-  data.modules.forEach((module, i) => {
-    const moduleId = `M${i}`;
-    const coreCount = module.files.filter(f => f.category === 'core').length;
-    const helperCount = module.files.filter(f => f.category === 'helper').length;
-    const typeCount = module.files.filter(f => f.category === 'type').length;
+	data.modules.forEach((module, i) => {
+		const moduleId = `M${i}`;
+		const coreCount = module.files.filter((f) => f.category === "core").length;
+		const helperCount = module.files.filter(
+			(f) => f.category === "helper",
+		).length;
+		const typeCount = module.files.filter((f) => f.category === "type").length;
 
-    md += `  FXPlanner-new --> ${moduleId}["${module.displayName}<br/>${module.files.length}个文件"]\n`;
+		md += `  FXPlanner-new --> ${moduleId}["${module.displayName}<br/>${module.files.length}个文件"]\n`;
 
-    if (coreCount > 0) {
-      md += `  ${moduleId} --> ${moduleId}_core["核心功能<br/>${coreCount}个"]\n`;
-      md += `  style ${moduleId}_core fill:#4caf50,stroke:#333,color:#fff\n`;
-    }
-    if (helperCount > 0) {
-      md += `  ${moduleId} --> ${moduleId}_helper["辅助工具<br/>${helperCount}个"]\n`;
-      md += `  style ${moduleId}_helper fill:#ffc107,stroke:#333,color:#fff\n`;
-    }
-    if (typeCount > 0) {
-      md += `  ${moduleId} --> ${moduleId}_type["类型定义<br/>${typeCount}个"]\n`;
-      md += `  style ${moduleId}_type fill:#2196f3,stroke:#333,color:#fff\n`;
-    }
+		if (coreCount > 0) {
+			md += `  ${moduleId} --> ${moduleId}_core["核心功能<br/>${coreCount}个"]\n`;
+			md += `  style ${moduleId}_core fill:#4caf50,stroke:#333,color:#fff\n`;
+		}
+		if (helperCount > 0) {
+			md += `  ${moduleId} --> ${moduleId}_helper["辅助工具<br/>${helperCount}个"]\n`;
+			md += `  style ${moduleId}_helper fill:#ffc107,stroke:#333,color:#fff\n`;
+		}
+		if (typeCount > 0) {
+			md += `  ${moduleId} --> ${moduleId}_type["类型定义<br/>${typeCount}个"]\n`;
+			md += `  style ${moduleId}_type fill:#2196f3,stroke:#333,color:#fff\n`;
+		}
 
-    const colors = ['#764ba2', '#f5576c', '#00f2fe'];
-    md += `  style ${moduleId} fill:${colors[i]},stroke:#333,color:#fff\n`;
-    md += `\n`;
-  });
+		const colors = ["#764ba2", "#f5576c", "#00f2fe"];
+		md += `  style ${moduleId} fill:${colors[i]},stroke:#333,color:#fff\n`;
+		md += `\n`;
+	});
 
-  md += `\`\`\`\n\n`;
+	md += `\`\`\`\n\n`;
 
-  md += `## 图例\n\n`;
-  md += `- 🟢 **核心功能**：主要业务逻辑、控制器、服务、页面组件\n`;
-  md += `- 🟡 **辅助工具**：hooks、utils、helpers\n`;
-  md += `- 🔵 **类型定义**：接口和类型\n`;
+	md += `## 图例\n\n`;
+	md += `- 🟢 **核心功能**：主要业务逻辑、控制器、服务、页面组件\n`;
+	md += `- 🟡 **辅助工具**：hooks、utils、helpers\n`;
+	md += `- 🔵 **类型定义**：接口和类型\n`;
 
-  const filePath = path.join(outputDir, 'structure.md');
-  fs.writeFileSync(filePath, md, 'utf-8');
-  console.log(`✅ structure.md (${(fs.statSync(filePath).size / 1024).toFixed(1)} KB)`);
+	const filePath = path.join(outputDir, "structure.md");
+	fs.writeFileSync(filePath, md, "utf-8");
+	console.log(
+		`✅ structure.md (${(fs.statSync(filePath).size / 1024).toFixed(1)} KB)`,
+	);
 }
 
 // ============= 生成 JSON =============
 
 function generateJSON(data: ProjectData, outputDir: string): void {
-  const filePath = path.join(outputDir, 'data.json');
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
-  console.log(`✅ data.json (${(fs.statSync(filePath).size / 1024).toFixed(1)} KB)`);
+	const filePath = path.join(outputDir, "data.json");
+	fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+	console.log(
+		`✅ data.json (${(fs.statSync(filePath).size / 1024).toFixed(1)} KB)`,
+	);
 }
 
 // ============= 主函数 =============
 
 async function main() {
-  console.log('🚀 生成代码地图\n');
+	console.log("🚀 生成代码地图\n");
 
-  const data = await analyzeProject();
+	const data = await analyzeProject();
 
-  const projectRoot = path.resolve(__dirname, '..');
-  const outputDir = path.join(projectRoot, '.claude/docs/code-map');
+	const projectRoot = path.resolve(__dirname, "..");
+	const outputDir = path.join(projectRoot, ".claude/docs/code-map");
 
-  if (fs.existsSync(outputDir)) {
-    fs.readdirSync(outputDir).forEach(file => {
-      if (file !== 'README.md') {
-        fs.unlinkSync(path.join(outputDir, file));
-      }
-    });
-  } else {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
+	if (fs.existsSync(outputDir)) {
+		fs.readdirSync(outputDir).forEach((file) => {
+			if (file !== "README.md") {
+				fs.unlinkSync(path.join(outputDir, file));
+			}
+		});
+	} else {
+		fs.mkdirSync(outputDir, { recursive: true });
+	}
 
-  console.log('📝 生成文件\n');
+	console.log("📝 生成文件\n");
 
-  generateJSON(data, outputDir);
-  generateSimpleTree(data, outputDir);
-  generateCollapsibleHTML(data, outputDir);
-  generateSplitMarkdown(data, outputDir);
-  generateCSSTreemap(data, outputDir);
-  generateMermaidBlock(data, outputDir);
+	generateJSON(data, outputDir);
+	generateSimpleTree(data, outputDir);
+	generateCollapsibleHTML(data, outputDir);
+	generateSplitMarkdown(data, outputDir);
+	generateCSSTreemap(data, outputDir);
+	generateMermaidBlock(data, outputDir);
 
-  console.log('\n✅ 完成！\n');
-  console.log('📂 输出目录：.claude/docs/code-map/\n');
-  console.log('查看方式：');
-  console.log('  - AI 阅读：tree.md（简洁树状）');
-  console.log('  - 人类浏览：用浏览器打开 index.html');
-  console.log('  - 可视化：用浏览器打开 treemap.html ⭐ 新增');
-  console.log('  - 结构图：structure.md（Mermaid 块图）⭐ 新增');
-  console.log('  - 分模块阅读：index.md + 各模块.md');
-  console.log('  - 程序处理：data.json\n');
+	console.log("\n✅ 完成！\n");
+	console.log("📂 输出目录：.claude/docs/code-map/\n");
+	console.log("查看方式：");
+	console.log("  - AI 阅读：tree.md（简洁树状）");
+	console.log("  - 人类浏览：用浏览器打开 index.html");
+	console.log("  - 可视化：用浏览器打开 treemap.html ⭐ 新增");
+	console.log("  - 结构图：structure.md（Mermaid 块图）⭐ 新增");
+	console.log("  - 分模块阅读：index.md + 各模块.md");
+	console.log("  - 程序处理：data.json\n");
 }
 
 main().catch((error) => {
-  console.error('❌ 失败：', error);
-  process.exit(1);
+	console.error("❌ 失败：", error);
+	process.exit(1);
 });

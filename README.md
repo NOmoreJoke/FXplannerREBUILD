@@ -42,19 +42,19 @@ bun run dev
 
 ```bash
 bun run typecheck     # TypeScript 类型检查
-bun run test          # 单元 + 接口冒烟（health/注册/登录/401/CRUD）
+bun run test          # 单元 + 接口回归（health/认证/OTP/汇率）
 bun run test:e2e      # E2E（需先准备数据库和服务环境）
 ```
 
 ## 目录结构
 
 ```
-├─ clients/chat-web/            # Next.js 前端（登录/注册 + 示例模块页）
-├─ services/chat/               # NestJS 后端（auth + 示例模块 + health）
-│  ├─ src/{auth,project,config,prisma,database}/
+├─ clients/chat-web/            # Next.js 前端（落地页/密码登录/OTP 登录/注册）
+├─ services/chat/               # NestJS 后端（auth + rate + health）
+│  ├─ src/{auth,config,prisma,rate}/
 │  ├─ prisma/                   # schema + migrations + seed
 │  └─ test/                     # 骨架接口/集成测试
-├─ packages/contracts/          # 共享包（跨端类型/常量的唯一出口）
+├─ packages/money/              # 共享包（币种常量与金额/汇率精度纯函数，前后端共用）
 ├─ packages/eslint-config/      # 共享 ESLint 配置
 ├─ packages/typescript-config/  # 共享 tsconfig
 ├─ e2e/                         # Playwright E2E（所有产物只落在此目录）
@@ -67,9 +67,18 @@ bun run test:e2e      # E2E（需先准备数据库和服务环境）
 
 | 层 | 内容 | 不需要时 |
 | --- | --- | --- |
-| **L1 核心骨架** | auth（JWT）、Prisma + User 表、health、env 模式、工程配置 | 保留 |
-| **L2 示例模块** | project CRUD（前后端 + 测试），演示标准分层 | 手动删除：注册点唯一（`app.module.ts`），无入向依赖 |
+| **L1 核心骨架** | auth（密码/OTP/JWT）、Prisma、health、env 模式、工程配置 | 保留 |
+| **L2 汇率能力** | rate（支持币种、最新汇率、历史汇率） | 保留 |
 | **L3 工具与规范** | test/code-map 脚本、版本工具链、测试体系、文档规范 | 保留 |
+
+开发模式下，Swagger 接口文档地址为：
+
+```text
+http://localhost:${API_PORT}/api/docs
+http://localhost:${API_PORT}/api/docs-json
+```
+
+所有公开接口必须在 Swagger 中提供用途摘要和详细说明；集成测试会自动检查这一约束。
 
 ## PostgreSQL（macOS）
 
@@ -81,16 +90,16 @@ brew install postgresql@16 && brew link --force postgresql@16
 brew services start postgresql@16
 brew services stop postgresql@16
 
-# 多实例不同端口：每个实例独立数据目录
-initdb -D ~/pgdata/5433 -U postgres -E UTF8           # 初始化
-pg_ctl -D ~/pgdata/5433 -o "-p 5433" -l ~/pgdata/5433.log start   # 指定端口启动
-pg_ctl -D ~/pgdata/5433 stop
+# 手动 PostgreSQL 实例（端口 5432）
+initdb -D ~/pgdata/5432 -U postgres -E UTF8           # 初始化
+pg_ctl -D ~/pgdata/5432 -o "-p 5432" -l ~/pgdata/5432.log start   # 指定端口启动
+pg_ctl -D ~/pgdata/5432 stop
 
 # 密码
 psql -U postgres -h localhost -p 5432                 # 连接
 ALTER USER postgres WITH PASSWORD 'newpassword';      -- 修改密码
 # 免密/认证方式：编辑数据目录下 pg_hba.conf（trust=免密 / md5=密码），改完 pg_ctl reload
-# 连接串格式：postgresql://postgres:密码@localhost:5433/库名
+# 连接串格式：postgresql://postgres:密码@localhost:5432/库名
 
 # 建库（供 DATABASE_URL 使用）
 createdb fxplanner_new_db_local                            # 简单建库
@@ -116,6 +125,16 @@ psql "postgresql://user:pass@localhost:5432/库名" -c "SELECT 1;"  # 认证+权
 | `CORS_ORIGIN` | 根 | 允许的前端源 |
 | `NEXT_PUBLIC_API_BASE_URL` | 根 | 前端 → 后端地址（build 时 inline） |
 | `DATABASE_URL` | services/chat | Prisma 连接串 |
+
+本地数据库由 `services/chat/.env.local` 的 `DATABASE_URL` 驱动，可从根目录管理：
+
+```bash
+bun run db:up       # 安装/初始化/启动，并确保目标数据库存在
+bun run db:status   # 查看项目实例及 5432 端口状态
+bun run db:down     # 停止项目管理的本地实例
+```
+
+命令由根目录转发到 `services/chat`，实际执行 `scripts/db-local.sh`。默认使用 Homebrew `postgresql@16` 和 `$HOME/pgdata/5432`；可通过 `PG_FORMULA`、`PG_BIN`、`PGDATA`、`PG_LOG_FILE`、`DB_ENV_FILE` 覆盖。脚本不会接管已占用 5432 的其他 PostgreSQL 实例，而是给出冲突诊断。
 
 ## 测试约定
 

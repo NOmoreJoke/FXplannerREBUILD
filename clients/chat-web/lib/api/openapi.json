@@ -1,0 +1,636 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/api/health": {
+      "get": {
+        "description": "供本地开发、部署探针和监控系统确认 API 服务可用；服务正常时返回 ok=true。",
+        "operationId": "AppController_getHealth",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "检查服务健康状态",
+        "tags": [
+          "System"
+        ]
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "description": "创建独立的密码账号并签发 JWT；不会与相同邮箱的 OTP 账号自动绑定或合并。",
+        "operationId": "AuthController_register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "注册成功。响应体为 { success, data: AuthResponseDto, message } 包装，data 为签发的用户与 JWT。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "使用邮箱和密码注册",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "description": "校验密码账号并签发 JWT；没有 passwordHash 的 OTP 独立账号不能使用此入口。",
+        "operationId": "AuthController_login",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "登录成功。响应体为 { success, data: AuthResponseDto, message } 包装，data 为用户与 JWT。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "使用邮箱和密码登录",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/otp/send-code": {
+      "post": {
+        "description": "向邮箱或手机号发送 6 位登录验证码，并返回 challengeId 和过期时间；此步骤不会登录或签发 JWT。",
+        "operationId": "AuthController_sendOtpCode",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendOtpCodeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已发送。响应体为 { success, data: OtpChallengeResultDto, message } 包装，此步骤不登录。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtpChallengeResultDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "发送 OTP 登录验证码",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/otp/login": {
+      "post": {
+        "description": "校验并消费 challengeId 对应的验证码，创建或复用独立 OTP 账号，然后签发 JWT。",
+        "operationId": "AuthController_loginWithOtp",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtpLoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "登录成功。响应体为 { success, data: AuthResponseDto, message } 包装，data 含 identity 绑定信息。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "使用 OTP 登录",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "description": "使用 Bearer JWT 查询当前用户，仅返回 id、email、name、avatar 和 createdAt 等公开字段。",
+        "operationId": "AuthController_getMe",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "查询成功。响应体为 { success, data: UserDto } 包装，仅含公开字段。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "获取当前登录用户",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/rates/supported": {
+      "get": {
+        "description": "返回汇率模块当前支持的全部 ISO 4217 货币代码，供前端选择器和参数校验使用。",
+        "operationId": "RateController_supported",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "查询支持的货币代码",
+        "tags": [
+          "Rate"
+        ]
+      }
+    },
+    "/api/rates/latest/{base}": {
+      "get": {
+        "description": "返回 base 兑换 USD 的最新报价；优先读取 24 小时内的数据库缓存，缓存缺失或过期时回源 Frankfurter。",
+        "operationId": "RateController_latest",
+        "parameters": [
+          {
+            "name": "base",
+            "required": true,
+            "in": "path",
+            "description": "基准货币代码",
+            "schema": {
+              "enum": [
+                "HKD",
+                "USD",
+                "GBP",
+                "AUD",
+                "CAD",
+                "CNY",
+                "JPY",
+                "EUR",
+                "SGD",
+                "NZD",
+                "TWD",
+                "CHF",
+                "KRW",
+                "THB",
+                "MYR"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "查询指定货币兑美元的最新汇率",
+        "tags": [
+          "Rate"
+        ]
+      }
+    },
+    "/api/rates/history": {
+      "get": {
+        "description": "按 base、target 和 period 查询工作日历史汇率；完整缓存直接返回，缓存不完整时回源并补齐。",
+        "operationId": "RateController_history",
+        "parameters": [
+          {
+            "name": "period",
+            "required": false,
+            "in": "query",
+            "description": "查询天数",
+            "schema": {
+              "enum": [
+                7,
+                30,
+                90
+              ],
+              "type": "number"
+            }
+          },
+          {
+            "name": "target",
+            "required": false,
+            "in": "query",
+            "description": "目标货币代码",
+            "schema": {
+              "enum": [
+                "HKD",
+                "USD",
+                "GBP",
+                "AUD",
+                "CAD",
+                "CNY",
+                "JPY",
+                "EUR",
+                "SGD",
+                "NZD",
+                "TWD",
+                "CHF",
+                "KRW",
+                "THB",
+                "MYR"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "base",
+            "required": false,
+            "in": "query",
+            "description": "基准货币代码",
+            "schema": {
+              "enum": [
+                "HKD",
+                "USD",
+                "GBP",
+                "AUD",
+                "CAD",
+                "CNY",
+                "JPY",
+                "EUR",
+                "SGD",
+                "NZD",
+                "TWD",
+                "CHF",
+                "KRW",
+                "THB",
+                "MYR"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "查询历史汇率序列",
+        "tags": [
+          "Rate"
+        ]
+      }
+    },
+    "/api/currencies": {
+      "get": {
+        "description": "返回全部启用中的币种（isActive=true），按 sortOrder 升序。静态字典，客户端可缓存 1 小时。",
+        "operationId": "CurrencyController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "响应体为 { success, data: CurrencyListResponseDto } 包装。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrencyListResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "查询支持的币种清单",
+        "tags": [
+          "Currency"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "FXPlanner Chat API",
+    "description": "FXPlanner 后端接口文档",
+    "version": "1.0",
+    "contact": {}
+  },
+  "tags": [
+    {
+      "name": "System",
+      "description": "服务存活检查"
+    },
+    {
+      "name": "Auth",
+      "description": "密码与 OTP 独立账号认证"
+    },
+    {
+      "name": "Rate",
+      "description": "支持币种、最新汇率和历史汇率查询"
+    }
+  ],
+  "servers": [],
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http"
+      }
+    },
+    "schemas": {
+      "RegisterDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "注册邮箱",
+            "example": "user@example.com",
+            "format": "email"
+          },
+          "password": {
+            "type": "string",
+            "description": "密码，至少 8 位且包含大小写字母和数字",
+            "example": "StrongPass123",
+            "format": "password",
+            "minLength": 8
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "UserDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "用户 ID",
+            "example": "clz9x8y2w0000abcd"
+          },
+          "email": {
+            "type": "string",
+            "description": "邮箱（OTP 独立账号可能为空）",
+            "example": "user@example.com",
+            "nullable": true
+          },
+          "name": {
+            "type": "string",
+            "description": "昵称",
+            "example": "阿员",
+            "nullable": true
+          },
+          "avatar": {
+            "type": "string",
+            "description": "头像 URL",
+            "nullable": true
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "description": "注册时间（ISO 8601）",
+            "example": "2025-01-01T00:00:00.000Z"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "name",
+          "avatar",
+          "createdAt"
+        ]
+      },
+      "AuthIdentityDto": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "身份渠道",
+            "enum": [
+              "email",
+              "phone"
+            ],
+            "example": "email"
+          },
+          "target": {
+            "type": "string",
+            "description": "渠道标识（邮箱或 E.164 手机号）",
+            "example": "user@example.com"
+          }
+        },
+        "required": [
+          "channel",
+          "target"
+        ]
+      },
+      "AuthResponseDto": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "description": "当前用户公开信息",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UserDto"
+              }
+            ]
+          },
+          "accessToken": {
+            "type": "string",
+            "description": "JWT 访问令牌",
+            "example": "eyJhbGciOiJIUzI1NiIs..."
+          },
+          "identity": {
+            "description": "OTP 登录时返回的绑定身份；密码登录不返回",
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuthIdentityDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "user",
+          "accessToken"
+        ]
+      },
+      "LoginDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "登录邮箱",
+            "example": "user@example.com",
+            "format": "email"
+          },
+          "password": {
+            "type": "string",
+            "description": "登录密码",
+            "example": "StrongPass123",
+            "format": "password"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "SendOtpCodeDto": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "登录验证码发送渠道",
+            "enum": [
+              "email",
+              "phone"
+            ],
+            "example": "email"
+          },
+          "target": {
+            "type": "string",
+            "description": "接收登录验证码的邮箱或 E.164 手机号",
+            "example": "user@example.com"
+          }
+        },
+        "required": [
+          "channel",
+          "target"
+        ]
+      },
+      "OtpChallengeResultDto": {
+        "type": "object",
+        "properties": {
+          "challengeId": {
+            "type": "string",
+            "description": "本次验证码挑战 ID，otp/login 时回传",
+            "example": "clz9x8y2w0000abcd"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string",
+            "description": "验证码过期时间（ISO 8601，5 分钟后）",
+            "example": "2025-01-01T00:05:00.000Z"
+          }
+        },
+        "required": [
+          "challengeId",
+          "expiresAt"
+        ]
+      },
+      "OtpLoginDto": {
+        "type": "object",
+        "properties": {
+          "challengeId": {
+            "type": "string",
+            "description": "发送验证码接口返回的 challengeId",
+            "example": "clz123challenge"
+          },
+          "code": {
+            "type": "string",
+            "description": "收到的 6 位登录验证码",
+            "example": "123456",
+            "minLength": 6,
+            "maxLength": 6
+          }
+        },
+        "required": [
+          "challengeId",
+          "code"
+        ]
+      },
+      "CurrencyResponseDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "ISO 4217 币种代码（3 位大写）",
+            "example": "HKD"
+          },
+          "nameZh": {
+            "type": "string",
+            "description": "币种中文名",
+            "example": "港币"
+          },
+          "nameEn": {
+            "type": "string",
+            "description": "币种英文名",
+            "example": "Hong Kong Dollar"
+          },
+          "decimalPlaces": {
+            "type": "number",
+            "description": "金额小数位（0=整数币种如 JPY/KRW，2=两位小数）",
+            "example": 2,
+            "enum": [
+              0,
+              2
+            ]
+          },
+          "sortOrder": {
+            "type": "number",
+            "description": "展示顺序，从 1 起严格递增",
+            "example": 1
+          }
+        },
+        "required": [
+          "code",
+          "nameZh",
+          "nameEn",
+          "decimalPlaces",
+          "sortOrder"
+        ]
+      },
+      "CurrencyListResponseDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "description": "启用中的币种清单（isActive=true），按 sortOrder 升序",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CurrencyResponseDto"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      }
+    }
+  }
+}

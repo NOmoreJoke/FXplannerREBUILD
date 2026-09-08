@@ -54,3 +54,5 @@ AGENT.md
 
 .pi/**
 docs/learning-notes/**
+# 代码地图生成产物
+polygrapher/

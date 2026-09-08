@@ -10,6 +10,9 @@
   "packageManager": "bun@1.2.15",
   "scripts": {
     "clean:ports": "dotenv -e .env.local -- sh -c 'lsof -ti :${API_PORT} 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :${WEB_PORT} 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :${DEV_LOG_PORT} 2>/dev/null | xargs kill -9 2>/dev/null; echo Ports cleaned'",
+    "db:up": "bun run --cwd services/chat db:up",
+    "db:down": "bun run --cwd services/chat db:down",
+    "db:status": "bun run --cwd services/chat db:status",
     "dev:clean": "bun run clean:ports && bun run dev",
     "test:env": "echo WEB_PORT=$WEB_PORT API_PORT=$API_PORT",
     "dev": "dotenv -e .env.local turbo dev",
@@ -27,6 +30,7 @@
     "test:e2e:report": "playwright show-report e2e/test-results/playwright-report",
     "test:e2e:video": "node e2e/scripts/generate-video-report.js && open e2e/test-results/video-report.html",
     "docs:codemap": "bun run scripts/code-map/generate-code-map.ts",
+    "export:openapi": "bun scripts/export-openapi.ts",
     "worktree:create": "WORKTREE_BASE_DIR=../Worktrees SYMLINK_DIRS=changes INSTALL_CMD='bun install' bash scripts/worktree/worktree-create.sh",
     "worktree:remove": "bash scripts/worktree/worktree-remove.sh",
     "commit": "cz",

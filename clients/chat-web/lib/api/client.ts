@@ -10,6 +10,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
 
 interface RequestConfig extends RequestInit {
 	skipAuth?: boolean;
+	redirectOnUnauthorized?: boolean;
 }
 
 interface ApiResponse<T> {
@@ -21,7 +22,11 @@ export async function apiClient<T>(
 	endpoint: string,
 	config: RequestConfig = {},
 ): Promise<T> {
-	const { skipAuth = false, ...fetchConfig } = config;
+	const {
+		skipAuth = false,
+		redirectOnUnauthorized = !skipAuth,
+		...fetchConfig
+	} = config;
 
 	// 自动添加 Authorization Header
 	const headers: Record<string, string> = {
@@ -57,7 +62,7 @@ export async function apiClient<T>(
 
 	// 处理 401 错误
 	if (response.status === 401) {
-		if (typeof window !== "undefined") {
+		if (redirectOnUnauthorized && typeof window !== "undefined") {
 			localStorage.removeItem("accessToken");
 			// 清除 Cookie
 			document.cookie = "accessToken=; path=/; max-age=0";

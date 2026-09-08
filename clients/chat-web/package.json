@@ -8,6 +8,7 @@
     "start": "NODE_ENV=production next start -p ${WEB_PORT:-3001}",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
+    "generate:api": "bun run ../../scripts/export-openapi.ts && openapi-typescript lib/api/openapi.json -o lib/api/schema.gen.ts && bun -e 'import fs from \"node:fs\"; const p = \"lib/api/schema.gen.ts\"; fs.writeFileSync(p, \"// 由 generate:api 自动生成（后端 DTO → OpenAPI → openapi-typescript），禁止手改；后端契约变更后重新执行 bun run generate:api。\\n\" + fs.readFileSync(p, \"utf8\"));'",
     "test": "NODE_ENV=test vitest run",
     "test:watch": "NODE_ENV=test vitest"
   },
@@ -20,7 +21,6 @@
     "@sentry/browser": "^10.69.0",
     "@tailwindcss/postcss": "^4.3.1",
     "@tanstack/react-query": "^5.101.4",
-    "@fxplanner-new/contracts": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -60,6 +60,7 @@
     "@vitejs/plugin-react": "^6.0.4",
     "code-inspector-plugin": "^1.6.6",
     "jsdom": "^29.1.1",
+    "openapi-typescript": "^7.13.0",
     "react-hook-form": "^7.81.0",
     "react-hot-toast": "^2.6.0",
     "typescript": "^5.7.0",
