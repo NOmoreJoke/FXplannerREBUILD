@@ -17,6 +17,7 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "prisma:reset": "prisma migrate reset --force && tsx prisma/seed.ts",
     "prisma:studio": "prisma studio",
+    "backfill:cost-lots": "tsx src/account/backfill-cost-lots.script.ts",
     "postinstall": "prisma generate"
   },
   "prisma": {
