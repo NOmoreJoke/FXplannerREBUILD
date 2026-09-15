@@ -1,4 +1,5 @@
 import { apiClient } from "@/lib/api/client";
+import { clearToken } from "@/lib/auth/token";
 import type {
 	AuthResponse,
 	AuthUser,
@@ -66,13 +67,10 @@ export const authApi = {
 		});
 	},
 
-	/**
-	 * 退出登录（客户端操作）
+ /**
+	 * 退出登录（客户端操作）：清除 token cookie
 	 */
 	logout() {
-		if (typeof window !== "undefined") {
-			localStorage.removeItem("accessToken");
-			document.cookie = "accessToken=; path=/; max-age=0";
-		}
+		clearToken();
 	},
 };

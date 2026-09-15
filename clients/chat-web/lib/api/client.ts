@@ -1,4 +1,5 @@
 import { captureApiError } from "@/lib/dev-log/monitor";
+import { clearToken, getToken } from "@/lib/auth/token";
 
 // 从环境变量读取后端 API 地址（必需）
 if (!process.env.NEXT_PUBLIC_API_BASE_URL) {
@@ -10,12 +11,30 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
 
 interface RequestConfig extends RequestInit {
 	skipAuth?: boolean;
-	redirectOnUnauthorized?: boolean;
 }
 
 interface ApiResponse<T> {
 	data: T;
 	message?: string;
+}
+
+/** 后端错误响应体（统一 { code, message }，如 plan 模块的 400/409 错误码） */
+interface ApiErrorBody {
+	code?: string;
+	message?: string;
+}
+
+/** 带状态码与业务错误码的 API 错误（instanceof Error，不影响既有 catch 逻辑） */
+export class ApiError extends Error {
+	readonly status: number;
+	readonly code?: string;
+
+	constructor(message: string, status: number, code?: string) {
+		super(message);
+		this.name = "ApiError";
+		this.status = status;
+		this.code = code;
+	}
 }
 
 export async function apiClient<T>(
@@ -24,7 +43,6 @@ export async function apiClient<T>(
 ): Promise<T> {
 	const {
 		skipAuth = false,
-		redirectOnUnauthorized = !skipAuth,
 		...fetchConfig
 	} = config;
 
@@ -35,7 +53,7 @@ export async function apiClient<T>(
 	};
 
 	if (!skipAuth && typeof window !== "undefined") {
-		const token = localStorage.getItem("accessToken");
+		const token = getToken();
 		if (token) {
 			headers["Authorization"] = `Bearer ${token}`;
 		}
@@ -60,19 +78,18 @@ export async function apiClient<T>(
 		throw error;
 	}
 
-	// 处理 401 错误
+	// 处理 401 错误：只清理凭证并抛错，不做页面跳转（跳转统一由保护区 layout 处理）
 	if (response.status === 401) {
-		if (redirectOnUnauthorized && typeof window !== "undefined") {
-			localStorage.removeItem("accessToken");
-			// 清除 Cookie
-			document.cookie = "accessToken=; path=/; max-age=0";
-			window.location.replace("/login");
+		if (typeof window !== "undefined") {
+			clearToken();
 		}
-		throw new Error("Token 无效或已过期");
+		throw new ApiError("Token 无效或已过期", 401);
 	}
 
 	if (!response.ok) {
-		const error = await response.json().catch(() => ({ message: "请求失败" }));
+		const error = await response
+			.json()
+			.catch(() => ({ message: "请求失败" }) as ApiErrorBody);
 		// HTTP 错误（4xx/5xx，401 除外）：上报本地开发日志
 		captureApiError({
 			endpoint,
@@ -81,7 +98,7 @@ export async function apiClient<T>(
 			status: response.status,
 			message: error.message || "请求失败",
 		});
-		throw new Error(error.message || "请求失败");
+		throw new ApiError(error.message || "请求失败", response.status, error.code);
 	}
 
 	const result: ApiResponse<T> = await response.json();

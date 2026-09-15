@@ -34,7 +34,7 @@ export class AuthController {
   @Post('register')
   @ApiOperation({
     summary: '使用邮箱和密码注册',
-    description: '创建独立的密码账号并签发 JWT；不会与相同邮箱的 OTP 账号自动绑定或合并。',
+    description: '创建密码账号并签发 JWT；同一邮箱后续通过 OTP 登录时，会验证通过后直接登录并绑定到本账号（仅绑定，不迁移历史数据）。',
   })
   @ApiBody({ type: RegisterDto })
   @ApiResponse({
@@ -105,7 +105,7 @@ export class AuthController {
   @Post('otp/login')
   @ApiOperation({
     summary: '使用 OTP 登录',
-    description: '校验并消费 challengeId 对应的验证码，创建或复用独立 OTP 账号，然后签发 JWT。',
+    description: '校验并消费 challengeId 对应的验证码后按优先级登录：已有 OTP 标识则复用原账号；email 渠道且同邮箱存在密码账号则登录该账号并绑定此 OTP 标识（不新建 User）；否则创建独立 OTP 账号，然后签发 JWT。',
   })
   @ApiBody({ type: OtpLoginDto })
   @ApiResponse({

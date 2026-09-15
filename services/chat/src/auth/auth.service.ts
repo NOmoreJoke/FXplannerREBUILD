@@ -111,6 +111,25 @@ export class AuthService {
           });
           if (existing) return existing.user;
 
+          // 仅绑定不迁移：email 渠道且同邮箱已存在密码账号（User.email 仅在密码注册时
+          // 写入，故 email 命中即为密码账号）→ 登录该账号并绑定此 OTP 标识，不再新建 User。
+          // phone 渠道无手机号列，恒走新建路径。
+          if (verification.channel === 'email') {
+            const passwordUser = await tx.user.findUnique({
+              where: { email: verification.target },
+            });
+            if (passwordUser) {
+              await tx.otpIdentity.create({
+                data: {
+                  userId: passwordUser.id,
+                  channel: verification.channel,
+                  target: verification.target,
+                },
+              });
+              return passwordUser;
+            }
+          }
+
           const created = await tx.user.create({ data: {} });
           await tx.otpIdentity.create({
             data: {

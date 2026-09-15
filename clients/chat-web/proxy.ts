@@ -20,9 +20,10 @@ export function proxy(request: NextRequest) {
 		return NextResponse.redirect(url);
 	}
 
-	// 2. 已登录用户访问认证路由 → 跳转公开首页
-	if (token && AUTH_ROUTES.includes(pathname)) {
-		return NextResponse.redirect(new URL("/", request.url));
+	// 2. 已登录用户访问落地页/认证路由 → 跳转工作台首页
+	// （已登录看落地页无意义；统一收敛到 /home，保证 / 与 /home 同一画面）
+	if (token && (pathname === "/" || AUTH_ROUTES.includes(pathname))) {
+		return NextResponse.redirect(new URL("/home", request.url));
 	}
 
 	return NextResponse.next();

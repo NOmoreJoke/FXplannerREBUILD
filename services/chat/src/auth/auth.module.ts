@@ -8,7 +8,7 @@ import { PrismaModule } from "../prisma/prisma.module";
 import { env } from "../config/env";
 import { EmailOtpChannel } from "./otp/email-otp.channel";
 import { OtpService } from "./otp/otp.service";
-import { OTP_CHANNELS } from "./otp/otp-channel";
+import { OTP_CHANNELS, OTP_OPTIONS } from "./otp/otp-channel";
 import { SmsOtpChannel } from "./otp/sms-otp.channel";
 
 @Module({
@@ -33,6 +33,11 @@ import { SmsOtpChannel } from "./otp/sms-otp.channel";
 			provide: OTP_CHANNELS,
 			useFactory: (email: EmailOtpChannel, sms: SmsOtpChannel) => [email, sms],
 			inject: [EmailOtpChannel, SmsOtpChannel],
+		},
+		// 注册默认选项（与 OtpService 内置默认值一致），使测试可通过 overrideProvider(OTP_OPTIONS) 调整频控
+		{
+			provide: OTP_OPTIONS,
+			useValue: {},
 		},
 	],
 	exports: [AuthService],

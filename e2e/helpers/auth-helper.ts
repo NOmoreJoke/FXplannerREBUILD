@@ -31,13 +31,13 @@ export async function registerTestUser(
 
 		// 等待跳转或错误提示
 		await Promise.race([
-			page.waitForURL(`${BASE_URL}/`, { timeout: 5000 }),
+			page.waitForURL(`${BASE_URL}/home`, { timeout: 5000 }),
 			page.waitForTimeout(5000),
 		]);
 
-		// 检查是否注册成功（跳转到公开首页）
+		// 检查是否注册成功（跳转到工作台首页）
 		const url = page.url();
-		return url === `${BASE_URL}/`;
+		return url === `${BASE_URL}/home`;
 	} catch (error) {
 		console.log(`⚠️ 注册用户失败: ${email}`, error);
 		return false;
@@ -70,17 +70,17 @@ export async function loginTestUser(
 
 		// 等待跳转或错误提示
 		await Promise.race([
-			page.waitForURL(`${BASE_URL}/`, { timeout: 10000 }),
+			page.waitForURL(`${BASE_URL}/home`, { timeout: 10000 }),
 			page.waitForTimeout(10000),
 		]);
 
-		// 检查是否登录成功
+		// 检查是否登录成功（跳转到工作台首页 + cookie 存在 token）
 		const url = page.url();
 		const token = await page.evaluate(() =>
-			localStorage.getItem("accessToken"),
+			document.cookie.includes("accessToken="),
 		);
 
-		return url === `${BASE_URL}/` && !!token;
+		return url === `${BASE_URL}/home` && token;
 	} catch (error) {
 		console.log(`⚠️ 登录失败: ${email}`, error);
 		return false;
