@@ -19,7 +19,6 @@ model User {
 
   // M0 schema 冻结：以下为新增业务模型的反向关系（Prisma 关系必须双侧声明）
   userSettings    UserSettings?
-  onboardingDraft OnboardingDraft?
   termsConsents   TermsConsent[]
   accounts        Account[]
   transactions    Transaction[]
@@ -38,6 +37,8 @@ model ExchangeRate {
   base       String
   quote      String
   rate       Decimal  @db.Decimal(20, 10)
+  /// 现汇卖出价（1 外币单位 = X 本位币；仅 abc 源填充，百外币单位已换算）；NULL = 该源无卖出价，录入场景回退 rate
+  sellRate   Decimal? @db.Decimal(20, 10) @map("sell_rate")
   source     String
   observedAt DateTime @map("observed_at")
   createdAt  DateTime @default(now()) @map("created_at")
@@ -126,19 +127,6 @@ model Currency {
   @@map("currencies")
 }
 
-/// 首次设置草稿（最后修改后保存 30 天）
-model OnboardingDraft {
-  id        String   @id @default(cuid())
-  userId    String   @unique @map("user_id")
-  payload   Json
-  expiresAt DateTime @map("expires_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("onboarding_drafts")
-}
-
 /// 条款与 18 岁确认记录
 model TermsConsent {
   id           String   @id @default(cuid())
@@ -214,18 +202,37 @@ model CostLot {
 model Plan {
   id             String   @id @default(cuid())
   userId         String   @map("user_id")
+  name           String?  @map("name")
+  pacePreference String   @default("balanced") @map("pace_preference")
   targetCurrency String   @map("target_currency")
   targetAmount   Decimal  @map("target_amount") @db.Decimal(20, 4)
   expectUseDate  DateTime @map("expect_use_date")
   prepLeadDays   Int      @default(3) @map("prep_lead_days")
   latestPrepDate DateTime @map("latest_prep_date")
+  /// 开始准备日（M5 落库：M2 创建时只算不存；NULL = 未落基线，重建排期时回退「明天起首个工作日」）
+  planStartDate  DateTime? @map("plan_start_date") @db.Timestamptz(3)
   status         String   @default("ACTIVE")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  installments   PlanInstallment[]
 
   @@index([userId, status])
   @@map("plans")
+}
+
+/// 计划分批排期（一个计划固定 3 条；seq 为批次序号 1..3）
+model PlanInstallment {
+  id          String   @id @default(cuid())
+  planId      String   @map("plan_id")
+  seq         Int
+  scheduledAt DateTime @map("scheduled_at")
+  amount      Decimal  @db.Decimal(20, 4)
+  plan        Plan     @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, seq])
+  @@index([planId, scheduledAt])
+  @@map("plan_installments")
 }
 
 /// 计划分配汇总（1:1 绑定计划；剩余 = amount − usedAmount，业务层计算，不存列）
@@ -238,6 +245,27 @@ model PlanAllocation {
   updatedAt  DateTime @updatedAt @map("updated_at")
 
   @@map("plan_allocations")
+}
+
+/// 计划变更记录（M5：目标/分配/完成/取消/重开留痕；完整变更明细由 JSON 快照承载）
+/// 走「裸外键」先例（对齐 PlanAllocation）：planId 不声明 Prisma relation（不触碰冻结基线的 Plan model），
+/// 级联删除由 migration SQL 的 REFERENCES plans(id) ON DELETE CASCADE 保证；查询按 planId 直查
+model PlanChangeLog {
+  id             String   @id @default(cuid())
+  planId         String   @map("plan_id")
+  /// 主类型用于筛选：TARGET_ADJUSTED | ALLOCATION_ADJUSTED | COMPLETED | CANCELLED | REOPENED
+  changeType     String   @map("change_type")
+  beforeTarget   Decimal  @map("before_target") @db.Decimal(20, 4)
+  afterTarget    Decimal  @map("after_target") @db.Decimal(20, 4)
+  beforeAlloc    Decimal  @map("before_alloc") @db.Decimal(20, 4)
+  afterAlloc     Decimal  @map("after_alloc") @db.Decimal(20, 4)
+  releasedAmount Decimal  @default(0) @map("released_amount") @db.Decimal(20, 4)
+  beforeSnapshot Json     @map("before_snapshot")
+  afterSnapshot  Json     @map("after_snapshot")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([planId, createdAt(sort: Desc)])
+  @@map("plan_change_logs")
 }
 
 /// 资金使用记录（分次使用 = 多行；version 为更正版本号）

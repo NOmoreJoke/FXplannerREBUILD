@@ -112,6 +112,36 @@ describe("数据库基础设施测试", () => {
 				}),
 			).rejects.toThrow();
 		});
+
+		test("ExchangeRate 支持可空 sellRate 列（读写往返；未写入时为 NULL）", async () => {
+			// 与既有两行（observedAt / +1 天）错开，避免唯一约束冲突
+			const withSellObservedAt = new Date(
+				observedAt.getTime() + 2 * 86_400_000,
+			);
+			const created = await prisma.exchangeRate.create({
+				data: {
+					base: "TEST",
+					quote: "USD",
+					rate: "6.7105500000",
+					sellRate: "6.7253100000",
+					source: "prisma-test",
+					observedAt: withSellObservedAt,
+				},
+			});
+
+			const readBack = await prisma.exchangeRate.findUnique({
+				where: { id: created.id },
+			});
+			expect(readBack?.rate.toFixed(10)).toBe("6.7105500000");
+			expect(readBack?.sellRate?.toFixed(10)).toBe("6.7253100000");
+
+			// 未填充 sellRate 的行保持 NULL（非 0、非缺省值）
+			const withoutSell = await prisma.exchangeRate.findFirst({
+				where: { base: "TEST", quote: "USD", sellRate: null },
+			});
+			expect(withoutSell).not.toBeNull();
+			expect(withoutSell?.sellRate).toBeNull();
+		});
 	});
 
 	describe("OTP 与工作流模型", () => {

@@ -40,8 +40,17 @@ describe("Swagger 接口说明", () => {
 			}),
 		);
 
-		// 9 个既有接口 + M0 新增 GET /api/currencies = 10
-		expect(operations).toHaveLength(10);
+		// 9 个既有接口 + M0 GET /api/currencies + M1.1 onboarding 3 入口
+		// + GET /api/home/state（首页分流状态）
+		// + POST /api/plans/schedule-preview、POST /api/plans（创建换汇计划）
+		// + POST /api/transactions、GET /api/transactions/:id（买入交易录入）
+		// + M5 计划管理 6 端点：GET /api/plans、GET /api/plans/:id、
+		//   POST /api/plans/:id/adjust-preview、PATCH /api/plans/:id、
+		//   POST /api/plans/:id/complete、POST /api/plans/:id/cancel
+		// + M3 外汇账户 3 端点：GET /api/accounts、GET /api/accounts/:currencyCode、
+		//   GET /api/accounts/:currencyCode/transactions
+		// + GET /api/home/portfolio（首页持仓成本聚合）= 28
+		expect(operations).toHaveLength(28);
 		for (const { path, method, operation } of operations) {
 			expect(
 				operation.summary,

@@ -15,7 +15,10 @@ import {
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
-import { ensureAccount, seedPlanWithAllocation } from "../helpers/plan-test-helper";
+import {
+	ensureAccount,
+	seedPlanWithAllocation,
+} from "../helpers/plan-test-helper";
 
 // 关闭全局接口限流：AppModule 以 { provide: APP_GUARD, useClass: ThrottlerGuard } 注册全局限流，
 // 但 Nest scanner 会把 APP_GUARD 的 token 改写为带 UUID 的内部 token（scanner.js insertProvider），
@@ -122,7 +125,9 @@ describe("AccountController（接口）", () => {
 		await postTx(userLedger, {
 			...simpleBody("CAD", "1000"),
 			feeAmount: "20",
-			transactedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+			transactedAt: new Date(
+				Date.now() - 3 * 24 * 60 * 60 * 1000,
+			).toISOString(),
 		}).expect(201);
 		await postTx(userLedger, simpleBody("CAD", "2000")).expect(201); // fee 缺省 = 未知
 	});
@@ -276,9 +281,9 @@ describe("AccountController（接口）", () => {
 		expect(earliest.type).toBe("PURCHASE");
 		expect(earliest.quantity).toBe("1000.0000");
 		expect(earliest.feeKnown).toBe(true);
-		expect(
-			new Date(latest.occurredAt).getTime(),
-		).toBeGreaterThan(new Date(earliest.occurredAt).getTime());
+		expect(new Date(latest.occurredAt).getTime()).toBeGreaterThan(
+			new Date(earliest.occurredAt).getTime(),
+		);
 		// ID 可跳转交易详情（PURCHASE 行即交易 ID）
 		const detail = await request(app.getHttpServer())
 			.get(`/api/transactions/${latest.id}`)
