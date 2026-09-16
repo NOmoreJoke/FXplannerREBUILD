@@ -10,13 +10,7 @@ import { config as dotenvConfig } from "dotenv";
 dotenvConfig({ path: path.resolve(__dirname, "../../../..", ".env.local") });
 dotenvConfig({ path: path.resolve(__dirname, "../..", ".env.local") });
 
-import {
-	afterAll,
-	beforeAll,
-	describe,
-	expect,
-	it,
-} from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { runBackfill } from "./backfill-cost-lots.script";
 
@@ -133,7 +127,9 @@ describe("backfill-cost-lots（存量回填，§8.1）", () => {
 		expect(result.acquiredLock).toBe(true);
 		expect(result.processedUsers).toBeGreaterThanOrEqual(1);
 		expect(result.createdLots).toBeGreaterThanOrEqual(3); // CAD 2 + USD 1，EUR 溢出条目不计
-		expect(result.duplicates.filter((d) => d.userId === userId)).toHaveLength(0);
+		expect(result.duplicates.filter((d) => d.userId === userId)).toHaveLength(
+			0,
+		);
 
 		const ownLots = await prisma.costLot.findMany({
 			where: { userId, sourceType: "PURCHASE" },
@@ -209,7 +205,12 @@ describe("backfill-cost-lots（存量回填，§8.1）", () => {
 		// 回填跑完后再查：预插批次使组内复检命中，不产生第二行
 		await runBackfill(prisma);
 		const t5Lots = await prisma.costLot.count({
-			where: { userId, currencyCode: "USD", sourceType: "PURCHASE", sourceId: t5.id },
+			where: {
+				userId,
+				currencyCode: "USD",
+				sourceType: "PURCHASE",
+				sourceId: t5.id,
+			},
 		});
 		expect(t5Lots).toBe(1); // 组内复检命中已先行插入的批次，无重复
 	});
@@ -254,6 +255,8 @@ describe("backfill-cost-lots（存量回填，§8.1）", () => {
 		expect(violation?.currencyCode).toBe("GBP");
 		expect(violation?.balance).toBe("500.0000");
 		expect(violation?.lotRemainingQty).toBe("0.0000");
-		expect(result.duplicates.filter((d) => d.userId === userId)).toHaveLength(0);
+		expect(result.duplicates.filter((d) => d.userId === userId)).toHaveLength(
+			0,
+		);
 	});
 });

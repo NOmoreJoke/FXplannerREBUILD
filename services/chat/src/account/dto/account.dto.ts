@@ -156,7 +156,8 @@ export class AccountLedgerItemDto {
 /** GET /api/accounts/:currencyCode/transactions 出参 */
 export class AccountLedgerDto {
 	@ApiProperty({
-		description: "本位币（成本列币种，取 userSettings.baseCurrency）；无设置行时为 null",
+		description:
+			"本位币（成本列币种，取 userSettings.baseCurrency）；无设置行时为 null",
 		example: "CNY",
 		type: String,
 		nullable: true,

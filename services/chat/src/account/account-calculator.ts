@@ -84,9 +84,7 @@ export function buildPurchaseLot(
 		transaction.feeAmount,
 		transaction.quantity,
 	);
-	const totalCost = transaction.principalAmount.add(
-		transaction.feeAmount ?? 0,
-	);
+	const totalCost = transaction.principalAmount.add(transaction.feeAmount ?? 0);
 	return {
 		user: { connect: { id: transaction.userId } },
 		currencyCode: transaction.currencyCode,

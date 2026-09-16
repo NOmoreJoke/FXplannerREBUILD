@@ -38,9 +38,21 @@ function fakeTx(overrides: Partial<TransactionModel> = {}): TransactionModel {
 describe("sumAllocatedByCurrency", () => {
 	it("多计划多币种分组求和：Σ(amount − usedAmount)", () => {
 		const result = sumAllocatedByCurrency([
-			{ currencyCode: "CAD", amount: new Prisma.Decimal("6000"), usedAmount: new Prisma.Decimal("1000") },
-			{ currencyCode: "CAD", amount: new Prisma.Decimal("500"), usedAmount: new Prisma.Decimal("0") },
-			{ currencyCode: "USD", amount: new Prisma.Decimal("300"), usedAmount: new Prisma.Decimal("100") },
+			{
+				currencyCode: "CAD",
+				amount: new Prisma.Decimal("6000"),
+				usedAmount: new Prisma.Decimal("1000"),
+			},
+			{
+				currencyCode: "CAD",
+				amount: new Prisma.Decimal("500"),
+				usedAmount: new Prisma.Decimal("0"),
+			},
+			{
+				currencyCode: "USD",
+				amount: new Prisma.Decimal("300"),
+				usedAmount: new Prisma.Decimal("100"),
+			},
 		]);
 		expect(result.size).toBe(2);
 		expect(result.get("CAD")?.toFixed(4)).toBe("5500.0000"); // 5000 + 500
@@ -50,15 +62,27 @@ describe("sumAllocatedByCurrency", () => {
 	it("CANCELLED 计划（amount = used，已释放）计 0：全状态不过滤", () => {
 		const result = sumAllocatedByCurrency([
 			// 取消时 amount → max(used, 0)（plan.service cancel），差额恒 0
-			{ currencyCode: "CAD", amount: new Prisma.Decimal("4000"), usedAmount: new Prisma.Decimal("4000") },
-			{ currencyCode: "CAD", amount: new Prisma.Decimal("6000"), usedAmount: new Prisma.Decimal("0") },
+			{
+				currencyCode: "CAD",
+				amount: new Prisma.Decimal("4000"),
+				usedAmount: new Prisma.Decimal("4000"),
+			},
+			{
+				currencyCode: "CAD",
+				amount: new Prisma.Decimal("6000"),
+				usedAmount: new Prisma.Decimal("0"),
+			},
 		]);
 		expect(result.get("CAD")?.toFixed(4)).toBe("6000.0000");
 	});
 
 	it("usedAmount > 0 部分使用：按差额计入（M7 超用口径回归网）", () => {
 		const result = sumAllocatedByCurrency([
-			{ currencyCode: "JPY", amount: new Prisma.Decimal("100000"), usedAmount: new Prisma.Decimal("40000") },
+			{
+				currencyCode: "JPY",
+				amount: new Prisma.Decimal("100000"),
+				usedAmount: new Prisma.Decimal("40000"),
+			},
 		]);
 		expect(result.get("JPY")?.toFixed(4)).toBe("60000.0000");
 	});
@@ -72,8 +96,16 @@ describe("sumAllocatedByCurrency", () => {
 	it("超用（used > amount）产生负贡献、合计为负：不 clamp（锁定与 computeCaps 的口径差异）", () => {
 		const result = sumAllocatedByCurrency([
 			// 超用 2000：M7 后可能触发（超用计划存续，完成时才拒绝，§3.3）
-			{ currencyCode: "CAD", amount: new Prisma.Decimal("3000"), usedAmount: new Prisma.Decimal("5000") },
-			{ currencyCode: "CAD", amount: new Prisma.Decimal("1000"), usedAmount: new Prisma.Decimal("0") },
+			{
+				currencyCode: "CAD",
+				amount: new Prisma.Decimal("3000"),
+				usedAmount: new Prisma.Decimal("5000"),
+			},
+			{
+				currencyCode: "CAD",
+				amount: new Prisma.Decimal("1000"),
+				usedAmount: new Prisma.Decimal("0"),
+			},
 		]);
 		expect(result.get("CAD")?.toFixed(4)).toBe("-1000.0000");
 		expect(result.get("CAD")?.isNegative()).toBe(true); // 负数原样保留，禁止 max(0)
@@ -136,7 +168,9 @@ describe("buildPurchaseLot", () => {
 			expect.unreachable("应当抛出");
 		} catch (error) {
 			expect(error).toBeInstanceOf(TransactionInvalidParamsException);
-			const response = (error as TransactionInvalidParamsException).getResponse() as {
+			const response = (
+				error as TransactionInvalidParamsException
+			).getResponse() as {
 				code: string;
 				message: string;
 			};
@@ -166,8 +200,14 @@ describe("buildPurchaseLot", () => {
 describe("computeRemainingCost", () => {
 	it("正常批次求和：Σ(remainingQty × unitCost)", () => {
 		const result = computeRemainingCost([
-			{ remainingQty: new Prisma.Decimal("10000"), unitCost: new Prisma.Decimal("1") },
-			{ remainingQty: new Prisma.Decimal("500"), unitCost: new Prisma.Decimal("2") },
+			{
+				remainingQty: new Prisma.Decimal("10000"),
+				unitCost: new Prisma.Decimal("1"),
+			},
+			{
+				remainingQty: new Prisma.Decimal("500"),
+				unitCost: new Prisma.Decimal("2"),
+			},
 		]);
 		expect(result.remainingTotalCost?.toFixed(4)).toBe("11000.0000");
 		expect(result.averageUnitCost?.toFixed(8)).toBe("1.04761905"); // 11000 ÷ 10500
@@ -175,7 +215,10 @@ describe("computeRemainingCost", () => {
 
 	it("部分消耗（remainingQty < quantity）：按剩余量计算", () => {
 		const result = computeRemainingCost([
-			{ remainingQty: new Prisma.Decimal("30"), unitCost: new Prisma.Decimal("2") }, // quantity 100 已耗 70
+			{
+				remainingQty: new Prisma.Decimal("30"),
+				unitCost: new Prisma.Decimal("2"),
+			}, // quantity 100 已耗 70
 		]);
 		expect(result.remainingTotalCost?.toFixed(4)).toBe("60.0000");
 		expect(result.averageUnitCost?.toFixed(8)).toBe("2.00000000");
@@ -183,8 +226,14 @@ describe("computeRemainingCost", () => {
 
 	it("多批次混合：剩余成本与平均单位成本同时正确", () => {
 		const result = computeRemainingCost([
-			{ remainingQty: new Prisma.Decimal("10"), unitCost: new Prisma.Decimal("1") },
-			{ remainingQty: new Prisma.Decimal("20"), unitCost: new Prisma.Decimal("3") },
+			{
+				remainingQty: new Prisma.Decimal("10"),
+				unitCost: new Prisma.Decimal("1"),
+			},
+			{
+				remainingQty: new Prisma.Decimal("20"),
+				unitCost: new Prisma.Decimal("3"),
+			},
 		]);
 		expect(result.remainingTotalCost?.toFixed(4)).toBe("70.0000");
 		expect(result.averageUnitCost?.toFixed(8)).toBe("2.33333333"); // 70 ÷ 30
@@ -192,7 +241,10 @@ describe("computeRemainingCost", () => {
 
 	it("全消耗（Σ remainingQty = 0）：averageUnitCost = null，余额 0 不计算（doc 04）", () => {
 		const result = computeRemainingCost([
-			{ remainingQty: new Prisma.Decimal("0"), unitCost: new Prisma.Decimal("2") },
+			{
+				remainingQty: new Prisma.Decimal("0"),
+				unitCost: new Prisma.Decimal("2"),
+			},
 		]);
 		expect(result.remainingTotalCost?.toFixed(4)).toBe("0.0000");
 		expect(result.averageUnitCost).toBeNull();
@@ -206,14 +258,26 @@ describe("computeRemainingCost", () => {
 
 	it("8 位四舍五入：1/3 舍去、2/3 第 9 位进位（toFixed(8) 断言）", () => {
 		const one = computeRemainingCost([
-			{ remainingQty: new Prisma.Decimal("1"), unitCost: new Prisma.Decimal("1") },
-			{ remainingQty: new Prisma.Decimal("2"), unitCost: new Prisma.Decimal("0") },
+			{
+				remainingQty: new Prisma.Decimal("1"),
+				unitCost: new Prisma.Decimal("1"),
+			},
+			{
+				remainingQty: new Prisma.Decimal("2"),
+				unitCost: new Prisma.Decimal("0"),
+			},
 		]); // 1 ÷ 3
 		expect(one.averageUnitCost?.toFixed(8)).toBe("0.33333333");
 
 		const two = computeRemainingCost([
-			{ remainingQty: new Prisma.Decimal("1"), unitCost: new Prisma.Decimal("2") },
-			{ remainingQty: new Prisma.Decimal("2"), unitCost: new Prisma.Decimal("0") },
+			{
+				remainingQty: new Prisma.Decimal("1"),
+				unitCost: new Prisma.Decimal("2"),
+			},
+			{
+				remainingQty: new Prisma.Decimal("2"),
+				unitCost: new Prisma.Decimal("0"),
+			},
 		]); // 2 ÷ 3 → 第 9 位 6 进位
 		expect(two.averageUnitCost?.toFixed(8)).toBe("0.66666667");
 	});
@@ -225,10 +289,24 @@ describe("mergeLedgerItems", () => {
 	it("PURCHASE + USAGE 合并后按 occurredAt 倒序", () => {
 		const merged = mergeLedgerItems(
 			[
-				{ id: "p1", occurredAt: occurred("2026-01-03T00:00:00.000Z"), createdAt: occurred("2026-01-03T10:00:00.000Z") },
-				{ id: "p2", occurredAt: occurred("2026-01-01T00:00:00.000Z"), createdAt: occurred("2026-01-01T10:00:00.000Z") },
+				{
+					id: "p1",
+					occurredAt: occurred("2026-01-03T00:00:00.000Z"),
+					createdAt: occurred("2026-01-03T10:00:00.000Z"),
+				},
+				{
+					id: "p2",
+					occurredAt: occurred("2026-01-01T00:00:00.000Z"),
+					createdAt: occurred("2026-01-01T10:00:00.000Z"),
+				},
 			],
-			[{ id: "u1", occurredAt: occurred("2026-01-02T00:00:00.000Z"), createdAt: occurred("2026-01-02T10:00:00.000Z") }],
+			[
+				{
+					id: "u1",
+					occurredAt: occurred("2026-01-02T00:00:00.000Z"),
+					createdAt: occurred("2026-01-02T10:00:00.000Z"),
+				},
+			],
 		);
 		expect(merged.map((item) => item.id)).toEqual(["p1", "u1", "p2"]);
 	});
@@ -237,12 +315,30 @@ describe("mergeLedgerItems", () => {
 		const at = occurred("2026-01-02T00:00:00.000Z");
 		const merged = mergeLedgerItems(
 			[
-				{ id: "p-early", occurredAt: at, createdAt: occurred("2026-01-02T08:00:00.000Z") },
-				{ id: "p-late", occurredAt: at, createdAt: occurred("2026-01-02T12:00:00.000Z") },
+				{
+					id: "p-early",
+					occurredAt: at,
+					createdAt: occurred("2026-01-02T08:00:00.000Z"),
+				},
+				{
+					id: "p-late",
+					occurredAt: at,
+					createdAt: occurred("2026-01-02T12:00:00.000Z"),
+				},
 			],
-			[{ id: "u-same", occurredAt: at, createdAt: occurred("2026-01-02T10:00:00.000Z") }],
+			[
+				{
+					id: "u-same",
+					occurredAt: at,
+					createdAt: occurred("2026-01-02T10:00:00.000Z"),
+				},
+			],
 		);
-		expect(merged.map((item) => item.id)).toEqual(["p-late", "u-same", "p-early"]);
+		expect(merged.map((item) => item.id)).toEqual([
+			"p-late",
+			"u-same",
+			"p-early",
+		]);
 	});
 
 	it("空输入返回空数组", () => {

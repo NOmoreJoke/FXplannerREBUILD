@@ -19,14 +19,15 @@ import {
 import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+// biome-ignore lint/style/useImportType: 必须值导入 DTO：type-only 导入会让 tsc 在 design:paramtypes 发出 Function，ValidationPipe 会对 @Param() 对象误转换导致字段丢失（500）
 import {
+	AccountCurrencyParamDto,
 	AccountDetailDto,
 	AccountErrorDto,
 	AccountLedgerDto,
 	AccountLedgerItemDto,
 	AccountListDto,
 	AccountListItemDto,
-	type AccountCurrencyParamDto,
 } from "./dto/account.dto";
 import { AccountService } from "./account.service";
 
