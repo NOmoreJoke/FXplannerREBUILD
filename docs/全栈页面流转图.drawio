@@ -1,0 +1,415 @@
+<mxfile host="app.diagrams.net" agent="pi" version="24.7.7" type="device">
+  <diagram id="fxplanner-fullstack-flow" name="全栈页面流转图">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="2400" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="&lt;b&gt;FXPlanner 全栈页面流转图&lt;/b&gt;　—　页面 · 接口 · 模块 · 数据（全量业务：实色 = 已实现，灰虚 = 规划中）" style="text;html=1;align=left;verticalAlign=middle;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="40" y="14" width="1400" height="34" as="geometry" />
+        </mxCell>
+
+        <!-- ======== 分区：公开区 ======== -->
+        <mxCell id="z_public" value="公开区 · clients/chat-web/app/（无需登录，proxy.ts 放行）" style="swimlane;html=1;horizontal=1;startSize=36;rounded=0;fontSize=13;fontStyle=1;fillColor=#FFFDF5;strokeColor=#666666;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="1560" height="320" as="geometry" />
+        </mxCell>
+        <mxCell id="n_start" value="" style="ellipse;whiteSpace=wrap;html=1;fillColor=#555555;strokeColor=#555555;" vertex="1" parent="z_public">
+          <mxGeometry x="28" y="105" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="p_landing" value="&lt;b&gt;/ 落地页&lt;/b&gt;&lt;br&gt;产品介绍 · CTA 登录/注册&lt;br&gt;已登录访问 → 302 /home" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7E6;strokeColor=#C98A2D;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_public">
+          <mxGeometry x="90" y="60" width="240" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="p_login" value="&lt;b&gt;/login 登录页&lt;/b&gt;&lt;br&gt;邮箱＋验证码（OTP）&lt;br&gt;store: auth-store（token/用户态）&lt;br&gt;API: POST /api/auth/otp/send-code&lt;br&gt;POST /api/auth/otp/login · /api/auth/login&lt;br&gt;GET /api/auth/me" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7E6;strokeColor=#C98A2D;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_public">
+          <mxGeometry x="430" y="60" width="260" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="p_reg" value="&lt;b&gt;/register 注册页&lt;/b&gt;&lt;br&gt;API: POST /api/auth/register" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7E6;strokeColor=#C98A2D;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_public">
+          <mxGeometry x="790" y="60" width="240" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="g_pub" value="守卫 · proxy.ts：已登录访问 / · /login · /register → 302 /home" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3CD;strokeColor=#C9A227;dashed=1;fontSize=10;align=left;spacing=6;arcSize=8;" vertex="1" parent="z_public">
+          <mxGeometry x="790" y="240" width="300" height="56" as="geometry" />
+        </mxCell>
+
+        <!-- ======== 分区：保护区 ======== -->
+        <mxCell id="z_prot" value="保护区 · app/(protected)/（守卫: proxy.ts + layout.tsx · 未登录 → 302 /login?redirect=原路径）　第一行 = 已实现　第二行 = 规划中" style="swimlane;html=1;horizontal=1;startSize=36;rounded=0;fontSize=13;fontStyle=1;fillColor=#F7FAFF;strokeColor=#666666;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="460" width="1560" height="680" as="geometry" />
+        </mxCell>
+        <mxCell id="p_home" value="&lt;b&gt;/home 工作台首页&lt;/b&gt;&lt;br&gt;组件: home-dashboard · home-empty-state&lt;br&gt;hook: use-home-state&lt;br&gt;API: GET /api/home/state&lt;br&gt;GET /api/onboarding/status · /api/currencies&lt;br&gt;未完成首次设置 → 向导拦截" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF3FF;strokeColor=#4A78B5;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_prot">
+          <mxGeometry x="80" y="80" width="300" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="p_wizard" value="&lt;b&gt;首次设置向导（内嵌流程）&lt;/b&gt;&lt;br&gt;非独立路由：承载于 /home 与 /plans/new&lt;br&gt;草稿续填（OnboardingDraft）&lt;br&gt;API: GET/PUT/DELETE /api/onboarding/draft&lt;br&gt;POST /api/onboarding/consents&lt;br&gt;POST /api/onboarding/complete" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3EAFF;strokeColor=#8250DF;dashed=1;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_prot">
+          <mxGeometry x="460" y="80" width="280" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="p_plannew" value="&lt;b&gt;/plans/new 新建计划&lt;/b&gt;&lt;br&gt;组件: plan-create-form · schedule-preview-card&lt;br&gt;hook: use-plan-form&lt;br&gt;API: POST /api/plans/schedule-preview&lt;br&gt;POST /api/plans&lt;br&gt;GET /api/rates/supported · /api/rates/latest/:base" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF3FF;strokeColor=#4A78B5;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_prot">
+          <mxGeometry x="840" y="80" width="320" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="p_quick" value="&lt;b&gt;/quick-entry 快速录入买入（规划中）&lt;/b&gt;&lt;br&gt;本金＋汇率/到账金额 · 手续费可空=未知&lt;br&gt;首次自动建立该币种账户&lt;br&gt;—— 业务泳道图分支 ①" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;dashed=1;fontColor=#555555;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_prot">
+          <mxGeometry x="80" y="300" width="290" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="p_plans" value="&lt;b&gt;/plans 计划列表（规划中）&lt;/b&gt;&lt;br&gt;进行中／已完成／已取消 筛选&lt;br&gt;分批进度一览&lt;br&gt;—— 业务泳道图分支 ②" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;dashed=1;fontColor=#555555;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_prot">
+          <mxGeometry x="410" y="300" width="240" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="p_plandetail" value="&lt;b&gt;/plans/:id 计划详情（规划中）&lt;/b&gt;&lt;br&gt;使用录入（可分次）· 调整目标&lt;br&gt;取消 / 重新开启 · 分批进度&lt;br&gt;提醒列表 · 更正入口&lt;br&gt;—— 业务泳道图分支 ②尾 + ④入口" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;dashed=1;fontColor=#555555;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_prot">
+          <mxGeometry x="690" y="300" width="330" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="p_reports" value="&lt;b&gt;/reports 报告中心（规划中）&lt;/b&gt;&lt;br&gt;成本摘要 · PDF 导出&lt;br&gt;（与最晚安全时间一次换汇对比）&lt;br&gt;—— 业务泳道图分支 ③" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;dashed=1;fontColor=#555555;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_prot">
+          <mxGeometry x="1070" y="300" width="290" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="p_correct" value="&lt;b&gt;更正流程（规划中 · 内嵌计划详情）&lt;/b&gt;&lt;br&gt;交易/使用详情 → 新内容＋原因（必填）→ 影响预览 → 确认保存&lt;br&gt;—— 业务泳道图分支 ④" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;dashed=1;fontColor=#555555;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_prot">
+          <mxGeometry x="690" y="530" width="330" height="110" as="geometry" />
+        </mxCell>
+
+        <!-- ======== 分区：后端 ======== -->
+        <mxCell id="z_api" value="后端 · services/chat（NestJS · 全局前缀 /api · OpenAPI 契约 → 前端生成客户端 lib/api）　第一行 = 已实现　第二行 = 待开发" style="swimlane;html=1;horizontal=1;startSize=36;rounded=0;fontSize=13;fontStyle=1;fillColor=#F7FCF9;strokeColor=#666666;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1240" width="1560" height="520" as="geometry" />
+        </mxCell>
+        <mxCell id="m_auth" value="&lt;b&gt;auth 模块&lt;/b&gt;&lt;br&gt;POST /api/auth/register&lt;br&gt;POST /api/auth/login&lt;br&gt;POST /api/auth/otp/send-code&lt;br&gt;POST /api/auth/otp/login&lt;br&gt;GET /api/auth/me" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAFBF1;strokeColor=#3D8B6E;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_api">
+          <mxGeometry x="60" y="60" width="270" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="m_onb" value="&lt;b&gt;onboarding 模块&lt;/b&gt;&lt;br&gt;GET /api/onboarding/status&lt;br&gt;GET/PUT/DELETE /api/onboarding/draft&lt;br&gt;POST /api/onboarding/consents&lt;br&gt;POST /api/onboarding/complete" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAFBF1;strokeColor=#3D8B6E;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_api">
+          <mxGeometry x="380" y="60" width="270" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="m_home" value="&lt;b&gt;home 模块&lt;/b&gt;&lt;br&gt;GET /api/home/state&lt;br&gt;聚合只读 · 无自有表" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAFBF1;strokeColor=#3D8B6E;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_api">
+          <mxGeometry x="700" y="60" width="230" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="m_plan" value="&lt;b&gt;plan 模块&lt;/b&gt;&lt;br&gt;POST /api/plans/schedule-preview&lt;br&gt;POST /api/plans" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAFBF1;strokeColor=#3D8B6E;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_api">
+          <mxGeometry x="980" y="60" width="250" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="m_rate" value="&lt;b&gt;rate / currency 模块&lt;/b&gt;&lt;br&gt;GET /api/rates/supported&lt;br&gt;GET /api/rates/latest/:base&lt;br&gt;GET /api/rates/history&lt;br&gt;GET /api/currencies" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAFBF1;strokeColor=#3D8B6E;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_api">
+          <mxGeometry x="1280" y="60" width="230" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="m_txn" value="&lt;b&gt;account / transaction 模块（待开发）&lt;/b&gt;&lt;br&gt;POST /api/transactions（建账 + CostLot）&lt;br&gt;GET /api/accounts&lt;br&gt;GET /api/transactions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;dashed=1;fontColor=#555555;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_api">
+          <mxGeometry x="60" y="310" width="270" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="m_usage" value="&lt;b&gt;plan 模块扩展（待开发）&lt;/b&gt;&lt;br&gt;POST /api/plans/:id/usages（FIFO 分摊）&lt;br&gt;PATCH /api/plans/:id（调整目标）&lt;br&gt;POST /api/plans/:id/cancel · /reopen" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;dashed=1;fontColor=#555555;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_api">
+          <mxGeometry x="380" y="310" width="270" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="m_reminder" value="&lt;b&gt;reminder 模块（待开发）&lt;/b&gt;&lt;br&gt;GET /api/reminders&lt;br&gt;POST /api/reminders/:id/read&lt;br&gt;同日合并 dedupKey" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;dashed=1;fontColor=#555555;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_api">
+          <mxGeometry x="700" y="310" width="230" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="m_report" value="&lt;b&gt;report 模块（待开发）&lt;/b&gt;&lt;br&gt;GET /api/reports/summary&lt;br&gt;GET /api/reports/pdf&lt;br&gt;最晚安全时间对比" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;dashed=1;fontColor=#555555;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_api">
+          <mxGeometry x="980" y="310" width="250" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="m_corr" value="&lt;b&gt;correction 模块（待开发）&lt;/b&gt;&lt;br&gt;POST /api/corrections/preview&lt;br&gt;POST /api/corrections（原因必填）&lt;br&gt;保留原记录 + before/after 快照" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;dashed=1;fontColor=#555555;fontSize=11;align=left;spacing=8;arcSize=8;" vertex="1" parent="z_api">
+          <mxGeometry x="1280" y="310" width="230" height="160" as="geometry" />
+        </mxCell>
+
+        <!-- ======== 分区：数据库（按模块分组） ======== -->
+        <mxCell id="z_db" value="数据库 · PostgreSQL（Prisma schema，按模块分组）　灰虚组 = 表已建、模块待开发" style="swimlane;html=1;horizontal=1;startSize=36;rounded=0;fontSize=13;fontStyle=1;fillColor=#FFFBF5;strokeColor=#666666;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1800" width="1560" height="500" as="geometry" />
+        </mxCell>
+        <mxCell id="g_auth" value="auth · 认证" style="swimlane;html=1;horizontal=1;startSize=26;rounded=0;fontSize=11;fontStyle=1;fillColor=#FFF9F0;strokeColor=#B08954;" vertex="1" parent="z_db">
+          <mxGeometry x="60" y="50" width="270" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="t_user" value="User" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B08954;fontSize=11;" vertex="1" parent="g_auth">
+          <mxGeometry x="8" y="30" width="254" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="t_otpch" value="OtpChallenge" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B08954;fontSize=11;" vertex="1" parent="g_auth">
+          <mxGeometry x="8" y="82" width="254" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="t_otpid" value="OtpIdentity" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B08954;fontSize=11;" vertex="1" parent="g_auth">
+          <mxGeometry x="8" y="134" width="254" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="g_onb" value="onboarding · 首次设置" style="swimlane;html=1;horizontal=1;startSize=26;rounded=0;fontSize=11;fontStyle=1;fillColor=#FFF9F0;strokeColor=#B08954;" vertex="1" parent="z_db">
+          <mxGeometry x="380" y="50" width="270" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="t_usettings" value="UserSettings" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B08954;fontSize=11;" vertex="1" parent="g_onb">
+          <mxGeometry x="8" y="30" width="254" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="t_odraft" value="OnboardingDraft（30 天草稿续填）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B08954;fontSize=11;" vertex="1" parent="g_onb">
+          <mxGeometry x="8" y="82" width="254" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="t_terms" value="TermsConsent" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B08954;fontSize=11;" vertex="1" parent="g_onb">
+          <mxGeometry x="8" y="134" width="254" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="g_home" value="home · 聚合" style="swimlane;html=1;horizontal=1;startSize=26;rounded=0;fontSize=11;fontStyle=1;fillColor=#FFF9F0;strokeColor=#B08954;" vertex="1" parent="z_db">
+          <mxGeometry x="700" y="50" width="230" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="t_agg" value="聚合只读：Plan · Account · Transaction&lt;br&gt;（home 模块无自有表）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#9E9E9E;dashed=1;fontSize=11;" vertex="1" parent="g_home">
+          <mxGeometry x="8" y="30" width="214" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="g_plan" value="plan · 计划" style="swimlane;html=1;horizontal=1;startSize=26;rounded=0;fontSize=11;fontStyle=1;fillColor=#FFF9F0;strokeColor=#B08954;" vertex="1" parent="z_db">
+          <mxGeometry x="980" y="50" width="250" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="t_plan" value="Plan（固定 3 期分批）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B08954;fontSize=11;" vertex="1" parent="g_plan">
+          <mxGeometry x="8" y="30" width="234" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="t_inst" value="PlanInstallment" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B08954;fontSize=11;" vertex="1" parent="g_plan">
+          <mxGeometry x="8" y="82" width="234" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="t_alloc" value="PlanAllocation" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B08954;fontSize=11;" vertex="1" parent="g_plan">
+          <mxGeometry x="8" y="134" width="234" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="g_rate" value="rate / currency · 汇率" style="swimlane;html=1;horizontal=1;startSize=26;rounded=0;fontSize=11;fontStyle=1;fillColor=#FFF9F0;strokeColor=#B08954;" vertex="1" parent="z_db">
+          <mxGeometry x="1280" y="50" width="230" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="t_exrate" value="ExchangeRate" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B08954;fontSize=11;" vertex="1" parent="g_rate">
+          <mxGeometry x="8" y="30" width="214" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="t_curr" value="Currency" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B08954;fontSize=11;" vertex="1" parent="g_rate">
+          <mxGeometry x="8" y="82" width="214" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="g_txn" value="account / transaction · 账本（规划中）" style="swimlane;html=1;horizontal=1;startSize=26;rounded=0;fontSize=11;fontStyle=1;fillColor=#FAFAFA;strokeColor=#AAAAAA;dashed=1;fontColor=#777777;" vertex="1" parent="z_db">
+          <mxGeometry x="60" y="270" width="270" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="t_account" value="Account（每币种仅一个）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#AAAAAA;fontColor=#666666;fontSize=11;" vertex="1" parent="g_txn">
+          <mxGeometry x="8" y="30" width="254" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="t_transaction" value="Transaction" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#AAAAAA;fontColor=#666666;fontSize=11;" vertex="1" parent="g_txn">
+          <mxGeometry x="8" y="82" width="254" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="t_costlot" value="CostLot（FIFO 批次）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#AAAAAA;fontColor=#666666;fontSize=11;" vertex="1" parent="g_txn">
+          <mxGeometry x="8" y="134" width="254" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="g_usage" value="usage · 使用分摊（规划中）" style="swimlane;html=1;horizontal=1;startSize=26;rounded=0;fontSize=11;fontStyle=1;fillColor=#FAFAFA;strokeColor=#AAAAAA;dashed=1;fontColor=#777777;" vertex="1" parent="z_db">
+          <mxGeometry x="380" y="270" width="270" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="t_usagerec" value="UsageRecord（可分次）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#AAAAAA;fontColor=#666666;fontSize=11;" vertex="1" parent="g_usage">
+          <mxGeometry x="8" y="30" width="254" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="t_usagelot" value="UsageLotAllocation（FIFO 拆批）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#AAAAAA;fontColor=#666666;fontSize=11;" vertex="1" parent="g_usage">
+          <mxGeometry x="8" y="82" width="254" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="g_rem" value="reminder · 提醒（规划中）" style="swimlane;html=1;horizontal=1;startSize=26;rounded=0;fontSize=11;fontStyle=1;fillColor=#FAFAFA;strokeColor=#AAAAAA;dashed=1;fontColor=#777777;" vertex="1" parent="z_db">
+          <mxGeometry x="700" y="270" width="230" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="t_reminder" value="Reminder（同日合并）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#AAAAAA;fontColor=#666666;fontSize=11;" vertex="1" parent="g_rem">
+          <mxGeometry x="8" y="30" width="214" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="g_report" value="report · 报告（规划中）" style="swimlane;html=1;horizontal=1;startSize=26;rounded=0;fontSize=11;fontStyle=1;fillColor=#FAFAFA;strokeColor=#AAAAAA;dashed=1;fontColor=#777777;" vertex="1" parent="z_db">
+          <mxGeometry x="980" y="270" width="250" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="t_reportnote" value="无自有表（读 Plan / Transaction / ExchangeRate 聚合）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#AAAAAA;fontColor=#666666;dashed=1;fontSize=10;" vertex="1" parent="g_report">
+          <mxGeometry x="8" y="30" width="234" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="g_corr" value="correction · 更正/数据权利（规划中）" style="swimlane;html=1;horizontal=1;startSize=26;rounded=0;fontSize=11;fontStyle=1;fillColor=#FAFAFA;strokeColor=#AAAAAA;dashed=1;fontColor=#777777;" vertex="1" parent="z_db">
+          <mxGeometry x="1280" y="270" width="230" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="t_correction" value="Correction（before/after）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#AAAAAA;fontColor=#666666;fontSize=11;" vertex="1" parent="g_corr">
+          <mxGeometry x="8" y="30" width="214" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="t_datareq" value="DataRequest" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#AAAAAA;fontColor=#666666;fontSize=11;" vertex="1" parent="g_corr">
+          <mxGeometry x="8" y="82" width="214" height="44" as="geometry" />
+        </mxCell>
+
+        <mxCell id="legend" value="&lt;b&gt;图例&lt;/b&gt;　── 页面跳转　　┄ 蓝 = 已实现 API 调用　　┄ 灰 = 规划中 API 调用　　┄ 紫 = 内嵌流程　　─ 灰 = 模块 → 数据表分组　　实色 = 已实现 · 灰虚框 = 规划中（表已建、模块未开发）" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="40" y="2320" width="1500" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- ======== 页面跳转（实线，已实现） ======== -->
+        <mxCell id="nav1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#555555;" edge="1" parent="1" source="n_start" target="p_landing">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="nav2" value="登录" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#555555;fontSize=11;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.4;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_landing" target="p_login">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="nav3" value="注册" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#555555;fontSize=11;labelBackgroundColor=#FFFFFF;exitX=0.75;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_landing" target="p_reg">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="320" y="370" />
+              <mxPoint x="830" y="370" />
+              <mxPoint x="830" y="235" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="nav4" value="切换" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#555555;fontSize=11;labelBackgroundColor=#FFFFFF;startArrow=classic;startFill=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_login" target="p_reg">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="810" y="195" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="nav5" value="验证码登录成功 · 写入 token" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#555555;fontSize=11;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_login" target="p_home">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="600" y="420" />
+              <mxPoint x="270" y="420" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="nav6" value="注册成功" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#555555;fontSize=11;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.9;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_reg" target="p_home">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1150" y="215" />
+              <mxPoint x="1150" y="500" />
+              <mxPoint x="390" y="500" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="nav7" value="新建计划入口" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#555555;fontSize=11;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_home" target="p_plannew">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="270" y="745" />
+              <mxPoint x="1040" y="745" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ======== 页面跳转（灰虚线，规划中） ======== -->
+        <mxCell id="nav_quick" value="录入入口 ①" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#999999;dashed=1;fontColor=#777777;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0.75;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_home" target="p_quick">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="nav_plans" value="我的计划 ②" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#999999;dashed=1;fontColor=#777777;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0.9;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_home" target="p_plans">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="nav_detail" value="查看详情" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#999999;dashed=1;fontColor=#777777;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_plans" target="p_plandetail">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="nav_report" value="报告入口 ③" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#999999;dashed=1;fontColor=#777777;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0.65;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_home" target="p_reports">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="315" y="722" />
+              <mxPoint x="1255" y="722" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="nav_correct" value="发起更正 ④" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#999999;dashed=1;fontColor=#777777;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_plandetail" target="p_correct">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ======== 内嵌流程（紫虚线） ======== -->
+        <mxCell id="emb1" value="内嵌" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#8250DF;dashed=1;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.4;exitDx=0;exitDy=0;entryX=0;entryY=0.4;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_home" target="p_wizard">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="emb2" value="内嵌" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#8250DF;dashed=1;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.4;exitDx=0;exitDy=0;entryX=1;entryY=0.4;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_plannew" target="p_wizard">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ======== API 调用（蓝虚线，已实现） ======== -->
+        <mxCell id="api1" value="POST /api/auth/*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#2D6CDF;dashed=1;dashPattern=6 4;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_login" target="m_auth">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="435" y="195" />
+              <mxPoint x="435" y="1270" />
+              <mxPoint x="235" y="1270" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="api2" value="POST /api/auth/register" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#2D6CDF;dashed=1;dashPattern=6 4;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.75;exitDx=0;exitDy=0;entryX=0.78;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_reg" target="m_auth">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="810" y="215" />
+              <mxPoint x="810" y="1280" />
+              <mxPoint x="310" y="1280" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="api3" value="GET /api/home/state" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#2D6CDF;dashed=1;dashPattern=6 4;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_home" target="m_home">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="455" y="625" />
+              <mxPoint x="455" y="1210" />
+              <mxPoint x="855" y="1210" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="api4" value="GET /api/onboarding/status" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#2D6CDF;dashed=1;dashPattern=6 4;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_home" target="m_onb">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="90" y="625" />
+              <mxPoint x="90" y="1250" />
+              <mxPoint x="555" y="1250" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="api5" value="draft · consents · complete" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#2D6CDF;dashed=1;dashPattern=6 4;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.81;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_wizard" target="m_onb">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="api6" value="POST /api/plans/*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#2D6CDF;dashed=1;dashPattern=6 4;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_plannew" target="m_plan">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1290" y="667" />
+              <mxPoint x="1290" y="1280" />
+              <mxPoint x="1145" y="1280" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="api7" value="rates · currencies" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#2D6CDF;dashed=1;dashPattern=6 4;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.4;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_plannew" target="m_rate">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1435" y="608" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ======== API 调用（灰虚线，规划中） ======== -->
+        <mxCell id="api_quick" value="POST /api/transactions" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#888888;dashed=1;dashPattern=4 4;fontColor=#777777;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_quick" target="m_txn">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="60" y="840" />
+              <mxPoint x="60" y="1630" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="api_usage" value="usages · cancel · reopen" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#888888;dashed=1;dashPattern=4 4;fontColor=#777777;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_plandetail" target="m_usage">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="710" y="855" />
+              <mxPoint x="710" y="1520" />
+              <mxPoint x="555" y="1520" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="api_reminder" value="reminders" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#888888;dashed=1;dashPattern=4 4;fontColor=#777777;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0.773;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_plandetail" target="m_reminder">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="985" y="1540" />
+              <mxPoint x="855" y="1540" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="api_report" value="reports/*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#888888;dashed=1;dashPattern=4 4;fontColor=#777777;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0.65;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_reports" target="m_report">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1300" y="1530" />
+              <mxPoint x="1145" y="1530" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="api_corr" value="corrections/*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#888888;dashed=1;dashPattern=4 4;fontColor=#777777;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="p_correct" target="m_corr">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="895" y="1130" />
+              <mxPoint x="1580" y="1130" />
+              <mxPoint x="1580" y="1630" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ======== 模块 → 数据表分组（灰实线，已实现） ======== -->
+        <mxCell id="mg1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9E9E9E;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="m_auth" target="g_auth">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="mg2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9E9E9E;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="m_onb" target="g_onb">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="mg3" value="只读" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9E9E9E;dashed=1;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="m_home" target="g_home">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="mg4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9E9E9E;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="m_plan" target="g_plan">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="mg5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9E9E9E;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="m_rate" target="g_rate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ======== 模块 → 数据表分组（灰虚线，规划中） ======== -->
+        <mxCell id="mg6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#AAAAAA;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="m_txn" target="g_txn">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="mg7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#AAAAAA;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="m_usage" target="g_usage">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="mg8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#AAAAAA;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="m_reminder" target="g_rem">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="mg9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#AAAAAA;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="m_report" target="g_report">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="mg10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#AAAAAA;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="m_corr" target="g_corr">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
