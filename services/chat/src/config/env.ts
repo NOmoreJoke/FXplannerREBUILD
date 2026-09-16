@@ -51,6 +51,15 @@ const schema = z
 		RESEND_API_KEY: optionalEnv(),
 		RESEND_FROM_EMAIL: optionalEmailEnv(),
 		RESEND_API_URL: optionalUrlEnv(),
+		// ── OTP 邮件 mock 开关（未接入真实邮件服务时本地联调用）──
+		// true 强制 mock；false 强制走真实 Resend；未设置时：非生产 && 未配置 Resend → 自动 mock，生产永不 mock
+		OTP_EMAIL_MOCK: z.enum(["true", "false"]).optional(),
+
+		// ── 认证接口限流上限（次/分钟，auth.controller Throttle）──
+		// 默认 5/10；E2E 集中造数时由测试脚本放大，生产不设置即维持默认
+		AUTH_THROTTLE_LIMIT: z.coerce.number().int().positive().optional(),
+		AUTH_OTP_THROTTLE_LIMIT: z.coerce.number().int().positive().optional(),
+		THROTTLE_GLOBAL_LIMIT: z.coerce.number().int().positive().optional(),
 		ALIYUN_ACCESS_KEY_ID: optionalEnv(),
 		ALIYUN_ACCESS_KEY_SECRET: optionalEnv(),
 		ALIYUN_SMS_SIGN_NAME: optionalEnv(),

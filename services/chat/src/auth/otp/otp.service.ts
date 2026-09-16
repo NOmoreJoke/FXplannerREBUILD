@@ -17,12 +17,23 @@ import { OTP_CHANNELS, OTP_OPTIONS } from "./otp-channel";
 import type { SendOtpCodeDto } from "./dto/send-otp-code.dto";
 import type { OtpLoginDto } from "./dto/otp-login.dto";
 
-export const OTP_EXPIRY_MS = 5 * 60 * 1000;
+/** 验证码有效期：10 分钟（doc 01 验证码规则，技术方案 §5） */
+export const OTP_EXPIRY_MS = 10 * 60 * 1000;
 export const OTP_MAX_ATTEMPTS = 5;
 export const OTP_TARGET_WINDOW_MS = 60 * 1000;
 export const OTP_IP_WINDOW_MS = 60 * 1000;
 export const OTP_TARGET_MAX_REQUESTS = 1;
 export const OTP_IP_MAX_REQUESTS = 5;
+
+/** 发送上限窗口：1 小时 / 24 小时（doc 01：1h 最多 5 次、24h 最多 20 次） */
+export const OTP_SEND_WINDOW_1H_MS = 60 * 60 * 1000;
+export const OTP_SEND_WINDOW_24H_MS = 24 * 60 * 60 * 1000;
+export const OTP_SEND_MAX_PER_HOUR = 5;
+export const OTP_SEND_MAX_PER_DAY = 20;
+
+/** 输错锁定：同一邮箱 15 分钟窗口内累计失败尝试 ≥5 次 → 全部失效并暂停验证与发送（doc 01） */
+export const OTP_VERIFY_LOCK_WINDOW_MS = 15 * 60 * 1000;
+export const OTP_VERIFY_LOCK_THRESHOLD = 5;
 
 export interface OtpServiceOptions {
   now?: () => Date;
@@ -32,12 +43,20 @@ export interface OtpServiceOptions {
   ipWindowMs?: number;
   targetMaxRequests?: number;
   ipMaxRequests?: number;
+  sendWindow1hMs?: number;
+  sendWindow24hMs?: number;
+  sendMaxPerHour?: number;
+  sendMaxPerDay?: number;
+  verifyLockWindowMs?: number;
+  verifyLockThreshold?: number;
   codeSecret?: string;
 }
 
 export interface OtpChallengeResult {
   challengeId: string;
   expiresAt: Date;
+  /** [dev] mock 渠道（devMode=true）时附带验证码明文，供本地联调/E2E；真实渠道恒为 undefined */
+  devCode?: string;
 }
 
 export interface OtpVerificationResult {
@@ -72,11 +91,41 @@ type OtpChallengeDelegate = {
   findUnique(args: { where: { id: string } }): Promise<OtpChallengeRecord | null>;
   updateMany(args: { where: Record<string, unknown>; data: Record<string, unknown> }): Promise<{ count: number }>;
   count(args: { where: Record<string, unknown> }): Promise<number>;
+  aggregate(args: {
+    where: Record<string, unknown>;
+    _sum: { attempts: true };
+  }): Promise<{ _sum: { attempts: number | null } }>;
 };
 
 class OtpTooManyRequestsException extends HttpException {
   constructor(message: string) {
     super(message, HttpStatus.TOO_MANY_REQUESTS);
+  }
+}
+
+/** 发送上限（1h ≥5 或 24h ≥20，按目标邮箱统计已创建验证码条数） */
+class OtpSendRateLimitedException extends HttpException {
+  constructor() {
+    super(
+      {
+        code: "OTP_SEND_RATE_LIMITED",
+        message: "验证码发送过于频繁：1 小时内最多发送 5 次、24 小时内最多发送 20 次，请稍后再试",
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
+  }
+}
+
+/** 输错锁定（15 分钟窗口累计失败尝试 ≥5：全部未消费验证码作废 + 暂停验证与发送） */
+class OtpVerifyLockedException extends HttpException {
+  constructor() {
+    super(
+      {
+        code: "OTP_VERIFY_LOCKED",
+        message: "验证码错误次数过多，该邮箱的验证码已全部失效，请 15 分钟后重新获取",
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
   }
 }
 
@@ -124,6 +173,12 @@ export class OtpService {
   private readonly ipWindowMs: number;
   private readonly targetMaxRequests: number;
   private readonly ipMaxRequests: number;
+  private readonly sendWindow1hMs: number;
+  private readonly sendWindow24hMs: number;
+  private readonly sendMaxPerHour: number;
+  private readonly sendMaxPerDay: number;
+  private readonly verifyLockWindowMs: number;
+  private readonly verifyLockThreshold: number;
   private readonly codeSecret: string;
   private readonly otpChallenge: OtpChallengeDelegate;
 
@@ -139,6 +194,12 @@ export class OtpService {
     this.ipWindowMs = options.ipWindowMs ?? OTP_IP_WINDOW_MS;
     this.targetMaxRequests = options.targetMaxRequests ?? OTP_TARGET_MAX_REQUESTS;
     this.ipMaxRequests = options.ipMaxRequests ?? OTP_IP_MAX_REQUESTS;
+    this.sendWindow1hMs = options.sendWindow1hMs ?? OTP_SEND_WINDOW_1H_MS;
+    this.sendWindow24hMs = options.sendWindow24hMs ?? OTP_SEND_WINDOW_24H_MS;
+    this.sendMaxPerHour = options.sendMaxPerHour ?? OTP_SEND_MAX_PER_HOUR;
+    this.sendMaxPerDay = options.sendMaxPerDay ?? OTP_SEND_MAX_PER_DAY;
+    this.verifyLockWindowMs = options.verifyLockWindowMs ?? OTP_VERIFY_LOCK_WINDOW_MS;
+    this.verifyLockThreshold = options.verifyLockThreshold ?? OTP_VERIFY_LOCK_THRESHOLD;
     const codeSecret = options.codeSecret ?? process.env.OTP_CODE_SECRET;
     if (!codeSecret) {
       throw new Error("必须配置独立的 OTP_CODE_SECRET");
@@ -196,10 +257,12 @@ export class OtpService {
       throw error;
     }
 
-    return {
-      challengeId: challenge.id,
-      expiresAt: challenge.expiresAt,
-    };
+    // mock 渠道（未接入真实邮件服务）把验证码随响应带回，本地演示与 E2E 依赖它取码
+    const result: OtpChallengeResult = { challengeId: challenge.id, expiresAt: challenge.expiresAt };
+    if (channel.devMode) {
+      result.devCode = code;
+    }
+    return result;
   }
 
   async verifyCode(dto: OtpLoginDto): Promise<OtpVerificationResult> {
@@ -215,6 +278,19 @@ export class OtpService {
     }
 
     const now = this.now();
+
+    // 输错锁定期内拒绝验证（在消费状态/有效期检查之前，暂停一切验证）。
+    if (
+      await this.isVerifyLocked(
+        this.otpChallenge,
+        challenge.channel as OtpChannelType,
+        challenge.target,
+        now,
+      )
+    ) {
+      throw new OtpVerifyLockedException();
+    }
+
     if (challenge.consumedAt) {
       throw new ConflictException("验证码已经使用过");
     }
@@ -238,6 +314,28 @@ export class OtpService {
       if (updated.count === 0) {
         await this.assertChallengeStillVerifiable(dto.challengeId, now);
       }
+
+      // 按邮箱聚合 15min 窗口累计失败尝试（含本次）：达到阈值 → 全部未消费
+      // 验证码立即作废 + 进入锁定期（技术方案 §5，不加字段由现有记录推导）。
+      if (
+        await this.isVerifyLocked(
+          this.otpChallenge,
+          challenge.channel as OtpChannelType,
+          challenge.target,
+          now,
+        )
+      ) {
+        await this.otpChallenge.updateMany({
+          where: {
+            channel: challenge.channel,
+            target: challenge.target,
+            consumedAt: null,
+          },
+          data: { consumedAt: now },
+        });
+        throw new OtpVerifyLockedException();
+      }
+
       if (challenge.attempts + 1 >= this.maxAttempts) {
         throw new OtpTooManyRequestsException("验证码错误次数已达上限");
       }
@@ -274,6 +372,21 @@ export class OtpService {
     return selected;
   }
 
+  /** 目标邮箱是否处于输错锁定期（15min 窗口累计失败尝试 ≥ 阈值即锁定，期满自动恢复） */
+  private async isVerifyLocked(
+    store: OtpChallengeDelegate,
+    channel: OtpChannelType,
+    target: string,
+    now: Date,
+  ): Promise<boolean> {
+    const lockSince = new Date(now.getTime() - this.verifyLockWindowMs);
+    const summed = await store.aggregate({
+      where: { channel, target, createdAt: { gte: lockSince } },
+      _sum: { attempts: true },
+    });
+    return (summed._sum.attempts ?? 0) >= this.verifyLockThreshold;
+  }
+
   private async assertRateLimit(
     store: OtpChallengeDelegate,
     channel: OtpChannelType,
@@ -283,15 +396,32 @@ export class OtpService {
   ): Promise<void> {
     const targetSince = new Date(now.getTime() - this.targetWindowMs);
     const ipSince = new Date(now.getTime() - this.ipWindowMs);
-    const [targetCount, ipCount] = await Promise.all([
+    const hourSince = new Date(now.getTime() - this.sendWindow1hMs);
+    const daySince = new Date(now.getTime() - this.sendWindow24hMs);
+    const [targetCount, ipCount, hourCount, dayCount, locked] = await Promise.all([
       store.count({
         where: { channel, target, createdAt: { gte: targetSince } },
       }),
       store.count({
         where: { requestIp, createdAt: { gte: ipSince } },
       }),
+      store.count({
+        where: { channel, target, createdAt: { gte: hourSince } },
+      }),
+      store.count({
+        where: { channel, target, createdAt: { gte: daySince } },
+      }),
+      this.isVerifyLocked(store, channel, target, now),
     ]);
 
+    // 输错锁定期内拒绝发送（与邮箱维度限流叠加生效）。
+    if (locked) {
+      throw new OtpVerifyLockedException();
+    }
+    // 发送上限按已创建的验证码条数统计（发送失败即删、不扣次数）。
+    if (hourCount >= this.sendMaxPerHour || dayCount >= this.sendMaxPerDay) {
+      throw new OtpSendRateLimitedException();
+    }
     if (targetCount >= this.targetMaxRequests || ipCount >= this.ipMaxRequests) {
       throw new OtpTooManyRequestsException("OTP 请求过于频繁，请稍后再试");
     }

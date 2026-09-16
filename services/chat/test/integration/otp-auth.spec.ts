@@ -87,6 +87,12 @@ function createMemoryPrisma() {
 			async ({ where }: any) =>
 				challenges.filter((challenge) => matches(challenge, where)).length,
 		),
+		aggregate: vi.fn(async ({ where }: any) => {
+			const sum = challenges
+				.filter((challenge) => matches(challenge, where))
+				.reduce((total, challenge) => total + challenge.attempts, 0);
+			return { _sum: { attempts: sum } };
+		}),
 	};
 	const prisma: Record<string, any> = {
 		otpChallenge,
@@ -191,12 +197,12 @@ describe("OTP auth integration", () => {
 		);
 	});
 
-	it("验证码应该在五分钟后过期，错误次数达到上限后不能继续尝试", async () => {
+	it("验证码应该在十分钟后过期，错误次数达到上限后不能继续尝试", async () => {
 		const expiring = await service.sendCode(
 			{ channel: "email", target: "expiry@example.com" } as SendOtpCodeDto,
 			"192.0.2.3",
 		);
-		now = new Date(now.getTime() + 5 * 60 * 1000 + 1);
+		now = new Date(now.getTime() + 10 * 60 * 1000 + 1);
 		await expectStatus(
 			() =>
 				service.verifyCode({

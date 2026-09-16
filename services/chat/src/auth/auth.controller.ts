@@ -10,6 +10,10 @@ import {
   Req,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+
+// 认证接口限流上限（次/分钟）：默认 5；E2E 集中造数经 AUTH_THROTTLE_LIMIT 放大（.env.local 已由 dotenv -e 注入 process.env）
+const AUTH_THROTTLE_LIMIT = Number(process.env.AUTH_THROTTLE_LIMIT ?? 5);
+const AUTH_OTP_THROTTLE_LIMIT = Number(process.env.AUTH_OTP_THROTTLE_LIMIT ?? 10);
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { RegisterDto, LoginDto } from './dto';
@@ -43,7 +47,7 @@ export class AuthController {
       '注册成功。响应体为 { success, data: AuthResponseDto, message } 包装，data 为签发的用户与 JWT。',
     type: AuthResponseDto,
   })
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Throttle({ default: { limit: AUTH_THROTTLE_LIMIT, ttl: 60000 } })
   @HttpCode(HttpStatus.CREATED)
   async register(@Body() dto: RegisterDto) {
     const data = await this.authService.register(dto);
@@ -66,7 +70,7 @@ export class AuthController {
       '登录成功。响应体为 { success, data: AuthResponseDto, message } 包装，data 为用户与 JWT。',
     type: AuthResponseDto,
   })
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Throttle({ default: { limit: AUTH_THROTTLE_LIMIT, ttl: 60000 } })
   @HttpCode(HttpStatus.OK)
   async login(@Body() dto: LoginDto) {
     const data = await this.authService.login(dto);
@@ -89,7 +93,7 @@ export class AuthController {
       '已发送。响应体为 { success, data: OtpChallengeResultDto, message } 包装，此步骤不登录。',
     type: OtpChallengeResultDto,
   })
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Throttle({ default: { limit: AUTH_THROTTLE_LIMIT, ttl: 60000 } })
   @HttpCode(HttpStatus.OK)
   async sendOtpCode(@Body() dto: SendOtpCodeDto, @Req() req: Request) {
     const forwardedFor = req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim();
@@ -114,7 +118,7 @@ export class AuthController {
       '登录成功。响应体为 { success, data: AuthResponseDto, message } 包装，data 含 identity 绑定信息。',
     type: AuthResponseDto,
   })
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @Throttle({ default: { limit: AUTH_OTP_THROTTLE_LIMIT, ttl: 60000 } })
   @HttpCode(HttpStatus.OK)
   async loginWithOtp(@Body() dto: OtpLoginDto) {
     const verification = await this.otpService.verifyCode(dto);

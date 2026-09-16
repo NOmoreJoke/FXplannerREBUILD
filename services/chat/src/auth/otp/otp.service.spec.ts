@@ -1,6 +1,7 @@
 import {
 	ConflictException,
 	HttpException,
+	ServiceUnavailableException,
 	UnauthorizedException,
 } from "@nestjs/common";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -323,5 +324,64 @@ describe("OtpService 验证码规则补全（M1.1）", () => {
 		await expect(h.verify("missing", "000000")).rejects.toBeInstanceOf(
 			UnauthorizedException,
 		);
+	});
+});
+
+describe("邮件 mock 模式（未接入真实邮件服务，changes/ux-improvements）", () => {
+	const baseOptions = {
+		now: () => new Date(T0),
+		targetMaxRequests: 100,
+		ipMaxRequests: 100,
+		codeSecret: "otp-unit-test-secret-with-32-chars!",
+	};
+
+	function buildService(channels: EmailOtpChannel[]) {
+		const prisma = createMemoryPrisma(() => new Date(T0));
+		const service = new OtpService(
+			prisma as unknown as PrismaService,
+			channels,
+			baseOptions,
+		);
+		return { prisma, service };
+	}
+
+	it("mock 渠道（devMode）：sendCode 响应附带 6 位 devCode，且不发网络请求", async () => {
+		const mockChannel = new EmailOtpChannel({ mock: true });
+		expect(mockChannel.devMode).toBe(true);
+		const { prisma, service } = buildService([mockChannel]);
+
+		const result = await service.sendCode(
+			{ channel: "email", target: "mock@example.com" } as SendOtpCodeDto,
+			"192.0.2.10",
+		);
+		expect(result.devCode).toMatch(/^\d{6}$/);
+		// mock 渠道 send 不经网络：challenge 已建且未被删除
+		expect(prisma.challenges).toHaveLength(1);
+	});
+
+	it("真实渠道（已配置 Resend）：响应不携带 devCode（防泄漏）", async () => {
+		const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+		const realChannel = new EmailOtpChannel({
+			apiKey: "resend-test-key",
+			from: "no-reply@example.com",
+			fetchImpl: fetchMock as unknown as OtpFetch,
+		});
+		expect(realChannel.devMode).toBe(false);
+		const { service } = buildService([realChannel]);
+
+		const result = await service.sendCode(
+			{ channel: "email", target: "real@example.com" } as SendOtpCodeDto,
+			"192.0.2.11",
+		);
+		expect(result.devCode).toBeUndefined();
+		expect(fetchMock).toHaveBeenCalledOnce();
+	});
+
+	it("显式 mock:false 且未配置供应商 → send 抛 503（保留原有行为）", async () => {
+		const strictChannel = new EmailOtpChannel({ mock: false });
+		expect(strictChannel.devMode).toBe(false);
+		await expect(
+			strictChannel.send("a@b.com", "123456"),
+		).rejects.toBeInstanceOf(ServiceUnavailableException);
 	});
 });

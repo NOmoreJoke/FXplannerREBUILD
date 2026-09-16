@@ -35,7 +35,7 @@ type Challenge = {
 	createdAt: Date;
 };
 
-function createMemoryPrisma() {
+function createMemoryPrisma(getNow: () => Date = () => new Date()) {
 	const challenges: Challenge[] = [];
 	let nextId = 1;
 	const matches = (challenge: Challenge, where: Record<string, any>) => {
@@ -61,7 +61,7 @@ function createMemoryPrisma() {
 				...data,
 				attempts: 0,
 				consumedAt: null,
-				createdAt: new Date(),
+				createdAt: new Date(getNow()),
 			};
 			challenges.push(challenge);
 			return { id: challenge.id, expiresAt: challenge.expiresAt };
@@ -92,6 +92,12 @@ function createMemoryPrisma() {
 			async ({ where }: any) =>
 				challenges.filter((challenge) => matches(challenge, where)).length,
 		),
+		aggregate: vi.fn(async ({ where }: any) => {
+			const sum = challenges
+				.filter((challenge) => matches(challenge, where))
+				.reduce((total, challenge) => total + challenge.attempts, 0);
+			return { _sum: { attempts: sum } };
+		}),
 	};
 	const prisma: Record<string, any> = {
 		otpChallenge,
@@ -292,5 +298,123 @@ describe("OTP API", () => {
 			.post("/api/auth/otp/login")
 			.send({ challengeId: "missing", code: "12345" })
 			.expect(400);
+	});
+});
+
+/**
+ * M1.1 新规则接口测试（技术方案 §5/§8）：
+ * 1h/24h 发送上限、15 分钟输错锁定。独立 module + 可注入时钟，避免与上方用例共享计数。
+ */
+describe("OTP API（M1.1 发送上限与输错锁定）", () => {
+	let app: INestApplication;
+	let now = new Date("2026-08-01T00:00:00.000Z");
+	const prisma = createMemoryPrisma(() => new Date(now));
+	const sentCodes: string[] = [];
+	const captureChannel: OtpChannel = {
+		channel: "email",
+		send: vi.fn(async (_target: string, code: string) => {
+			sentCodes.push(code);
+		}),
+	};
+
+	const post = (target: string) =>
+		request(app.getHttpServer())
+			.post("/api/auth/otp/send-code")
+			.send({ channel: "email", target });
+
+	const login = (challengeId: string, code: string) =>
+		request(app.getHttpServer())
+			.post("/api/auth/otp/login")
+			.send({ challengeId, code });
+
+	beforeAll(async () => {
+		const module = await Test.createTestingModule({
+			controllers: [OtpTestController],
+			providers: [
+				OtpService,
+				{ provide: PrismaService, useValue: prisma },
+				{ provide: OTP_CHANNELS, useValue: [captureChannel] },
+				{
+					provide: OTP_OPTIONS,
+					useValue: {
+						now: () => new Date(now),
+						// 关闭 60s 频控（上方用例已覆盖），聚焦 1h/24h 与锁定规则
+						targetMaxRequests: 100,
+						ipMaxRequests: 100,
+						codeSecret: "otp-api-newrules-secret-32-chars!",
+					},
+				},
+			],
+		}).compile();
+		app = module.createNestApplication();
+		app.setGlobalPrefix("api");
+		app.useGlobalPipes(new ValidationPipe({ transform: true }));
+		await app.init();
+	});
+
+	afterAll(async () => {
+		await app.close();
+	});
+
+	const wrongCode = () => (sentCodes.at(-1) === "000000" ? "000001" : "000000");
+
+	it("1 小时内发满 5 次后，第 6 次发送 429 OTP_SEND_RATE_LIMITED", async () => {
+		const target = "rate-1h@example.com";
+		for (let i = 0; i < 5; i += 1) {
+			await post(target).expect(200);
+		}
+		const res = await post(target).expect(429);
+		expect(res.body.code).toBe("OTP_SEND_RATE_LIMITED");
+	});
+
+	it("15 分钟内输错 5 次：全部未消费验证码作废，锁定期内验证与发送均 429 OTP_VERIFY_LOCKED", async () => {
+		const target = "lock-api@example.com";
+		const sent = await post(target).expect(200);
+		const challengeId = sent.body.data.challengeId as string;
+		const code = sentCodes.at(-1)!;
+
+		for (let i = 0; i < 4; i += 1) {
+			await login(challengeId, wrongCode()).expect(401);
+		}
+		const locked = await login(challengeId, wrongCode()).expect(429);
+		expect(locked.body.code).toBe("OTP_VERIFY_LOCKED");
+
+		// 该邮箱全部未消费验证码已作废（不依赖验证码内容）
+		const challenges = prisma.challenges as Array<{
+			target: string;
+			consumedAt: Date | null;
+		}>;
+		expect(
+			challenges
+				.filter((challenge) => challenge.target === target)
+				.every((challenge) => challenge.consumedAt !== null),
+		).toBe(true);
+
+		// 锁定期内：验证与发送均拒绝
+		await login(challengeId, code).expect(429);
+		const resend = await post(target).expect(429);
+		expect(resend.body.code).toBe("OTP_VERIFY_LOCKED");
+	});
+
+	it("锁定期满（超过 15 分钟）自动恢复：发送与验证均可用", async () => {
+		const target = "recover-api@example.com";
+		const sent = await post(target).expect(200);
+		const challengeId = sent.body.data.challengeId as string;
+
+		for (let i = 0; i < 4; i += 1) {
+			await login(challengeId, wrongCode()).expect(401);
+		}
+		// 第 5 次输错触发锁定
+		await login(challengeId, wrongCode()).expect(429);
+
+		// 推进时钟滚出 15 分钟锁定窗口
+		now = new Date(now.getTime() + 15 * 60 * 1000 + 1000);
+
+		const resent = await post(target).expect(200);
+		const newChallengeId = resent.body.data.challengeId as string;
+		const newCode = sentCodes.at(-1)!;
+		expect(newChallengeId).not.toBe(challengeId);
+
+		await login(newChallengeId, newCode).expect(200);
 	});
 });

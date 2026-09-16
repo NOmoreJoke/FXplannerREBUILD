@@ -17,4 +17,13 @@ export class OtpChallengeResultDto {
 		type: Date,
 	})
 	expiresAt!: Date;
+
+	@ApiProperty({
+		description:
+			"[dev] 邮件 mock 模式下的验证码：仅开发环境未接入真实邮件服务时返回，生产恒为空",
+		example: "123456",
+		type: String,
+		required: false,
+	})
+	devCode?: string;
 }
