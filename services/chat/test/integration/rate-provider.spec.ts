@@ -1,6 +1,11 @@
 import { BadGatewayException } from "@nestjs/common";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { RatePairUnsupportedException } from "../../src/rate/rate.errors";
 import { RateProvider } from "../../src/rate/rate.provider";
+
+// 本文件验证 frankfurter 行为（= M1.2 语义回归）：门面构造时读取 env，
+// 切到降级单源模式避免多源路由将 CAD/USD 等币对指向农行真实接口；断言不变。
+process.env.RATE_SOURCE = "frankfurter";
 
 function response(body: unknown, status = 200): Response {
 	return {
@@ -65,11 +70,80 @@ describe("RateProvider", () => {
 		expect(result[0].observedAt.toISOString()).toBe("2026-08-01T00:00:00.000Z");
 	});
 
-	it("供应商非 2xx 响应统一转为 BadGatewayException", async () => {
+	it("数据源 404 → RatePairUnsupportedException（422 语义）", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(response({ message: "not found" }, 404)),
+		);
+
+		await expect(
+			new RateProvider().fetchLatest("USD", "TWD"),
+		).rejects.toBeInstanceOf(RatePairUnsupportedException);
+		await expect(
+			new RateProvider().fetchLatestBatch("USD", ["CNY", "TWD"]),
+		).rejects.toBeInstanceOf(RatePairUnsupportedException);
+	});
+
+	it("批量请求一次外呼、URL 携带全部目标且共享同一报价时点", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			response({
+				date: "2026-08-03",
+				rates: { CNY: "0.1391", JPY: "0.0067" },
+			}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await new RateProvider().fetchLatestBatch("USD", [
+			"CNY",
+			"JPY",
+		]);
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://api.frankfurter.app/latest?from=USD&to=CNY%2CJPY",
+			expect.objectContaining({
+				signal: expect.any(AbortSignal),
+			}),
+		);
+		// 整组共享同一报价时点（逐项访问路径对应新 RateBatchQuote 契约，预期值不变）
+		expect(result.quotes.CNY.observedAt).toEqual(
+			new Date("2026-08-03T00:00:00.000Z"),
+		);
+		expect(result.quotes.JPY.observedAt).toEqual(
+			new Date("2026-08-03T00:00:00.000Z"),
+		);
+		expect(result.quotes.CNY.rate).toBe("0.1391");
+		expect(result.quotes.JPY.rate).toBe("0.0067");
+	});
+
+	it("批量响应缺失某目标币种时：该目标不在 rates 映射，其余照常返回", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(
+				response({
+					date: "2026-08-03",
+					rates: { CNY: "0.1391" }, // 无 TWD：ECB 不提供新台币
+				}),
+			),
+		);
+
+		const result = await new RateProvider().fetchLatestBatch("USD", [
+			"CNY",
+			"TWD",
+		]);
+
+		expect(result.quotes.CNY.rate).toBe("0.1391");
+		expect(result.quotes.TWD).toBeUndefined();
+	});
+
+	it("供应商非 2xx 响应统一转为 BadGatewayException（单目标与批量同语义）", async () => {
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({}, 503)));
 
 		await expect(
 			new RateProvider().fetchLatest("EUR", "USD"),
+		).rejects.toBeInstanceOf(BadGatewayException);
+		await expect(
+			new RateProvider().fetchLatestBatch("EUR", ["USD", "CNY"]),
 		).rejects.toBeInstanceOf(BadGatewayException);
 	});
 
