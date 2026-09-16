@@ -48,9 +48,9 @@ export interface AccountSeedResult {
 	transactionIds: string[];
 }
 
-/** 昨天时刻（ISO）：UTC+8 口径必不晚于今天，录入不被「晚于今天」拦截 */
-function yesterdayIso(): string {
-	return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+/** 当前时刻（ISO）：新用户账本起点为注册当日，用「现在」既不早于起点也不晚于今天 */
+function nowIso(): string {
+	return new Date().toISOString();
 }
 
 /** 远期用途日与开始日（对齐 test/helpers/plan-test-helper.ts 的固定日期先例，不依赖真实时钟） */
@@ -85,9 +85,12 @@ async function api<T>(
 }
 
 /** 注册并登录测试用户（返回 token 与 userId；用后由后端测试/人工清理或级联复用） */
-export async function seedRegisterAndLogin(
-	label: string,
-): Promise<{ email: string; password: string; accessToken: string; userId: string }> {
+export async function seedRegisterAndLogin(label: string): Promise<{
+	email: string;
+	password: string;
+	accessToken: string;
+	userId: string;
+}> {
 	const email = `e2e-account-${label}-${Date.now()}@example.com`;
 	const password = "TestPass123";
 	await api("/api/auth/register", {
@@ -98,7 +101,12 @@ export async function seedRegisterAndLogin(
 		"/api/auth/login",
 		{ method: "POST", body: { email, password } },
 	);
-	return { email, password, accessToken: data.accessToken, userId: data.user.id };
+	return {
+		email,
+		password,
+		accessToken: data.accessToken,
+		userId: data.user.id,
+	};
 }
 
 /** 完成初始化设置（POST consents + complete）：仅用于构造 baseCurrency */
@@ -119,6 +127,7 @@ export async function seedOnboarding(
 			locale: "zh-CN",
 			region: "CN",
 			prepPreference: "balanced",
+			reminderEnabled: true,
 		},
 	});
 }
@@ -138,7 +147,7 @@ export async function seedTransaction(
 			exchangeRate: "1",
 			quantity: amount,
 			feeAmount: "0",
-			transactedAt: yesterdayIso(),
+			transactedAt: nowIso(),
 		},
 	});
 	return data.id;
@@ -214,7 +223,7 @@ export async function injectLoginCookie(
 		baseUrl = new URL(url);
 	} catch {
 		throw new Error(
-		`injectLoginCookie 收到非法 URL：${url}（检查 CORS_ORIGIN / WEB_PORT 环境变量）`,
+			`injectLoginCookie 收到非法 URL：${url}（检查 CORS_ORIGIN / WEB_PORT 环境变量）`,
 		);
 	}
 	await context.addCookies([

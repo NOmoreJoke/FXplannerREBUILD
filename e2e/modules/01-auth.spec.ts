@@ -1,5 +1,6 @@
 import { test, expect } from "../fixtures/auto-screenshot";
 import { TestLogger } from "../helpers/logger";
+import { saveScreenshot } from "../helpers/save-screenshot";
 
 /**
  * 认证模块 E2E 测试
@@ -29,6 +30,7 @@ test.describe("【认证模块】用户认证流程", () => {
 			// 验证注册页加载
 			await expect(page).toHaveURL(/.*register/);
 			logger.log("action", "info", "✓ 注册页已加载");
+			await saveScreenshot(page, "01-auth", "T-AUTH-001-register-page");
 
 			// 填写表单
 			await page.fill('input[name="email"]', TEST_EMAIL);
@@ -43,6 +45,7 @@ test.describe("【认证模块】用户认证流程", () => {
 			// 等待跳转到工作台首页（/home）
 			await page.waitForURL(`${BASE_URL}/home`, { timeout: 10000 });
 			logger.log("action", "info", "✓ 已跳转到工作台首页");
+			await saveScreenshot(page, "01-auth", "T-AUTH-001-home-after-register");
 
 			// 验证 Token
 			const token = await page.evaluate(() =>

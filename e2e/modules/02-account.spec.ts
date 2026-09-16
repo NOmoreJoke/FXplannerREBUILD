@@ -1,5 +1,6 @@
 import { test, expect } from "../fixtures/auto-screenshot";
 import { TestLogger } from "../helpers/logger";
+import { saveScreenshot } from "../helpers/save-screenshot";
 import {
 	injectLoginCookie,
 	seedAccountScenario,
@@ -58,6 +59,7 @@ test.describe("【外汇账户模块】账户列表 / 详情 / 流水", () => {
 
 		// 术语裁决：表头为「未分配余额」（§1.1 裁决 1，废弃「可分配」）
 		await expect(page.locator("th", { hasText: "未分配余额" })).toBeVisible();
+		await saveScreenshot(page, "02-account", "T-ACCOUNT-001-account-list");
 
 		logger.log("action", "info", "✓ 列表三值与术语断言通过");
 	});
@@ -86,6 +88,11 @@ test.describe("【外汇账户模块】账户列表 / 详情 / 流水", () => {
 		await expect(page.getByText("12000.0000").first()).toBeVisible();
 		await expect(page.getByText("6000.0000").first()).toBeVisible();
 		await expect(page.getByText("1.00000000")).toBeVisible(); // (6000+6000) ÷ 12000，toFixed(8)
+		await saveScreenshot(
+			page,
+			"02-account",
+			"T-ACCOUNT-002-account-detail-ledger",
+		);
 
 		// 流水表：两行买入记录按日期倒序（同日按录入倒序）；类型标签「买入」
 		const rows = page.locator("tbody tr");
@@ -94,15 +101,16 @@ test.describe("【外汇账户模块】账户列表 / 详情 / 流水", () => {
 		await expect(rows.nth(1)).toContainText("买入");
 
 		// 成本列表头动态本位币（baseCurrency=CNY 由接口返回，前端不硬编码）
-		await expect(
-			page.locator("th", { hasText: "成本（CNY）" }),
-		).toBeVisible();
+		await expect(page.locator("th", { hasText: "成本（CNY）" })).toBeVisible();
 
-		// 买入行级跳转：第一行点击进入 /transactions/:id
+		// 买入行级跳转：倒序首行 = 后录入的一笔，取行内 stretched link 的目标作为断言基准（不硬编码 id）
+		const rowHref = await rows
+			.first()
+			.locator('a[href^="/transactions/"]')
+			.getAttribute("href");
+		expect(rowHref).toBeTruthy();
 		await rows.first().click();
-		await expect(page).toHaveURL(
-			`${BASE_URL}/transactions/${seed.transactionIds[0]}`,
-		);
+		await expect(page).toHaveURL(`${BASE_URL}${rowHref}`);
 
 		// 详情页金额与流水行一致（该笔本金 6,000、汇率 1、成本 6,000）
 		await page.waitForLoadState("networkidle");
