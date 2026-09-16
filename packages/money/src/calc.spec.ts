@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import Decimal from "decimal.js";
-import { assertValidRate, RATE_DECIMAL_PLACES, roundRateTo8 } from "./rate";
-import { InvalidRateError } from "./errors";
-import { finalAmountOf, impliedRate } from "./calc";
-import { InvalidAmountError, RoundToZeroError } from "./errors";
+import { assertValidRate, RATE_DECIMAL_PLACES, roundRateTo8 } from "./rate.ts";
+import { InvalidRateError } from "./errors.ts";
+import { finalAmountOf, impliedRate, receivedAmountOf } from "./calc.ts";
+import { InvalidAmountError, RoundToZeroError } from "./errors.ts";
 
 /** 独立理论值：64 位精度全精度算完再舍一次，与被测实现（32 位精度）互为对照 */
 const THEORY = Decimal.clone({ precision: 64 });
@@ -91,6 +91,60 @@ describe("impliedRate（到账 ÷ 本金，反算汇率）", () => {
 		expect(() => impliedRate("100", "0", 2)).toThrow(InvalidAmountError);
 		expect(() => impliedRate("-100", "10", 2)).toThrow(InvalidAmountError);
 		expect(() => impliedRate("100", Number.NaN, 2)).toThrow(InvalidAmountError);
+	});
+});
+
+describe("receivedAmountOf（本金 ÷ 汇率，到账金额，最终舍一次）", () => {
+	it("doc 05 例：72,480 元 ÷ 7.2480 = 10,000.00 美元（2 位币种）", () => {
+		expect(receivedAmountOf("72480", "7.248", 2).toFixed(2)).toBe("10000.00");
+	});
+
+	it("除法不先截短：1000 ÷ 7.31 全精度商后舍 2 位 = 136.80", () => {
+		// 全精度商 136.79890533...，若先截短到 4 位再舍会得到同一结果，
+		// 用理论值互为对照：64 位精度全除后舍 2 位
+		const expected = new THEORY("1000").div("7.31").toDecimalPlaces(2, HALF_UP);
+		expect(receivedAmountOf("1000", "7.31", 2).eq(expected)).toBe(true);
+		expect(receivedAmountOf("1000", "7.31", 2).toFixed(2)).toBe("136.80");
+	});
+
+	it("0 位币种（日元）：10000 ÷ 152.12345678 → 66（四舍五入取整）", () => {
+		const expected = new THEORY("10000")
+			.div("152.12345678")
+			.toDecimalPlaces(0, HALF_UP);
+		expect(receivedAmountOf("10000", "152.12345678", 0).eq(expected)).toBe(
+			true,
+		);
+		expect(receivedAmountOf("10000", "152.12345678", 0).toString()).toBe("66");
+	});
+
+	it("0 位币种（韩元）小数进位边界：1 ÷ 2 → 1", () => {
+		expect(receivedAmountOf("1", "2", 0).toString()).toBe("1");
+	});
+
+	it("正数舍 0 拦截：0.01 ÷ 2（0 位币种）与 0.001 ÷ 2（2 位币种）均拦截", () => {
+		expect(() => receivedAmountOf("0.01", "2", 0)).toThrow(RoundToZeroError);
+		expect(() => receivedAmountOf("0.001", "2", 2)).toThrow(RoundToZeroError);
+	});
+
+	it("2 位币种 0.005 边界不拦截：0.01 ÷ 2 = 0.01", () => {
+		expect(receivedAmountOf("0.01", "2", 2).toString()).toBe("0.01");
+	});
+
+	it("本金或汇率非正数、非有限数时抛 InvalidAmountError", () => {
+		expect(() => receivedAmountOf("0", "7.248", 2)).toThrow(InvalidAmountError);
+		expect(() => receivedAmountOf("-72480", "7.248", 2)).toThrow(
+			InvalidAmountError,
+		);
+		expect(() => receivedAmountOf("72480", "0", 2)).toThrow(InvalidAmountError);
+		expect(() => receivedAmountOf("72480", "-7.248", 2)).toThrow(
+			InvalidAmountError,
+		);
+		expect(() => receivedAmountOf(Number.NaN, "7.248", 2)).toThrow(
+			InvalidAmountError,
+		);
+		expect(() =>
+			receivedAmountOf("72480", Number.POSITIVE_INFINITY, 2),
+		).toThrow(InvalidAmountError);
 	});
 });
 

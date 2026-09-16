@@ -7,7 +7,7 @@
  * - 汇率必须是大于 0 的有效数字。
  */
 import Decimal from "decimal.js";
-import { InvalidRateError } from "./errors";
+import { InvalidRateError } from "./errors.ts";
 
 /** 采用汇率的小数位（固定 8 位，与币种精度无关） */
 export const RATE_DECIMAL_PLACES = 8;

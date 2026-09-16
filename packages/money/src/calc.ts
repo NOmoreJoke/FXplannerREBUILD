@@ -8,9 +8,9 @@
  * - 除法不先截成固定小数位，再算金额。
  */
 import Decimal from "decimal.js";
-import { InvalidAmountError, RoundToZeroError } from "./errors";
-import { roundToCurrency } from "./round";
-import { roundRateTo8 } from "./rate";
+import { InvalidAmountError, RoundToZeroError } from "./errors.ts";
+import { roundToCurrency } from "./round.ts";
+import { roundRateTo8 } from "./rate.ts";
 
 // 中间过程全精度：十进制运算精度提升到 32 位有效数字，
 // 覆盖「16 位有效数字金额 × 12 位有效数字汇率」的最大精确积（约 28 位），
@@ -30,6 +30,29 @@ export function finalAmountOf(
 	const product = new Decimal(principal).mul(new Decimal(rate));
 	const rounded = roundToCurrency(product, decimalPlaces);
 	if (rounded.isZero() && product.gt(0)) {
+		throw new RoundToZeroError();
+	}
+	return rounded;
+}
+
+/**
+ * 到账外币金额 ＝ principal ÷ rate（买入填法 A：本金 + 汇率 → 到账）。
+ * 与 finalAmountOf（× 方向）对称：除法不先截短，全精度相除后
+ * 仅按买入币种精度四舍五入一次；正数结果被舍入为 0 时抛 RoundToZeroError。
+ */
+export function receivedAmountOf(
+	principal: Decimal.Value,
+	rate: Decimal.Value,
+	decimalPlaces: 0 | 2,
+): Decimal {
+	const base = new Decimal(principal);
+	const quote = new Decimal(rate);
+	if (!base.isFinite() || base.lte(0) || !quote.isFinite() || quote.lte(0)) {
+		throw new InvalidAmountError("本金与汇率必须为大于 0 的有效数字");
+	}
+	const quotient = base.div(quote);
+	const rounded = roundToCurrency(quotient, decimalPlaces);
+	if (rounded.isZero() && quotient.gt(0)) {
 		throw new RoundToZeroError();
 	}
 	return rounded;

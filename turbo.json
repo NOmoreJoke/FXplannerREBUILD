@@ -29,7 +29,10 @@
         "CORS_ORIGIN",
         "NEXT_PUBLIC_API_BASE_URL",
         "DEV_LOG_PORT",
-        "NEXT_PUBLIC_DEV_LOG_URL"
+        "NEXT_PUBLIC_DEV_LOG_URL",
+        "AUTH_THROTTLE_LIMIT",
+        "AUTH_OTP_THROTTLE_LIMIT",
+        "THROTTLE_GLOBAL_LIMIT"
       ]
     },
     "start": {

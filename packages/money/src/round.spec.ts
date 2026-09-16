@@ -6,13 +6,13 @@ import {
 	assertNotRoundToZero,
 	assertPositiveAmount,
 	roundToCurrency,
-} from "./round";
+} from "./round.ts";
 import {
 	AmountLimitExceededError,
 	InvalidAmountError,
 	RoundToZeroError,
-} from "./errors";
-import { CURRENCIES } from "./currencies";
+} from "./errors.ts";
+import { CURRENCIES } from "./currencies.ts";
 
 describe("roundToCurrency（按币种精度舍入一次）", () => {
 	it("JPY/KRW（0 位小数）取整，其余币种保留 2 位", () => {

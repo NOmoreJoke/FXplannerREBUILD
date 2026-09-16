@@ -12,7 +12,7 @@ import {
 	AmountLimitExceededError,
 	InvalidAmountError,
 	RoundToZeroError,
-} from "./errors";
+} from "./errors.ts";
 
 /** 单笔金额上限（开区间，不含） */
 export const AMOUNT_UPPER_LIMIT = new Decimal("100000000000");
