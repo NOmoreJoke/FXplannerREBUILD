@@ -6,11 +6,9 @@ import { usePathname } from "next/navigation";
 import {
 	ArrowLeftRight,
 	FileText,
-	History,
 	Home,
 	LogOut,
 	Settings,
-	Split,
 	Wallet,
 } from "lucide-react";
 import { authApi } from "@/lib/api/auth";
@@ -18,7 +16,7 @@ import { getToken } from "@/lib/auth/token";
 import { redirectToLogin } from "@/lib/auth/redirect-to-login";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { useLogout } from "@/lib/query/hooks/use-auth";
-import { PageLoading } from "@/components/base";
+import { AppBreadcrumb, PageLoading } from "@/components/base";
 import { cn } from "@/lib/utils";
 
 /**
@@ -81,15 +79,20 @@ export default function ProtectedLayout({
 	return (
 		<div className="flex min-h-screen bg-background">
 			<aside className="flex w-60 shrink-0 flex-col border-r border-border">
-				{/* Logo */}
-				<div className="flex items-center gap-2.5 px-5 pb-1 pt-6">
+				{/* Logo（可点击回首页） */}
+				<Link
+					href="/home"
+					aria-label="回到首页"
+					title="回到首页"
+					className="flex items-center gap-2.5 px-5 pb-1 pt-6 transition-opacity hover:opacity-80"
+				>
 					<div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-mint-700 text-xs font-bold text-white">
 						FX
 					</div>
 					<span className="font-display text-lg font-semibold text-foreground">
 						FXPlanner
 					</span>
-				</div>
+				</Link>
 				<p className="px-5 pb-4 text-xs text-muted-foreground">
 					规划你的换汇工作台
 				</p>
@@ -97,15 +100,20 @@ export default function ProtectedLayout({
 				{/* 导航菜单 */}
 				<nav className="flex-1 space-y-1 px-3">
 					{NAV_ITEMS.map((item) => {
-						const active = pathname.startsWith(item.href);
+						// 首页精确匹配；其余前缀匹配，子页面（如 /plans/[id]）自动跟随父级高亮
+						const active =
+							item.href === "/home"
+								? pathname === "/home"
+								: pathname.startsWith(item.href);
 						return (
 							<Link
 								key={item.href}
 								href={item.href}
+								aria-current={active ? "page" : undefined}
 								className={cn(
 									"flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
 									active
-										? "bg-mint-50 font-medium text-mint-700"
+										? "bg-mint-700 font-medium text-white shadow-sm"
 										: "text-ink-500 hover:bg-muted hover:text-foreground",
 								)}
 							>
@@ -115,16 +123,6 @@ export default function ProtectedLayout({
 						);
 					})}
 				</nav>
-
-				{/* 个人计划卡片（静态占位） */}
-				<div className="mx-3 mb-3 rounded-xl bg-mint-50 p-4">
-					<p className="text-sm font-medium text-mint-700">个人计划</p>
-					<p className="mt-2 text-xs leading-5 text-ink-500">
-						倒计时: <span className="font-medium text-foreground">8 天</span>
-						<br />
-						安全换汇剩余时间
-					</p>
-				</div>
 
 				{/* 当前用户（真实数据 + 登出） */}
 				<div className="mx-3 mb-5 flex items-center gap-3 rounded-xl border border-border p-3">
@@ -151,17 +149,19 @@ export default function ProtectedLayout({
 				</div>
 			</aside>
 
-			<main className="min-w-0 flex-1">{children}</main>
+			<main className="min-w-0 flex-1">
+				{/* 统一面包屑：全部子页面自动获得，页面内禁止重复实现 */}
+				<AppBreadcrumb />
+				{children}
+			</main>
 		</div>
 	);
 }
 
 const NAV_ITEMS = [
 	{ href: "/home", label: "首页", icon: Home },
-	{ href: "/accounts", label: "外汇账户", icon: Wallet },
 	{ href: "/plans", label: "换汇计划", icon: ArrowLeftRight },
-	{ href: "/paths", label: "路径比较", icon: Split },
-	{ href: "/history", label: "历史模拟", icon: History },
+	{ href: "/accounts", label: "外汇账户", icon: Wallet },
 	{ href: "/reports", label: "我的报告", icon: FileText },
 	{ href: "/settings", label: "设置", icon: Settings },
 ] as const;

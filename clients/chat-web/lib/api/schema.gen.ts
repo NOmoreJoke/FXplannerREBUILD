@@ -36,7 +36,7 @@ export interface paths {
         put?: never;
         /**
          * 使用邮箱和密码注册
-         * @description 创建独立的密码账号并签发 JWT；不会与相同邮箱的 OTP 账号自动绑定或合并。
+         * @description 创建密码账号并签发 JWT；同一邮箱后续通过 OTP 登录时，会验证通过后直接登录并绑定到本账号（仅绑定，不迁移历史数据）。
          */
         post: operations["AuthController_register"];
         delete?: never;
@@ -96,7 +96,7 @@ export interface paths {
         put?: never;
         /**
          * 使用 OTP 登录
-         * @description 校验并消费 challengeId 对应的验证码，创建或复用独立 OTP 账号，然后签发 JWT。
+         * @description 校验并消费 challengeId 对应的验证码后按优先级登录：已有 OTP 标识则复用原账号；email 渠道且同邮箱存在密码账号则登录该账号并绑定此 OTP 标识（不新建 User）；否则创建独立 OTP 账号，然后签发 JWT。
          */
         post: operations["AuthController_loginWithOtp"];
         delete?: never;
@@ -117,6 +117,106 @@ export interface paths {
          * @description 使用 Bearer JWT 查询当前用户，仅返回 id、email、name、avatar 和 createdAt 等公开字段。
          */
         get: operations["AuthController_getMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/onboarding/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询首次设置状态
+         * @description 完成态判定 / 条款确认进度 / 已保存设置 / 当前条款版本。只读无副作用。
+         */
+        get: operations["OnboardingController_getStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/onboarding/consents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 确认年龄与当前版本服务条款
+         * @description 记录 age18 与 terms 两条确认（适用当前版本条款）。按 (userId, termsVersion, consentType) upsert：重复确认幂等，保留首次确认时间。
+         */
+        post: operations["OnboardingController_saveConsents"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/onboarding/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 完成首次设置（最终提交，不可重复）
+         * @description 事务内依次校验：条款（400 CONSENT_REQUIRED）→ 本位币 15 币种（400 INVALID_BASE_CURRENCY）→ 已有设置（409 ONBOARDING_ALREADY_COMPLETED，并发重复由唯一约束兜底同样 409）。成功后创建设置（记账起点 = 完成时刻）。本位币一经设定永久锁定，无任何修改入口。
+         */
+        post: operations["OnboardingController_complete"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/home/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询首页状态（分流 + 摘要）
+         * @description 一次请求返回分流三布尔（onboardingCompleted / hasAccounts / hasPlans）+ 账户与计划全量摘要 + 汇率全表最新观测时间。分流规则（如是否空账本）由前端按三布尔决策，后端保持数据中立。
+         */
+        get: operations["HomeController_getState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/home/portfolio": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询持仓聚合（CostLot 剩余持仓）
+         * @description 按币种聚合剩余持仓（remainingQty > 0）：Σ剩余数量、Σ剩余持仓成本、平均单位成本，附本位币。口径：unitCost 以用户当前本位币计价（本位币买入价），本位币历史变更不重算；聚合在 SQL 层完成，仅返回 remainingQty > 0 的币种，按 currencyCode 升序。
+         */
+        get: operations["HomeController_getPortfolio"];
         put?: never;
         post?: never;
         delete?: never;
@@ -153,8 +253,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * 查询指定货币兑美元的最新汇率
-         * @description 返回 base 兑换 USD 的最新报价；优先读取 24 小时内的数据库缓存，缓存缺失或过期时回源 Frankfurter。
+         * 查询最新汇率（支持多目标批量）
+         * @description 返回 base 兑指定目标的最新报价；5 分钟有效期窗口内命中数据库缓存，过期或 refresh=true 时整组回源（同一时点）。多源路由：农行牌价（abc，秒级双价）覆盖 HKD/USD/GBP/AUD/CAD/JPY/EUR/SGD/NZD/CHF/THB/KRW，TWD 由 er-api、MYR 由 frankfurter 补齐；RATE_SOURCE=frankfurter 时整组单源降级（TWD 422）。仅 abc 源额外返回现汇卖出价 sellRate（录入价取 sellRate ?? rate）。单目标（缺省 targets=USD）返回平铺结构；多目标返回 items[] 且错误下沉到项（币对不支持 422 语义、数据源不可用 502 语义）。绝不返回过期报价，无 0 兑底、无手填汇率。
          */
         get: operations["RateController_latest"];
         put?: never;
@@ -185,6 +285,134 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plans/schedule-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 分批排期预览（只读，不落库）
+         * @description 按目标金额/用途日期/提前天数/节奏实时生成分批排期（3/2/1 批），并返回该币种可分配余额 caps 供前端对「计入已有外币」做实时预检。可随表单输入反复调用，不产生任何落库副作用。错误：400 INVALID_PLAN_PARAMS（币种/金额/日期/天数/节奏非法）、NO_AVAILABLE_DATES（可安排工作日为 0）、AMOUNT_TOO_SMALL（分批取整后某批为 0）。
+         */
+        post: operations["PlanController_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 计划列表（本人，updatedAt 倒序，limit 100 兑底）
+         * @description 返回本人全部计划（可按状态过滤：ACTIVE / COMPLETED / CANCELLED，缺省全部；非法值 400）。含目标金额、累计已使用、分配总额、计划剩余分配、资金缺口、最晚准备日期、下一准备节点。个人工具量级无分页，服务端 limit 100 兑底。
+         */
+        get: operations["PlanController_list"];
+        put?: never;
+        /**
+         * 创建换汇计划（事务）
+         * @description 事务内依次执行：重检可分配余额（409 INSUFFICIENT_ALLOCATABLE_BALANCE 时附 caps 现值）→ 插入计划（最晚准备日服务端重算，不信任前端）→ 分配记录（usedAmount = 0）→ 分批排期；任一失败全部回滚。allocatedAmount 允许 0（不占用余额的纯新建目标）。
+         */
+        post: operations["PlanController_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plans/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 计划详情（含准备节点 / 修改记录 / 操作标记）
+         * @description 返回计划全量信息：列表项字段 + 节奏/准备缓冲/预计使用日期/开始准备日 + 准备节点 + 修改记录（倒序）+ canModify/canCancel/canComplete/canReopen（服务端按状态与数据计算，前端据此显隐操作按钮）。不存在或不属于本人均 404（防枚举）。
+         */
+        get: operations["PlanController_getDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * 提交修改 / 重新开启（事务 + 乐观锁）
+         * @description 两段式修改第二段：事务内条件更新（id + userId + updatedAt = expectedUpdatedAt）原子完成乐观锁检查与写入，行数 = 0 返回 409 PLAN_STATE_CHANGED；随后事务内重算重校验（预览结果不作为提交依据），目标/分配/排期/变更记录同一事务落库，任一失败全部回滚。已完成计划提高目标需 confirmReopen: true（缺失 400；重开时不得同时携带分配/节奏/准备缓冲参数）；进行中计划携带 confirmReopen 会被忽略。返回提交后详情。
+         */
+        patch: operations["PlanController_adjust"];
+        trace?: never;
+    };
+    "/api/plans/{id}/adjust-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 修改预览（只读，不落库）
+         * @description 两段式修改第一段：按新目标/新分配/节奏/准备缓冲/开始日计算影响（释放额、新缺口、新排期、caps 三值），不变更任何数据。仅进行中可预览；已完成计划提高目标返回 reopen 标记（提交时须带 confirmReopen: true）；已取消预览 409。至少提供一项修改内容，否则 400。
+         */
+        post: operations["PlanController_previewAdjust"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plans/{id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 完成确认（仅进行中；数据不变）
+         * @description 事务内条件更新（WHERE status = 'ACTIVE'）原子防「并发取消 + 完成」双写，行数 = 0 返回 409。仅当已使用 = 目标且剩余分配 = 0 且无超用可完成（PLAN_COMPLETE_NOT_READY 400 附当前差值；超用提示先走更正流程）。成功后状态转 COMPLETED 并写完成记录，计划数据不变。无请求体。
+         */
+        post: operations["PlanController_complete"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plans/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 取消计划（释放剩余分配，终态）
+         * @description 事务内条件更新（WHERE status = 'ACTIVE'）保证与完成/其他修改并发时恰一成功，行数 = 0 返回 409。分配总额下调为累计已使用（释放全部剩余分配回未分配余额，账户余额与已发生的换汇、使用记录不动），准备节点清空，状态转 CANCELLED（终态）并写取消记录。无请求体。
+         */
+        post: operations["PlanController_cancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/currencies": {
         parameters: {
             query?: never;
@@ -197,6 +425,106 @@ export interface paths {
          * @description 返回全部启用中的币种（isActive=true），按 sortOrder 升序。静态字典，客户端可缓存 1 小时。
          */
         get: operations["CurrencyController_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 创建买入记录（事务）
+         * @description 两种填法三值同送（本金/汇率/到账），服务端做双向自洽校验（receivedAmountOf(p,r)==q 或 impliedRate(p,q)==r 满足其一）。事务内依次执行：关联计划校验（存在/本人 404 PLAN_NOT_FOUND、币种一致 400 PLAN_CURRENCY_MISMATCH，仅标记不触发分配）→ 账户 upsert 自动建户 + 余额原子累加 → 插入交易记录（version=1、rateSource=MANUAL）；任一失败全部回滚。手续费缺省 = 未知（null，≠ 0）；"0" = 无手续费。
+         */
+        post: operations["TransactionController_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/transactions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 交易详情
+         * @description 返回单条买入记录（数量/本金/手续费/总成本/汇率等）；手续费未知时 feeAmount=null、totalCost=null、feeKnown=false，前端显示「费用未明确」。仅本人可见：不存在或不属于本人一律 404 TRANSACTION_NOT_FOUND。
+         */
+        get: operations["TransactionController_detail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 账户列表（本人，currencyCode 升序）
+         * @description 返回本人全部虚拟外汇账户（按币种合并，同币种单账户）：余额、已分配金额（Σ全部计划剩余分配，全状态求和）、未分配余额（余额 − 已分配）。未分配余额/已分配为负（数据破坏信号）时如实返回不钳 0（warn 日志，§3.3/§6）。baseCurrency 取 userSettings，新用户无设置行时为 null。
+         */
+        get: operations["AccountController_listAccounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{currencyCode}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 账户详情（余额 / 已分配 / 未分配余额 / 剩余成本 / 平均单位成本）
+         * @description 列表接口单账户字段 + 剩余已记录成本（toFixed(4)）与平均单位成本（toFixed(8)）；无批次（旧数据未回填）或余额 0 / 全部消耗时对应值为 null（doc 04：余额为 0 时不计算单位平均成本）。币种大小写不敏感：非 15 币种 400 INVALID_ACCOUNT_CURRENCY；该币种无账户（含他人账户）404 ACCOUNT_NOT_FOUND，不泄露存在性。
+         */
+        get: operations["AccountController_getAccount"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{currencyCode}/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 账户流水（按时间倒序的事件列表，非 FIFO 计算顺序）
+         * @description 账户详情页事件列表：买入（PURCHASE）与使用（USAGE，M7 上线前不出现；初始持仓 INITIAL 为 M1 预留），按 occurredAt 倒序、同刻按录入时间倒序。买入成本 = 本金 + 手续费（未知时 = 本金，feeKnown=false）；使用成本 M7 起由 FIFO 消耗聚合（当前恒 null）。无分页（单用户流水 ≤ 万级，§3.6）。鉴权与 404 口径同详情接口。
+         */
+        get: operations["AccountController_getLedger"];
         put?: never;
         post?: never;
         delete?: never;
@@ -311,6 +639,11 @@ export interface components {
              * @example 2025-01-01T00:05:00.000Z
              */
             expiresAt: string;
+            /**
+             * @description [dev] 邮件 mock 模式下的验证码：仅开发环境未接入真实邮件服务时返回，生产恒为空
+             * @example 123456
+             */
+            devCode?: string;
         };
         OtpLoginDto: {
             /**
@@ -323,6 +656,933 @@ export interface components {
              * @example 123456
              */
             code: string;
+        };
+        OnboardingConsentsResultDto: {
+            /**
+             * @description 确认时适用的条款版本
+             * @example 2026-01
+             */
+            termsVersion: string;
+            /**
+             * Format: date-time
+             * @description 年龄确认时间（首次确认时刻，ISO 8601）
+             * @example 2026-08-01T00:00:00.000Z
+             */
+            age18ConsentedAt: string;
+            /**
+             * Format: date-time
+             * @description 条款确认时间（首次确认时刻，ISO 8601）
+             * @example 2026-08-01T00:00:00.000Z
+             */
+            termsConsentedAt: string;
+        };
+        OnboardingSettingsViewDto: {
+            /**
+             * @description 本位币（ISO 4217，一经设定永久锁定）
+             * @example CNY
+             */
+            baseCurrency: string;
+            /**
+             * @description 语言
+             * @example zh-CN
+             */
+            locale: string;
+            /**
+             * @description 地区
+             * @example CN
+             */
+            region: string;
+            /**
+             * @description 换汇准备偏好
+             * @example balanced
+             */
+            prepPreference: string;
+            /** @description 是否启用到期提醒 */
+            reminderEnabled: boolean;
+            /**
+             * Format: date-time
+             * @description 记账起点（完成设置的时刻，ISO 8601；历史数据可能为空）
+             * @example 2026-08-01T00:00:00.000Z
+             */
+            ledgerStartedAt: string | null;
+        };
+        OnboardingCompleteResultDto: {
+            /** @description 创建的用户设置 */
+            settings: components["schemas"]["OnboardingSettingsViewDto"];
+            /**
+             * Format: date-time
+             * @description 记账起点 = 完成设置确认成功的时刻（ISO 8601）
+             * @example 2026-08-01T00:00:00.000Z
+             */
+            ledgerStartedAt: string;
+        };
+        OnboardingStatusDto: {
+            /** @description 是否已完成首次设置（完成态判定，前端据此跳过向导） */
+            completed: boolean;
+            /** @description 当前版本必要条款（age18 + terms）是否均已确认 */
+            requiredConsentsMet: boolean;
+            /** @description 已保存的设置；未完成时为 null */
+            settings: components["schemas"]["OnboardingSettingsViewDto"] | null;
+            /**
+             * @description 当前生效的服务条款版本
+             * @example 2026-01
+             */
+            currentTermsVersion: string;
+        };
+        SaveConsentsDto: {
+            /**
+             * @description 确认已满 18 周岁（必须为 true）
+             * @example true
+             */
+            age18Confirmed: boolean;
+            /**
+             * @description 确认同意当前版本服务条款（必须为 true）
+             * @example true
+             */
+            termsConfirmed: boolean;
+        };
+        CompleteOnboardingDto: {
+            /**
+             * @description 地区（ISO 3166 国家/地区码或用户自填标识）
+             * @example CN
+             */
+            region: string;
+            /**
+             * @description 语言（BCP 47 标识）
+             * @example zh-CN
+             */
+            locale: string;
+            /**
+             * @description 本位币（ISO 4217，必须在支持的 15 币种内；完成设置后永久锁定）
+             * @example CNY
+             */
+            baseCurrency: string;
+            /**
+             * @description 换汇准备偏好
+             * @example balanced
+             */
+            prepPreference: string;
+            /**
+             * @description 是否启用到期提醒
+             * @example true
+             */
+            reminderEnabled: boolean;
+        };
+        OnboardingErrorDto: {
+            /**
+             * @description 错误码：CONSENT_REQUIRED / INVALID_BASE_CURRENCY / ONBOARDING_ALREADY_COMPLETED
+             * @example ONBOARDING_ALREADY_COMPLETED
+             */
+            code: string;
+            /**
+             * @description 错误描述
+             * @example 首次设置已完成，本位币不可更改，设置不可重复提交
+             */
+            message: string;
+        };
+        AccountSummaryDto: {
+            /**
+             * @description 币种代码（ISO 4217）
+             * @example USD
+             */
+            currencyCode: string;
+            /**
+             * @description 账户余额（Decimal(20, 4)，固定 4 位小数字符串）
+             * @example 1500.0000
+             */
+            balance: string;
+        };
+        PlanSummaryDto: {
+            /**
+             * @description 计划 ID（cuid）
+             * @example cmex5g2h70000abcd
+             */
+            id: string;
+            /**
+             * @description 目标币种（ISO 4217）
+             * @example USD
+             */
+            targetCurrency: string;
+            /**
+             * @description 目标金额（Decimal(20, 4)，固定 4 位小数字符串）
+             * @example 10000.0000
+             */
+            targetAmount: string;
+            /**
+             * @description 已分配金额（来自计划分配记录，无分配记录时为 "0.0000"）
+             * @example 4000.0000
+             */
+            allocatedAmount: string;
+            /**
+             * @description 剩余可分配 = 已分配 − 已使用（服务端计算，schema 注释：业务层计算，不存列）
+             * @example 6000.0000
+             */
+            remainingAmount: string;
+            /**
+             * @description 期望用汇日（ISO 8601 UTC）
+             * @example 2026-10-01T00:00:00.000Z
+             */
+            expectUseDate: string;
+            /**
+             * @description 最晚备汇日（存量列，ISO 8601 UTC）
+             * @example 2026-09-25T00:00:00.000Z
+             */
+            latestPrepDate: string;
+            /**
+             * @description 计划状态（大写枚举，与存量值一致）
+             * @example ACTIVE
+             * @enum {string}
+             */
+            status: "ACTIVE" | "COMPLETED" | "CANCELLED";
+        };
+        HomeStateDto: {
+            /**
+             * @description 是否已完成首次设置（user_settings 中存在该用户记录）
+             * @example true
+             */
+            onboardingCompleted: boolean;
+            /**
+             * @description 是否有账户记录（与 accounts.length > 0 恒一致）
+             * @example false
+             */
+            hasAccounts: boolean;
+            /**
+             * @description 是否有计划记录（与 plans.length > 0 恒一致）
+             * @example false
+             */
+            hasPlans: boolean;
+            /** @description 全量账户摘要，按 currencyCode 升序 */
+            accounts: components["schemas"]["AccountSummaryDto"][];
+            /** @description 全量计划摘要，按 createdAt 降序，不分页 */
+            plans: components["schemas"]["PlanSummaryDto"][];
+            /**
+             * @description 汇率全表最新观测时间（exchange_rates.observed_at 最大值，顶栏「最新刷新」数据源）；无任何汇率数据时为 null
+             * @example 2026-09-24T01:30:00.000Z
+             */
+            latestRateObservedAt: string | null;
+        };
+        PortfolioByCurrencyDto: {
+            /**
+             * @description 币种代码（ISO 4217）
+             * @example USD
+             */
+            currencyCode: string;
+            /**
+             * @description 剩余数量 Σ remainingQty（Decimal(20, 4)，固定 4 位小数字符串）
+             * @example 1100.0000
+             */
+            remainingQty: string;
+            /**
+             * @description 剩余持仓成本 Σ(remainingQty × unitCost)（本位币计价，固定 4 位小数字符串）
+             * @example 8100.0000
+             */
+            totalRemainingCost: string;
+            /**
+             * @description 平均单位成本 = totalRemainingCost ÷ remainingQty（对齐 CostLot.unitCost 的 Decimal(20, 10) 口径，固定 10 位小数字符串）
+             * @example 7.3636363636
+             */
+            avgUnitCost: string;
+        };
+        PortfolioDto: {
+            /**
+             * @description 本位币（user_settings.base_currency）；口径假设：CostLot.unitCost 以该币种计价；用户无设置记录时为 null
+             * @example CNY
+             */
+            baseCurrency: string | null;
+            /**
+             * @description 全部币种剩余持仓成本合计（本位币计价，固定 4 位小数字符串）；无持仓为 "0.0000"
+             * @example 8570.0000
+             */
+            totalRemainingCost: string;
+            /** @description 分币种持仓聚合，仅含 remainingQty > 0 的币种，按 currencyCode 升序；无持仓为空数组 */
+            byCurrency: components["schemas"]["PortfolioByCurrencyDto"][];
+        };
+        LatestRateResponseDto: {
+            /**
+             * @description 基准币种代码
+             * @example CNY
+             */
+            base: string;
+            /**
+             * @description 目标币种代码
+             * @example USD
+             */
+            target: string;
+            /**
+             * @description 报价（1 单位 base 可兑换的 target 数量），四舍五入保留 8 位小数
+             * @example 0.13910462
+             */
+            rate: string;
+            /**
+             * @description 现汇卖出价（1 单位 target 兑 X base），四舍五入保留 8 位小数；仅 abc（农行牌价）源返回，录入价取 sellRate ?? rate
+             * @example 0.67401235
+             */
+            sellRate?: string;
+            /**
+             * @description 报价来源（数据源标识；恒等报价为 identity；多源：abc / frankfurter / er-api）
+             * @example abc
+             */
+            source: string;
+            /**
+             * @description 报价所属日（如实展示），ISO 8601
+             * @example 2026-02-13T00:00:00.000Z
+             */
+            observedAt: string;
+            /**
+             * @description 有效期窗口终点，ISO 8601
+             * @example 2026-02-16T08:05:00.000Z
+             */
+            validUntil: string;
+            /**
+             * @description 当前是否仍在有效期内
+             * @example true
+             */
+            fresh: boolean;
+        };
+        RateErrorDto: {
+            /**
+             * @description 机器可读错误码
+             * @example RATE_PAIR_UNSUPPORTED
+             * @enum {string}
+             */
+            code: "RATE_PAIR_UNSUPPORTED" | "RATE_SOURCE_UNAVAILABLE";
+            /**
+             * @description 人类可读错误说明
+             * @example 汇率数据源不支持 USD → TWD 报价，无法提供该币种有效报价
+             */
+            message: string;
+            /**
+             * @description 该币对库中最后一条报价的时间（ISO 8601）；数据源不可用时供前端兜底提示，无历史报价或币对不支持时为 null
+             * @example 2026-02-13T08:00:00.000Z
+             */
+            lastObservedAt: string | null;
+        };
+        LatestRateItemDto: {
+            /**
+             * @description 目标币种代码
+             * @example CNY
+             */
+            target: string;
+            /**
+             * @description 报价（1 单位 base 可兑换的 target 数量），按来源报价四舍五入保留 8 位小数
+             * @example 0.13910462
+             */
+            rate?: string;
+            /**
+             * @description 现汇卖出价（1 单位 target 兑 X base），四舍五入保留 8 位小数；仅 abc（农行牌价）源返回，其余源缺省，录入价取 sellRate ?? rate
+             * @example 0.67401235
+             */
+            sellRate?: string;
+            /**
+             * @description 报价来源（数据源标识；恒等报价为 identity；多源：abc 农行牌价 / frankfurter / er-api）
+             * @example abc
+             */
+            source?: string;
+            /**
+             * @description 报价所属日，数据源标注并如实展示（可能为最近一个工作日，不因确认而变为今天），ISO 8601
+             * @example 2026-02-13T00:00:00.000Z
+             */
+            observedAt?: string;
+            /**
+             * @description 有效期窗口终点 = 最后确认时间 + 5 分钟，ISO 8601；恰好满 5 分钟视为过期
+             * @example 2026-02-16T08:05:00.000Z
+             */
+            validUntil?: string;
+            /**
+             * @description 当前是否仍在有效期内（now < validUntil）
+             * @example true
+             */
+            fresh?: boolean;
+            /** @description 项级错误；出现时本项无报价数据 */
+            error?: components["schemas"]["RateErrorDto"];
+        };
+        LatestRateGroupResponseDto: {
+            /**
+             * @description 基准币种代码
+             * @example USD
+             */
+            base: string;
+            /** @description 逐目标报价项（顺序与请求 targets 一致） */
+            items: components["schemas"]["LatestRateItemDto"][];
+        };
+        PlanInstallmentDto: {
+            /**
+             * @description 批次序号（1 起）
+             * @example 1
+             */
+            seq: number;
+            /**
+             * @description 该批准备日期（ISO 8601 UTC 0 点）
+             * @example 2027-07-28T00:00:00.000Z
+             */
+            scheduledAt: string;
+            /**
+             * @description 该批金额（按币种精度向下取整，固定 4 位小数字符串）
+             * @example 16666.6600
+             */
+            amount: string;
+        };
+        PlanDto: {
+            /**
+             * @description 计划 ID（cuid）
+             * @example cmex5g2h70000abcd
+             */
+            id: string;
+            /**
+             * @description 目标名称（缺省为 null）
+             * @example 今年换 5 万美元
+             */
+            name: string | null;
+            /**
+             * @description 目标币种（ISO 4217）
+             * @example USD
+             */
+            targetCurrency: string;
+            /**
+             * @description 目标金额（固定 4 位小数字符串）
+             * @example 50000.0000
+             */
+            targetAmount: string;
+            /**
+             * @description 已分配金额（固定 4 位小数字符串）
+             * @example 12000.0000
+             */
+            allocatedAmount: string;
+            /**
+             * @description 剩余分配 = amount − usedAmount（创建时 usedAmount = 0）
+             * @example 12000.0000
+             */
+            remainingAmount: string;
+            /**
+             * @description 期望用汇日（ISO 8601 UTC）
+             * @example 2027-08-01T00:00:00.000Z
+             */
+            expectUseDate: string;
+            /**
+             * @description 最晚准备日（服务端重算，不信任前端）
+             * @example 2027-07-28T00:00:00.000Z
+             */
+            latestPrepDate: string;
+            /**
+             * @description 提前准备天数（1~30）
+             * @example 3
+             */
+            prepLeadDays: number;
+            /**
+             * @description 资金准备节奏
+             * @example balanced
+             * @enum {string}
+             */
+            pacePreference: "conservative" | "balanced" | "aggressive";
+            /**
+             * @description 计划状态
+             * @example ACTIVE
+             * @enum {string}
+             */
+            status: "ACTIVE" | "COMPLETED" | "CANCELLED";
+            /** @description 分批排期（3/2/1 批） */
+            installments: components["schemas"]["PlanInstallmentDto"][];
+        };
+        AllocatableCapsDto: {
+            /**
+             * @description 该币种可分配余额 = 账户余额 − 其他计划剩余分配之和（固定 4 位小数字符串）
+             * @example 12000.0000
+             */
+            allocatableBalance: string;
+            /**
+             * @description 本次分配上限 = min(可分配余额, 目标金额)（固定 4 位小数字符串）
+             * @example 12000.0000
+             */
+            maxAllocatable: string;
+        };
+        SchedulePreviewResultDto: {
+            /**
+             * @description 最晚准备日（服务端按用途日期与提前天数重算）
+             * @example 2027-07-28T00:00:00.000Z
+             */
+            latestPrepDate: string;
+            /** @description 分批排期（3/2/1 批，日期升序） */
+            installments: components["schemas"]["PlanInstallmentDto"][];
+            /** @description 该币种可分配余额信息 */
+            caps: components["schemas"]["AllocatableCapsDto"];
+        };
+        PlanListItemDto: {
+            /**
+             * @description 计划 ID（cuid）
+             * @example cmex5g2h70000abcd
+             */
+            id: string;
+            /**
+             * @description 目标名称（缺省为 null）
+             * @example 今年换 5 万美元
+             */
+            name: string | null;
+            /**
+             * @description 计划状态
+             * @example ACTIVE
+             * @enum {string}
+             */
+            status: "ACTIVE" | "COMPLETED" | "CANCELLED";
+            /**
+             * @description 目标币种（ISO 4217）
+             * @example USD
+             */
+            targetCurrency: string;
+            /**
+             * @description 目标金额（固定 4 位小数字符串）
+             * @example 50000.0000
+             */
+            targetAmount: string;
+            /**
+             * @description 累计已使用（M7 写入；当前恒 0.0000；固定 4 位小数字符串）
+             * @example 4000.0000
+             */
+            usedAmount: string;
+            /**
+             * @description 分配总额（留给该计划的金额，固定 4 位小数字符串）
+             * @example 6000.0000
+             */
+            allocatedAmount: string;
+            /**
+             * @description 计划剩余分配 = max(0, 分配总额 − 累计已使用)（固定 4 位小数字符串）
+             * @example 2000.0000
+             */
+            remainingAllocation: string;
+            /**
+             * @description 资金缺口 = max(0, 还需使用金额 − 计划剩余分配)；0 即钱已备齐（固定 4 位小数字符串）
+             * @example 8000.0000
+             */
+            gap: string;
+            /**
+             * @description 最晚准备日期（ISO 8601 UTC）
+             * @example 2027-07-28T00:00:00.000Z
+             */
+            latestPrepDate: string;
+            /**
+             * @description 下一准备节点日期（未到期的最早准备节点；无排期或已全部过期为 null，ISO 8601 UTC）
+             * @example 2027-07-01T00:00:00.000Z
+             */
+            nextInstallmentAt: string | null;
+            /**
+             * @description 最近更新时间（ISO 8601，乐观锁 expectedUpdatedAt 取自本字段）
+             * @example 2026-09-16T08:30:00.123Z
+             */
+            updatedAt: string;
+        };
+        PlanChangeLogDto: {
+            /** @description 记录 ID */
+            id: string;
+            /**
+             * @description 变更主类型：TARGET_ADJUSTED / ALLOCATION_ADJUSTED / PARAMS_ADJUSTED（节奏·缓冲·开始日）/ COMPLETED / CANCELLED / REOPENED
+             * @example TARGET_ADJUSTED
+             */
+            changeType: string;
+            /**
+             * @description 变更前目标金额（固定 4 位小数字符串）
+             * @example 10000.0000
+             */
+            beforeTarget: string;
+            /**
+             * @description 变更后目标金额（固定 4 位小数字符串）
+             * @example 8000.0000
+             */
+            afterTarget: string;
+            /**
+             * @description 变更前分配总额（固定 4 位小数字符串）
+             * @example 6000.0000
+             */
+            beforeAlloc: string;
+            /**
+             * @description 变更后分配总额（固定 4 位小数字符串）
+             * @example 4000.0000
+             */
+            afterAlloc: string;
+            /**
+             * @description 本次释放的分配额（回到未分配余额，固定 4 位小数字符串）
+             * @example 2000.0000
+             */
+            releasedAmount: string;
+            /** @description 变更前全量快照（含目标/分配/已使用/剩余/缺口/节奏/准备缓冲/开始日/状态等，金额 4 位小数字符串、日期 ISO 8601） */
+            beforeSnapshot: Record<string, never>;
+            /** @description 变更后全量快照（结构同 beforeSnapshot） */
+            afterSnapshot: Record<string, never>;
+            /**
+             * @description 变更时间（ISO 8601）
+             * @example 2026-09-16T08:30:00.123Z
+             */
+            createdAt: string;
+        };
+        PlanDetailDto: {
+            /**
+             * @description 计划 ID（cuid）
+             * @example cmex5g2h70000abcd
+             */
+            id: string;
+            /**
+             * @description 目标名称（缺省为 null）
+             * @example 今年换 5 万美元
+             */
+            name: string | null;
+            /**
+             * @description 计划状态
+             * @example ACTIVE
+             * @enum {string}
+             */
+            status: "ACTIVE" | "COMPLETED" | "CANCELLED";
+            /**
+             * @description 目标币种（ISO 4217）
+             * @example USD
+             */
+            targetCurrency: string;
+            /**
+             * @description 目标金额（固定 4 位小数字符串）
+             * @example 50000.0000
+             */
+            targetAmount: string;
+            /**
+             * @description 累计已使用（M7 写入；当前恒 0.0000；固定 4 位小数字符串）
+             * @example 4000.0000
+             */
+            usedAmount: string;
+            /**
+             * @description 分配总额（留给该计划的金额，固定 4 位小数字符串）
+             * @example 6000.0000
+             */
+            allocatedAmount: string;
+            /**
+             * @description 计划剩余分配 = max(0, 分配总额 − 累计已使用)（固定 4 位小数字符串）
+             * @example 2000.0000
+             */
+            remainingAllocation: string;
+            /**
+             * @description 资金缺口 = max(0, 还需使用金额 − 计划剩余分配)；0 即钱已备齐（固定 4 位小数字符串）
+             * @example 8000.0000
+             */
+            gap: string;
+            /**
+             * @description 最晚准备日期（ISO 8601 UTC）
+             * @example 2027-07-28T00:00:00.000Z
+             */
+            latestPrepDate: string;
+            /**
+             * @description 下一准备节点日期（未到期的最早准备节点；无排期或已全部过期为 null，ISO 8601 UTC）
+             * @example 2027-07-01T00:00:00.000Z
+             */
+            nextInstallmentAt: string | null;
+            /**
+             * @description 最近更新时间（ISO 8601，乐观锁 expectedUpdatedAt 取自本字段）
+             * @example 2026-09-16T08:30:00.123Z
+             */
+            updatedAt: string;
+            /**
+             * @description 资金准备节奏（conservative=安心 / balanced=均衡 / aggressive=主动）
+             * @example balanced
+             * @enum {string}
+             */
+            pacePreference: "conservative" | "balanced" | "aggressive";
+            /**
+             * @description 准备缓冲（提前准备的工作日天数，1~30）
+             * @example 3
+             */
+            prepLeadDays: number;
+            /**
+             * @description 预计使用日期（ISO 8601 UTC，不可修改）
+             * @example 2027-08-01T00:00:00.000Z
+             */
+            expectUseDate: string;
+            /**
+             * @description 开始准备日（ISO 8601 UTC；重建排期 earliest 基准，未落基线为 null → 明天起首个工作日）
+             * @example 2027-07-01T00:00:00.000Z
+             */
+            planStartDate: string | null;
+            /** @description 准备节点（分批排期，按批次序号升序；已清空为空数组） */
+            installments: components["schemas"]["PlanInstallmentDto"][];
+            /** @description 修改记录（按时间倒序；存量计划无历史为空数组） */
+            changeLogs: components["schemas"]["PlanChangeLogDto"][];
+            /**
+             * @description 可否修改目标/分配/节奏/准备缓冲（仅进行中）
+             * @example true
+             */
+            canModify: boolean;
+            /**
+             * @description 可否取消（仅进行中）
+             * @example true
+             */
+            canCancel: boolean;
+            /**
+             * @description 可否完成确认（进行中且已使用=目标且剩余分配=0，无超用）
+             * @example false
+             */
+            canComplete: boolean;
+            /**
+             * @description 可否重新开启（已完成且严格完成态：已使用=目标且剩余分配=0）
+             * @example false
+             */
+            canReopen: boolean;
+        };
+        AdjustPreviewDto: {
+            /**
+             * @description 新目标金额（正数字符串，≤ 单笔上限，最多 4 位小数；缺省沿用现目标）
+             * @example 8000
+             */
+            newTargetAmount?: string;
+            /**
+             * @description 新分配总额（≥ 0 字符串，最多 4 位小数；缺省时调低目标将自动释放多余分配）
+             * @example 4000
+             */
+            newAllocAmount?: string;
+            /**
+             * @description 资金准备节奏（conservative=安心 / balanced=均衡 / aggressive=主动）
+             * @example balanced
+             * @enum {string}
+             */
+            pacePreference?: "conservative" | "balanced" | "aggressive";
+            /**
+             * @description 准备缓冲（提前准备的工作日天数，1~30 整数；缺省沿用现值）
+             * @example 3
+             */
+            prepLeadDays?: number;
+            /**
+             * @description 开始准备日（ISO 8601，不得早于今天；缺省 = 沿用现开始日；显式 null = 清空回退「明天起首个工作日」）
+             * @example 2027-07-01T00:00:00.000Z
+             */
+            startDate?: string | null;
+        };
+        AdjustPlanDto: {
+            /**
+             * @description 新目标金额（正数字符串，≤ 单笔上限，最多 4 位小数；缺省沿用现目标）
+             * @example 8000
+             */
+            newTargetAmount?: string;
+            /**
+             * @description 新分配总额（≥ 0 字符串，最多 4 位小数；缺省时调低目标将自动释放多余分配）
+             * @example 4000
+             */
+            newAllocAmount?: string;
+            /**
+             * @description 资金准备节奏（conservative=安心 / balanced=均衡 / aggressive=主动）
+             * @example balanced
+             * @enum {string}
+             */
+            pacePreference?: "conservative" | "balanced" | "aggressive";
+            /**
+             * @description 准备缓冲（提前准备的工作日天数，1~30 整数；缺省沿用现值）
+             * @example 3
+             */
+            prepLeadDays?: number;
+            /**
+             * @description 开始准备日（ISO 8601，不得早于今天；缺省 = 沿用现开始日；显式 null = 清空回退「明天起首个工作日」）
+             * @example 2027-07-01T00:00:00.000Z
+             */
+            startDate?: string | null;
+            /**
+             * @description 乐观锁：取自计划详情 updatedAt 原值；不匹配返回 409 PLAN_STATE_CHANGED
+             * @example 2026-09-16T08:30:00.123Z
+             */
+            expectedUpdatedAt: string;
+            /**
+             * @description 重新开启确认：已完成计划提高目标时必须为 true；进行中计划携带会被忽略；重开时不得同时携带分配/节奏/准备缓冲参数
+             * @example true
+             */
+            confirmReopen?: boolean;
+        };
+        AdjustCapsDto: {
+            /**
+             * @description 修改分配总额上限 = min(还需使用金额, 未分配余额 + 本计划原分配总额)（固定 4 位小数字符串）
+             * @example 7000.0000
+             */
+            limit: string;
+            /**
+             * @description 未分配余额 = 账户余额 − Σ同币种各计划剩余分配（固定 4 位小数字符串）
+             * @example 5000.0000
+             */
+            unallocatedBalance: string;
+            /**
+             * @description 还需使用金额 = max(0, 新目标 − 累计已使用)（固定 4 位小数字符串）
+             * @example 10000.0000
+             */
+            stillNeeded: string;
+        };
+        AdjustImpactDto: {
+            /**
+             * @description 本次释放的分配额（回到未分配余额，固定 4 位小数字符串）
+             * @example 2000.0000
+             */
+            releasedAmount: string;
+            /**
+             * @description 新资金缺口（固定 4 位小数字符串）
+             * @example 4000.0000
+             */
+            newGap: string;
+            /** @description 新排期（准备节点；缺口为 0 时为 null——现有排期将被清空） */
+            newSchedule: components["schemas"]["PlanInstallmentDto"][] | null;
+            /**
+             * @description 现有排期是否将被清空（newSchedule 为 null 时恒 true）
+             * @example false
+             */
+            scheduleDropped: boolean;
+        };
+        PlanAdjustSnapshotDto: {
+            /**
+             * @description 目标金额（固定 4 位小数字符串）
+             * @example 10000.0000
+             */
+            targetAmount: string;
+            /**
+             * @description 分配总额（固定 4 位小数字符串）
+             * @example 6000.0000
+             */
+            allocAmount: string;
+            /**
+             * @description 累计已使用（固定 4 位小数字符串）
+             * @example 0.0000
+             */
+            usedAmount: string;
+            /**
+             * @description 计划剩余分配（固定 4 位小数字符串）
+             * @example 6000.0000
+             */
+            remainingAllocation: string;
+            /**
+             * @description 资金缺口（固定 4 位小数字符串）
+             * @example 4000.0000
+             */
+            gap: string;
+            /**
+             * @description 资金准备节奏
+             * @example balanced
+             * @enum {string}
+             */
+            pacePreference: "conservative" | "balanced" | "aggressive";
+            /**
+             * @description 准备缓冲（工作日天数）
+             * @example 3
+             */
+            prepLeadDays: number;
+            /**
+             * @description 开始准备日（ISO 8601；未落基线为 null）
+             * @example 2027-07-01T00:00:00.000Z
+             */
+            planStartDate: string | null;
+        };
+        AdjustPreviewResultDto: {
+            /**
+             * @description 本次调整是否可行（非法组合直接以 4xx 报错，不会返回 false）
+             * @example true
+             */
+            valid: boolean;
+            /**
+             * @description 是否为重新开启（已完成计划提高目标场景；true 时提交须带 confirmReopen: true）
+             * @example false
+             */
+            reopen: boolean;
+            /** @description caps 三值（重新开启场景省略） */
+            caps?: components["schemas"]["AdjustCapsDto"] | null;
+            /** @description 修改影响 */
+            impact: components["schemas"]["AdjustImpactDto"];
+            /** @description 修改前状态快照 */
+            before: components["schemas"]["PlanAdjustSnapshotDto"];
+            /** @description 修改后状态快照 */
+            after: components["schemas"]["PlanAdjustSnapshotDto"];
+            /**
+             * @description 新最晚准备日期（按用途日期与准备缓冲重算，ISO 8601 UTC）
+             * @example 2027-07-28T00:00:00.000Z
+             */
+            newLatestPrepDate: string;
+        };
+        PlanListQueryDto: {
+            /**
+             * @description 按计划状态过滤（缺省返回全部）
+             * @example ACTIVE
+             * @enum {string}
+             */
+            status?: "ACTIVE" | "COMPLETED" | "CANCELLED";
+        };
+        SchedulePreviewDto: {
+            /**
+             * @description 目标币种（ISO 4217，必须在支持的 15 币种内）
+             * @example USD
+             */
+            targetCurrency: string;
+            /**
+             * @description 目标金额（正数字符串，≤ 单笔上限 100,000,000,000）
+             * @example 50000.00
+             */
+            targetAmount: string;
+            /**
+             * @description 期望用汇日（ISO 8601，必须晚于今天）
+             * @example 2027-08-01T00:00:00.000Z
+             */
+            expectUseDate: string;
+            /**
+             * @description 提前准备天数（1~30 整数）
+             * @example 3
+             */
+            prepLeadDays: number;
+            /**
+             * @description 资金准备节奏（conservative=安心 / balanced=均衡 / aggressive=主动）
+             * @example balanced
+             */
+            pacePreference: string;
+            /**
+             * @description 开始准备日（ISO 8601；缺省 = 最早可安排日，即明天起首个工作日）
+             * @example null
+             */
+            startDate?: string | null;
+        };
+        PlanErrorDto: {
+            /**
+             * @description 错误码：INVALID_PLAN_PARAMS / NO_AVAILABLE_DATES / AMOUNT_TOO_SMALL / INSUFFICIENT_ALLOCATABLE_BALANCE / PLAN_NOT_FOUND / PLAN_STATE_CHANGED / PLAN_INVALID_TRANSITION / PLAN_TARGET_BELOW_USED / PLAN_ALLOCATION_LIMIT / PLAN_ALLOCATION_BELOW_USED / PLAN_COMPLETE_NOT_READY
+             * @example INSUFFICIENT_ALLOCATABLE_BALANCE
+             */
+            code: string;
+            /**
+             * @description 错误描述
+             * @example 可分配余额不足，请调整分配金额
+             */
+            message: string;
+        };
+        CreatePlanDto: {
+            /**
+             * @description 目标币种（ISO 4217，必须在支持的 15 币种内）
+             * @example USD
+             */
+            targetCurrency: string;
+            /**
+             * @description 目标金额（正数字符串，≤ 单笔上限 100,000,000,000）
+             * @example 50000.00
+             */
+            targetAmount: string;
+            /**
+             * @description 期望用汇日（ISO 8601，必须晚于今天）
+             * @example 2027-08-01T00:00:00.000Z
+             */
+            expectUseDate: string;
+            /**
+             * @description 提前准备天数（1~30 整数）
+             * @example 3
+             */
+            prepLeadDays: number;
+            /**
+             * @description 资金准备节奏（conservative=安心 / balanced=均衡 / aggressive=主动）
+             * @example balanced
+             */
+            pacePreference: string;
+            /**
+             * @description 开始准备日（ISO 8601；缺省 = 最早可安排日，即明天起首个工作日）
+             * @example null
+             */
+            startDate?: string | null;
+            /**
+             * @description 目标名称（缺省存 null）
+             * @example 今年换 5 万美元
+             */
+            name?: string;
+            /**
+             * @description 本次计入已有外币的分配金额（≥ 0，≤ 可分配余额与目标金额较小者；缺省 "0" 不占用余额）
+             * @example 12000.00
+             */
+            allocatedAmount?: string;
         };
         CurrencyResponseDto: {
             /**
@@ -355,6 +1615,232 @@ export interface components {
         CurrencyListResponseDto: {
             /** @description 启用中的币种清单（isActive=true），按 sortOrder 升序 */
             items: components["schemas"]["CurrencyResponseDto"][];
+        };
+        TransactionDto: {
+            /**
+             * @description 交易 ID（cuid）
+             * @example cmb9...
+             */
+            id: string;
+            /**
+             * @description 买入币种（ISO 4217）
+             * @example USD
+             */
+            currencyCode: string;
+            /**
+             * @description 到账外币数量（固定 4 位小数字符串）
+             * @example 10000.0000
+             */
+            quantity: string;
+            /**
+             * @description 本金金额（本位币，固定 4 位小数字符串）
+             * @example 72480.0000
+             */
+            principalAmount: string;
+            /**
+             * @description 手续费（本位币，固定 4 位小数字符串）；null = 未知（≠ 0）
+             * @example 42.0000
+             */
+            feeAmount: string | null;
+            /**
+             * @description 交易总成本 = 本金 + 手续费（固定 4 位小数字符串）；手续费未知时为 null（绝不当 0 计算）
+             * @example 72522.0000
+             */
+            totalCost: string | null;
+            /**
+             * @description 手续费是否明确（false 时前端显示「费用未明确」提示）
+             * @example true
+             */
+            feeKnown: boolean;
+            /**
+             * @description 成交汇率（1 外币 = X 本位币，固定 8 位小数字符串）
+             * @example 7.24800000
+             */
+            exchangeRate: string;
+            /**
+             * @description 关联计划 ID（仅标记，可空）
+             * @example cmb1...
+             */
+            planId: string | null;
+            /**
+             * @description 关联计划名称（计划不存在或未关联时为 null）
+             * @example 学费计划
+             */
+            planName: string | null;
+            /**
+             * @description 交易日期（ISO 8601 UTC）
+             * @example 2026-09-20T00:00:00.000Z
+             */
+            transactedAt: string;
+            /**
+             * @description 更正版本号（本次恒为 1，交易更正能力随 M8 实现）
+             * @example 1
+             */
+            version: number;
+        };
+        CreateTransactionDto: {
+            /**
+             * @description 买入币种（ISO 4217，必须在支持的 15 币种内）
+             * @example USD
+             * @enum {string}
+             */
+            currencyCode: "HKD" | "USD" | "GBP" | "AUD" | "CAD" | "CNY" | "JPY" | "EUR" | "SGD" | "NZD" | "TWD" | "CHF" | "KRW" | "THB" | "MYR";
+            /**
+             * @description 本金金额（本位币，正数字符串，< 单笔上限 100,000,000,000）
+             * @example 72480.00
+             */
+            principalAmount: string;
+            /**
+             * @description 成交汇率（1 外币 = X 本位币，正数字符串，≤ 8 位小数，超位数拒绝不截断）
+             * @example 7.24800000
+             */
+            exchangeRate: string;
+            /**
+             * @description 到账外币数量（正数字符串；小数位 ≤ 币种精度，JPY/KRW 必须为整数；< 单笔上限）
+             * @example 10000.00
+             */
+            quantity: string;
+            /**
+             * @description 手续费（本位币，可选）；缺省 = 未知（落库 null，≠ 0）；"0" = 无手续费
+             * @example 42.00
+             */
+            feeAmount?: string | null;
+            /**
+             * @description 交易日期（ISO 8601；UTC+8 口径不晚于今天，不早于账本起点）
+             * @example 2026-09-20T00:00:00.000Z
+             */
+            transactedAt: string;
+            /**
+             * @description 关联计划 ID（可选，仅标记不触发分配；计划币种须与买入币种一致）
+             * @example cmb1...
+             */
+            planId?: string | null;
+        };
+        TransactionErrorDto: {
+            /**
+             * @description 错误码（见 enum）
+             * @example INVALID_TRANSACTION_PARAMS
+             * @enum {string}
+             */
+            code: "INVALID_TRANSACTION_PARAMS" | "ROUND_TO_ZERO" | "PLAN_CURRENCY_MISMATCH" | "PLAN_NOT_FOUND" | "TRANSACTION_NOT_FOUND";
+            /**
+             * @description 错误描述
+             * @example 本金、汇率与到账数量不匹配，请按其中一种填法重新核对
+             */
+            message: string;
+        };
+        AccountListItemDto: {
+            /**
+             * @description 币种代码（ISO 4217）
+             * @example CAD
+             */
+            currencyCode: string;
+            /**
+             * @description 账户余额（Decimal(20, 4)，toFixed(4) 字符串）
+             * @example 12000.0000
+             */
+            balance: string;
+            /**
+             * @description 已分配金额 = Σ全部计划剩余分配（amount − usedAmount，全状态求和；toFixed(4) 字符串）
+             * @example 6000.0000
+             */
+            allocatedAmount: string;
+            /**
+             * @description 未分配余额 = 余额 − 已分配（toFixed(4) 字符串）；正常数据 ≥ 0，为负说明数据被破坏，接口如实返回不钳 0
+             * @example 6000.0000
+             */
+            unallocatedAmount: string;
+        };
+        AccountListDto: {
+            /**
+             * @description 本位币（成本币种，取 userSettings.baseCurrency）；新用户无设置行时为 null（前端成本列退化为纯金额）
+             * @example CNY
+             */
+            baseCurrency: string | null;
+            /** @description 账户列表，按 currencyCode 升序；未建任何账户时空数组 */
+            accounts: components["schemas"]["AccountListItemDto"][];
+        };
+        AccountDetailDto: {
+            /**
+             * @description 本位币（成本币种，取 userSettings.baseCurrency）；新用户无设置行时为 null
+             * @example CNY
+             */
+            baseCurrency: string | null;
+            /**
+             * @description 币种代码（ISO 4217）
+             * @example CAD
+             */
+            currencyCode: string;
+            /**
+             * @description 剩余已记录成本 = Σ(remainingQty × unitCost)（toFixed(4) 字符串）；无批次（旧数据未回填）时为 null
+             * @example 18420.0000
+             */
+            remainingTotalCost: string | null;
+            /**
+             * @description 平均单位成本 = 剩余成本 ÷ Σ remainingQty（toFixed(8) 字符串）；余额 0 或全部消耗时不计算，为 null（doc 04）
+             * @example 1.00000000
+             */
+            averageUnitCost: string | null;
+        };
+        AccountLedgerItemDto: {
+            /**
+             * @description 事件记录 ID（cuid；PURCHASE 行即交易 ID，可跳转交易详情）
+             * @example cmb1...
+             */
+            id: string;
+            /**
+             * @description 事件类型：PURCHASE = 买入；USAGE = 使用（M7 上线前不出现）；INITIAL = 初始持仓（M1 预留，当前不出现）
+             * @example PURCHASE
+             * @enum {string}
+             */
+            type: "PURCHASE" | "USAGE" | "INITIAL";
+            /**
+             * @description 发生时间（ISO 8601 UTC；买入 = 交易日期，使用 = 使用日期）
+             * @example 2026-09-08T02:00:00.000Z
+             */
+            occurredAt: string;
+            /**
+             * @description 外币数量（toFixed(4) 字符串；USAGE 行 = 使用金额）
+             * @example 10620.0000
+             */
+            quantity: string;
+            /**
+             * @description 成本（toFixed(4) 字符串）：买入 = 本金 + 手续费（未知时 = 本金）；使用 = FIFO 消耗成本（M7 起，当前恒 null）
+             * @example 10620.0000
+             */
+            totalCost: string | null;
+            /**
+             * @description 手续费是否明确（买入行：feeAmount 非 null；使用行恒 true——使用无费用概念）
+             * @example true
+             */
+            feeKnown: boolean;
+            /**
+             * @description 更正版本号（当前恒为 1，按最新有效版本过滤随 M8 实现）
+             * @example 1
+             */
+            version: number;
+        };
+        AccountLedgerDto: {
+            /**
+             * @description 本位币（成本列币种，取 userSettings.baseCurrency）；无设置行时为 null
+             * @example CNY
+             */
+            baseCurrency: string | null;
+            /** @description 流水条目，按 occurredAt 倒序、同刻按录入时间倒序；无分页（单用户 ≤ 万级，§3.6） */
+            items: components["schemas"]["AccountLedgerItemDto"][];
+        };
+        AccountErrorDto: {
+            /**
+             * @description 错误码
+             * @example ACCOUNT_NOT_FOUND
+             * @enum {string}
+             */
+            code: "INVALID_ACCOUNT_CURRENCY" | "ACCOUNT_NOT_FOUND";
+            /**
+             * @description 错误描述
+             * @example 该币种暂无外汇账户
+             */
+            message: string;
         };
     };
     responses: never;
@@ -498,6 +1984,152 @@ export interface operations {
             };
         };
     };
+    OnboardingController_getStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 状态查询成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OnboardingStatusDto"];
+                };
+            };
+        };
+    };
+    OnboardingController_saveConsents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveConsentsDto"];
+            };
+        };
+        responses: {
+            /** @description 成功，响应体为 { success, data, message } 包装 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["OnboardingConsentsResultDto"];
+                        message?: string;
+                    };
+                };
+            };
+        };
+    };
+    OnboardingController_complete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompleteOnboardingDto"];
+            };
+        };
+        responses: {
+            /** @description 成功，响应体为 { success, data, message } 包装 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["OnboardingCompleteResultDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 未确认条款或本位币非法 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OnboardingErrorDto"];
+                };
+            };
+            /** @description 首次设置已完成（ONBOARDING_ALREADY_COMPLETED） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OnboardingErrorDto"];
+                };
+            };
+        };
+    };
+    HomeController_getState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 状态查询成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["HomeStateDto"];
+                        message?: string;
+                    };
+                };
+            };
+        };
+    };
+    HomeController_getPortfolio: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 持仓聚合查询成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["PortfolioDto"];
+                        message?: string;
+                    };
+                };
+            };
+        };
+    };
     RateController_supported: {
         parameters: {
             query?: never;
@@ -517,7 +2149,12 @@ export interface operations {
     };
     RateController_latest: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 忽略 5 分钟有效期窗口，强制回源（录入页进入刷新、最终确认前重查用） */
+                refresh?: boolean;
+                /** @description 逗号分隔的目标币种（≤15 个，须在支持清单内）；缺省 USD。与 base 相同的币种返回恒等报价（rate=1） */
+                targets?: unknown;
+            };
             header?: never;
             path: {
                 /** @description 基准货币代码 */
@@ -527,11 +2164,39 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description 单目标平铺结构或多目标 items 结构 */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
+                content: {
+                    "application/json": components["schemas"]["LatestRateResponseDto"] | components["schemas"]["LatestRateGroupResponseDto"];
+                };
+            };
+            /** @description 参数非法：币种不在支持清单、targets 超量 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
                 content?: never;
+            };
+            /** @description 数据源不提供该币对报价（如 ECB 无 TWD），重试无用 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateErrorDto"];
+                };
+            };
+            /** @description 汇率数据源暂时不可用（网络失败/5xx/超时），响应体含库中最后报价时间 lastObservedAt */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateErrorDto"];
+                };
             };
         };
     };
@@ -559,6 +2224,368 @@ export interface operations {
             };
         };
     };
+    PlanController_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SchedulePreviewDto"];
+            };
+        };
+        responses: {
+            /** @description 预览成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["SchedulePreviewResultDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 参数非法（INVALID_PLAN_PARAMS）或无法生成排期（NO_AVAILABLE_DATES / AMOUNT_TOO_SMALL） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+        };
+    };
+    PlanController_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 获取成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: {
+                            items?: components["schemas"]["PlanListItemDto"][];
+                        };
+                        message?: string;
+                    };
+                };
+            };
+            /** @description status 非法（不在三值枚举内），无模块 code */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+        };
+    };
+    PlanController_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePlanDto"];
+            };
+        };
+        responses: {
+            /** @description 创建成功，响应体为 { success, data, message } 包装 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["PlanDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 参数非法（INVALID_PLAN_PARAMS）或无法生成排期（NO_AVAILABLE_DATES / AMOUNT_TOO_SMALL） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+            /** @description 分配超可配余额（INSUFFICIENT_ALLOCATABLE_BALANCE，附 caps 现值） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+        };
+    };
+    PlanController_getDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 获取成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["PlanDetailDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 计划不存在或不属于本人（PLAN_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+        };
+    };
+    PlanController_adjust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdjustPlanDto"];
+            };
+        };
+        responses: {
+            /** @description 修改成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["PlanDetailDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 参数非法（INVALID_PLAN_PARAMS）/ 目标低于已用（PLAN_TARGET_BELOW_USED）/ 分配低于已用（PLAN_ALLOCATION_BELOW_USED，附 used 与差额）/ 超上限（PLAN_ALLOCATION_LIMIT，附最新 caps）/ 排期不可生成（NO_AVAILABLE_DATES / AMOUNT_TOO_SMALL） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+            /** @description 计划不存在或不属于本人（PLAN_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+            /** @description 乐观锁失配（PLAN_STATE_CHANGED）或非法状态流转（PLAN_INVALID_TRANSITION） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+        };
+    };
+    PlanController_previewAdjust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdjustPreviewDto"];
+            };
+        };
+        responses: {
+            /** @description 预览成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["AdjustPreviewResultDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 参数非法（INVALID_PLAN_PARAMS：至少一项 / 金额超 4 位小数 / 缓冲越界等）或无法生成新排期（NO_AVAILABLE_DATES / AMOUNT_TOO_SMALL） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+            /** @description 计划不存在或不属于本人（PLAN_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+            /** @description 已取消计划不可预览，或已完成计划非严格完成态 + 调高目标（PLAN_INVALID_TRANSITION） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+        };
+    };
+    PlanController_complete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 完成成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["PlanDetailDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 未达标或存在超用（PLAN_COMPLETE_NOT_READY，附差值） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+            /** @description 计划不存在或不属于本人（PLAN_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+            /** @description 仅进行中的计划可完成（PLAN_INVALID_TRANSITION） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+        };
+    };
+    PlanController_cancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 取消成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["PlanDetailDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 计划不存在或不属于本人（PLAN_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+            /** @description 仅进行中的计划可取消（PLAN_INVALID_TRANSITION） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+        };
+    };
     CurrencyController_list: {
         parameters: {
             query?: never;
@@ -575,6 +2602,198 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CurrencyListResponseDto"];
+                };
+            };
+        };
+    };
+    TransactionController_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTransactionDto"];
+            };
+        };
+        responses: {
+            /** @description 创建成功，响应体为 { success, data, message } 包装 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["TransactionDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 参数非法（INVALID_TRANSACTION_PARAMS，含三值不自洽、币种/金额/日期校验失败）或到账金额正数舍 0（ROUND_TO_ZERO）、计划币种不匹配（PLAN_CURRENCY_MISMATCH） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransactionErrorDto"];
+                };
+            };
+            /** @description 关联计划不存在或不属于本人（PLAN_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransactionErrorDto"];
+                };
+            };
+        };
+    };
+    TransactionController_detail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 查询成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["TransactionDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 交易不存在或不属于本人（TRANSACTION_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransactionErrorDto"];
+                };
+            };
+        };
+    };
+    AccountController_listAccounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 获取成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["AccountListDto"];
+                        message?: string;
+                    };
+                };
+            };
+        };
+    };
+    AccountController_getAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 获取成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["AccountDetailDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 币种不在支持的 15 币种内（INVALID_ACCOUNT_CURRENCY） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountErrorDto"];
+                };
+            };
+            /** @description 该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountErrorDto"];
+                };
+            };
+        };
+    };
+    AccountController_getLedger: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 获取成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["AccountLedgerDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 币种不在支持的 15 币种内（INVALID_ACCOUNT_CURRENCY） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountErrorDto"];
+                };
+            };
+            /** @description 该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountErrorDto"];
                 };
             };
         };

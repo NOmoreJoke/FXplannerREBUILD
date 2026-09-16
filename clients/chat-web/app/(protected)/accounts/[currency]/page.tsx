@@ -26,8 +26,7 @@ export default function AccountDetailPage() {
 	const params = useParams<{ currency: string }>();
 	const raw = params?.currency;
 	// 接口对路径参数统一转大写（方案 §4.2），展示层同步大写
-	const code =
-		typeof raw === "string" && raw !== "" ? raw.toUpperCase() : null;
+	const code = typeof raw === "string" && raw !== "" ? raw.toUpperCase() : null;
 
 	const detailQuery = useQuery({
 		queryKey: ["accounts", "detail", code],

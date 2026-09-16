@@ -12,6 +12,7 @@ import { ApiError } from "@/lib/api/client";
 import { safeRedirectPath } from "@/lib/auth/safe-redirect-path";
 import { setToken } from "@/lib/auth/token";
 import { useAuthStore } from "@/lib/stores/auth-store";
+import { PasswordInput } from "@/components/base";
 
 /**
  * 注册表单校验（与后端 RegisterDto 对齐）：min(8) + 大小写字母和数字 + 两次密码一致
@@ -123,12 +124,10 @@ export function RegisterForm() {
 							>
 								密码
 							</label>
-							<input
+							<PasswordInput
 								id="password"
-								type="password"
 								autoComplete="new-password"
 								{...register("password")}
-								className="w-full rounded-lg border border-border px-4 py-2 focus:border-mint-500 focus:ring-2 focus:ring-mint-500"
 								placeholder="至少 8 位，含大小写字母和数字"
 								disabled={isLoading}
 							/>
@@ -147,12 +146,10 @@ export function RegisterForm() {
 							>
 								确认密码
 							</label>
-							<input
+							<PasswordInput
 								id="confirmPassword"
-								type="password"
 								autoComplete="new-password"
 								{...register("confirmPassword")}
-								className="w-full rounded-lg border border-border px-4 py-2 focus:border-mint-500 focus:ring-2 focus:ring-mint-500"
 								placeholder="再次输入密码"
 								disabled={isLoading}
 							/>

@@ -14,8 +14,9 @@ export default function RootLayout({
 }: {
 	children: React.ReactNode;
 }) {
+	// suppressHydrationWarning：浏览器扩展（如 Bybit Wallet）会在 hydration 前向 <html> 注入属性，抑制该标签的属性不匹配警告
 	return (
-		<html lang="zh" className={cn("font-sans")}>
+		<html lang="zh" className={cn("font-sans")} suppressHydrationWarning>
 			<body>
 				<ReactQueryProvider>
 					<TooltipProvider>{children}</TooltipProvider>

@@ -74,9 +74,7 @@ export function AccountLedgerTable({ ledger }: AccountLedgerTableProps) {
 							</TableCell>
 						</TableRow>
 					) : (
-						ledger.items.map((item) => (
-							<LedgerRow key={item.id} item={item} />
-						))
+						ledger.items.map((item) => <LedgerRow key={item.id} item={item} />)
 					)}
 				</TableBody>
 			</Table>

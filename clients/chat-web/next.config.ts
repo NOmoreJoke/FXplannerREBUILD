@@ -39,6 +39,8 @@ if (!parsed.success) {
 
 const nextConfig: NextConfig = {
 	output: "standalone",
+	// money 包为 TS 源码直出的 workspace 包（main 指向 ./src/index.ts），需交给打包器转译
+	transpilePackages: ["@fxplanner-new/money"],
 	outputFileTracingRoot: path.join(process.cwd(), "../../"),
 	env: {
 		NEXT_PUBLIC_API_BASE_URL: parsed.data.NEXT_PUBLIC_API_BASE_URL,

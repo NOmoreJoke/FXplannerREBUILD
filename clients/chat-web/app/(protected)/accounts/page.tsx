@@ -3,10 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { CircleAlert, Plus } from "lucide-react";
-import {
-	accountsApi,
-	type AccountListItem,
-} from "@/lib/api/accounts";
+import { accountsApi, type AccountListItem } from "@/lib/api/accounts";
 import { getCurrencyName } from "@/lib/api/currencies";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -66,7 +63,11 @@ export default function AccountsPage() {
 				</Link>
 			</header>
 
-			{isEmpty ? <AccountsEmpty /> : <AccountsTable accounts={query.data.accounts} />}
+			{isEmpty ? (
+				<AccountsEmpty />
+			) : (
+				<AccountsTable accounts={query.data.accounts} />
+			)}
 		</div>
 	);
 }

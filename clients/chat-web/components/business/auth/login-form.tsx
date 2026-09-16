@@ -6,19 +6,16 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Mail, MessageSquare, Send } from "lucide-react";
+import { Send } from "lucide-react";
 import { toast } from "sonner";
-import type {
-	AuthResponse,
-	OtpChannel,
-	PasswordLoginInput,
-} from "@/lib/api/contract";
+import type { AuthResponse, PasswordLoginInput } from "@/lib/api/contract";
 import { authApi } from "@/lib/api/auth";
 import { ApiError } from "@/lib/api/client";
 import { safeRedirectPath } from "@/lib/auth/safe-redirect-path";
 import { setToken } from "@/lib/auth/token";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { useOtpCountdown } from "@/lib/hooks/use-otp-countdown";
+import { PasswordInput } from "@/components/base";
 
 /**
  * 登录表单校验（与后端 LoginDto 对齐）：邮箱格式 + 密码非空
@@ -31,26 +28,16 @@ export const loginSchema = z.object({
 type LoginFormData = z.infer<typeof loginSchema>;
 type LoginMode = "password" | "otp";
 
-/** 邮箱正则（对齐后端 otp.service normalizeOtpTarget 的 email 校验） */
+/** 邮箱正则（对齐后端 otp.service normalizeOtpTarget 的 email 校验；仅支持邮箱，无手机号渠道） */
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-/** E.164 手机号正则（对齐后端 otp.service normalizeOtpTarget 的 phone 校验） */
-const E164_PHONE_PATTERN = /^\+[1-9]\d{7,14}$/;
 
 /**
- * OTP 发送目标格式校验（与后端 normalizeOtpTarget 对齐）
- * email 渠道校验邮箱格式；phone 渠道先归一化（去空格/横线/括号、00 → +）再校验 E.164
+ * OTP 发送目标格式校验（与后端 normalizeOtpTarget 对齐，仅邮箱渠道）
  */
-export function isValidOtpTarget(
-	channel: OtpChannel,
-	rawTarget: string,
-): boolean {
+export function isValidOtpTarget(rawTarget: string): boolean {
 	const value = rawTarget.trim();
 	if (!value) return false;
-	if (channel === "email") {
-		return EMAIL_PATTERN.test(value.toLowerCase());
-	}
-	const normalized = value.replace(/[\s()-]/g, "").replace(/^00/, "+");
-	return E164_PHONE_PATTERN.test(normalized);
+	return EMAIL_PATTERN.test(value.toLowerCase());
 }
 
 /** 统一提取接口错误文案（ApiError / Error / 兜底） */
@@ -66,7 +53,6 @@ export function LoginForm() {
 	const setUser = useAuthStore((s) => s.setUser);
 	const redirect = searchParams.get("redirect");
 	const [mode, setMode] = useState<LoginMode>("password");
-	const [channel, setChannel] = useState<OtpChannel>("email");
 	const [otpTarget, setOtpTarget] = useState("");
 	const [otpCode, setOtpCode] = useState("");
 	const [challengeId, setChallengeId] = useState<string | null>(null);
@@ -76,7 +62,6 @@ export function LoginForm() {
 		seconds: cooldown,
 		cooling,
 		start: startCooldown,
-		reset: resetCooldown,
 	} = useOtpCountdown();
 
 	const {
@@ -106,32 +91,27 @@ export function LoginForm() {
 		}
 	};
 
-	const changeChannel = (nextChannel: OtpChannel) => {
-		setChannel(nextChannel);
-		setOtpTarget("");
-		setOtpCode("");
-		setChallengeId(null);
-		resetCooldown();
-	};
-
 	const sendOtpCode = async () => {
 		const target = otpTarget.trim();
-		if (!isValidOtpTarget(channel, target)) {
-			toast.error(
-				channel === "email"
-					? "请输入正确的邮箱地址"
-					: "请输入正确的手机号（E.164 格式，如 +8613800138000）",
-			);
+		if (!isValidOtpTarget(target)) {
+			toast.error("请输入正确的邮箱地址");
 			return;
 		}
 
 		try {
 			setIsSendingOtp(true);
-			const result = await authApi.sendOtpCode(channel, target);
+			const result = await authApi.sendOtpCode("email", target);
 			setChallengeId(result.challengeId);
 			setOtpCode("");
 			startCooldown();
-			toast.success("验证码已发送");
+			// dev mock 模式：后端未接入真实邮件服务时随响应带回验证码，
+			// 提示并自动填入（生产环境无 devCode，流程不变）
+			if (result.devCode) {
+				setOtpCode(result.devCode);
+				toast.success(`验证码已发送（模拟）：${result.devCode}`);
+			} else {
+				toast.success("验证码已发送，请查收邮箱");
+			}
 		} catch (error) {
 			toast.error(getErrorMessage(error, "验证码发送失败"));
 		} finally {
@@ -159,6 +139,8 @@ export function LoginForm() {
 			setIsLoading(false);
 		}
 	};
+
+	const sendOtpLabel = isSendingOtp ? "发送中..." : "获取验证码";
 
 	return (
 		<div className="min-h-screen flex items-center justify-center bg-background px-4">
@@ -244,14 +226,12 @@ export function LoginForm() {
 								>
 									密码
 								</label>
-								<input
+								<PasswordInput
 									id="password"
-									type="password"
 									autoComplete="current-password"
-									{...register("password")}
-									className="w-full rounded-lg border border-border px-4 py-2 focus:border-mint-500 focus:ring-2 focus:ring-mint-500"
 									placeholder="••••••••"
 									disabled={isLoading}
+									{...register("password")}
 								/>
 								{errors.password && (
 									<p className="mt-1 text-sm text-destructive">
@@ -270,47 +250,18 @@ export function LoginForm() {
 						</form>
 					) : (
 						<form onSubmit={loginWithOtp} className="space-y-6">
-							<div className="grid grid-cols-2 gap-2">
-								<button
-									type="button"
-									aria-pressed={channel === "email"}
-									onClick={() => changeChannel("email")}
-									className={`inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
-										channel === "email"
-											? "border-mint-700 bg-mint-50 text-mint-700"
-											: "border-border text-muted-foreground hover:border-ink-300"
-									}`}
-								>
-									<Mail className="h-4 w-4" aria-hidden="true" />
-									邮箱
-								</button>
-								<button
-									type="button"
-									aria-pressed={channel === "phone"}
-									onClick={() => changeChannel("phone")}
-									className={`inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
-										channel === "phone"
-											? "border-mint-700 bg-mint-50 text-mint-700"
-											: "border-border text-muted-foreground hover:border-ink-300"
-									}`}
-								>
-									<MessageSquare className="h-4 w-4" aria-hidden="true" />
-									手机号
-								</button>
-							</div>
-
 							<div>
 								<label
 									htmlFor="otpTarget"
 									className="mb-2 block text-sm font-medium text-foreground"
 								>
-									{channel === "email" ? "邮箱" : "手机号"}
+									邮箱
 								</label>
 								<input
 									id="otpTarget"
 									name="otpTarget"
-									type={channel === "email" ? "email" : "tel"}
-									autoComplete={channel === "email" ? "email" : "tel"}
+									type="email"
+									autoComplete="email"
 									value={otpTarget}
 									onChange={(event) => {
 										setOtpTarget(event.target.value);
@@ -318,9 +269,7 @@ export function LoginForm() {
 										setOtpCode("");
 									}}
 									className="w-full rounded-lg border border-border px-4 py-2 focus:border-mint-500 focus:ring-2 focus:ring-mint-500"
-									placeholder={
-										channel === "email" ? "your@email.com" : "+8613800138000"
-									}
+									placeholder="your@email.com"
 									disabled={isLoading || isSendingOtp}
 								/>
 							</div>
@@ -357,11 +306,7 @@ export function LoginForm() {
 										className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
 									>
 										<Send className="h-4 w-4" aria-hidden="true" />
-										{cooling
-											? `${cooldown}s`
-											: isSendingOtp
-												? "发送中..."
-												: "获取验证码"}
+										{cooling ? `${cooldown}s` : sendOtpLabel}
 									</button>
 								</div>
 							</div>

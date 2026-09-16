@@ -28,12 +28,20 @@ interface ApiErrorBody {
 export class ApiError extends Error {
 	readonly status: number;
 	readonly code?: string;
+	/** 解析出的错误响应体（供消费方读取 code/message 之外的增量字段，如 502 的 lastObservedAt） */
+	readonly body?: Record<string, unknown>;
 
-	constructor(message: string, status: number, code?: string) {
+	constructor(
+		message: string,
+		status: number,
+		code?: string,
+		body?: Record<string, unknown>,
+	) {
 		super(message);
 		this.name = "ApiError";
 		this.status = status;
 		this.code = code;
+		this.body = body;
 	}
 }
 
@@ -41,10 +49,7 @@ export async function apiClient<T>(
 	endpoint: string,
 	config: RequestConfig = {},
 ): Promise<T> {
-	const {
-		skipAuth = false,
-		...fetchConfig
-	} = config;
+	const { skipAuth = false, ...fetchConfig } = config;
 
 	// 自动添加 Authorization Header
 	const headers: Record<string, string> = {
@@ -98,7 +103,12 @@ export async function apiClient<T>(
 			status: response.status,
 			message: error.message || "请求失败",
 		});
-		throw new ApiError(error.message || "请求失败", response.status, error.code);
+		throw new ApiError(
+			error.message || "请求失败",
+			response.status,
+			error.code,
+			error as Record<string, unknown>,
+		);
 	}
 
 	const result: ApiResponse<T> = await response.json();
