@@ -1,7 +1,13 @@
 "use client";
 
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { CircleAlert } from "lucide-react";
-import { HomeDashboard, HomeEmptyState } from "@/components/business/home";
+import {
+	HomeDashboard,
+	HomeEmptyState,
+	InitialBackfillCard,
+} from "@/components/business/home";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useHomeState } from "@/lib/hooks/use-home-state";
@@ -10,14 +16,27 @@ import { useHomeState } from "@/lib/hooks/use-home-state";
  * 工作台首页（分流瘦壳）
  *
  * 认证守卫在 (protected)/layout.tsx（勿在此重复）。
- * 按 GET /home/state 两分流：
- * - 无账户 且 无计划              → 空状态引导页
- * - 有账户 或 有计划              → 正常数据首页
+ * 按 GET /home/state 分流（onboarding-rework 口径）：
+ * - 未建账（!onboardingCompleted）    → replace 跳 /onboarding 建账向导；
+ * - 已建账，无账户 且 无计划          → 空状态引导页 + 补录初始持仓引导卡
+ *   （未录初始持仓时；E2E 场景 1/10：跳过持仓后首页可见引导卡，补录后消失）；
+ * - 已建账，有账户 或 有计划          → 正常数据首页（未录初始持仓时挂补录引导卡）。
  * 请求失败：整页错误态 + 重试，不跳转不误判。
- * 注：onboarding 向导已按产品决策取消，onboardingCompleted 字段后端仍返回但前端不再消费。
+ * 注：渲染期跳转统一走 useEffect + 提前 return（对齐 redirectToLogin 的防重复思路），
+ * 避免 React 渲染期间触发导航告警。
  */
 export default function HomePage() {
+	const router = useRouter();
 	const { isLoading, isError, refetch, state, dashboard } = useHomeState();
+
+	// 未建账分流：导航统一在 effect 中触发（渲染期只提前返回骨架），
+	// hooks 顺序恒定（rules-of-hooks），state 未就绪时不分流
+	const needsOnboarding = state ? !state.onboardingCompleted : false;
+	useEffect(() => {
+		if (needsOnboarding) {
+			router.replace("/onboarding");
+		}
+	}, [needsOnboarding, router]);
 
 	if (isLoading) {
 		return <HomeSkeleton />;
@@ -31,8 +50,22 @@ export default function HomePage() {
 		return null; // 不可达：非 loading 非 error 时 data 必已就绪（类型收窄）
 	}
 
+	if (needsOnboarding) {
+		return <HomeSkeleton />;
+	}
+
+	// 空状态分支：已建账但无账户无计划 → 引导页 + 补录初始持仓引导卡
 	if (!state.hasAccounts && !state.hasPlans) {
-		return <HomeEmptyState />;
+		return (
+			<>
+				<HomeEmptyState />
+				{!dashboard?.hasInitialHoldings && (
+					<div className="mx-auto max-w-5xl px-8 pb-6">
+						<InitialBackfillCard />
+					</div>
+				)}
+			</>
+		);
 	}
 
 	if (!dashboard) {

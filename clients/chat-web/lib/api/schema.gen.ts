@@ -176,7 +176,7 @@ export interface paths {
         put?: never;
         /**
          * 完成首次设置（最终提交，不可重复）
-         * @description 事务内依次校验：条款（400 CONSENT_REQUIRED）→ 本位币 15 币种（400 INVALID_BASE_CURRENCY）→ 已有设置（409 ONBOARDING_ALREADY_COMPLETED，并发重复由唯一约束兜底同样 409）。成功后创建设置（记账起点 = 完成时刻）。本位币一经设定永久锁定，无任何修改入口。
+         * @description 事务内依次校验：条款（400 CONSENT_REQUIRED）→ 本位币 15 币种（400 INVALID_BASE_CURRENCY）→ 已有设置（409 ONBOARDING_ALREADY_COMPLETED，并发重复由唯一约束兜底同样 409）。成功后创建设置（记账起点 = 完成当日 UTC+8 日初）；可选 initialHoldings 初始持仓同事务入账（最多 14 项，任一失败整单回滚：无有效报价 400 RATE_UNAVAILABLE、金额/成本非法 400 INVALID_AMOUNT）。本位币一经设定永久锁定，无任何修改入口。
          */
         post: operations["OnboardingController_complete"];
         delete?: never;
@@ -185,40 +185,20 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/home/state": {
+    "/api/onboarding/initial-holdings": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * 查询首页状态（分流 + 摘要）
-         * @description 一次请求返回分流三布尔（onboardingCompleted / hasAccounts / hasPlans）+ 账户与计划全量摘要 + 汇率全表最新观测时间。分流规则（如是否空账本）由前端按三布尔决策，后端保持数据中立。
-         */
-        get: operations["HomeController_getState"];
+        get?: never;
         put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/home/portfolio": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
         /**
-         * 查询持仓聚合（CostLot 剩余持仓）
-         * @description 按币种聚合剩余持仓（remainingQty > 0）：Σ剩余数量、Σ剩余持仓成本、平均单位成本，附本位币。口径：unitCost 以用户当前本位币计价（本位币买入价），本位币历史变更不重算；聚合在 SQL 层完成，仅返回 remainingQty > 0 的币种，按 currencyCode 升序。
+         * 补录初始持仓（建账后，每币种仅一笔）
+         * @description 要求已建账（409 ONBOARDING_NOT_COMPLETED）；传入币种均不得已有初始记录（409 INITIAL_HOLDING_EXISTS，整单拒绝不做部分成功；并发重复由唯一约束兜底同样 409）。实时取价（现汇卖出价优先，1 外币 = X 本位币），5 分钟时效以报价观测时间为锚；无有效报价 400 RATE_UNAVAILABLE、金额/成本非法 400 INVALID_AMOUNT，均整单回滚。
          */
-        get: operations["HomeController_getPortfolio"];
-        put?: never;
-        post?: never;
+        post: operations["OnboardingController_saveInitialHoldings"];
         delete?: never;
         options?: never;
         head?: never;
@@ -277,6 +257,46 @@ export interface paths {
          * @description 按 base、target 和 period 查询工作日历史汇率；完整缓存直接返回，缓存不完整时回源并补齐。
          */
         get: operations["RateController_history"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/home/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询首页状态（分流 + 摘要）
+         * @description 一次请求返回分流三布尔（onboardingCompleted / hasAccounts / hasPlans）+ 账户与计划全量摘要 + 汇率全表最新观测时间。分流规则（如是否空账本）由前端按三布尔决策，后端保持数据中立。
+         */
+        get: operations["HomeController_getState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/home/portfolio": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询持仓聚合（CostLot 剩余持仓）
+         * @description 按币种聚合剩余持仓（remainingQty > 0）：Σ剩余数量、Σ剩余持仓成本、平均单位成本，附本位币。口径：unitCost 以用户当前本位币计价（本位币买入价），本位币历史变更不重算；聚合在 SQL 层完成，仅返回 remainingQty > 0 的币种，按 currencyCode 升序。
+         */
+        get: operations["HomeController_getPortfolio"];
         put?: never;
         post?: never;
         delete?: never;
@@ -533,6 +553,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询用户设置（完整视图）
+         * @description 返回邮箱、地区、语言、本位币（只读）、准备偏好、提醒开关与记账起点。未完成首次设置 → 409 ONBOARDING_NOT_COMPLETED。只读无副作用。
+         */
+        get: operations["SettingsController_getSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * 更新偏好设置（幂等）
+         * @description 白名单四字段 region/locale/prepPreference/reminderEnabled，全部可选但至少一项（全空 400 SETTINGS_UPDATE_EMPTY）；枚举非法 400；重复提交同值幂等无副作用。baseCurrency 无更新通道：DTO 不含该字段，未知字段被全局 ValidationPipe 静默剥离（含 baseCurrency 的请求剥后为空 → 400）。未建账 409 ONBOARDING_NOT_COMPLETED。
+         */
+        patch: operations["SettingsController_updateSettings"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -716,6 +760,54 @@ export interface components {
              */
             ledgerStartedAt: string;
         };
+        InitialHoldingCreatedDto: {
+            /**
+             * @description 币种代码（ISO 4217，规范化大写）
+             * @example USD
+             */
+            currencyCode: string;
+            /**
+             * @description 持仓金额（Decimal(20, 4)，toFixed(4) 字符串）
+             * @example 1000.0000
+             */
+            amount: string;
+            /**
+             * @description 采用汇率（来源报价 8 位小数 HALF_UP，toFixed(10) 字符串；1 外币 = X 本位币；现汇卖出价优先）
+             * @example 7.2531000000
+             */
+            rate: string;
+            /**
+             * @description 来源原报价（未采用 8 位舍入的原始值，toFixed(10) 字符串；与 rate 一起保存防 ExchangeRate 覆盖不可回溯）
+             * @example 7.2531000000
+             */
+            rawRate: string;
+            /**
+             * @description 报价来源标识（abc / er-api / frankfurter / identity）
+             * @example abc
+             */
+            rateSource: string;
+            /**
+             * Format: date-time
+             * @description 报价观测时间（ISO 8601；5 分钟时效以此时间为锚）
+             * @example 2026-08-01T00:00:00.000Z
+             */
+            rateObservedAt: string;
+            /**
+             * @description 折算成本 = amount × rate 按本位币精度 HALF_UP 舍一次（toFixed(4) 字符串）
+             * @example 7253.1000
+             */
+            cost: string;
+        };
+        InitialHoldingsResultDto: {
+            /** @description 本次入账的初始持仓记录（按入参顺序） */
+            created: components["schemas"]["InitialHoldingCreatedDto"][];
+            /**
+             * Format: date-time
+             * @description 记账起点（建账时的 ledgerStartedAt；ISO 8601）
+             * @example 2026-08-01T00:00:00.000Z
+             */
+            ledgerStartedAt: string;
+        };
         OnboardingStatusDto: {
             /** @description 是否已完成首次设置（完成态判定，前端据此跳过向导） */
             completed: boolean;
@@ -741,6 +833,18 @@ export interface components {
              */
             termsConfirmed: boolean;
         };
+        InitialHoldingItemDto: {
+            /**
+             * @description 持仓币种（ISO 4217，必须在 15 币种内且不等于本位币）
+             * @example USD
+             */
+            currencyCode: string;
+            /**
+             * @description 持仓金额（字符串；最多 2 位小数，JPY/KRW 整数；> 0 且 < 10¹¹）
+             * @example 1000.00
+             */
+            amount: string;
+        };
         CompleteOnboardingDto: {
             /**
              * @description 地区（ISO 3166 国家/地区码或用户自填标识）
@@ -758,19 +862,21 @@ export interface components {
              */
             baseCurrency: string;
             /**
-             * @description 换汇准备偏好
+             * @description 换汇准备偏好（可选，缺省 balanced，由服务端兜底；向导不再收集）
              * @example balanced
              */
-            prepPreference: string;
+            prepPreference?: string;
             /**
-             * @description 是否启用到期提醒
+             * @description 是否启用到期提醒（可选，缺省 true，由服务端兜底）
              * @example true
              */
-            reminderEnabled: boolean;
+            reminderEnabled?: boolean;
+            /** @description 初始持仓（可选，最多 14 项 = 15 币种减本位币；币种不得重复且不得为本位币；任一项失败整单回滚） */
+            initialHoldings?: components["schemas"]["InitialHoldingItemDto"][];
         };
         OnboardingErrorDto: {
             /**
-             * @description 错误码：CONSENT_REQUIRED / INVALID_BASE_CURRENCY / ONBOARDING_ALREADY_COMPLETED
+             * @description 错误码：CONSENT_REQUIRED / INVALID_BASE_CURRENCY / ONBOARDING_ALREADY_COMPLETED / ONBOARDING_NOT_COMPLETED / INITIAL_HOLDING_EXISTS / RATE_UNAVAILABLE / INVALID_HOLDINGS / INVALID_AMOUNT
              * @example ONBOARDING_ALREADY_COMPLETED
              */
             code: string;
@@ -780,122 +886,9 @@ export interface components {
              */
             message: string;
         };
-        AccountSummaryDto: {
-            /**
-             * @description 币种代码（ISO 4217）
-             * @example USD
-             */
-            currencyCode: string;
-            /**
-             * @description 账户余额（Decimal(20, 4)，固定 4 位小数字符串）
-             * @example 1500.0000
-             */
-            balance: string;
-        };
-        PlanSummaryDto: {
-            /**
-             * @description 计划 ID（cuid）
-             * @example cmex5g2h70000abcd
-             */
-            id: string;
-            /**
-             * @description 目标币种（ISO 4217）
-             * @example USD
-             */
-            targetCurrency: string;
-            /**
-             * @description 目标金额（Decimal(20, 4)，固定 4 位小数字符串）
-             * @example 10000.0000
-             */
-            targetAmount: string;
-            /**
-             * @description 已分配金额（来自计划分配记录，无分配记录时为 "0.0000"）
-             * @example 4000.0000
-             */
-            allocatedAmount: string;
-            /**
-             * @description 剩余可分配 = 已分配 − 已使用（服务端计算，schema 注释：业务层计算，不存列）
-             * @example 6000.0000
-             */
-            remainingAmount: string;
-            /**
-             * @description 期望用汇日（ISO 8601 UTC）
-             * @example 2026-10-01T00:00:00.000Z
-             */
-            expectUseDate: string;
-            /**
-             * @description 最晚备汇日（存量列，ISO 8601 UTC）
-             * @example 2026-09-25T00:00:00.000Z
-             */
-            latestPrepDate: string;
-            /**
-             * @description 计划状态（大写枚举，与存量值一致）
-             * @example ACTIVE
-             * @enum {string}
-             */
-            status: "ACTIVE" | "COMPLETED" | "CANCELLED";
-        };
-        HomeStateDto: {
-            /**
-             * @description 是否已完成首次设置（user_settings 中存在该用户记录）
-             * @example true
-             */
-            onboardingCompleted: boolean;
-            /**
-             * @description 是否有账户记录（与 accounts.length > 0 恒一致）
-             * @example false
-             */
-            hasAccounts: boolean;
-            /**
-             * @description 是否有计划记录（与 plans.length > 0 恒一致）
-             * @example false
-             */
-            hasPlans: boolean;
-            /** @description 全量账户摘要，按 currencyCode 升序 */
-            accounts: components["schemas"]["AccountSummaryDto"][];
-            /** @description 全量计划摘要，按 createdAt 降序，不分页 */
-            plans: components["schemas"]["PlanSummaryDto"][];
-            /**
-             * @description 汇率全表最新观测时间（exchange_rates.observed_at 最大值，顶栏「最新刷新」数据源）；无任何汇率数据时为 null
-             * @example 2026-09-24T01:30:00.000Z
-             */
-            latestRateObservedAt: string | null;
-        };
-        PortfolioByCurrencyDto: {
-            /**
-             * @description 币种代码（ISO 4217）
-             * @example USD
-             */
-            currencyCode: string;
-            /**
-             * @description 剩余数量 Σ remainingQty（Decimal(20, 4)，固定 4 位小数字符串）
-             * @example 1100.0000
-             */
-            remainingQty: string;
-            /**
-             * @description 剩余持仓成本 Σ(remainingQty × unitCost)（本位币计价，固定 4 位小数字符串）
-             * @example 8100.0000
-             */
-            totalRemainingCost: string;
-            /**
-             * @description 平均单位成本 = totalRemainingCost ÷ remainingQty（对齐 CostLot.unitCost 的 Decimal(20, 10) 口径，固定 10 位小数字符串）
-             * @example 7.3636363636
-             */
-            avgUnitCost: string;
-        };
-        PortfolioDto: {
-            /**
-             * @description 本位币（user_settings.base_currency）；口径假设：CostLot.unitCost 以该币种计价；用户无设置记录时为 null
-             * @example CNY
-             */
-            baseCurrency: string | null;
-            /**
-             * @description 全部币种剩余持仓成本合计（本位币计价，固定 4 位小数字符串）；无持仓为 "0.0000"
-             * @example 8570.0000
-             */
-            totalRemainingCost: string;
-            /** @description 分币种持仓聚合，仅含 remainingQty > 0 的币种，按 currencyCode 升序；无持仓为空数组 */
-            byCurrency: components["schemas"]["PortfolioByCurrencyDto"][];
+        SaveInitialHoldingsDto: {
+            /** @description 初始持仓列表（1~14 项；币种校验规则同 complete 的 initialHoldings） */
+            holdings: components["schemas"]["InitialHoldingItemDto"][];
         };
         LatestRateResponseDto: {
             /**
@@ -1004,6 +997,128 @@ export interface components {
             base: string;
             /** @description 逐目标报价项（顺序与请求 targets 一致） */
             items: components["schemas"]["LatestRateItemDto"][];
+        };
+        AccountSummaryDto: {
+            /**
+             * @description 币种代码（ISO 4217）
+             * @example USD
+             */
+            currencyCode: string;
+            /**
+             * @description 账户余额（Decimal(20, 4)，固定 4 位小数字符串）
+             * @example 1500.0000
+             */
+            balance: string;
+        };
+        PlanSummaryDto: {
+            /**
+             * @description 计划 ID（cuid）
+             * @example cmex5g2h70000abcd
+             */
+            id: string;
+            /**
+             * @description 目标币种（ISO 4217）
+             * @example USD
+             */
+            targetCurrency: string;
+            /**
+             * @description 目标金额（Decimal(20, 4)，固定 4 位小数字符串）
+             * @example 10000.0000
+             */
+            targetAmount: string;
+            /**
+             * @description 已分配金额（来自计划分配记录，无分配记录时为 "0.0000"）
+             * @example 4000.0000
+             */
+            allocatedAmount: string;
+            /**
+             * @description 剩余可分配 = 已分配 − 已使用（服务端计算，schema 注释：业务层计算，不存列）
+             * @example 6000.0000
+             */
+            remainingAmount: string;
+            /**
+             * @description 期望用汇日（ISO 8601 UTC）
+             * @example 2026-10-01T00:00:00.000Z
+             */
+            expectUseDate: string;
+            /**
+             * @description 最晚备汇日（存量列，ISO 8601 UTC）
+             * @example 2026-09-25T00:00:00.000Z
+             */
+            latestPrepDate: string;
+            /**
+             * @description 计划状态（大写枚举，与存量值一致）
+             * @example ACTIVE
+             * @enum {string}
+             */
+            status: "ACTIVE" | "COMPLETED" | "CANCELLED";
+        };
+        HomeStateDto: {
+            /**
+             * @description 是否已完成首次设置（user_settings 中存在该用户记录）
+             * @example true
+             */
+            onboardingCompleted: boolean;
+            /**
+             * @description 是否存在初始持仓成本批次（sourceType=INITIAL 的 CostLot），供首页补录引导卡分流
+             * @example false
+             */
+            hasInitialHoldings: boolean;
+            /**
+             * @description 是否有账户记录（与 accounts.length > 0 恒一致）
+             * @example false
+             */
+            hasAccounts: boolean;
+            /**
+             * @description 是否有计划记录（与 plans.length > 0 恒一致）
+             * @example false
+             */
+            hasPlans: boolean;
+            /** @description 全量账户摘要，按 currencyCode 升序 */
+            accounts: components["schemas"]["AccountSummaryDto"][];
+            /** @description 全量计划摘要，按 createdAt 降序，不分页 */
+            plans: components["schemas"]["PlanSummaryDto"][];
+            /**
+             * @description 汇率全表最新观测时间（exchange_rates.observed_at 最大值，顶栏「最新刷新」数据源）；无任何汇率数据时为 null
+             * @example 2026-09-24T01:30:00.000Z
+             */
+            latestRateObservedAt: string | null;
+        };
+        PortfolioByCurrencyDto: {
+            /**
+             * @description 币种代码（ISO 4217）
+             * @example USD
+             */
+            currencyCode: string;
+            /**
+             * @description 剩余数量 Σ remainingQty（Decimal(20, 4)，固定 4 位小数字符串）
+             * @example 1100.0000
+             */
+            remainingQty: string;
+            /**
+             * @description 剩余持仓成本 Σ(remainingQty × unitCost)（本位币计价，固定 4 位小数字符串）
+             * @example 8100.0000
+             */
+            totalRemainingCost: string;
+            /**
+             * @description 平均单位成本 = totalRemainingCost ÷ remainingQty（对齐 CostLot.unitCost 的 Decimal(20, 10) 口径，固定 10 位小数字符串）
+             * @example 7.3636363636
+             */
+            avgUnitCost: string;
+        };
+        PortfolioDto: {
+            /**
+             * @description 本位币（user_settings.base_currency）；口径假设：CostLot.unitCost 以该币种计价；用户无设置记录时为 null
+             * @example CNY
+             */
+            baseCurrency: string | null;
+            /**
+             * @description 全部币种剩余持仓成本合计（本位币计价，固定 4 位小数字符串）；无持仓为 "0.0000"
+             * @example 8570.0000
+             */
+            totalRemainingCost: string;
+            /** @description 分币种持仓聚合，仅含 remainingQty > 0 的币种，按 currencyCode 升序；无持仓为空数组 */
+            byCurrency: components["schemas"]["PortfolioByCurrencyDto"][];
         };
         PlanInstallmentDto: {
             /**
@@ -1842,6 +1957,79 @@ export interface components {
              */
             message: string;
         };
+        SettingsViewDto: {
+            /**
+             * @description 账号邮箱（注册时填写；历史数据可能为空）
+             * @example user@example.com
+             */
+            email: string | null;
+            /**
+             * @description 地区
+             * @example CN
+             */
+            region: string;
+            /**
+             * @description 语言
+             * @example zh-CN
+             */
+            locale: string;
+            /**
+             * @description 本位币（只读，来源 user_settings.base_currency；无任何更新通道，建账时锁定）
+             * @example CNY
+             */
+            baseCurrency: string;
+            /**
+             * @description 换汇准备偏好
+             * @example balanced
+             * @enum {string}
+             */
+            prepPreference: "cautious" | "balanced" | "proactive";
+            /** @description 是否启用到期提醒 */
+            reminderEnabled: boolean;
+            /**
+             * Format: date-time
+             * @description 记账起点（完成设置当日 UTC+8 日初，ISO 8601；历史数据可能为空）
+             * @example 2026-08-01T00:00:00.000Z
+             */
+            ledgerStartedAt: string | null;
+        };
+        SettingsErrorDto: {
+            /**
+             * @description 错误码：SETTINGS_UPDATE_EMPTY / ONBOARDING_NOT_COMPLETED
+             * @example SETTINGS_UPDATE_EMPTY
+             */
+            code: string;
+            /**
+             * @description 错误描述
+             * @example 至少提供一个要更新的设置字段
+             */
+            message: string;
+        };
+        UpdateSettingsDto: {
+            /**
+             * @description 地区（ISO 3166 国家/地区码）
+             * @example HK
+             * @enum {string}
+             */
+            region?: "HK" | "CN";
+            /**
+             * @description 语言（BCP 47 标识）
+             * @example zh-CN
+             * @enum {string}
+             */
+            locale?: "zh-CN" | "en";
+            /**
+             * @description 换汇准备偏好
+             * @example balanced
+             * @enum {string}
+             */
+            prepPreference?: "cautious" | "balanced" | "proactive";
+            /**
+             * @description 是否启用到期提醒
+             * @example true
+             */
+            reminderEnabled?: boolean;
+        };
     };
     responses: never;
     parameters: never;
@@ -2080,17 +2268,21 @@ export interface operations {
             };
         };
     };
-    HomeController_getState: {
+    OnboardingController_saveInitialHoldings: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveInitialHoldingsDto"];
+            };
+        };
         responses: {
-            /** @description 状态查询成功，响应体为 { success, data, message } 包装 */
-            200: {
+            /** @description 成功，响应体为 { success, data, message } 包装 */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2098,34 +2290,27 @@ export interface operations {
                     "application/json": {
                         /** @example true */
                         success?: boolean;
-                        data?: components["schemas"]["HomeStateDto"];
+                        data?: components["schemas"]["InitialHoldingsResultDto"];
                         message?: string;
                     };
                 };
             };
-        };
-    };
-    HomeController_getPortfolio: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description 持仓聚合查询成功，响应体为 { success, data, message } 包装 */
-            200: {
+            /** @description 无有效报价（RATE_UNAVAILABLE）或金额非法（INVALID_AMOUNT/INVALID_HOLDINGS） */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example true */
-                        success?: boolean;
-                        data?: components["schemas"]["PortfolioDto"];
-                        message?: string;
-                    };
+                    "application/json": components["schemas"]["OnboardingErrorDto"];
+                };
+            };
+            /** @description 尚未建账（ONBOARDING_NOT_COMPLETED）或币种已有初始记录（INITIAL_HOLDING_EXISTS） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OnboardingErrorDto"];
                 };
             };
         };
@@ -2221,6 +2406,56 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    HomeController_getState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 状态查询成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["HomeStateDto"];
+                        message?: string;
+                    };
+                };
+            };
+        };
+    };
+    HomeController_getPortfolio: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 持仓聚合查询成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["PortfolioDto"];
+                        message?: string;
+                    };
+                };
             };
         };
     };
@@ -2794,6 +3029,87 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountErrorDto"];
+                };
+            };
+        };
+    };
+    SettingsController_getSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 设置查询成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["SettingsViewDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 尚未完成首次设置（ONBOARDING_NOT_COMPLETED） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorDto"];
+                };
+            };
+        };
+    };
+    SettingsController_updateSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSettingsDto"];
+            };
+        };
+        responses: {
+            /** @description 设置已更新，返回更新后的完整视图 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["SettingsViewDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 全空入参（SETTINGS_UPDATE_EMPTY）或枚举非法 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorDto"];
+                };
+            };
+            /** @description 尚未完成首次设置（ONBOARDING_NOT_COMPLETED） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorDto"];
                 };
             };
         };

@@ -13,6 +13,7 @@ import {
 import { format, parseISO } from "date-fns";
 import { buttonVariants } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { InitialBackfillCard } from "@/components/business/home/initial-backfill-card";
 import {
 	formatDisplayAmount,
 	formatDisplayDate,
@@ -52,6 +53,7 @@ export function HomeDashboard({ dashboard }: HomeDashboardProps) {
 		baseCurrency,
 		latestRateObservedAt,
 		focusPlan,
+		hasInitialHoldings,
 	} = dashboard;
 
 	return (
@@ -83,6 +85,13 @@ export function HomeDashboard({ dashboard }: HomeDashboardProps) {
 					)}
 				</div>
 			</header>
+
+			{/* 补录引导：从未录入初始持仓时展示（规格模块 3），补录完成后消失 */}
+			{!hasInitialHoldings && (
+				<div className="mb-6">
+					<InitialBackfillCard />
+				</div>
+			)}
 
 			{/* 统计卡片：账户卡无账户不出、备汇日卡无 ACTIVE 计划不出；grid 按存在卡片自动排布 */}
 			<div className="mb-8 grid grid-cols-4 gap-4">

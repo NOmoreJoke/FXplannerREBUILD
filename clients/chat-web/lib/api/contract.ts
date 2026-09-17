@@ -34,6 +34,9 @@ export type PasswordLoginInput = Schemas["LoginDto"];
 /** 首次设置状态（后端 OnboardingStatusDto，GET /onboarding/status 的 data） */
 export type OnboardingStatus = Schemas["OnboardingStatusDto"];
 
+/** 年龄与条款确认结果（后端 OnboardingConsentsResultDto，POST /onboarding/consents 的 data） */
+export type ConsentsResult = Schemas["OnboardingConsentsResultDto"];
+
 // ---------------------------------------------------------------------------
 // 首页状态：home 后端模块已落地（GET /home/state、GET /home/portfolio），
 // 类型经 bun run generate:api 生成后在此别名。
@@ -45,7 +48,30 @@ export type AccountSummary = Schemas["AccountSummaryDto"];
 /** 换汇计划摘要（后端 PlanSummaryDto，GET /home/state 的 plans 项） */
 export type PlanSummary = Schemas["PlanSummaryDto"];
 
-/** 首页状态（后端 HomeStateDto，GET /home/state 的 data）：分流三布尔 + 账户/计划摘要 */
+// ---------------------------------------------------------------------------
+// 首次设置重构（onboarding-rework）：后端 SettingsModule 与 onboarding 扩展已落地，
+// 类型经 bun run generate:api 生成后在此别名。
+// ---------------------------------------------------------------------------
+
+/** 初始持仓入参项（POST /onboarding/complete 与 POST /onboarding/initial-holdings 共用；金额字符串） */
+export type InitialHoldingItem = Schemas["InitialHoldingItemDto"];
+
+/** 补录初始持仓出参（POST /onboarding/initial-holdings 的 data；created 元素含 rawRate/来源/报价时间/成本） */
+export type InitialHoldingsResult = Schemas["InitialHoldingsResultDto"];
+
+/** 完成建账入参（POST /onboarding/complete；偏好与初始持仓均可选，缺省由服务端兜底） */
+export type CompleteOnboardingReq = Schemas["CompleteOnboardingDto"];
+
+/** 用户设置视图（GET/PATCH /settings 的 data；本位币只读，无更新通道） */
+export type SettingsView = Schemas["SettingsViewDto"];
+
+/** 更新设置入参（PATCH /settings；全可选至少一项，DTO 不含 baseCurrency——白名单拒绝） */
+export type UpdateSettingsReq = Schemas["UpdateSettingsDto"];
+
+/** 设置模块错误码（400 SETTINGS_UPDATE_EMPTY 等） */
+export type SettingsErrorCode = Schemas["SettingsErrorDto"]["code"];
+
+/** 首页状态（后端 HomeStateDto，GET /home/state 的 data）：分流布尔 + hasInitialHoldings + 账户/计划摘要 */
 export type HomeState = Schemas["HomeStateDto"];
 
 // ---------------------------------------------------------------------------

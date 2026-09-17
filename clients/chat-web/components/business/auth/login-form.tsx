@@ -10,6 +10,7 @@ import { Send } from "lucide-react";
 import { toast } from "sonner";
 import type { AuthResponse, PasswordLoginInput } from "@/lib/api/contract";
 import { authApi } from "@/lib/api/auth";
+import { onboardingApi } from "@/lib/api/onboarding";
 import { ApiError } from "@/lib/api/client";
 import { safeRedirectPath } from "@/lib/auth/safe-redirect-path";
 import { setToken } from "@/lib/auth/token";
@@ -64,6 +65,12 @@ export function LoginForm() {
 		start: startCooldown,
 	} = useOtpCountdown();
 
+	// 合规勾选（onboarding-rework：两项独立、默认不勾；密码与 OTP 双模式均拦截）。
+	// OTP 模式发送验证码后不重置勾选状态，登录时随 finishLogin 提交真实勾选值。
+	const [age18Confirmed, setAge18Confirmed] = useState(false);
+	const [termsConfirmed, setTermsConfirmed] = useState(false);
+	const consentsGiven = age18Confirmed && termsConfirmed;
+
 	const {
 		register,
 		handleSubmit,
@@ -72,18 +79,35 @@ export function LoginForm() {
 		resolver: zodResolver(loginSchema),
 	});
 
-	// 登录成功后的统一收尾：token 只写 cookie（唯一事实来源），并按白名单回跳
-	const finishLogin = (result: AuthResponse) => {
+	// 登录成功后的统一收尾：token 只写 cookie（唯一事实来源），并按白名单回跳。
+	// 回跳前自动提交登录页勾选的 consents（失败不阻塞，未建账用户由建账后端
+	// 校验兜底，技术方案 §3.1）；再查 onboarding 状态分流：未建账进向导，
+	// 已建账回首页或登录前正在浏览的页面（状态查询失败不拦截，按已建账回跳）。
+	const finishLogin = async (result: AuthResponse) => {
 		setToken(result.accessToken);
 		setUser(result.user);
+		try {
+			await onboardingApi.saveConsents({ age18Confirmed, termsConfirmed });
+		} catch {
+			// 失败不阻塞登录流程；未建账用户完成建账时后端会再次校验并拦截
+		}
+		let target: string;
+		try {
+			const status = await onboardingApi.getStatus();
+			target = status.completed
+				? (safeRedirectPath(redirect) ?? "/home")
+				: "/onboarding";
+		} catch {
+			target = safeRedirectPath(redirect) ?? "/home";
+		}
 		toast.success("登录成功");
-		router.push(safeRedirectPath(redirect) ?? "/home");
+		router.push(target);
 	};
 
 	const onPasswordSubmit = async (data: PasswordLoginInput) => {
 		try {
 			setIsLoading(true);
-			finishLogin(await authApi.login(data));
+			await finishLogin(await authApi.login(data));
 		} catch (error) {
 			toast.error(getErrorMessage(error, "登录失败"));
 		} finally {
@@ -132,7 +156,7 @@ export function LoginForm() {
 
 		try {
 			setIsLoading(true);
-			finishLogin(await authApi.loginWithOtp(challengeId, otpCode));
+			await finishLogin(await authApi.loginWithOtp(challengeId, otpCode));
 		} catch (error) {
 			toast.error(getErrorMessage(error, "OTP 登录失败"));
 		} finally {
@@ -191,6 +215,38 @@ export function LoginForm() {
 						</button>
 					</div>
 
+					{/* 合规勾选（两种登录模式共享）：默认不勾、相互独立，未全勾时拦截并提示 */}
+					<div className="mb-6 space-y-2.5">
+						<label className="flex items-start gap-2.5 text-sm text-foreground">
+							<input
+								type="checkbox"
+								data-testid="consent-age18"
+								checked={age18Confirmed}
+								onChange={(event) => setAge18Confirmed(event.target.checked)}
+								className="mt-0.5 size-4 shrink-0 cursor-pointer accent-mint-700"
+							/>
+							<span>已满 18 周岁</span>
+						</label>
+						<label className="flex items-start gap-2.5 text-sm text-foreground">
+							<input
+								type="checkbox"
+								data-testid="consent-terms"
+								checked={termsConfirmed}
+								onChange={(event) => setTermsConfirmed(event.target.checked)}
+								className="mt-0.5 size-4 shrink-0 cursor-pointer accent-mint-700"
+							/>
+							<span>已阅读并同意服务条款与隐私说明</span>
+						</label>
+						{!consentsGiven && (
+							<p
+								data-testid="consent-hint"
+								className="text-xs text-destructive"
+							>
+								请先勾选确认年龄与条款
+							</p>
+						)}
+					</div>
+
 					{mode === "password" ? (
 						<form
 							onSubmit={handleSubmit(onPasswordSubmit)}
@@ -242,7 +298,8 @@ export function LoginForm() {
 
 							<button
 								type="submit"
-								disabled={isLoading}
+								data-testid="password-login-submit"
+								disabled={isLoading || !consentsGiven}
 								className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-mint-700 px-4 py-2 font-medium text-white transition-colors hover:bg-mint-700/90 disabled:cursor-not-allowed disabled:opacity-50"
 							>
 								{isLoading ? "登录中..." : "登录"}
@@ -301,8 +358,11 @@ export function LoginForm() {
 									/>
 									<button
 										type="button"
+										data-testid="send-otp"
 										onClick={sendOtpCode}
-										disabled={isLoading || isSendingOtp || cooling}
+										disabled={
+											isLoading || isSendingOtp || cooling || !consentsGiven
+										}
 										className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
 									>
 										<Send className="h-4 w-4" aria-hidden="true" />
@@ -313,6 +373,7 @@ export function LoginForm() {
 
 							<button
 								type="submit"
+								data-testid="otp-login-submit"
 								disabled={isLoading || !challengeId}
 								className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-mint-700 px-4 py-2 font-medium text-white transition-colors hover:bg-mint-700/90 disabled:cursor-not-allowed disabled:opacity-50"
 							>

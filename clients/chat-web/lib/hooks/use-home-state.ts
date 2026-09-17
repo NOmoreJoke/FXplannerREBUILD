@@ -59,6 +59,8 @@ export interface HomeDashboardData {
 	baseCurrency: string | null;
 	/** 透传 state.latestRateObservedAt */
 	latestRateObservedAt: string | null;
+	/** 透传 state.hasInitialHoldings（存在 INITIAL CostLot 即 true；false 时首页挂补录引导卡） */
+	hasInitialHoldings: boolean;
 	/** 无 ACTIVE 计划 → null */
 	focusPlan: HomeDashboardFocusPlan | null;
 }
@@ -149,6 +151,7 @@ function deriveDashboard(
 		totalRemainingCost: portfolio?.totalRemainingCost ?? null,
 		baseCurrency: portfolio?.baseCurrency ?? null,
 		latestRateObservedAt: state.latestRateObservedAt,
+		hasInitialHoldings: state.hasInitialHoldings,
 		focusPlan: deriveFocusPlan(state.plans),
 	};
 }
@@ -168,8 +171,9 @@ function deriveDashboard(
  * - dashboard：state 成功时的仪表盘数据（state 失败/加载中 → null；portfolio
  *   未成功时仅成本字段降级 null）
  *
- * 分流决策表（changes/home-state-routing/技术方案.md §3.1，onboarding 分支已按产品决策取消）：
- * !hasAccounts && !hasPlans → 空状态；其余 → 正常首页。
+ * 分流决策表（changes/home-state-routing/技术方案.md §3.1 + onboarding-rework 口径）：
+ * !onboardingCompleted → /onboarding 建账向导；!hasAccounts && !hasPlans → 空状态；
+ * 其余 → 正常首页；!hasInitialHoldings → 叠加补录初始持仓引导卡。
  */
 export function useHomeState() {
 	const stateQuery = useQuery<HomeState>({

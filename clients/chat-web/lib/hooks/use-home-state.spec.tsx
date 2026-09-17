@@ -16,7 +16,7 @@ vi.mock("@/lib/api/home", () => ({
 	fetchHomePortfolio: vi.fn(),
 }));
 
-/** 新用户（未完成设置；onboarding 已取消，此状态按空账本处理） */
+/** 新用户（未完成设置；分流至 /onboarding 建账向导，onboarding-rework 口径） */
 const onboardingIncompleteState: HomeState = {
 	onboardingCompleted: false,
 	hasAccounts: false,
@@ -24,9 +24,10 @@ const onboardingIncompleteState: HomeState = {
 	accounts: [],
 	plans: [],
 	latestRateObservedAt: null,
+	hasInitialHoldings: false,
 };
 
-/** 完成设置但空账本（→ 空状态引导页） */
+/** 完成设置但空账本（→ 空状态引导页；未录初始持仓时叠加补录引导卡） */
 const emptyBookState: HomeState = {
 	onboardingCompleted: true,
 	hasAccounts: false,
@@ -34,6 +35,7 @@ const emptyBookState: HomeState = {
 	accounts: [],
 	plans: [],
 	latestRateObservedAt: null,
+	hasInitialHoldings: false,
 };
 
 /** 完成设置且有账户有计划（→ 正常数据首页，示例取自技术方案 §3.1 示例 B） */
@@ -58,6 +60,7 @@ const dataState: HomeState = {
 		},
 	],
 	latestRateObservedAt: "2026-09-24T01:30:00.000Z",
+	hasInitialHoldings: true,
 };
 
 /** 持仓成本聚合（契约 §2：本位币 + CostLot 剩余持仓聚合） */
@@ -136,7 +139,7 @@ describe("useHomeState", () => {
 		expect(result.current.isError).toBe(false);
 	});
 
-	it("onboardingCompleted=false 应原样返回，页面不再据此跳转（onboarding 已取消）", async () => {
+	it("onboardingCompleted=false 应原样返回（分流跳 /onboarding 由页面消费）", async () => {
 		vi.mocked(homeApi.getState).mockResolvedValue(onboardingIncompleteState);
 
 		const { result } = renderHook(() => useHomeState(), {
@@ -165,6 +168,7 @@ describe("useHomeState", () => {
 			accounts: [],
 			plans: [],
 			latestRateObservedAt: null,
+			hasInitialHoldings: false,
 		});
 	});
 
@@ -228,6 +232,7 @@ describe("useHomeState - dashboard 派生（home-dashboard 数据层）", () => 
 			},
 		],
 		latestRateObservedAt: "2026-09-24T01:30:00.000Z",
+		hasInitialHoldings: true,
 	};
 
 	it("正常场景：dashboard 汇总账户/持仓成本，focusPlan 选 latestPrepDate 最早的 ACTIVE 计划", async () => {
@@ -263,6 +268,8 @@ describe("useHomeState - dashboard 派生（home-dashboard 数据层）", () => 
 		expect(dashboard?.totalRemainingCost).toBe("246380.0000");
 		expect(dashboard?.baseCurrency).toBe("HKD");
 		expect(dashboard?.latestRateObservedAt).toBe("2026-09-24T01:30:00.000Z");
+		// hasInitialHoldings 透传（初始持仓已录入 → true）
+		expect(dashboard?.hasInitialHoldings).toBe(true);
 
 		// focusPlan：两个 ACTIVE 中选 latestPrepDate 最早（today+5）者
 		expect(dashboard?.focusPlan?.id).toBe("plan-earlier");
@@ -329,6 +336,22 @@ describe("useHomeState - dashboard 派生（home-dashboard 数据层）", () => 
 			expect(result.current.dashboard?.focusPlan?.id).toBe("plan-zero"),
 		);
 		expect(result.current.dashboard?.focusPlan?.progressPercent).toBe(0);
+	});
+
+	it("hasInitialHoldings=false 应透传（首页据此挂补录引导卡）", async () => {
+		vi.mocked(homeApi.getState).mockResolvedValue({
+			...multiActiveState,
+			hasInitialHoldings: false,
+		});
+
+		const { result } = renderHook(() => useHomeState(), {
+			wrapper: createWrapper(),
+		});
+
+		await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+		expect(result.current.state?.hasInitialHoldings).toBe(false);
+		expect(result.current.dashboard?.hasInitialHoldings).toBe(false);
 	});
 
 	it("portfolio 请求失败：state 数据仍在，成本字段降级 null，不进入页面错误态", async () => {
