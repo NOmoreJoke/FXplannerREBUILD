@@ -16,6 +16,10 @@ export default defineConfig({
 		environment: "node",
 		passWithNoTests: false, // 强制要求至少有一个测试文件
 		include: ["**/*.spec.ts", "**/*.e2e-spec.ts"], // Colocation: 测试文件和源码放一起，包含E2E测试
+		// 文件串行执行：多个 spec 共享同一数据库（home.spec 全表清空 exchange_rates、
+		// backfill 造数用户、rate 各组 deleteMany 币对），并行时序竞争导致偶发
+		// FK 违反 / 行丢失（onboarding-rework 实施期间复现频率过高，串行为最小侵入根治）
+		fileParallelism: false,
 		server: {
 			deps: {
 				inline: ["@fxplanner-new/money"],

@@ -1,13 +1,20 @@
 import { HttpException } from "@nestjs/common";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaService } from "../prisma/prisma.service";
+import { RateSourceUnavailableException } from "../rate/rate.errors";
+import type { RateService } from "../rate/rate.service";
 import { utc8DayStart } from "../transaction/transaction-calculator";
 import { CURRENT_TERMS_VERSION } from "./onboarding.constants";
 import {
+	InitialHoldingExistsException,
+	InvalidAmountException,
+	InvalidHoldingsException,
 	OnboardingAlreadyCompletedException,
 	OnboardingConsentRequiredException,
 	OnboardingInvalidCurrencyException,
+	OnboardingNotCompletedException,
 	OnboardingService,
+	RateUnavailableException,
 } from "./onboarding.service";
 
 // 固定时钟：T0 = 2026-08-01 08:00 UTC
@@ -30,14 +37,47 @@ function createPrismaMock() {
 		count: vi.fn(),
 		upsert: vi.fn(),
 	};
+	const initialHolding = {
+		findMany: vi.fn(),
+		create: vi.fn(),
+	};
+	const costLot = {
+		create: vi.fn(),
+		aggregate: vi.fn(),
+	};
+	const account = {
+		upsert: vi.fn(),
+	};
 	const prisma = {
 		userSettings,
 		termsConsent,
+		initialHolding,
+		costLot,
+		account,
 		$transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) =>
 			callback(prisma),
 		),
 	};
 	return prisma;
+}
+
+function createRateServiceMock() {
+	return {
+		getLatest: vi.fn(),
+	} as unknown as {
+		getLatest: ReturnType<typeof vi.fn>;
+	} & RateService;
+}
+
+function createLoggerMock() {
+	return {
+		log: vi.fn(),
+		warn: vi.fn(),
+		error: vi.fn(),
+	} as unknown as {
+		log: ReturnType<typeof vi.fn>;
+		warn: ReturnType<typeof vi.fn>;
+	} & import("@nestjs/common").Logger;
 }
 
 /** 抛出时返回 HttpException 的状态码与错误体（{ code, message }）；未抛则失败。可传异常类做类型断言 */
@@ -61,17 +101,69 @@ async function errorOf(
 
 describe("OnboardingService", () => {
 	let prisma: ReturnType<typeof createPrismaMock>;
+	let rateService: ReturnType<typeof createRateServiceMock>;
+	let logger: ReturnType<typeof createLoggerMock>;
 	let service: OnboardingService;
 
 	beforeEach(() => {
 		vi.useFakeTimers({ now: T0 });
 		prisma = createPrismaMock();
-		service = new OnboardingService(prisma as unknown as PrismaService);
+		rateService = createRateServiceMock();
+		logger = createLoggerMock();
+		service = new OnboardingService(
+			prisma as unknown as PrismaService,
+			rateService,
+			logger,
+		);
 	});
 
 	afterEach(() => {
 		vi.useRealTimers();
 	});
+
+	/** 建账成功前置：条款齐全、无既有设置、create 原样回显 */
+	function mockCompleteSuccess() {
+		prisma.termsConsent.count.mockResolvedValue(2);
+		prisma.userSettings.findUnique.mockResolvedValue(null);
+		prisma.userSettings.create.mockImplementation(async ({ data }: any) => ({
+			...data,
+		}));
+	}
+
+	/** 多目标组响应（1 USD = 7.26 CNY 现汇卖出价 / 1 JPY = 0.048 CNY 基准价） */
+	function mockGroupQuotes() {
+		rateService.getLatest.mockResolvedValue({
+			base: "CNY",
+			items: [
+				{
+					target: "USD",
+					rate: "7.253100005",
+					sellRate: "7.26000000",
+					source: "abc",
+					observedAt: T0.toISOString(),
+					validUntil: new Date(T0.getTime() + 5 * 60 * 1000).toISOString(),
+					fresh: true,
+				},
+				{
+					target: "JPY",
+					rate: "0.0480000000",
+					source: "er-api",
+					observedAt: T0.toISOString(),
+					validUntil: new Date(T0.getTime() + 5 * 60 * 1000).toISOString(),
+					fresh: true,
+				},
+			],
+		});
+		prisma.initialHolding.create.mockImplementation(async ({ data }: any) => ({
+			id: `holding-${data.currencyCode}`,
+			...data,
+		}));
+		prisma.costLot.create.mockResolvedValue({});
+		prisma.costLot.aggregate.mockResolvedValue({
+			_sum: { remainingQty: "1000" },
+		});
+		prisma.account.upsert.mockResolvedValue({});
+	}
 
 	describe("getStatus", () => {
 		it("未完成：completed=false、settings=null", async () => {
@@ -211,11 +303,7 @@ describe("OnboardingService", () => {
 		});
 
 		it("成功：事务内创建设置（ledgerStartedAt = 完成当日 UTC+8 日初）", async () => {
-			prisma.termsConsent.count.mockResolvedValue(2);
-			prisma.userSettings.findUnique.mockResolvedValue(null);
-			prisma.userSettings.create.mockImplementation(async ({ data }: any) => ({
-				...data,
-			}));
+			mockCompleteSuccess();
 
 			const result = await service.complete("u1", {
 				...validWizard,
@@ -263,6 +351,426 @@ describe("OnboardingService", () => {
 			await expect(service.complete("u1", { ...validWizard })).rejects.toThrow(
 				"connection refused",
 			);
+		});
+
+		it("prepPreference / reminderEnabled 缺省：服务端兜底 balanced / true", async () => {
+			mockCompleteSuccess();
+
+			await service.complete("u1", {
+				region: "CN",
+				locale: "zh-CN",
+				baseCurrency: "CNY",
+			});
+
+			const [arg] = prisma.userSettings.create.mock.calls[0];
+			expect(arg.data.prepPreference).toBe("balanced");
+			expect(arg.data.reminderEnabled).toBe(true);
+		});
+
+		it("带 2 币种 holdings 成功：采用价 sellRate 优先、8 位舍入、成本按本位币精度、批次与账户重算", async () => {
+			mockCompleteSuccess();
+			mockGroupQuotes();
+
+			const result = await service.complete("u1", {
+				...validWizard,
+				initialHoldings: [
+					{ currencyCode: "usd", amount: "1000.00" }, // 混合大小写，规范化 USD
+					{ currencyCode: "JPY", amount: "100000" },
+				],
+			});
+
+			// getLatest 以规范化后的币种代码取价（base = 本位币）
+			expect(rateService.getLatest).toHaveBeenCalledWith("CNY", ["USD", "JPY"]);
+
+			// InitialHolding × 2：rate = sellRate ?? rate（8 位 HALF_UP），rawRate = 原值
+			const holdingCalls = prisma.initialHolding.create.mock.calls;
+			expect(holdingCalls).toHaveLength(2);
+			const usdData = holdingCalls[0][0].data;
+			expect(usdData.currencyCode).toBe("USD");
+			expect(usdData.amount.toFixed(4)).toBe("1000.0000");
+			expect(usdData.rate.toFixed(8)).toBe("7.26000000"); // 采用现汇卖出价
+			expect(usdData.rawRate.toFixed(10)).toBe("7.2600000000");
+			expect(usdData.rateSource).toBe("abc");
+			expect(usdData.rateObservedAt).toEqual(T0);
+			expect(usdData.cost.toFixed(4)).toBe("7260.0000"); // 1000 × 7.26，CNY 2 位精度
+			expect(usdData.confirmedAt).toBeInstanceOf(Date);
+			const jpyData = holdingCalls[1][0].data;
+			expect(jpyData.currencyCode).toBe("JPY");
+			expect(jpyData.rate.toFixed(8)).toBe("0.04800000"); // 无卖出价回退基准价
+			expect(jpyData.rawRate.toFixed(10)).toBe("0.0480000000");
+			expect(jpyData.cost.toFixed(4)).toBe("4800.0000"); // 100000 × 0.048
+
+			// CostLot × 2：字段口径与 buildPurchaseLot（PURCHASE）一致
+			const lotCalls = prisma.costLot.create.mock.calls;
+			expect(lotCalls).toHaveLength(2);
+			const usdLot = lotCalls[0][0].data;
+			expect(usdLot.sourceType).toBe("INITIAL");
+			expect(usdLot.sourceId).toBe("holding-USD");
+			expect(usdLot.quantity.toFixed(4)).toBe("1000.0000");
+			expect(usdLot.remainingQty.toFixed(4)).toBe("1000.0000");
+			expect(usdLot.unitCost.toFixed(8)).toBe("7.26000000");
+			expect(usdLot.totalCost.toFixed(4)).toBe("7260.0000");
+			expect(usdLot.acquiredAt).toEqual(utc8DayStart(T0)); // = ledgerStartedAt
+
+			// Account 按批次汇总重算（costLot.aggregate → account.upsert）
+			expect(prisma.costLot.aggregate).toHaveBeenCalledWith({
+				_sum: { remainingQty: true },
+				where: { userId: "u1", currencyCode: "USD" },
+			});
+			expect(prisma.account.upsert).toHaveBeenCalledTimes(2);
+			const [upsertArg] = prisma.account.upsert.mock.calls[0];
+			expect(upsertArg.where).toEqual({
+				userId_currencyCode: { userId: "u1", currencyCode: "USD" },
+			});
+			expect(upsertArg.create.balance.toFixed(4)).toBe("1000.0000");
+
+			// 响应出参不变：settings + ledgerStartedAt
+			expect(result.settings.baseCurrency).toBe("CNY");
+			expect(result.ledgerStartedAt).toEqual(utc8DayStart(T0));
+		});
+
+		it("8 位汇率舍入：原报价 10 位小数 → rate = HALF_UP 8 位、rawRate 保留原值", async () => {
+			mockCompleteSuccess();
+			rateService.getLatest.mockResolvedValue({
+				base: "CNY",
+				items: [
+					{
+						target: "USD",
+						rate: "7.253100005", // 第 9 位为 5 → HALF_UP 进位
+						source: "er-api",
+						observedAt: T0.toISOString(),
+						validUntil: new Date(T0.getTime() + 5 * 60 * 1000).toISOString(),
+						fresh: true,
+					},
+				],
+			});
+			prisma.initialHolding.create.mockImplementation(
+				async ({ data }: any) => ({ id: "holding-1", ...data }),
+			);
+			prisma.costLot.create.mockResolvedValue({});
+			prisma.costLot.aggregate.mockResolvedValue({
+				_sum: { remainingQty: "100" },
+			});
+			prisma.account.upsert.mockResolvedValue({});
+
+			await service.complete("u1", {
+				...validWizard,
+				initialHoldings: [{ currencyCode: "USD", amount: "100.00" }],
+			});
+
+			const [arg] = prisma.initialHolding.create.mock.calls[0];
+			expect(arg.data.rate.toFixed(8)).toBe("7.25310001");
+			expect(arg.data.rawRate.toFixed(10)).toBe("7.2531000050");
+		});
+
+		it("成本舍入为 0 拒绝（400 INVALID_AMOUNT）", async () => {
+			mockCompleteSuccess();
+			rateService.getLatest.mockResolvedValue({
+				base: "CNY",
+				items: [
+					{
+						target: "USD",
+						rate: "0.4",
+						source: "er-api",
+						observedAt: T0.toISOString(),
+						validUntil: new Date(T0.getTime() + 5 * 60 * 1000).toISOString(),
+						fresh: true,
+					},
+				],
+			});
+
+			const { body } = await errorOf(
+				() =>
+					service.complete("u1", {
+						...validWizard,
+						initialHoldings: [{ currencyCode: "USD", amount: "0.01" }],
+					}),
+				InvalidAmountException,
+			);
+
+			expect(body.code).toBe("INVALID_AMOUNT");
+			// 整单回滚语义：事务回调内抛出即回滚（mock 下以 create 未产生后续断言体现）
+			expect(prisma.account.upsert).not.toHaveBeenCalled();
+		});
+
+		it("成本 ≥ 1e11 拒绝（400 INVALID_AMOUNT）", async () => {
+			mockCompleteSuccess();
+			rateService.getLatest.mockResolvedValue({
+				base: "CNY",
+				items: [
+					{
+						target: "USD",
+						rate: "200", // 1e9 × 200 = 2e11 ≥ 1e11
+						source: "er-api",
+						observedAt: T0.toISOString(),
+						validUntil: new Date(T0.getTime() + 5 * 60 * 1000).toISOString(),
+						fresh: true,
+					},
+				],
+			});
+
+			const { body } = await errorOf(
+				() =>
+					service.complete("u1", {
+						...validWizard,
+						initialHoldings: [{ currencyCode: "USD", amount: "1000000000" }],
+					}),
+				InvalidAmountException,
+			);
+
+			expect(body.code).toBe("INVALID_AMOUNT");
+		});
+
+		it("报价超时效（observedAt + 5min ≤ now）→ 400 RATE_UNAVAILABLE", async () => {
+			mockCompleteSuccess();
+			rateService.getLatest.mockResolvedValue({
+				base: "CNY",
+				items: [
+					{
+						target: "USD",
+						rate: "7.25",
+						source: "er-api",
+						observedAt: T0.toISOString(),
+						validUntil: new Date(T0.getTime() + 5 * 60 * 1000).toISOString(),
+						fresh: true,
+					},
+				],
+			});
+			// 时钟推进 6 分钟：以报价来源标注时间 observedAt 为锚过期
+			vi.setSystemTime(new Date(T0.getTime() + 6 * 60 * 1000));
+
+			const { body } = await errorOf(
+				() =>
+					service.complete("u1", {
+						...validWizard,
+						initialHoldings: [{ currencyCode: "USD", amount: "100.00" }],
+					}),
+				RateUnavailableException,
+			);
+
+			expect(body.code).toBe("RATE_UNAVAILABLE");
+		});
+
+		it("取价失败（数据源不可用）→ 400 RATE_UNAVAILABLE，事务回调内抛出即回滚", async () => {
+			mockCompleteSuccess();
+			rateService.getLatest.mockRejectedValue(
+				new RateSourceUnavailableException(null),
+			);
+
+			const { status, body } = await errorOf(
+				() =>
+					service.complete("u1", {
+						...validWizard,
+						initialHoldings: [{ currencyCode: "USD", amount: "100.00" }],
+					}),
+				RateUnavailableException,
+			);
+
+			expect(status).toBe(400);
+			expect(body.code).toBe("RATE_UNAVAILABLE");
+			// settings.create 已执行（取价在其后），事务回调抛出 → 整体回滚语义
+			expect(prisma.userSettings.create).toHaveBeenCalled();
+			expect(prisma.initialHolding.create).not.toHaveBeenCalled();
+		});
+
+		it("holdings 校验：非法币种 / 含本位币 / 重复币种 → 400 INVALID_HOLDINGS", () => {
+			const assertHoldings = (
+				service as unknown as {
+					assertHoldings: (base: string, items: unknown[]) => void;
+				}
+			).assertHoldings.bind(service);
+
+			expect(() =>
+				assertHoldings("CNY", [{ currencyCode: "FOO", amount: "1.00" }]),
+			).toThrow(InvalidHoldingsException);
+			expect(() =>
+				assertHoldings("CNY", [{ currencyCode: "cny", amount: "1.00" }]),
+			).toThrow(InvalidHoldingsException);
+			expect(() =>
+				assertHoldings("CNY", [
+					{ currencyCode: "USD", amount: "1.00" },
+					{ currencyCode: "USD", amount: "2.00" },
+				]),
+			).toThrow(InvalidHoldingsException);
+		});
+
+		it("holdings 金额校验：≤0 / ≥1e11 / JPY 带小数 → 400 INVALID_AMOUNT", () => {
+			const assertHoldings = (
+				service as unknown as {
+					assertHoldings: (base: string, items: unknown[]) => void;
+				}
+			).assertHoldings.bind(service);
+
+			expect(() =>
+				assertHoldings("CNY", [{ currencyCode: "USD", amount: "0" }]),
+			).toThrow(InvalidAmountException);
+			expect(() =>
+				assertHoldings("CNY", [{ currencyCode: "USD", amount: "-1" }]),
+			).toThrow(InvalidAmountException);
+			expect(() =>
+				assertHoldings("CNY", [
+					{ currencyCode: "USD", amount: "100000000000" },
+				]),
+			).toThrow(InvalidAmountException);
+			expect(() =>
+				assertHoldings("CNY", [{ currencyCode: "JPY", amount: "100.5" }]),
+			).toThrow(InvalidAmountException);
+		});
+
+		it("成功日志不含金额与成本（可观测性：金额不落日志）", async () => {
+			mockCompleteSuccess();
+			mockGroupQuotes();
+
+			await service.complete("u1", {
+				...validWizard,
+				initialHoldings: [
+					{ currencyCode: "USD", amount: "1000.00" },
+					{ currencyCode: "JPY", amount: "100000" },
+				],
+			});
+
+			expect(logger.log).toHaveBeenCalledTimes(1);
+			const serialized = JSON.stringify(logger.log.mock.calls[0]);
+			expect(serialized).not.toContain("amount");
+			expect(serialized).not.toContain("cost");
+			expect(serialized).not.toContain("1000");
+			expect(serialized).not.toContain("100000");
+			expect(serialized).toContain("u1");
+			expect(serialized).toContain("USD");
+			expect(serialized).toContain("abc");
+		});
+	});
+
+	describe("saveInitialHoldings", () => {
+		const backfillDto = {
+			holdings: [{ currencyCode: "EUR", amount: "500.00" }],
+		};
+		const settingsRow = {
+			baseCurrency: "CNY",
+			ledgerStartedAt: utc8DayStart(T0),
+		};
+
+		it("未建账 → 409 ONBOARDING_NOT_COMPLETED", async () => {
+			prisma.userSettings.findUnique.mockResolvedValue(null);
+
+			const { status, body } = await errorOf(
+				() => service.saveInitialHoldings("u1", backfillDto),
+				OnboardingNotCompletedException,
+			);
+
+			expect(status).toBe(409);
+			expect(body.code).toBe("ONBOARDING_NOT_COMPLETED");
+		});
+
+		it("币种已有初始记录 → 409 INITIAL_HOLDING_EXISTS（整单拒绝）", async () => {
+			prisma.userSettings.findUnique.mockResolvedValue(settingsRow);
+			prisma.initialHolding.findMany.mockResolvedValue([
+				{ currencyCode: "EUR" },
+			]);
+
+			const { body } = await errorOf(
+				() => service.saveInitialHoldings("u1", backfillDto),
+				InitialHoldingExistsException,
+			);
+
+			expect(body.code).toBe("INITIAL_HOLDING_EXISTS");
+			expect(rateService.getLatest).not.toHaveBeenCalled();
+		});
+
+		it("正常补录：单目标平铺响应归一、ledgerStartedAt 取建账起点", async () => {
+			prisma.userSettings.findUnique.mockResolvedValue(settingsRow);
+			prisma.initialHolding.findMany.mockResolvedValue([]);
+			// 单目标响应为平铺结构（无 items）→ 归一为单元素
+			rateService.getLatest.mockResolvedValue({
+				base: "CNY",
+				target: "EUR",
+				rate: "0.79000000",
+				source: "frankfurter",
+				observedAt: T0.toISOString(),
+				validUntil: new Date(T0.getTime() + 5 * 60 * 1000).toISOString(),
+				fresh: true,
+			});
+			prisma.initialHolding.create.mockImplementation(
+				async ({ data }: any) => ({ id: "holding-eur", ...data }),
+			);
+			prisma.costLot.create.mockResolvedValue({});
+			prisma.costLot.aggregate.mockResolvedValue({
+				_sum: { remainingQty: "500" },
+			});
+			prisma.account.upsert.mockResolvedValue({});
+
+			const result = await service.saveInitialHoldings("u1", backfillDto);
+
+			expect(rateService.getLatest).toHaveBeenCalledWith("CNY", ["EUR"]);
+			expect(result.created).toHaveLength(1);
+			expect(result.created[0]).toMatchObject({
+				currencyCode: "EUR",
+				amount: "500.0000",
+				rate: "0.7900000000",
+				rawRate: "0.7900000000",
+				rateSource: "frankfurter",
+				cost: "395.0000", // 500 × 0.79
+			});
+			expect(result.created[0].rateObservedAt).toEqual(T0);
+			expect(result.ledgerStartedAt).toEqual(utc8DayStart(T0));
+
+			const [lotArg] = prisma.costLot.create.mock.calls[0];
+			expect(lotArg.data.sourceType).toBe("INITIAL");
+			expect(lotArg.data.acquiredAt).toEqual(utc8DayStart(T0));
+		});
+
+		it("ledgerStartedAt 为 null 的存量：兜底当日 UTC+8 日初", async () => {
+			prisma.userSettings.findUnique.mockResolvedValue({
+				baseCurrency: "CNY",
+				ledgerStartedAt: null,
+			});
+			prisma.initialHolding.findMany.mockResolvedValue([]);
+			rateService.getLatest.mockResolvedValue({
+				base: "CNY",
+				target: "EUR",
+				rate: "0.79000000",
+				source: "frankfurter",
+				observedAt: T0.toISOString(),
+				validUntil: new Date(T0.getTime() + 5 * 60 * 1000).toISOString(),
+				fresh: true,
+			});
+			prisma.initialHolding.create.mockImplementation(
+				async ({ data }: any) => ({ id: "holding-eur", ...data }),
+			);
+			prisma.costLot.create.mockResolvedValue({});
+			prisma.costLot.aggregate.mockResolvedValue({
+				_sum: { remainingQty: "500" },
+			});
+			prisma.account.upsert.mockResolvedValue({});
+
+			const result = await service.saveInitialHoldings("u1", backfillDto);
+
+			expect(result.ledgerStartedAt).toEqual(utc8DayStart(T0));
+		});
+
+		it("并发兜底：InitialHolding 插入撞 P2002 → 409 INITIAL_HOLDING_EXISTS", async () => {
+			prisma.userSettings.findUnique.mockResolvedValue(settingsRow);
+			prisma.initialHolding.findMany.mockResolvedValue([]);
+			// 取价需先成功（并发双请求都通过预检查与取价，插入时才分出胜负）
+			rateService.getLatest.mockResolvedValue({
+				base: "CNY",
+				target: "EUR",
+				rate: "0.79000000",
+				source: "frankfurter",
+				observedAt: T0.toISOString(),
+				validUntil: new Date(T0.getTime() + 5 * 60 * 1000).toISOString(),
+				fresh: true,
+			});
+			prisma.initialHolding.create.mockRejectedValue(
+				Object.assign(new Error("Unique constraint failed"), { code: "P2002" }),
+			);
+
+			const { body } = await errorOf(
+				() => service.saveInitialHoldings("u1", backfillDto),
+				InitialHoldingExistsException,
+			);
+
+			expect(body.code).toBe("INITIAL_HOLDING_EXISTS");
 		});
 	});
 });

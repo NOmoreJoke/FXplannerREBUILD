@@ -49,8 +49,10 @@ describe("Swagger 接口说明", () => {
 		//   POST /api/plans/:id/complete、POST /api/plans/:id/cancel
 		// + M3 外汇账户 3 端点：GET /api/accounts、GET /api/accounts/:currencyCode、
 		//   GET /api/accounts/:currencyCode/transactions
-		// + GET /api/home/portfolio（首页持仓成本聚合）= 28
-		expect(operations).toHaveLength(28);
+		// + GET /api/home/portfolio（首页持仓成本聚合）
+		// + onboarding-rework 3 端点：POST /api/onboarding/initial-holdings（补录初始持仓）、
+		//   GET /api/settings、PATCH /api/settings（用户设置读写）= 31
+		expect(operations).toHaveLength(31);
 		for (const { path, method, operation } of operations) {
 			expect(
 				operation.summary,
