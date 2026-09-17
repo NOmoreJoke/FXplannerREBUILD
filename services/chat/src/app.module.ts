@@ -14,6 +14,7 @@ import { OnboardingModule } from "./onboarding/onboarding.module";
 import { PlanModule } from "./plan/plan.module";
 import { TransactionModule } from "./transaction/transaction.module";
 import { AccountModule } from "./account/account.module";
+import { SettingsModule } from "./settings/settings.module";
 
 @Module({
 	imports: [
@@ -32,6 +33,7 @@ import { AccountModule } from "./account/account.module";
 		CurrencyModule,
 		TransactionModule,
 		AccountModule,
+		SettingsModule,
 	],
 	controllers: [AppController],
 	providers: [

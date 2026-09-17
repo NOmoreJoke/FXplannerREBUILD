@@ -144,7 +144,7 @@ export class PortfolioDto {
 	byCurrency!: PortfolioByCurrencyDto[];
 }
 
-/** GET /api/home/state 响应：分流三布尔 + 账户/计划摘要 + 最新汇率观测时间 */
+/** GET /api/home/state 响应：分流四布尔 + 账户/计划摘要 + 最新汇率观测时间 */
 export class HomeStateDto {
 	@ApiProperty({
 		description: "是否已完成首次设置（user_settings 中存在该用户记录）",
@@ -152,6 +152,14 @@ export class HomeStateDto {
 		type: Boolean,
 	})
 	onboardingCompleted!: boolean;
+
+	@ApiProperty({
+		description:
+			"是否存在初始持仓成本批次（sourceType=INITIAL 的 CostLot），供首页补录引导卡分流",
+		example: false,
+		type: Boolean,
+	})
+	hasInitialHoldings!: boolean;
 
 	@ApiProperty({
 		description: "是否有账户记录（与 accounts.length > 0 恒一致）",

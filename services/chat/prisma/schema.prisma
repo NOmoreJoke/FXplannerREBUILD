@@ -28,6 +28,7 @@ model User {
   corrections     Correction[]
   reminders       Reminder[]
   dataRequests    DataRequest[]
+  initialHoldings InitialHolding[]
 
   @@map("users")
 }
@@ -176,6 +177,27 @@ model Transaction {
 
   @@index([userId, transactedAt])
   @@map("transactions")
+}
+
+/// 初始持仓记录（onboarding-rework 技术方案 §3.2：每币种仅一笔；rate 采用价
+/// 8 位小数，rawRate 为来源原值；CostLot.sourceId 指向本表，与 PURCHASE→Transaction 同构）
+model InitialHolding {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  currencyCode   String   @map("currency_code")
+  amount         Decimal  @db.Decimal(20, 4)
+  rate           Decimal  @map("rate") @db.Decimal(20, 10)
+  rawRate        Decimal  @map("raw_rate") @db.Decimal(20, 10)
+  rateSource     String   @map("rate_source")
+  rateObservedAt DateTime @map("rate_observed_at")
+  cost           Decimal  @db.Decimal(20, 4)
+  confirmedAt    DateTime @map("confirmed_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, currencyCode])
+  @@map("initial_holdings")
 }
 
 /// FIFO 成本批次（sourceType：INITIAL / PURCHASE；sourceId 指向来源记录）

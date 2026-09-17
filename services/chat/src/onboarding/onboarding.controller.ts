@@ -24,11 +24,13 @@ import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import {
 	CompleteOnboardingDto,
+	InitialHoldingsResultDto,
 	OnboardingCompleteResultDto,
 	OnboardingConsentsResultDto,
 	OnboardingErrorDto,
 	OnboardingStatusDto,
 	SaveConsentsDto,
+	SaveInitialHoldingsDto,
 } from "./dto/onboarding.dto";
 import { OnboardingService } from "./onboarding.service";
 
@@ -42,6 +44,7 @@ import { OnboardingService } from "./onboarding.service";
 @ApiExtraModels(
 	OnboardingConsentsResultDto,
 	OnboardingCompleteResultDto,
+	InitialHoldingsResultDto,
 )
 @Controller("onboarding")
 @UseGuards(JwtAuthGuard)
@@ -87,7 +90,7 @@ export class OnboardingController {
 	@ApiOperation({
 		summary: "完成首次设置（最终提交，不可重复）",
 		description:
-			"事务内依次校验：条款（400 CONSENT_REQUIRED）→ 本位币 15 币种（400 INVALID_BASE_CURRENCY）→ 已有设置（409 ONBOARDING_ALREADY_COMPLETED，并发重复由唯一约束兜底同样 409）。成功后创建设置（记账起点 = 完成时刻）。本位币一经设定永久锁定，无任何修改入口。", 
+			"事务内依次校验：条款（400 CONSENT_REQUIRED）→ 本位币 15 币种（400 INVALID_BASE_CURRENCY）→ 已有设置（409 ONBOARDING_ALREADY_COMPLETED，并发重复由唯一约束兜底同样 409）。成功后创建设置（记账起点 = 完成当日 UTC+8 日初）；可选 initialHoldings 初始持仓同事务入账（最多 14 项，任一失败整单回滚：无有效报价 400 RATE_UNAVAILABLE、金额/成本非法 400 INVALID_AMOUNT）。本位币一经设定永久锁定，无任何修改入口。", 
 	})
 	@ApiBody({ type: CompleteOnboardingDto })
 	@ApiCreated({ type: OnboardingCompleteResultDto })
@@ -109,6 +112,30 @@ export class OnboardingController {
 			data,
 			message: "首次设置完成，本位币已锁定",
 		};
+	}
+
+	@Post("initial-holdings")
+	@ApiOperation({
+		summary: "补录初始持仓（建账后，每币种仅一笔）",
+		description:
+			"要求已建账（409 ONBOARDING_NOT_COMPLETED）；传入币种均不得已有初始记录（409 INITIAL_HOLDING_EXISTS，整单拒绝不做部分成功；并发重复由唯一约束兜底同样 409）。实时取价（现汇卖出价优先，1 外币 = X 本位币），5 分钟时效以报价观测时间为锚；无有效报价 400 RATE_UNAVAILABLE、金额/成本非法 400 INVALID_AMOUNT，均整单回滚。",
+	})
+	@ApiBody({ type: SaveInitialHoldingsDto })
+	@ApiCreated({ type: InitialHoldingsResultDto })
+	@ApiBadRequestResponse({
+		description: "无有效报价（RATE_UNAVAILABLE）或金额非法（INVALID_AMOUNT/INVALID_HOLDINGS）",
+		type: OnboardingErrorDto,
+	})
+	@ApiConflictResponse({
+		description: "尚未建账（ONBOARDING_NOT_COMPLETED）或币种已有初始记录（INITIAL_HOLDING_EXISTS）",
+		type: OnboardingErrorDto,
+	})
+	async saveInitialHoldings(
+		@CurrentUser() user: User,
+		@Body() dto: SaveInitialHoldingsDto,
+	) {
+		const data = await this.onboardingService.saveInitialHoldings(user.id, dto);
+		return { success: true, data, message: "初始持仓已入账" };
 	}
 }
 

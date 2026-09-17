@@ -29,11 +29,11 @@ export class HomeService {
 	) {}
 
 	/**
-	 * 首页状态（GET /api/home/state，方案 §4.2）：四组查询并行，一次请求返回分流 + 摘要。
-	 * 只读、无副作用；空状态只返回原始事实（三布尔），分流规则归前端展示层，后端保持数据中立。
+	 * 首页状态（GET /api/home/state，方案 §4.2）：五组查询并行，一次请求返回分流 + 摘要。
+	 * 只读、无副作用；空状态只返回原始事实（四布尔），分流规则归前端展示层，后端保持数据中立。
 	 */
 	async getState(userId: string): Promise<HomeStateDto> {
-		const [settings, accounts, plans, latestRateObservedAt] =
+		const [settings, accounts, plans, latestRateObservedAt, initialLotCount] =
 			await Promise.all([
 				this.prisma.userSettings.findUnique({ where: { userId } }),
 				this.prisma.account.findMany({
@@ -45,6 +45,9 @@ export class HomeService {
 					orderBy: { createdAt: "desc" },
 				}),
 				this.rateService.getLatestObservedAt(),
+				this.prisma.costLot.count({
+					where: { userId, sourceType: "INITIAL" },
+				}),
 			]);
 
 		// PlanAllocation 与 Plan 无 Prisma relation（planId 为裸外键 + @unique），
@@ -58,6 +61,7 @@ export class HomeService {
 
 		return {
 			onboardingCompleted: settings !== null,
+			hasInitialHoldings: initialLotCount > 0,
 			hasAccounts: accounts.length > 0,
 			hasPlans: plans.length > 0,
 			accounts: accounts.map((account) => this.toAccountSummary(account)),

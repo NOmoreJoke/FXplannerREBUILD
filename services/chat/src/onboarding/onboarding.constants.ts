@@ -1,5 +1,8 @@
 /**
- * 首次设置模块常量（技术方案 §2/§3，schema 冻结：不新增任何模型与字段）。
+ * 首次设置模块常量。
+ *
+ * schema 冻结已由 changes/onboarding-rework/技术方案.md §1.3-1 显式解除：
+ * 新增 InitialHolding 模型与 User.initialHoldings 反向关系，现有模型不变。
  */
 
 /** 当前生效的服务条款版本（本期唯一版本，无新版条款流程；技术方案 §3.3） */
