@@ -53,9 +53,11 @@ test.describe("【OTP 登录】邮箱验证码（mock 邮件）", () => {
 		await page.waitForLoadState("networkidle");
 		await page.click('[role="tab"]:has-text("验证码登录")');
 
-		// 填邮箱并发码
+		// 填邮箱、勾选两项（onboarding-rework 登录门槛）并发码
 		await page.fill("#otpTarget", TEST_EMAIL);
-		await page.click('button:has-text("获取验证码")');
+		await page.check('[data-testid="consent-age18"]');
+		await page.check('[data-testid="consent-terms"]');
+		await page.click('[data-testid="send-otp"]');
 		logger.log("action", "info", `⏳ 已请求发码 ${TEST_EMAIL}`);
 
 		// mock 模式：devCode 自动填充输入框（toast「验证码已发送（模拟）」同源）
@@ -67,13 +69,13 @@ test.describe("【OTP 登录】邮箱验证码（mock 邮件）", () => {
 		await saveScreenshot(page, "05-otp-login", "T-OTP-002-01-code-filled");
 
 		// 「验证并登录」随 challengeId 就绪而启用
-		const submit = page.locator('button:has-text("验证并登录")');
+		const submit = page.locator('[data-testid="otp-login-submit"]');
 		await expect(submit).toBeEnabled();
 		await submit.click();
 
-		await page.waitForURL(`${BASE_URL}/home`, { timeout: 15000 });
-		logger.log("action", "info", "✓ OTP 登录成功，已进入 /home");
-		await saveScreenshot(page, "05-otp-login", "T-OTP-002-02-home");
+		await page.waitForURL(`${BASE_URL}/onboarding`, { timeout: 15000 });
+		logger.log("action", "info", "✓ OTP 登录成功，未建账用户已进入建账向导");
+		await saveScreenshot(page, "05-otp-login", "T-OTP-002-02-onboarding");
 
 		await logger.saveToFile();
 	});

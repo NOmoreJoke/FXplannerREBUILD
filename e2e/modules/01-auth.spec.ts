@@ -42,8 +42,8 @@ test.describe("【认证模块】用户认证流程", () => {
 			await page.click('button[type="submit"]');
 			logger.log("action", "info", "⏳ 等待注册响应...");
 
-			// 等待跳转到工作台首页（/home）
-			await page.waitForURL(`${BASE_URL}/home`, { timeout: 10000 });
+			// 等待跳转到工作台首页（/home；新注册未建账用户会被分流到 /onboarding）
+			await page.waitForURL(/\/(home|onboarding)/, { timeout: 10000 });
 			logger.log("action", "info", "✓ 已跳转到工作台首页");
 			await saveScreenshot(page, "01-auth", "T-AUTH-001-home-after-register");
 
@@ -103,13 +103,17 @@ test.describe("【认证模块】用户认证流程", () => {
 			await page.fill('input[name="password"]', TEST_PASSWORD);
 			logger.log("action", "info", `✓ 登录表单已填充: ${TEST_EMAIL}`);
 
+			// 登录门槛（onboarding-rework）：两项勾选后才可提交
+			await page.check('[data-testid="consent-age18"]');
+			await page.check('[data-testid="consent-terms"]');
+
 			// 提交登录
 			await page.click('button[type="submit"]');
 			logger.log("action", "info", "⏳ 等待登录响应...");
 
-			// 等待跳转到工作台首页（/home）
-			await page.waitForURL(`${BASE_URL}/home`, { timeout: 10000 });
-			logger.log("action", "info", "✓ 已跳转到工作台首页");
+			// 等待跳转：未建账用户进入建账向导（onboarding-rework 新行为）
+			await page.waitForURL(`${BASE_URL}/onboarding`, { timeout: 10000 });
+			logger.log("action", "info", "✓ 已登录并进入建账向导（未建账分流）");
 
 			// 验证 Token
 			const token = await page.evaluate(() =>
@@ -130,9 +134,11 @@ test.describe("【认证模块】用户认证流程", () => {
 			await page.reload();
 			await page.waitForLoadState("networkidle");
 
-			// 填写错误密码
+			// 填写错误密码（登录门槛：先勾选才能点提交按钮）
 			await page.fill('input[name="email"]', TEST_EMAIL);
 			await page.fill('input[name="password"]', "WrongPassword123");
+			await page.check('[data-testid="consent-age18"]');
+			await page.check('[data-testid="consent-terms"]');
 			logger.log("action", "info", "✓ 填充错误的密码");
 
 			// 提交
@@ -173,19 +179,21 @@ test.describe("【认证模块】用户认证流程", () => {
 			logger.log("action", "info", "开始：已登录访问落地页跳转工作台");
 			logger.setupPageListeners(page);
 
-			// 先登录（复用 T-AUTH-001 注册的用户）
+			// 先登录（复用 T-AUTH-001 注册的用户；未建账 → 登录后进向导）
 			await page.goto(`${BASE_URL}/login`);
 			await page.fill('input[name="email"]', TEST_EMAIL);
 			await page.fill('input[name="password"]', TEST_PASSWORD);
+			await page.check('[data-testid="consent-age18"]');
+			await page.check('[data-testid="consent-terms"]');
 			await page.click('button[type="submit"]');
-			await page.waitForURL(`${BASE_URL}/home`, { timeout: 10000 });
+			await page.waitForURL(/\/(home|onboarding)/, { timeout: 10000 });
 			logger.log("action", "info", "✓ 已登录");
 
-			// 已登录访问 / → 边缘守卫应重定向到 /home（与 /home 同一画面）
+			// 已登录访问 / → 被导离落地页（已建账 → /home；未建账新用户 → /onboarding 分流）
 			await page.goto(`${BASE_URL}/`);
 			await page.waitForLoadState("networkidle");
-			expect(page.url()).toBe(`${BASE_URL}/home`);
-			logger.log("action", "info", "✓ 已登录访问 / 自动跳转 /home");
+			await expect(page).toHaveURL(/\/(home|onboarding)/);
+			logger.log("action", "info", "✓ 已登录访问 / 自动导离落地页");
 
 			await logger.saveToFile();
 		});
@@ -196,12 +204,14 @@ test.describe("【认证模块】用户认证流程", () => {
 			logger.log("action", "info", "开始：用户登出成功");
 			logger.setupPageListeners(page);
 
-			// 先登录
+			// 先登录（未建账用户登录后进向导，onboarding-rework 行为）
 			await page.goto(`${BASE_URL}/login`);
 			await page.fill('input[name="email"]', TEST_EMAIL);
 			await page.fill('input[name="password"]', TEST_PASSWORD);
+			await page.check('[data-testid="consent-age18"]');
+			await page.check('[data-testid="consent-terms"]');
 			await page.click('button[type="submit"]');
-			await page.waitForURL(`${BASE_URL}/home`, { timeout: 10000 });
+			await page.waitForURL(/\/(home|onboarding)/, { timeout: 10000 });
 			logger.log("action", "info", "✓ 已登录");
 
 			// 清除 Token 模拟登出
