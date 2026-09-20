@@ -57,7 +57,7 @@ const schema = z
 
 		// ── 汇率定时刷新开关（rate-refresh-cron 技术方案 §3.2）──
 		// false 关闭定时轮（vitest test.env 注入 false 防测试环境真实调度）；未设置 = 开启。
-		// ⚠️ 非法值（如 "TURE"）会在此处 safeParse 失败 → 整个服务拒绝启动，而非静默停用
+		// ⚠️ 取值拼写错误会在此处 safeParse 失败 → 整个服务拒绝启动，而非静默停用
 		RATE_CRON_ENABLED: z.enum(["true", "false"]).optional(),
 
 		// ── 认证接口限流上限（次/分钟，auth.controller Throttle）──
