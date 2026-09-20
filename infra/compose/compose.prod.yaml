@@ -1,0 +1,84 @@
+---
+# ============================================
+# FXPlanner 生产部署（服务器 /opt/fxplanner）
+# ============================================
+# 隔离约定（与宿主机既有服务严格区分）：
+#   - 独立 compose 项目名 fxplanner（容器/网络/卷均带 fxplanner 前缀）
+#   - 独立 bridge 网络，不与 lingji（host 网络）共享栈
+#   - 独立 postgres 容器 + 独立卷，不触碰宿主机系统级 Postgres(5432/lingji_prod)
+#   - 端口错开：web 3101 / api 4101 / pg 仅绑 127.0.0.1:5433
+#     （已占用：22/80/443/3001 lingji-web/4001 lingji-api/5432 系统 pg）
+name: fxplanner
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fxplanner-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fxplanner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: fxplanner_prod
+    volumes:
+      - fxplanner-pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fxplanner -d fxplanner_prod"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [fxplanner-net]
+
+  chat:
+    image: ghcr.io/jiangxiaoyu66/fxplanner-chat:latest
+    container_name: fxplanner-chat
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: >-
+        postgres://fxplanner:${POSTGRES_PASSWORD}@postgres:5432/fxplanner_prod?schema=public
+      API_PORT: "4001"
+      CORS_ORIGIN: ${PUBLIC_ORIGIN}
+      JWT_SECRET: ${JWT_SECRET}
+      OTP_CODE_SECRET: ${OTP_CODE_SECRET}
+      DATA_EXPORT_DIR: /data/exports
+    volumes:
+      - fxplanner-exports:/data/exports
+    ports:
+      - "4101:4001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -qO- http://127.0.0.1:4001/api/health || exit 1
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [fxplanner-net]
+
+  web:
+    image: ghcr.io/jiangxiaoyu66/fxplanner-chat-web:latest
+    container_name: fxplanner-web
+    restart: unless-stopped
+    environment:
+      # Next standalone 由 PORT 决定监听端口（Dockerfile 的 WEB_PORT 不生效）
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "3101:3000"
+    depends_on:
+      chat:
+        condition: service_started
+    networks: [fxplanner-net]
+
+volumes:
+  fxplanner-pgdata:
+  fxplanner-exports:
+
+networks:
+  fxplanner-net:
+    driver: bridge
