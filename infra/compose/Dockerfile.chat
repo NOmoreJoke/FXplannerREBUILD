@@ -29,7 +29,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=base --chown=bun:bun /app/services/chat/dist ./dist
 COPY --from=base --chown=bun:bun /app/node_modules ./node_modules
-COPY --from=base --chown=bun:bun /app/services/chat/node_modules ./services/chat/node_modules
+# bun 会将依赖提升至根 node_modules，services/chat 下不产生包内 node_modules
 ARG API_PORT=4001
 ENV API_PORT=${API_PORT}
 EXPOSE ${API_PORT}
