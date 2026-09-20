@@ -13,6 +13,8 @@ COPY packages/dev-log-server/package.json ./packages/dev-log-server/
 COPY packages/eslint-config/package.json ./packages/eslint-config/
 COPY packages/typescript-config/package.json ./packages/typescript-config/
 COPY services/chat/package.json ./services/chat/
+# services/chat 的 postinstall（prisma generate）在安装期即执行，schema 必须先就位
+COPY services/chat/prisma ./services/chat/prisma/
 COPY clients/chat-web/package.json ./clients/chat-web/
 RUN bun install --frozen-lockfile
 COPY . .
