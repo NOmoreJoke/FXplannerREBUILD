@@ -10,8 +10,8 @@ import {
 } from "../../src/rate/rate.provider";
 import { RateController } from "../../src/rate/rate.controller";
 import {
-  RateCronService,
-  type CronRunSummary,
+	RateCronService,
+	type CronRunSummary,
 } from "../../src/rate/rate-cron.service";
 import { RateService } from "../../src/rate/rate.service";
 import { SUPPORTED_CURRENCIES } from "../../src/rate/rate.constants";
@@ -53,8 +53,18 @@ const buildRateApp = async (
 // cron 全量用例专用：abc 牌价表结构同 ABC_SAMPLE_FIXTURE（唯一真实样本仅含 3 币种），
 // 按 CurrName 括号代码解析的规则生成 12 币种全量应答（同一 PublishTime，价格合法即可）
 const ABC_FULL_CODES = [
-	"HKD", "USD", "GBP", "AUD", "CAD", "JPY",
-	"EUR", "SGD", "NZD", "CHF", "THB", "KRW",
+	"HKD",
+	"USD",
+	"GBP",
+	"AUD",
+	"CAD",
+	"JPY",
+	"EUR",
+	"SGD",
+	"NZD",
+	"CHF",
+	"THB",
+	"KRW",
 ] as const;
 const ABC_CN_NAME: Record<(typeof ABC_FULL_CODES)[number], string> = {
 	HKD: "港元",
@@ -578,10 +588,7 @@ describe("RateController（接口）", () => {
 				abc: async () => jsonResponse({ message: "abc down" }, 500),
 			};
 			failureCronApp = (
-				await buildRateApp(
-					"multi",
-					createRateSourceFetchStub(failureRoutes),
-				)
+				await buildRateApp("multi", createRateSourceFetchStub(failureRoutes))
 			).app;
 
 			dedupeApp = (

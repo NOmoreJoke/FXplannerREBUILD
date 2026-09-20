@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -58,36 +58,41 @@ export function resolveCrumbs(pathname: string): Crumb[] {
 /**
  * 统一面包屑（base 层）：在 (protected)/layout.tsx 顶部渲染一次，
  * 所有子页面自动获得，禁止在页面内重复实现。
+ *
+ * actions：同一条顶栏右侧的操作区插槽（如提醒铃铛），面包屑靠左、actions 靠右；
+ * 由 layout 传入（base 不反向依赖 business），页面无需感知。
  */
-export function AppBreadcrumb() {
+export function AppBreadcrumb({ actions }: { actions?: ReactNode }) {
 	const pathname = usePathname();
 	const crumbs = resolveCrumbs(pathname);
-	if (crumbs.length === 0) return null;
+	if (crumbs.length === 0 && !actions) return null;
 
 	return (
-		<Breadcrumb
-			aria-label="面包屑"
-			className="border-b border-border bg-background px-8 py-3"
-		>
-			<BreadcrumbList>
-				{crumbs.map((crumb, index) => {
-					const isLast = index === crumbs.length - 1;
-					return (
-						<Fragment key={`${crumb.label}-${index}`}>
-							<BreadcrumbItem>
-								{isLast || !crumb.href ? (
-									<BreadcrumbPage>{crumb.label}</BreadcrumbPage>
-								) : (
-									<BreadcrumbLink asChild>
-										<Link href={crumb.href}>{crumb.label}</Link>
-									</BreadcrumbLink>
-								)}
-							</BreadcrumbItem>
-							{!isLast && <BreadcrumbSeparator />}
-						</Fragment>
-					);
-				})}
-			</BreadcrumbList>
-		</Breadcrumb>
+		<div className="flex items-center justify-between gap-4 border-b border-border bg-background px-8 py-3">
+			<Breadcrumb aria-label="面包屑">
+				<BreadcrumbList>
+					{crumbs.map((crumb, index) => {
+						const isLast = index === crumbs.length - 1;
+						return (
+							<Fragment key={`${crumb.label}-${index}`}>
+								<BreadcrumbItem>
+									{isLast || !crumb.href ? (
+										<BreadcrumbPage>{crumb.label}</BreadcrumbPage>
+									) : (
+										<BreadcrumbLink asChild>
+											<Link href={crumb.href}>{crumb.label}</Link>
+										</BreadcrumbLink>
+									)}
+								</BreadcrumbItem>
+								{!isLast && <BreadcrumbSeparator />}
+							</Fragment>
+						);
+					})}
+				</BreadcrumbList>
+			</Breadcrumb>
+			{actions && (
+				<div className="flex shrink-0 items-center gap-2">{actions}</div>
+			)}
+		</div>
 	);
 }

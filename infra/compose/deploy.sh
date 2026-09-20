@@ -8,26 +8,26 @@ cd "$(dirname "$0")"
 COMPOSE="docker compose --env-file .env -f compose.prod.yaml"
 
 case "${1:-deploy}" in
-  deploy)
-    echo "==> 1/4 拉取镜像"
-    $COMPOSE pull chat web
-    echo "==> 2/4 启动数据库并等待就绪"
-    $COMPOSE up -d postgres
-    $COMPOSE wait postgres
-    echo "==> 3/4 数据库迁移（prisma migrate deploy）"
-    $COMPOSE run --rm chat \
-      bunx prisma migrate deploy --schema services/chat/prisma/schema.prisma
-    echo "==> 4/4 启动/更新服务"
-    $COMPOSE up -d
-    ;;
-  rollback)
-    echo "==> 回滚：恢复上一个 tag 镜像需事先另行保留，此处仅重启当前镜像"
-    $COMPOSE restart chat web
-    ;;
-  *)
-    echo "未知命令：$1（可用：deploy | rollback）" >&2
-    exit 1
-    ;;
+deploy)
+	echo "==> 1/4 拉取镜像"
+	$COMPOSE pull chat web
+	echo "==> 2/4 启动数据库并等待就绪"
+	$COMPOSE up -d postgres
+	$COMPOSE wait postgres
+	echo "==> 3/4 数据库迁移（prisma migrate deploy）"
+	$COMPOSE run --rm chat \
+		bunx prisma migrate deploy --schema prisma/schema.prisma
+	echo "==> 4/4 启动/更新服务"
+	$COMPOSE up -d
+	;;
+rollback)
+	echo "==> 回滚：恢复上一个 tag 镜像需事先另行保留，此处仅重启当前镜像"
+	$COMPOSE restart chat web
+	;;
+*)
+	echo "未知命令：$1（可用：deploy | rollback）" >&2
+	exit 1
+	;;
 esac
 
 echo "==> 当前状态"

@@ -1,35 +1,60 @@
-# Chat 服务镜像（Nest）。构建上下文为仓库根（context: ../..），
-# 以便容器内 Bun 能按 workspace 解析 packages/money 等共享包。
-FROM oven/bun:1.2.15-alpine AS base
+# Chat 服务镜像（Nest）。构建上下文为仓库根（context: ../..）。
+# 体积控制对齐 LingJi 模式：
+#   deps             全量安装（dev+prod），仅供构建期使用
+#   chat-build       prisma generate + nest build
+#   chat-runtime-deps 只装 chat 的生产依赖闭包（--production --filter），
+#                     其余 workspace manifest 仅为让 bun 校验 bun.lock
+#   runner           干净基础镜像，只放运行必需物（生产 node_modules、
+#                    .prisma 产物、dist、money TS 源码）
+FROM oven/bun:1.2.15-alpine AS deps
 WORKDIR /app
-# monorepo：必须把根配置 + 所有 workspace 成员的 package.json 一起复制，
-# 否则 Bun 发现 workspace 结构与 bun.lock 不符，--frozen-lockfile 会报错。
+# monorepo：根配置 + 全部 workspace 成员的 package.json 必须与 bun.lock
+# 一致（缺任一 --frozen-lockfile 即报 lockfile changed）
 COPY package.json bun.lock bunfig.toml ./
-# 全部 workspace 成员与 bun.lock 一致（含 dev-log-server/eslint-config/
-# typescript-config），缺任一都会让 --frozen-lockfile 报 lockfile changed。
 COPY packages/money/package.json ./packages/money/
 COPY packages/dev-log-server/package.json ./packages/dev-log-server/
 COPY packages/eslint-config/package.json ./packages/eslint-config/
 COPY packages/typescript-config/package.json ./packages/typescript-config/
 COPY services/chat/package.json ./services/chat/
-# postinstall（prisma generate）在安装期即执行，schema 必须先于 install 就位
-COPY services/chat/prisma ./services/chat/prisma/
 COPY clients/chat-web/package.json ./clients/chat-web/
 RUN bun install --frozen-lockfile
-COPY . .
-# @prisma/client 需显式生成：bun install 的 postinstall 在 monorepo 下
-# 会被静默跳过，空壳 client 会让 nest build(tsc) 全量报 implicit any。
-RUN cd services/chat && bunx prisma generate
-# 只构建本服务自己的包。不加 --filter 会触发 turbo 构建全部包(含 chat-web)，
-# 而 chat 镜像没有前端所需的 NEXT_PUBLIC_API_BASE_URL，会导致前端 fail-fast 报错。
-RUN bun run build --filter=@fxplanner-new/chat
 
-FROM base AS runner
+FROM deps AS source
+COPY . .
+
+FROM source AS chat-build
+RUN bunx prisma generate --schema=services/chat/prisma/schema.prisma \
+ && bun run build --filter=@fxplanner-new/chat
+
+# 只安装 chat 的生产依赖闭包。--filter 防止 chat-web（next/turbopack）与
+# 根 devDeps（turbo/vitest 等）进入运行时镜像；prisma 已是 chat 的
+# dependencies，本阶段自带 CLI，generate 离线完成。
+FROM oven/bun:1.2.15-alpine AS chat-runtime-deps
+WORKDIR /app
+COPY package.json bun.lock bunfig.toml ./
+COPY packages/money/package.json ./packages/money/
+COPY packages/dev-log-server/package.json ./packages/dev-log-server/
+COPY packages/eslint-config/package.json ./packages/eslint-config/
+COPY packages/typescript-config/package.json ./packages/typescript-config/
+COPY services/chat/package.json ./services/chat/
+COPY clients/chat-web/package.json ./clients/chat-web/
+RUN bun install --frozen-lockfile --production --filter @fxplanner-new/chat --omit=peer \
+ && cd services/chat && bunx prisma generate --schema=prisma/schema.prisma
+
+FROM oven/bun:1.2.15-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=base --chown=bun:bun /app/services/chat/dist ./dist
-COPY --from=base --chown=bun:bun /app/node_modules ./node_modules
-# bun 会将依赖提升至根 node_modules，services/chat 下不产生包内 node_modules
+COPY --from=chat-runtime-deps --chown=bun:bun /app/node_modules ./node_modules
+# migrate deploy 需要 schema；生成的 client（node_modules/.prisma）内嵌运行时所需
+COPY --from=chat-build --chown=bun:bun /app/services/chat/prisma ./services/chat/prisma
+COPY --from=chat-build --chown=bun:bun /app/services/chat/dist ./services/chat/dist
+# 防御：nest build 若带出 spec 产物，其 vitest 导入会在生产崩溃
+RUN find /app/services/chat/dist -type f -name '*.spec.*' -delete
+COPY --from=chat-build --chown=bun:bun /app/services/chat/package.json ./services/chat/package.json
+# money 为 TS 源码直出（Bun 直接执行 TS），运行时保留源码
+COPY --from=chat-build --chown=bun:bun /app/packages/money/src ./packages/money/src
+COPY --from=chat-build --chown=bun:bun /app/packages/money/package.json ./packages/money/package.json
+WORKDIR /app/services/chat
 ARG API_PORT=4001
 ENV API_PORT=${API_PORT}
 EXPOSE ${API_PORT}

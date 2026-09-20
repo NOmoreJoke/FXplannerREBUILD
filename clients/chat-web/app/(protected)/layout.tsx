@@ -17,6 +17,7 @@ import { redirectToLogin } from "@/lib/auth/redirect-to-login";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { useLogout } from "@/lib/query/hooks/use-auth";
 import { AppBreadcrumb, PageLoading } from "@/components/base";
+import { ReminderBell } from "@/components/business/reminder";
 import { cn } from "@/lib/utils";
 
 /**
@@ -150,8 +151,8 @@ export default function ProtectedLayout({
 			</aside>
 
 			<main className="min-w-0 flex-1">
-				{/* 统一面包屑：全部子页面自动获得，页面内禁止重复实现 */}
-				<AppBreadcrumb />
+				{/* 统一面包屑行：面包屑靠左，提醒铃铛靠右（全部子页面自动获得，页面内禁止重复实现） */}
+				<AppBreadcrumb actions={<ReminderBell />} />
 				{children}
 			</main>
 		</div>

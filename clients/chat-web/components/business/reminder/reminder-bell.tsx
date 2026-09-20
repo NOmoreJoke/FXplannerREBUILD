@@ -8,7 +8,8 @@ import { settingsApi } from "@/lib/api/settings";
 import { useReminders } from "@/lib/hooks/use-reminders";
 
 /**
- * 首页顶栏提醒入口（铃铛 + 未读角标；reminders 技术方案 §8）。
+ * 工作台顶栏提醒入口（铃铛 + 未读角标；reminders 技术方案 §8）。
+ * 位置：(protected)/layout.tsx 面包屑行右侧，全站受保护页面共享；由 AppBreadcrumb 的 actions 插槽承载。
  *
  * - 提醒开关关闭（reminderEnabled=false）→ 不渲染角标（需求 §7.1）；
  * - 未读数为 0 / 提醒接口失败（含未建账 409）→ 不渲染角标，铃铛本身保留入口；

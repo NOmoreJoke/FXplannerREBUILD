@@ -2,19 +2,16 @@ import type { INestApplication } from "@nestjs/common";
 import { Test, type TestingModule } from "@nestjs/testing";
 import { SchedulerRegistry, ScheduleModule } from "@nestjs/schedule";
 import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
 } from "vitest";
 import { SUPPORTED_CURRENCIES } from "./rate.constants";
-import {
-	RATE_CRON_ENABLED_TOKEN,
-	RateCronService,
-} from "./rate-cron.service";
+import { RATE_CRON_ENABLED_TOKEN, RateCronService } from "./rate-cron.service";
 import { RateService } from "./rate.service";
 
 /**

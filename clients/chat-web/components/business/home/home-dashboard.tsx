@@ -14,7 +14,7 @@ import { format, parseISO } from "date-fns";
 import { buttonVariants } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { InitialBackfillCard } from "@/components/business/home/initial-backfill-card";
-import { ReminderBell, ReminderSection } from "@/components/business/reminder";
+import { ReminderSection } from "@/components/business/reminder";
 import {
 	formatDisplayAmount,
 	formatDisplayDate,
@@ -59,7 +59,7 @@ export function HomeDashboard({ dashboard }: HomeDashboardProps) {
 
 	return (
 		<div className="mx-auto max-w-5xl px-8 py-6">
-			{/* 顶栏：当天日期 + 快捷录入 + 汇率监控角标（无观测数据不显示） */}
+			{/* 顶栏：当天日期 + 快捷录入 + 汇率监控角标（无观测数据不显示）；提醒铃铛已上移至 layout 面包屑行 */}
 			<header className="mb-6 flex items-start justify-between">
 				<div>
 					<h1 className="text-xl font-bold text-foreground">首页</h1>
@@ -78,8 +78,6 @@ export function HomeDashboard({ dashboard }: HomeDashboardProps) {
 						<Plus className="size-4" />
 						录入买入
 					</Link>
-					{/* 提醒中心入口：铃铛 + 未读角标（reminders §8；开关关闭/无未读不显角标） */}
-					<ReminderBell />
 					{latestRateObservedAt !== null && (
 						<span className="flex items-center gap-1.5 rounded-full bg-mint-50 px-3 py-1.5 text-xs font-medium text-mint-700">
 							<span className="size-1.5 rounded-full bg-mint-500" />

@@ -1,40 +1,42 @@
-# Chat Web 镜像（Next）。next.config.ts 已开启 output:"standalone" 与
-# outputFileTracingRoot，最终镜像只需 .next/standalone + .next/static + public。
-FROM oven/bun:1.2.15-alpine AS base
+# Chat Web 镜像（Next standalone）。对齐 LingJi：构建用 node
+# （Bun 的 worker_threads 尚不完整），运行时只带 standalone 产物。
+FROM oven/bun:1.2.15-alpine AS deps
 WORKDIR /app
-# monorepo：必须把根配置 + 所有 workspace 成员的 package.json 一起复制，
-# 否则 Bun 发现 workspace 结构与 bun.lock 不符，--frozen-lockfile 会报错。
+# monorepo：根配置 + 全部 workspace 成员的 package.json 必须与 bun.lock
+# 一致（缺任一 --frozen-lockfile 即报 lockfile changed）
 COPY package.json bun.lock bunfig.toml ./
-# monorepo：必须把根配置 + 所有 workspace 成员的 package.json 一起复制
-#（与 bun.lock 一致，含 chat-web 所依赖的 money），
-# 否则 Bun 发现 workspace 结构与 bun.lock 不符，--frozen-lockfile 会报错。
 COPY packages/money/package.json ./packages/money/
 COPY packages/dev-log-server/package.json ./packages/dev-log-server/
 COPY packages/eslint-config/package.json ./packages/eslint-config/
 COPY packages/typescript-config/package.json ./packages/typescript-config/
 COPY services/chat/package.json ./services/chat/
-# services/chat 的 postinstall（prisma generate）在安装期即执行，schema 必须先就位
-COPY services/chat/prisma ./services/chat/prisma/
 COPY clients/chat-web/package.json ./clients/chat-web/
 RUN bun install --frozen-lockfile
+
+FROM deps AS source
 COPY . .
+
+# Next 16 的 worker_threads 依赖 Bun 未完全实现，构建必须用 node
+FROM node:22-alpine AS web-build
+WORKDIR /app
 # 12-Factor：构建期变量必须显式注入，不在 Dockerfile 里硬编码。
 # docker build --build-arg NEXT_PUBLIC_API_BASE_URL=https://api.example.com .
 ARG NEXT_PUBLIC_API_BASE_URL
 RUN test -n "$NEXT_PUBLIC_API_BASE_URL" || \
   (echo "ERROR: NEXT_PUBLIC_API_BASE_URL build arg is required" && exit 1)
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
-# 只构建前端自己的包，不触发 turbo 构建全部包。
-RUN bun run build --filter=@fxplanner-new/chat-web
+COPY --from=source /app ./
+WORKDIR /app/clients/chat-web
+RUN ../../node_modules/.bin/next build
 
-FROM base AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=base --chown=bun:bun /app/clients/chat-web/.next/standalone ./
-COPY --from=base --chown=bun:bun /app/clients/chat-web/.next/static ./clients/chat-web/.next/static
-COPY --from=base --chown=bun:bun /app/clients/chat-web/public ./clients/chat-web/public
-ARG WEB_PORT=3001
-ENV WEB_PORT=${WEB_PORT}
-EXPOSE ${WEB_PORT}
-USER bun
-CMD ["sh", "-c", "node clients/chat-web/server.js"]
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+COPY --from=web-build /app/clients/chat-web/.next/standalone ./
+COPY --from=web-build /app/clients/chat-web/.next/static ./clients/chat-web/.next/static
+COPY --from=web-build /app/clients/chat-web/public ./clients/chat-web/public
+USER node
+EXPOSE 3000
+CMD ["node", "clients/chat-web/server.js"]

@@ -15,10 +15,10 @@
     "db:down": "bash ../../scripts/db-local.sh down",
     "db:status": "bash ../../scripts/db-local.sh status",
     "prisma:seed": "tsx prisma/seed.ts",
+    "prisma:generate": "prisma generate",
     "prisma:reset": "prisma migrate reset --force && tsx prisma/seed.ts",
     "prisma:studio": "prisma studio",
-    "backfill:cost-lots": "tsx src/account/backfill-cost-lots.script.ts",
-    "postinstall": "prisma generate"
+    "backfill:cost-lots": "tsx src/account/backfill-cost-lots.script.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -51,6 +51,7 @@
     "openai": "^6.45.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
+    "prisma": "^5.0.0",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.0",
     "sharp": "^0.35.3",
@@ -67,7 +68,6 @@
     "@types/supertest": "^7.2.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
-    "prisma": "^5.0.0",
     "supertest": "^7.2.2",
     "ts-loader": "^9.6.2",
     "tsconfig-paths": "^4.2.0",

@@ -12,7 +12,8 @@ name: fxplanner
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # docker.io 在服务器上不可达，经 relay-images.yml 中转到自有 ghcr
+    image: ghcr.io/jiangxiaoyu66/postgres:16-alpine
     container_name: fxplanner-postgres
     restart: unless-stopped
     environment:
