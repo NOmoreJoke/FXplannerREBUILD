@@ -1,16 +1,55 @@
+# ============================================
+# CI — typecheck + 全量测试（后端/前端/工具链）
+# ============================================
+# 触发：push 到任意非 main 分支 + PR 到 main
+#（在 dev 等开发分支上直接推送即触发；PR 时只在合并前跑一次，避免双跑）
+# ============================================
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches-ignore: [main]
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  lint-and-typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.2.15
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # @prisma/client 需显式生成：bun install 的 postinstall 在 monorepo 下
+      # 会被静默跳过，空壳 client 会让 tsc 全量报 implicit any
+      - name: Generate Prisma Client
+        working-directory: services/chat
+        run: bunx prisma generate
+
+      - name: Typecheck
+        run: bun run typecheck
+
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: lint-and-typecheck
 
-    # 测试数据库服务（与 compose.yaml test-db 配置一致）
+    # 测试数据库服务（与本地 compose 的 test-db 配置一致）
     services:
       postgres:
         image: postgres:16-alpine
@@ -28,37 +67,51 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.2.15
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Typecheck
-        run: bun run typecheck
+      - name: Generate Prisma Client
+        working-directory: services/chat
+        run: bunx prisma generate
 
       - name: Backend tests
+        working-directory: services/chat
         env:
-          # CI 直接注入独立测试库连接串，不读取本地环境文件
+          # CI 直接注入独立测试库连接串与必填配置（src/config/env.ts 严格校验），
+          # 不读取本地环境文件；密钥为 CI 专用一次性测试值，非真实凭据
           DATABASE_URL: >-
             postgresql://postgres:postgres@localhost:5433/fxplanner_new_test?schema=public
           NODE_ENV: test
+          API_PORT: 4001
+          CORS_ORIGIN: http://localhost:3001
+          JWT_SECRET: ci-only-jwt-secret-0123456789abcdef
+          OTP_CODE_SECRET: ci-only-otp-secret-0123456789abcdef
         run: |
-          cd services/chat
           bunx prisma migrate deploy
           bun run test
 
       - name: Frontend tests
-        run: |
-          cd clients/chat-web
-          bun run test
+        working-directory: clients/chat-web
+        env:
+          # client.ts 顶层校验该变量；hook spec 已 mock，此处注入仅为保持与运行时形态一致
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:4001/api
+        run: bun run test
 
+      # 防假绿：套件不存在时明确 SKIP，而不是空跑退出 0 显示 ✅（与 scripts/test.ts 约定一致）
       - name: Scripts tests
-        run: bun test scripts/__tests__/
+        run: |
+          if [ -d scripts/__tests__ ]; then
+            bun test scripts/__tests__/
+          else
+            echo "⏭️ SKIP：scripts/__tests__ 不存在（无工具链测试）；补充测试后此套件自动恢复执行"
+          fi
 
       # E2E 暂不接入 CI
       # 原因：依赖真实前后端服务与 AI 调用，需要完整环境与 API 密钥

@@ -23,6 +23,12 @@ logs/
 # verify artifacts
 e2e-verified.png
 
+# 运行产物
+# 账户数据导出 ZIP 落盘（account-data 技术方案 §3.1 的 DATA_EXPORT_DIR 回退目录）
+services/chat/data-exports/
+# Herdr 多 agent 协作黑板（运行时状态，不入库）
+.team/
+
 # test artifacts（统一收敛到 e2e/ 下，根目录禁止出现）
 e2e/test-results/
 **/test-screenshots/
