@@ -6,7 +6,8 @@
 #   - 独立 compose 项目名 fxplanner（容器/网络/卷均带 fxplanner 前缀）
 #   - 独立 bridge 网络，不与 lingji（host 网络）共享栈
 #   - 独立 postgres 容器 + 独立卷，不触碰宿主机系统级 Postgres(5432/lingji_prod)
-#   - 端口错开：web 3101 / api 4101 / pg 仅绑 127.0.0.1:5433
+#   - 端口错开：web/api 仅绑 127.0.0.1（外网统一走 nginx 443 反代
+#     https://fxplanner.zyaoai.com → 3101/4101），pg 仅绑 127.0.0.1:5433
 #     （已占用：22/80/443/3001 lingji-web/4001 lingji-api/5432 系统 pg）
 name: fxplanner
 
@@ -47,7 +48,7 @@ services:
     volumes:
       - fxplanner-exports:/data/exports
     ports:
-      - "4101:4001"
+      - "127.0.0.1:4101:4001"
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,7 +71,7 @@ services:
       PORT: "3000"
       HOSTNAME: 0.0.0.0
     ports:
-      - "3101:3000"
+      - "127.0.0.1:3101:3000"
     depends_on:
       chat:
         condition: service_started
