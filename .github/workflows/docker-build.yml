@@ -1,0 +1,105 @@
+---
+# ============================================
+# Build Docker images and push them to ghcr.io
+# ============================================
+# 两个独立 Dockerfile（infra/compose/Dockerfile.chat / Dockerfile.web），
+# 构建上下文均为仓库根（monorepo workspace 解析需要），产出两个镜像：
+#   ghcr.io/jiangxiaoyu66/fxplanner-chat      NestJS 后端
+#   ghcr.io/jiangxiaoyu66/fxplanner-chat-web  Next.js 前端（standalone）
+# 触发：push main / release 发布 / 手动（dev 日常推送不打镜像）
+name: Docker Build & Push
+
+"on":
+  push:
+    branches: [main]
+    paths-ignore:
+      - "changes/**"
+      - "docs/**"
+      - "*.md"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Web 构建期 API 地址：优先仓库变量（Settings → Variables），
+      # 未配置时用本地占位值保证镜像可构建。NEXT_PUBLIC_* 为构建期内联。
+      WEB_API_BASE_URL: >-
+        ${{ vars.NEXT_PUBLIC_API_BASE_URL
+        || 'http://localhost:4001/api' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: >-
+          docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+        with:
+          driver: docker-container
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract chat metadata
+        id: meta-chat
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
+        with:
+          images: ghcr.io/jiangxiaoyu66/fxplanner-chat
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}}
+
+      - name: Extract web metadata
+        id: meta-web
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
+        with:
+          images: ghcr.io/jiangxiaoyu66/fxplanner-chat-web
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}}
+
+      - name: Build and push chat
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: infra/compose/Dockerfile.chat
+          target: runner
+          push: true
+          tags: ${{ steps.meta-chat.outputs.tags }}
+          labels: ${{ steps.meta-chat.outputs.labels }}
+          cache-from: type=gha,scope=fxplanner-chat
+          cache-to: type=gha,mode=max,scope=fxplanner-chat
+
+      # NEXT_PUBLIC_* 为 Next.js 构建期内联变量，见 job 级 env 注释
+      - name: Build and push web
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: infra/compose/Dockerfile.web
+          target: runner
+          push: true
+          tags: ${{ steps.meta-web.outputs.tags }}
+          labels: ${{ steps.meta-web.outputs.labels }}
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=${{ env.WEB_API_BASE_URL }}
+          cache-from: type=gha,scope=fxplanner-web
+          cache-to: type=gha,mode=max,scope=fxplanner-web

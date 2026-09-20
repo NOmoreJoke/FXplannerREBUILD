@@ -9,7 +9,12 @@ import {
 	RateProvider,
 } from "../../src/rate/rate.provider";
 import { RateController } from "../../src/rate/rate.controller";
+import {
+  RateCronService,
+  type CronRunSummary,
+} from "../../src/rate/rate-cron.service";
 import { RateService } from "../../src/rate/rate.service";
+import { SUPPORTED_CURRENCIES } from "../../src/rate/rate.constants";
 import {
 	ABC_SAMPLE_FIXTURE,
 	createRateSourceFetchStub,
@@ -22,6 +27,65 @@ import {
 // 15 币种全量 + 1 个重复，用于验证 targets 超量 400
 const SIXTEEN_TARGETS =
 	"HKD,USD,GBP,AUD,CAD,CNY,JPY,EUR,SGD,NZD,TWD,CHF,KRW,THB,MYR,CNY";
+
+/** 真实 AppModule + overrideProvider(RateProvider) 注入 fetch stub（按 URL 路由三源，不发真实请求）；
+ *  三源路由契约与 cron-refresh 端点两组用例共用（rate-refresh-cron 方案 §6.2） */
+const buildRateApp = async (
+	rateSourceEnv: string,
+	stub: ReturnType<typeof vi.fn>,
+): Promise<TestContext> => {
+	const previous = process.env.RATE_SOURCE;
+	process.env.RATE_SOURCE = rateSourceEnv;
+	try {
+		return await createTestApp((builder) =>
+			builder.overrideProvider(RateProvider).useFactory({
+				factory: (timeoutMs: number) =>
+					new RateProvider(timeoutMs, stub as unknown as typeof fetch),
+				inject: [RATE_PROVIDER_TIMEOUT_TOKEN],
+			}),
+		);
+	} finally {
+		if (previous === undefined) delete process.env.RATE_SOURCE;
+		else process.env.RATE_SOURCE = previous;
+	}
+};
+
+// cron 全量用例专用：abc 牌价表结构同 ABC_SAMPLE_FIXTURE（唯一真实样本仅含 3 币种），
+// 按 CurrName 括号代码解析的规则生成 12 币种全量应答（同一 PublishTime，价格合法即可）
+const ABC_FULL_CODES = [
+	"HKD", "USD", "GBP", "AUD", "CAD", "JPY",
+	"EUR", "SGD", "NZD", "CHF", "THB", "KRW",
+] as const;
+const ABC_CN_NAME: Record<(typeof ABC_FULL_CODES)[number], string> = {
+	HKD: "港元",
+	USD: "美元",
+	GBP: "英镑",
+	AUD: "澳元",
+	CAD: "加拿大元",
+	JPY: "日元",
+	EUR: "欧元",
+	SGD: "新加坡元",
+	NZD: "新西兰元",
+	CHF: "瑞士法郎",
+	THB: "泰铢",
+	KRW: "韩国元",
+};
+const buildFullAbcFixture = () => ({
+	ErrorCode: "0",
+	ErrorMsg: "",
+	Data: {
+		Table: ABC_FULL_CODES.map((code, i) => ({
+			BenchMarkPrice: `${(i + 1) * 10}.50000000`,
+			BuyingPrice: `${(i + 1) * 10}.49000000`,
+			CurrName: `${ABC_CN_NAME[code]}(${code})`,
+			CurrId: String(i + 1),
+			SellPrice: `${(i + 1) * 10}.51000000`,
+			PublishTime: "2026-09-15T10:26:54+08:00",
+			Id: String(i + 1),
+			CashBuyingPrice: `${(i + 1) * 10}.49000000`,
+		})),
+	},
+});
 
 describe("RateController（接口）", () => {
 	let app: INestApplication;
@@ -62,11 +126,23 @@ describe("RateController（接口）", () => {
 			data_points: [],
 		})),
 	};
+	// cron-refresh 端点 mock：runOnce 返回值按用例覆写（fatal 语义用 mockResolvedValueOnce）
+	const cronSummary = {
+		triggeredAt: "2026-09-17T03:30:00.000Z",
+		succeeded: ["USD", "CNY"],
+		failed: [{ target: "TWD", code: "RATE_SOURCE_UNAVAILABLE" }],
+	};
+	const rateCronService = {
+		runOnce: vi.fn(async (): Promise<CronRunSummary> => ({ ...cronSummary })),
+	};
 
 	beforeAll(async () => {
 		const moduleRef = await Test.createTestingModule({
 			controllers: [RateController],
-			providers: [{ provide: RateService, useValue: rateService }],
+			providers: [
+				{ provide: RateService, useValue: rateService },
+				{ provide: RateCronService, useValue: rateCronService },
+			],
 		}).compile();
 
 		app = moduleRef.createNestApplication();
@@ -211,6 +287,35 @@ describe("RateController（接口）", () => {
 			.expect(400);
 	});
 
+	it("POST /api/rates/cron-refresh：runOnce 摘要透传（成功轮次，rate-refresh-cron §6.2）", async () => {
+		const res = await request(app.getHttpServer())
+			.post("/api/rates/cron-refresh")
+			.expect(200);
+
+		expect(res.body).toMatchObject({
+			success: true,
+			data: cronSummary,
+			message: "汇率定时刷新（手动触发）完成",
+		});
+	});
+
+	it("POST /api/rates/cron-refresh：fatal 语义——整轮异常仍 200 且 data.fatal 透出（无 500 路径）", async () => {
+		rateCronService.runOnce.mockResolvedValueOnce({
+			triggeredAt: "2026-09-17T04:00:00.000Z",
+			succeeded: [],
+			failed: [],
+			fatal: "db connection lost",
+		});
+
+		const res = await request(app.getHttpServer())
+			.post("/api/rates/cron-refresh")
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.data.succeeded).toEqual([]);
+		expect(res.body.data.fatal).toBe("db connection lost");
+	});
+
 	// ── realtime-rate 多源升级追加用例（方案 §8.2）：仅追加，既有用例断言不动 ──
 	// 装配：真实 AppModule + overrideProvider(RateProvider) 注入 fetch stub（按 URL 路由三源，不发真实请求）。
 	describe("三源路由契约（真实 AppModule + fetch stub）", () => {
@@ -225,26 +330,6 @@ describe("RateController（接口）", () => {
 		let failureRoutes: RateSourceRoutes;
 		let failureApp: INestApplication;
 		let degradedApp: INestApplication;
-
-		const buildRateApp = async (
-			rateSourceEnv: string,
-			stub: ReturnType<typeof vi.fn>,
-		): Promise<TestContext> => {
-			const previous = process.env.RATE_SOURCE;
-			process.env.RATE_SOURCE = rateSourceEnv;
-			try {
-				return await createTestApp((builder) =>
-					builder.overrideProvider(RateProvider).useFactory({
-						factory: (timeoutMs: number) =>
-							new RateProvider(timeoutMs, stub as unknown as typeof fetch),
-						inject: [RATE_PROVIDER_TIMEOUT_TOKEN],
-					}),
-				);
-			} finally {
-				if (previous === undefined) delete process.env.RATE_SOURCE;
-				else process.env.RATE_SOURCE = previous;
-			}
-		};
 
 		const defaultMultiRoutes = () => {
 			multiRoutes.abc = async () => jsonResponse(ABC_SAMPLE_FIXTURE);
@@ -456,6 +541,114 @@ describe("RateController（接口）", () => {
 					code: "RATE_PAIR_UNSUPPORTED",
 				});
 			});
+		});
+	});
+
+	// ── rate-refresh-cron 手动触发端点（方案 §6.2）：真实 AppModule + fetch stub ──
+	// vitest test.env 已注入 RATE_CRON_ENABLED="false"（vitest.config.ts §6.0），
+	// 定时调度在测试环境不真实触发；本组经端点直接驱动 runOnce，
+	// 验证与定时任务共用链路的 HTTP 语义与落库行为。
+	describe("cron-refresh 端点（真实 AppModule + fetch stub）", () => {
+		const healthyRoutes: RateSourceRoutes = {
+			abc: async () => jsonResponse(buildFullAbcFixture()),
+			erApi: async () => jsonResponse(erApiLatestBody({ TWD: "4.5023" })),
+			frankfurter: async () =>
+				jsonResponse(frankfurterLatestBody("2026-09-15", { MYR: "0.6102" })),
+		};
+		let cronApp: INestApplication;
+		let failureCronApp: INestApplication;
+		// 去重用例独立实例：与 cronApp 的端点级限流（2/min）计数互不干扰
+		let dedupeApp: INestApplication;
+
+		const countCnyRows = () =>
+			realCtx.prisma.exchangeRate.count({ where: { base: "CNY" } });
+
+		beforeAll(async () => {
+			// 清理 CNY 视角全量残留（含恒等行），避免唯一约束/窗口污染
+			await realCtx.prisma.exchangeRate.deleteMany({
+				where: { base: "CNY" },
+			});
+
+			cronApp = (
+				await buildRateApp("multi", createRateSourceFetchStub(healthyRoutes))
+			).app;
+
+			const failureRoutes: RateSourceRoutes = {
+				...healthyRoutes,
+				abc: async () => jsonResponse({ message: "abc down" }, 500),
+			};
+			failureCronApp = (
+				await buildRateApp(
+					"multi",
+					createRateSourceFetchStub(failureRoutes),
+				)
+			).app;
+
+			dedupeApp = (
+				await buildRateApp("multi", createRateSourceFetchStub(healthyRoutes))
+			).app;
+		});
+
+		afterAll(async () => {
+			await realCtx.prisma.exchangeRate.deleteMany({
+				where: { base: "CNY" },
+			});
+			await cronApp?.close();
+			await failureCronApp?.close();
+			await dedupeApp?.close();
+		});
+
+		it("手动触发成功：succeeded 覆盖 15 币种，库内落库 15 行（14 外部 + 恒等）", async () => {
+			const res = await request(cronApp.getHttpServer())
+				.post("/api/rates/cron-refresh")
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect([...res.body.data.succeeded].sort()).toEqual(
+				[...SUPPORTED_CURRENCIES].sort(),
+			);
+			expect(res.body.data.failed).toEqual([]);
+			expect(res.body.data.fatal).toBeUndefined();
+			expect(await countCnyRows()).toBe(15);
+		});
+
+		it("单源失败不影响其他源：abc 500 → 12 币种 failed，TWD/MYR/CNY 照常落库", async () => {
+			const res = await request(failureCronApp.getHttpServer())
+				.post("/api/rates/cron-refresh")
+				.expect(200);
+
+			expect([...res.body.data.succeeded].sort()).toEqual([
+				"CNY",
+				"MYR",
+				"TWD",
+			]);
+			expect(res.body.data.failed).toHaveLength(12);
+			for (const failedItem of res.body.data.failed) {
+				expect(failedItem.code).toBe("RATE_SOURCE_UNAVAILABLE");
+			}
+		});
+
+		it("重复触发去重：同牌价两轮后行数不变（upsert 幂等，规格验收③）", async () => {
+			// 独立清理（含上一用例 failureCronApp 落库的恒等行：其 observedAt 键与本组不同）
+			await realCtx.prisma.exchangeRate.deleteMany({
+				where: { base: "CNY" },
+			});
+
+			const first = await request(dedupeApp.getHttpServer())
+				.post("/api/rates/cron-refresh")
+				.expect(200);
+			expect(first.body.data.succeeded).toHaveLength(15);
+			const rowsAfterFirst = await countCnyRows();
+			expect(rowsAfterFirst).toBe(15);
+
+			// 第二轮：abc 处于 10s 最小外呼间隔内，复用上次成功全表（无新外呼、同 observedAt），
+			// er-api/frankfurter/恒等项亦按同 observedAt upsert 同一行 → 零新增
+			const second = await request(dedupeApp.getHttpServer())
+				.post("/api/rates/cron-refresh")
+				.expect(200);
+			expect(second.body.data.succeeded).toHaveLength(15);
+
+			expect(await countCnyRows()).toBe(rowsAfterFirst);
 		});
 	});
 });

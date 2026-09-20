@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { ThrottlerModule, ThrottlerGuard } from "@nestjs/throttler";
 import { JwtModule } from "@nestjs/jwt";
+import { ScheduleModule } from "@nestjs/schedule";
 import { AppController } from "./app.controller";
 import { PrismaModule } from "./prisma/prisma.module";
 import { RateModule } from "./rate/rate.module";
@@ -34,6 +35,9 @@ import { DataRequestLockGuard } from "./data-request/data-request-lock.guard";
 		// JwtModule（verify 显式 secret，register 无配置）：DataRequestLockGuard 以 APP_GUARD
 		// 在本模块上下文实例化，JwtService 须在此可见（AuthModule 未导出 JwtModule）
 		JwtModule.register({}),
+		// 定时调度（rate-refresh-cron 技术方案 §3.1）：RateModule 内 RateCronService 整点/半点刷新汇率；
+		// 测试环境经 vitest test.env 注入 RATE_CRON_ENABLED=false 防真实外呼（vitest.config.ts）
+		ScheduleModule.forRoot(),
 		PrismaModule,
 		AuthModule,
 		OnboardingModule,

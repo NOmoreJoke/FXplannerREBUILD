@@ -1,11 +1,15 @@
 import {
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Inject,
   Param,
+  Post,
   Query,
   ValidationPipe,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import {
   ApiBadGatewayResponse,
   ApiBadRequestResponse,
@@ -19,6 +23,10 @@ import {
   getSchemaPath,
 } from '@nestjs/swagger';
 import { SUPPORTED_CURRENCIES, VALID_PERIODS } from './rate.constants';
+import {
+  RateCronService,
+  type CronRunSummary,
+} from './rate-cron.service';
 import {
   LatestRateGroupResponseDto,
   LatestRateQueryDto,
@@ -34,6 +42,7 @@ import { RateService } from './rate.service';
 export class RateController {
   constructor(
     @Inject(RateService) private readonly rateService: RateService,
+    @Inject(RateCronService) private readonly rateCronService: RateCronService,
   ) {}
 
   @Get('supported')
@@ -163,6 +172,31 @@ export class RateController {
       success: true,
       data,
       message: '历史汇率查询成功',
+    };
+  }
+
+  @Post('cron-refresh')
+  // 契约恒 200（方案 §5：runOnce 不抛异常，无 500 路径；POST 缺省 201 与契约不符）
+  @HttpCode(HttpStatus.OK)
+  // 端点级收紧：2 次/分钟/IP（全局限流 10/min 对"全量回源+落库"偏宽；
+  // frankfurter/er-api 无源级节流，此为本端点重复触发的外呼闸门，方案 §3.3）
+  @Throttle({ default: { limit: 2, ttl: 60000 } })
+  @ApiOperation({
+    summary: '手动触发一轮汇率定时刷新（验证用）',
+    description:
+      '与定时任务共用 runOnce（CNY 视角 15 币种强制回源落库），等价一轮整点/半点定时轮。'
+      + 'runOnce 承诺不抛异常：单源失败在 failed 数组如实呈现，整轮逃逸异常进 fatal，故本端点无 500 路径。'
+      + '落库 upsert 幂等（唯一键 base+quote+observedAt），重复触发无副作用积累。',
+  })
+  @ApiOkResponse({
+    description: '轮次摘要：triggeredAt + succeeded/failed 分类；fatal 仅整轮逃逸异常时出现',
+  })
+  async cronRefresh(): Promise<{ success: boolean; data: CronRunSummary; message: string }> {
+    const data = await this.rateCronService.runOnce();
+    return {
+      success: true,
+      data,
+      message: '汇率定时刷新（手动触发）完成',
     };
   }
 }

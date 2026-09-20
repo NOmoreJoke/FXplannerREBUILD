@@ -41,6 +41,11 @@ export default defineConfig({
 			OTP_SEND_MAX_PER_DAY: "20",
 			OTP_TARGET_MAX_REQUESTS: "1",
 			OTP_IP_MAX_REQUESTS: "5",
+			// 汇率定时刷新关闭（rate-refresh-cron 技术方案 §6.0，高危前置项）：
+			// ScheduleModule 注册于 AppModule，test/api 经 createTestApp 启动真实 AppModule，
+			// 串行长跑跨 :00/:30 边界会真实外呼+落库污染 rate 断言；与 rate.module.ts
+			// 读取逻辑保持一致（≠"false" 即开启），改这里须同步 rate-cron.service.ts 注释
+			RATE_CRON_ENABLED: "false",
 		},
 		server: {
 			deps: {

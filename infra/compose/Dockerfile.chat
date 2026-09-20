@@ -10,6 +10,9 @@ COPY services/chat/package.json ./services/chat/
 COPY clients/chat-web/package.json ./clients/chat-web/
 RUN bun install --frozen-lockfile
 COPY . .
+# @prisma/client 需显式生成：bun install 的 postinstall 在 monorepo 下
+# 会被静默跳过，空壳 client 会让 nest build(tsc) 全量报 implicit any。
+RUN cd services/chat && bunx prisma generate
 # 只构建本服务自己的包。不加 --filter 会触发 turbo 构建全部包(含 chat-web)，
 # 而 chat 镜像没有前端所需的 NEXT_PUBLIC_API_BASE_URL，会导致前端 fail-fast 报错。
 RUN bun run build --filter=@fxplanner-new/chat

@@ -53,8 +53,9 @@ describe("Swagger 接口说明", () => {
 		// + onboarding-rework 3 端点：POST /api/onboarding/initial-holdings（补录初始持仓）、
 		//   GET /api/settings、PATCH /api/settings（用户设置读写）
 		// + 提醒 / 使用记录（M7）/ 更正（M8）/ 数据权利等模块端点（多模块并行追加，计数随模块合入递增）
-		// + M10 成本摘要与报告 2 端点：GET /api/reports/plans、GET /api/reports/plans/:id = 48
-		expect(operations).toHaveLength(48);
+		// + M10 成本摘要与报告 2 端点：GET /api/reports/plans、GET /api/reports/plans/:id
+		// + rate-refresh-cron 1 端点：POST /api/rates/cron-refresh（手动触发定时刷新）= 49
+		expect(operations).toHaveLength(49);
 		for (const { path, method, operation } of operations) {
 			expect(
 				operation.summary,

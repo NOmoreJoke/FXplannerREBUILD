@@ -1,0 +1,45 @@
+# Docker 构建上下文排除清单（context = 仓库根）
+# 目标：上下文只含源码与锁文件——不带宿主机 node_modules/构建产物（会破坏分层安装），
+# 更不带密钥（.env* 由 12-Factor 禁止入库，同样禁止进镜像）。
+
+# VCS 与 AI 工具状态
+.git
+.github
+.pi
+.team
+.claude*
+.qoder
+.codegraph
+
+# 依赖与构建产物（镜像内自行安装/构建）
+node_modules
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+*.tsbuildinfo
+
+# 密钥与环境配置（12-Factor：镜像不含任何实际配置）
+.env
+.env.*
+!/.env.local.example
+!/services/chat/.env.local.example
+
+# 日志与运行产物
+logs
+**/logs
+*.log
+services/chat/data-exports
+
+# 测试产物
+**/test-results
+**/playwright-report
+**/test-screenshots
+e2e-verified.png
+
+# worktree/IDE 临时产物
+*~feat_*
+*~fix_*
+*~chore_*
+.claude.worktrees
+.worktrees
