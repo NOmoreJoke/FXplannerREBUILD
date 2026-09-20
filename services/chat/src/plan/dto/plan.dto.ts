@@ -1,6 +1,6 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { IsBoolean, IsInt, IsIn, IsOptional, IsString } from "class-validator";
-import { PACE_PREFERENCES } from "../schedule-builder";
+import { PACE_PREFERENCES, type PacePreference } from "../schedule-builder";
 
 /**
  * 换汇计划模块 DTO：OpenAPI 契约唯一来源，前端类型由 generate:api 产出。
@@ -221,9 +221,9 @@ export class PlanDto {
 	@ApiProperty({
 		description: "资金准备节奏",
 		example: "balanced",
-		enum: ["conservative", "balanced", "aggressive"],
+		enum: [...PACE_PREFERENCES],
 	})
-	pacePreference!: "conservative" | "balanced" | "aggressive";
+	pacePreference!: PacePreference;
 
 	@ApiProperty({
 		description: "计划状态",
@@ -424,9 +424,9 @@ export class PlanDetailDto extends PlanListItemDto {
 		description:
 			"资金准备节奏（conservative=安心 / balanced=均衡 / aggressive=主动）",
 		example: "balanced",
-		enum: ["conservative", "balanced", "aggressive"],
+		enum: [...PACE_PREFERENCES],
 	})
-	pacePreference!: "conservative" | "balanced" | "aggressive";
+	pacePreference!: PacePreference;
 
 	@ApiProperty({
 		description: "准备缓冲（提前准备的工作日天数，1~30）",
@@ -462,6 +462,22 @@ export class PlanDetailDto extends PlanListItemDto {
 		type: [PlanChangeLogDto],
 	})
 	changeLogs!: PlanChangeLogDto[];
+
+	@ApiProperty({
+		description:
+			"还需使用金额 = max(0, 目标 − 累计已使用)，最低记为 0（目标不会被系统改写，固定 4 位小数字符串）",
+		example: "6000.0000",
+		type: String,
+	})
+	stillNeeded!: string;
+
+	@ApiProperty({
+		description:
+			"资金状态（服务端计算，前端只展示）：PREPARING=准备中（有缺口）/ READY=资金已备齐 / USED_UP=资金已使用完成",
+		example: "READY",
+		enum: ["PREPARING", "READY", "USED_UP"],
+	})
+	fundStatus!: "PREPARING" | "READY" | "USED_UP";
 
 	@ApiProperty({
 		description: "可否修改目标/分配/节奏/准备缓冲（仅进行中）",
@@ -520,7 +536,7 @@ export class AdjustPreviewDto {
 		description:
 			"资金准备节奏（conservative=安心 / balanced=均衡 / aggressive=主动）",
 		example: "balanced",
-		enum: ["conservative", "balanced", "aggressive"],
+		enum: [...PACE_PREFERENCES],
 		required: false,
 	})
 	@IsOptional()
@@ -642,7 +658,7 @@ export class PlanAdjustSnapshotDto {
 	@ApiProperty({
 		description: "资金准备节奏",
 		example: "balanced",
-		enum: ["conservative", "balanced", "aggressive"],
+		enum: [...PACE_PREFERENCES],
 	})
 	pacePreference!: string;
 

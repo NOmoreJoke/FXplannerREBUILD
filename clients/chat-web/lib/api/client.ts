@@ -91,6 +91,25 @@ export async function apiClient<T>(
 		throw new ApiError("Token 无效或已过期", 401);
 	}
 
+	// 处理数据请求锁（account-data 技术方案 §8）：注销/清空处理中访问业务端点
+	// → 统一跳转进度页，实现「登录只进进度页」与强制下线体验
+	if (
+		response.status === 403 &&
+		typeof window !== "undefined" &&
+		!window.location.pathname.startsWith("/data-requests")
+	) {
+		const lockError = await response
+			.clone()
+			.json()
+			.catch(() => ({}) as ApiErrorBody);
+		if (
+			lockError.code === "DATA_REQUEST_LOCKED" ||
+			lockError.code === "ACCOUNT_PENDING_DELETION"
+		) {
+			window.location.href = "/data-requests";
+		}
+	}
+
 	if (!response.ok) {
 		const error = await response
 			.json()

@@ -2,6 +2,7 @@ import { HttpException, HttpStatus, Inject, Injectable } from "@nestjs/common";
 import { getCurrency } from "@fxplanner-new/money";
 import { Prisma, type Transaction as TransactionModel } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
 import {
 	assertUnitCostInRange,
 	buildPurchaseLot,
@@ -206,7 +207,13 @@ export class TransactionService {
 			where: { userId },
 			select: { ledgerStartedAt: true },
 		});
-		assertTransactedAtInRange(transactedAt, new Date(), settings?.ledgerStartedAt ?? null);
+		// BE-03 防线：未建账不允许录交易（错误体附 /onboarding 引导，与 plan/usage 一致）
+		if (!settings) {
+			throw new OnboardingNotCompletedException(
+				"尚未完成首次设置，请先前往 /onboarding 完成建账后再录入交易",
+			);
+		}
+		assertTransactedAtInRange(transactedAt, new Date(), settings.ledgerStartedAt);
 
 		// 三值双向自洽（权威防线；前端互算仅作体验层，方案 §6）
 		assertSelfConsistent(

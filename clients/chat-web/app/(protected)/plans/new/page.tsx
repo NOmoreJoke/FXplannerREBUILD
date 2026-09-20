@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import type { CreatePlanReq } from "@/lib/api/contract";
 import { onboardingApi } from "@/lib/api/onboarding";
 import { plansApi } from "@/lib/api/plans";
-import { isPacePreference, usePlanForm } from "@/lib/hooks/use-plan-form";
+import { toPacePreference, usePlanForm } from "@/lib/hooks/use-plan-form";
 import { useSchedulePreview } from "@/lib/hooks/use-schedule-preview";
 
 /**
@@ -47,14 +47,18 @@ export default function NewPlanPage() {
 		queryFn: () => onboardingApi.getStatus(),
 		retry: false, // 401 由 apiClient 统一跳登录，其余失败静默用默认节奏
 	});
+	// 首次设置的节奏偏好回填为默认节奏；用户已手动改过（touched）则不覆盖。
+	// FE-03：settings prep 域（cautious 系）与 plan pace 域（conservative 系）
+	// 词集不同，回填须经 toPacePreference 同义桥映射，直接赋值会静默失效。
 	const prepPreference = statusQuery.data?.settings?.prepPreference;
+	const backfillPace = toPacePreference(prepPreference);
 	useEffect(() => {
-		if (!isPacePreference(prepPreference)) return;
+		if (!backfillPace) return;
 		if (form.touched.pacePreference) return;
-		if (form.values.pacePreference === prepPreference) return;
-		form.setField("pacePreference", prepPreference, { touch: false });
+		if (form.values.pacePreference === backfillPace) return;
+		form.setField("pacePreference", backfillPace, { touch: false });
 	}, [
-		prepPreference,
+		backfillPace,
 		form.touched.pacePreference,
 		form.values.pacePreference,
 		form.setField,

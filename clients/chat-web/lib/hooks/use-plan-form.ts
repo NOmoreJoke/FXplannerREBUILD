@@ -47,19 +47,36 @@ export const DEFAULT_PLAN_FORM_VALUES: PlanFormValues = {
 	allocatedAmount: "0",
 };
 
-/** 资金准备节奏合法值（用于 onboarding 偏好回填的合法性判断与组件枚举） */
-export const PACE_PREFERENCES: readonly PacePreference[] = [
+/**
+ * 资金准备节奏合法值（pace 域；单一来源 = 后端 plan DTO / schedule-builder
+ * PACE_PREFERENCES，经 OpenAPI 契约 PacePreference 收敛）。
+ * satisfies 锁定：后端值集变更 → 此处编译报错强制同步（FE-03 根治，防漂移）。
+ */
+export const PACE_PREFERENCES = [
 	"conservative",
 	"balanced",
 	"aggressive",
-] as const;
+] as const satisfies readonly PacePreference[];
 
-/** 判定是否为合法节奏值（onboarding 存量 prepPreference 无枚举约束，需运行时收窄） */
+/** 判定是否为合法节奏值（运行时收窄） */
 export function isPacePreference(value: unknown): value is PacePreference {
 	return (
 		typeof value === "string" &&
 		(PACE_PREFERENCES as readonly string[]).includes(value)
 	);
+}
+
+/**
+ * settings prep 域（cautious 系）→ plan pace 域（conservative 系）跨域同义词桥
+ * （FE-03：两域语义同源但词集不同，回填需显式映射而非直接赋值；
+ * 非 pace/prep 合法值（含空）返回 null，由调用方决定是否回填默认值）。
+ * 两侧类型均由契约收窄，新增枚举值时编译器迫使补全映射。
+ */
+export function toPacePreference(value: unknown): PacePreference | null {
+	if (isPacePreference(value)) return value;
+	if (value === "cautious") return "conservative";
+	if (value === "proactive") return "aggressive";
+	return null;
 }
 
 /** 非负金额（不含符号/千分位） */
@@ -161,8 +178,9 @@ export function validatePlanForm(
  * getError 在字段未触碰且无值时不返回错误，避免初始全红。
  */
 export function usePlanForm() {
-	const [values, setValues] =
-		useState<PlanFormValues>(DEFAULT_PLAN_FORM_VALUES);
+	const [values, setValues] = useState<PlanFormValues>(
+		DEFAULT_PLAN_FORM_VALUES,
+	);
 	const [touched, setTouched] = useState<
 		Partial<Record<PlanFormField, boolean>>
 	>({});
@@ -199,10 +217,7 @@ export function usePlanForm() {
 		});
 	}, []);
 
-	const errors = useMemo(
-		() => validatePlanForm(values, caps),
-		[values, caps],
-	);
+	const errors = useMemo(() => validatePlanForm(values, caps), [values, caps]);
 
 	const getError = useCallback(
 		(field: PlanFormField): string | undefined => {

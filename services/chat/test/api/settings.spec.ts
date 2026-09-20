@@ -200,4 +200,21 @@ describe("SettingsController（e2e）", () => {
 		// 枚举非法来自全局 ValidationPipe：标准 400 结构（statusCode），非模块错误体
 		expect(res.body.statusCode).toBe(400);
 	});
+
+	it("值集回归（FE-03 根治）：prep 全部合法值 cautious/proactive 各自 PATCH 200 且 GET 回显一致（词集单一来源后端 DTO）", async () => {
+		for (const prepPreference of ["cautious", "proactive"] as const) {
+			const res = await request(app.getHttpServer())
+				.patch("/api/settings")
+				.set(bearer(user.accessToken))
+				.send({ prepPreference })
+				.expect(200);
+			expect(res.body.data.prepPreference).toBe(prepPreference);
+
+			const get = await request(app.getHttpServer())
+				.get("/api/settings")
+				.set(bearer(user.accessToken))
+				.expect(200);
+			expect(get.body.data.prepPreference).toBe(prepPreference);
+		}
+	});
 });

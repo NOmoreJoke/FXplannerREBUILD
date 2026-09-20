@@ -76,7 +76,7 @@ export interface paths {
         put?: never;
         /**
          * 发送 OTP 登录验证码
-         * @description 向邮箱或手机号发送 6 位登录验证码，并返回 challengeId 和过期时间；此步骤不会登录或签发 JWT。
+         * @description 向邮箱或手机号发送 6 位验证码（可指定用途 LOGIN/EXPORT/CLEAR/DELETION，默认 LOGIN），并返回 challengeId 和过期时间；此步骤不会登录或签发 JWT。
          */
         post: operations["AuthController_sendOtpCode"];
         delete?: never;
@@ -114,7 +114,7 @@ export interface paths {
         };
         /**
          * 获取当前登录用户
-         * @description 使用 Bearer JWT 查询当前用户，仅返回 id、email、name、avatar 和 createdAt 等公开字段。
+         * @description 使用 Bearer JWT 查询当前用户，仅返回 id、email、name、avatar 和 createdAt 等公开字段。注销/清空中仍可访问（前端凭 403 锁码跳进度页）。
          */
         get: operations["AuthController_getMe"];
         put?: never;
@@ -577,6 +577,314 @@ export interface paths {
         patch: operations["SettingsController_updateSettings"];
         trace?: never;
     };
+    "/api/reminders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 提醒列表（内置懒生成：先幂等生成今日应存在的提醒行再返回）
+         * @description 入口先按 R1~R4 规则幂等生成「业务今天（UTC+8）」应存在的提醒行（同计划同日合并，唯一键防重；开关关闭跳过生成），再返回未读全量 + 已读近 30 天（scheduledFor 倒序，上限 100）。行内容（matters）按计划最新状态读时派生：非 ACTIVE 计划行与事项已消失的行不返回。错误：409 ONBOARDING_NOT_COMPLETED（未完成首次设置）。
+         */
+        get: operations["ReminderController_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reminders/{id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 单条已读（幂等）
+         * @description 将本人一条提醒标记为已读（userId 双保险防越权）。行不存在或非本人 → 404 REMINDER_NOT_FOUND（不泄露存在性）；重复调用幂等返回既有 readAt，不报错。
+         */
+        post: operations["ReminderController_markRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reminders/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 全部已读（幂等）
+         * @description 将当前用户全部未读提醒标记为已读（仅更新 readAt 为 null 的行），返回本次更新的行数；重复调用 updatedCount = 0，天然幂等。
+         */
+        post: operations["ReminderController_markAllRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reports/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 报告中心列表（本人全部计划成本摘要，创建时间倒序）
+         * @description 按计划列出成本摘要：状态、币种、目标金额、累计已使用数量、已使用成本（本位币）、使用均价、手续费未明确标记、信息更新时间。可按状态（ACTIVE / COMPLETED / CANCELLED）与币种过滤，缺省全部；非法值 400 INVALID_REPORT_PARAMS。不同币种金额绝不合计（无跨计划合计行）。M7 未上线（无使用分摊数据）时 usedQuantity="0.0000"、成本与均价为 null（全链路「尚未使用」）。baseCurrency 取 userSettings，新用户 null。
+         */
+        get: operations["ReportController_listPlans"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reports/plans/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 单计划报告（页面摘要与打印视图共用数据源）
+         * @description 单计划成本报告：基本信息与进度（目标/已使用/剩余待使用差额）、成本摘要（已使用总成本/使用均价）、来源拆分（初始持仓/后续买入各自数量与成本）、手续费未明确标记、收益占位区块（算法定稿前不出数值：纯初始持仓 INITIAL_ONLY_NO_COMPARISON，含买入 NOT_SUPPORTED_YET）、信息更新时间与报告生成时间。id 格式非法 400 INVALID_REPORT_PARAMS；不存在或不属于本人均 404（防枚举）。
+         */
+        get: operations["ReportController_getPlanReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plans/{id}/usages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 使用记录列表（usedAt 倒序，limit 100 兑底）
+         * @description 返回该计划的使用记录（含每笔 FIFO 使用成本），usedAt 倒序、同刻按录入先后倒序；个人工具量级无分页，服务端 limit 100 兑底。计划不存在或不属于本人均 404（防枚举）。
+         */
+        get: operations["UsageController_list"];
+        put?: never;
+        /**
+         * 记录使用（五步事务：扣分配/扣余额/FIFO 分摊）
+         * @description 事务内依次执行：① $executeRaw 条件扣分配（used + 本次 ≤ 分配总额，行数 = 0 返回 409 INSUFFICIENT_PLAN_ALLOCATION 附当前剩余）→ ② 条件扣账户余额（防御兜底）→ ③ 插使用记录（version = 1）→ ④ FIFO 成本分摊（同日先初始持仓再按买入先后）→ ⑤ 写分摊明细 + 递减批次；任一失败整体回滚。非幂等：一次确认 = 一笔新使用。出参含提交后计划资金面快照（fundStatus/canComplete），前端一次往返即可刷新进度区。
+         */
+        post: operations["UsageController_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/corrections/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 影响预览（只读重放）
+         * @description 只读重放受影响币种账本（UTC+8 日 → 初始<买入<使用 → 首录顺序确定性重放），返回前后对比、余额/成本影响、缺口与拦截明细；不落任何业务行。V1/V2/V3 类拦截以 blockers 返回 200（blockers 非空 = 不能提交）；参数/待确定项/报价缺失类直接 400。USAGE 目标依赖 M7，落地前返回 400 CORRECTION_TARGET_TYPE_UNAVAILABLE。
+         */
+        post: operations["CorrectionController_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/corrections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 修改记录列表（版本历史）
+         * @description 按 targetType+targetId 返回修改记录（createdAt 倒序分页；含 APPLIED 与 FAILED，FAILED 附 failReason），供记录详情页版本历史区展示。目标不存在或不属于本人一律 404（不泄露存在性）；targetType/targetId 缺失 400。
+         */
+        get: operations["CorrectionController_list"];
+        put?: never;
+        /**
+         * 提交更正（事务）
+         * @description 事务内：受影响币种账户行锁（按币种码排序防死锁）→ baseVersion/baseUpdatedAt 乐观校验（409 CORRECTION_TARGET_CHANGED）→ 新鲜数据重放复核（V1 资金缺口 / V2 分配冲突 / V3 历史时点缺口 → 409 且零变化）→ 目标行 update + version+1 → 重建 CostLot/UsageLotAllocation → 余额 = 重放终态 → Correction(APPLIED) 留痕。复核不通过时独立事务尽力写 FAILED 尝试留痕（含拟改内容与失败原因），原数据零变化。
+         */
+        post: operations["CorrectionController_apply"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/corrections/target": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 更正目标当前内容
+         * @description 返回被更正记录的当前完整内容（金额 4 位、时间 ISO；含乐观校验基准字段 version / updatedAt），作为更正页表单初值数据源。仅本人可见：不存在或不属于本人一律 404（不泄露存在性）。
+         */
+        get: operations["CorrectionController_getTarget"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-requests/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询当前数据请求（进度页）
+         * @description 返回最近 30 天内最新一条非撤回请求的进度视图（含展示状态映射、可否撤回、下载入口）；无进行中请求返回 null。
+         */
+        get: operations["DataRequestController_getCurrent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-requests/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询清空影响（确认页）
+         * @description 返回各业务记录数量与是否存在可下载导出包；CLEAR 提交时的 confirmedTotals 快照与此比对，不一致 409 IMPACT_CHANGED。
+         */
+        get: operations["DataRequestController_getImpact"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-requests/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 数据操作验证码校验（生成 10 分钟确认凭证）
+         * @description 校验 challenge 用途（LOGIN 不放行）并消费验证码，返回确认截止时刻（消费 +10 分钟）；用途不匹配 403 VERIFICATION_PURPOSE_MISMATCH，码错沿用 OTP 语义。
+         */
+        post: operations["DataRequestController_verify"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 提交数据请求（EXPORT 同步生成 / CLEAR、DELETION 进入 7 日流程）
+         * @description 需 verify 返回的确认凭证（10 分钟内、一次性）；互斥 409 附原请求视图；CLEAR 必带 confirmedTotals 且与服务端重算一致；提交 CLEAR/DELETION 时可下载导出链接立即失效。
+         */
+        post: operations["DataRequestController_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-requests/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 撤回请求
+         * @description CLEAR PENDING 直接撤回（原记录原样恢复）；DELETION PENDING 需携带 purpose=DELETION 的新验证凭证（仅登录不算撤回）；EXPORT 无取消窗口；非本人/不存在 404。
+         */
+        post: operations["DataRequestController_cancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-requests/{id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 下载导出包（ZIP 流式返回）
+         * @description 仅本人 EXPORT COMPLETED 且 24 小时内可下载；过期/文件已清理 410 DOWNLOAD_EXPIRED；非本人 404（不泄露存在性）。
+         */
+        get: operations["DataRequestController_download"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -670,6 +978,12 @@ export interface components {
              * @example user@example.com
              */
             target: string;
+            /**
+             * @description 验证码用途（可选，默认 LOGIN）：登录/导出/清空/注销分别验证，互相不能顶用；频控按目标邮箱合计不受用途影响
+             * @default LOGIN
+             * @enum {string}
+             */
+            purpose: "LOGIN" | "EXPORT" | "CLEAR" | "DELETION";
         };
         OtpChallengeResultDto: {
             /**
@@ -1415,6 +1729,17 @@ export interface components {
             /** @description 修改记录（按时间倒序；存量计划无历史为空数组） */
             changeLogs: components["schemas"]["PlanChangeLogDto"][];
             /**
+             * @description 还需使用金额 = max(0, 目标 − 累计已使用)，最低记为 0（目标不会被系统改写，固定 4 位小数字符串）
+             * @example 6000.0000
+             */
+            stillNeeded: string;
+            /**
+             * @description 资金状态（服务端计算，前端只展示）：PREPARING=准备中（有缺口）/ READY=资金已备齐 / USED_UP=资金已使用完成
+             * @example READY
+             * @enum {string}
+             */
+            fundStatus: "PREPARING" | "READY" | "USED_UP";
+            /**
              * @description 可否修改目标/分配/节奏/准备缓冲（仅进行中）
              * @example true
              */
@@ -2029,6 +2354,904 @@ export interface components {
              * @example true
              */
             reminderEnabled?: boolean;
+        };
+        ReminderMatterDto: {
+            /**
+             * @description 事项类型：PREP_DUE（今日准备节点）/ PREP_OVERDUE（准备逾期）/ USE_DUE（今日为预计使用日）/ COMPLETE_READY（可确认完成）
+             * @enum {string}
+             */
+            kind: "PREP_DUE" | "PREP_OVERDUE" | "USE_DUE" | "COMPLETE_READY";
+            /**
+             * @description 仅 PREP_DUE：本次准备节点的金额合计（4 位小数字符串）；其余 null
+             * @example 3000.0000
+             */
+            installmentAmount: string | null;
+            /**
+             * @description 当前资金缺口 = max(0, 目标 − 已使用 − 剩余分配)；0 即钱已备齐
+             * @example 7000.0000
+             */
+            gapAmount: string;
+            /**
+             * @description 钱是否已备齐（gapAmount == 0）
+             * @example false
+             */
+            isFundsReady: boolean;
+            /**
+             * @description 仅 PREP_OVERDUE：已逾期天数（逾期首日为 1）；其余 null
+             * @example 1
+             */
+            daysOverdue: number | null;
+        };
+        ReminderItemDto: {
+            /** @description 提醒行 id */
+            id: string;
+            /** @description 关联计划 id */
+            planId: string;
+            /** @description 计划名（null 时前端回退「{币种} 换汇计划」） */
+            planName: string | null;
+            /**
+             * @description 目标币种
+             * @example USD
+             */
+            targetCurrency: string;
+            /**
+             * @description 业务日（ISO 8601，该日 UTC+8 0 点对应的 UTC 时刻）
+             * @example 2026-09-17T00:00:00.000Z
+             */
+            scheduledFor: string;
+            /** @description 已读时间（null = 未读） */
+            readAt: string | null;
+            /**
+             * @description 首写类型（诊断用途；展示以 matters 为准）
+             * @enum {string}
+             */
+            recordedType: "PREP_DUE" | "PREP_OVERDUE" | "USE_DUE" | "COMPLETE_READY";
+            /** @description 当前成立的事项数组（读时按计划最新状态派生，可并列多条） */
+            matters: components["schemas"]["ReminderMatterDto"][];
+        };
+        RemindersViewDto: {
+            /** @description 未读全量 + 已读近 30 天，按 scheduledFor 倒序，上限 100 条 */
+            items: components["schemas"]["ReminderItemDto"][];
+            /**
+             * @description 未读数（= items 中 readAt 为 null 的行数）
+             * @example 1
+             */
+            unreadCount: number;
+        };
+        ReminderReadResultDto: {
+            /** @description 提醒行 id */
+            id: string;
+            /** @description 已读时间 */
+            readAt: string;
+        };
+        ReminderReadAllResultDto: {
+            /**
+             * @description 本次标为已读的行数
+             * @example 3
+             */
+            updatedCount: number;
+        };
+        ReminderErrorDto: {
+            /**
+             * @description 错误码
+             * @example REMINDER_NOT_FOUND
+             */
+            code: string;
+            /** @description 错误信息 */
+            message: string;
+        };
+        ReportPlanListItemDto: {
+            /**
+             * @description 计划 ID（cuid）
+             * @example cmex5g2h70000abcd
+             */
+            planId: string;
+            /**
+             * @description 计划名称（缺省为 null）
+             * @example 今年换 5 万美元
+             */
+            name: string | null;
+            /**
+             * @description 计划状态
+             * @example ACTIVE
+             * @enum {string}
+             */
+            status: "ACTIVE" | "COMPLETED" | "CANCELLED";
+            /**
+             * @description 目标币种（ISO 4217）
+             * @example USD
+             */
+            currencyCode: string;
+            /**
+             * @description 目标金额（toFixed(4) 字符串）
+             * @example 10000.0000
+             */
+            targetAmount: string;
+            /**
+             * @description 累计已使用数量 = Σ UsageRecord.amount（toFixed(4) 字符串）
+             * @example 400.0000
+             */
+            usedQuantity: string;
+            /**
+             * @description 已使用成本（本位币，toFixed(4) 字符串）= Σ UsageLotAllocation.cost；无有效使用或成本缺失时为 null（缺成本不按零）
+             * @example 2840.0000
+             */
+            usedTotalCost: string | null;
+            /**
+             * @description 使用均价 = 已使用成本 ÷ 已使用数量（toFixed(8) 字符串）；从未使用时不计算，为 null（不显示 0）
+             * @example 7.10000000
+             */
+            usedUnitCost: string | null;
+            /**
+             * @description 是否涉及手续费未明确的买入（true 时前端显示「按已录入金额计算，部分交易费用未明确…」固定说明）
+             * @example false
+             */
+            hasUnknownFee: boolean;
+            /**
+             * @description 信息更新时间（ISO 8601，展示口径 = max(使用记录 updatedAt, 相关更正 createdAt)；无记录 null）
+             * @example 2026-09-08T02:00:00.000Z
+             */
+            updatedAt: string | null;
+        };
+        ReportPlanListDto: {
+            /**
+             * @description 本位币（成本币种，取 userSettings.baseCurrency）；新用户无设置行时为 null
+             * @example CNY
+             */
+            baseCurrency: string | null;
+            /** @description 计划成本摘要列表，按计划创建时间倒序；无计划时空数组 */
+            items: components["schemas"]["ReportPlanListItemDto"][];
+        };
+        ReportPlanInfoDto: {
+            /**
+             * @description 计划 ID（cuid）
+             * @example cmex5g2h70000abcd
+             */
+            id: string;
+            /**
+             * @description 计划名称（缺省为 null）
+             * @example 今年换 5 万美元
+             */
+            name: string | null;
+            /**
+             * @description 计划状态
+             * @example ACTIVE
+             * @enum {string}
+             */
+            status: "ACTIVE" | "COMPLETED" | "CANCELLED";
+            /**
+             * @description 目标币种（ISO 4217）
+             * @example USD
+             */
+            currencyCode: string;
+            /**
+             * @description 本位币（成本币种）；新用户无设置行时为 null（前端成本列退化为纯金额）
+             * @example CNY
+             */
+            baseCurrency: string | null;
+            /**
+             * @description 目标金额（toFixed(4) 字符串）
+             * @example 10000.0000
+             */
+            targetAmount: string;
+            /**
+             * @description 累计已使用数量（toFixed(4) 字符串）
+             * @example 400.0000
+             */
+            usedQuantity: string;
+            /**
+             * @description 剩余待使用 = max(0, 目标 − 已使用)（toFixed(4) 字符串；完成后调小场景的「差额」展示）
+             * @example 9600.0000
+             */
+            remainingToUseAmount: string;
+        };
+        ReportPlanCostDto: {
+            /**
+             * @description 已使用总成本（本位币，toFixed(4) 字符串）；无有效使用或成本缺失时为 null
+             * @example 2840.0000
+             */
+            usedTotalCost: string | null;
+            /**
+             * @description 使用均价（toFixed(8) 字符串）；从未使用时不计算，为 null（不显示 0）
+             * @example 7.10000000
+             */
+            usedUnitCost: string | null;
+            /**
+             * @description 是否涉及手续费未明确的买入（前端显示固定说明文案）
+             * @example false
+             */
+            hasUnknownFee: boolean;
+        };
+        ReportSourceSplitItemDto: {
+            /**
+             * @description 该来源已使用数量（toFixed(4) 字符串；无该来源时为 "0.0000"）
+             * @example 100.0000
+             */
+            quantity: string;
+            /**
+             * @description 该来源已使用成本（toFixed(4) 字符串）；批次必有成本，无该来源时为 "0.0000"
+             * @example 710.0000
+             */
+            cost: string;
+        };
+        ReportSourceSplitDto: {
+            /** @description 初始持仓来源（成本为记账起点口径） */
+            initial: components["schemas"]["ReportSourceSplitItemDto"];
+            /** @description 后续买入来源 */
+            purchase: components["schemas"]["ReportSourceSplitItemDto"];
+        };
+        ReportYieldSectionDto: {
+            /**
+             * @description 收益区块展示类型：INITIAL_ONLY_NO_COMPARISON = 纯初始持仓，显示「不计算收益比较」；NOT_SUPPORTED_YET = 含买入来源，算法待确认，显示「收益比较将在后续版本提供」
+             * @example NOT_SUPPORTED_YET
+             * @enum {string}
+             */
+            displayType: "INITIAL_ONLY_NO_COMPARISON" | "NOT_SUPPORTED_YET";
+        };
+        ReportPlanMetaDto: {
+            /**
+             * @description 信息更新时间（ISO 8601，展示口径 = max(使用记录 updatedAt, 相关更正 createdAt)；无记录 null）
+             * @example 2026-09-08T02:00:00.000Z
+             */
+            updatedAt: string | null;
+            /**
+             * @description 报告生成时间（ISO 8601；报告页脚展示）
+             * @example 2026-09-08T10:00:00.000Z
+             */
+            generatedAt: string;
+        };
+        PlanReportDto: {
+            /** @description 计划基本信息与进度 */
+            plan: components["schemas"]["ReportPlanInfoDto"];
+            /** @description 成本摘要 */
+            cost: components["schemas"]["ReportPlanCostDto"];
+            /** @description 来源拆分（初始持仓 / 后续买入） */
+            sourceSplit: components["schemas"]["ReportSourceSplitDto"];
+            /** @description 收益区块（本期占位，不出数值） */
+            yieldSection: components["schemas"]["ReportYieldSectionDto"];
+            /** @description 元信息（更新时间 / 报告生成时间） */
+            meta: components["schemas"]["ReportPlanMetaDto"];
+        };
+        ReportErrorDto: {
+            /**
+             * @description 错误码
+             * @example PLAN_NOT_FOUND
+             * @enum {string}
+             */
+            code: "INVALID_REPORT_PARAMS" | "PLAN_NOT_FOUND";
+            /**
+             * @description 错误描述
+             * @example 计划不存在
+             */
+            message: string;
+        };
+        CreateUsageDto: {
+            /**
+             * @description 使用金额（正数字符串，≤ 币种精度：日元/韩元整数、其余 2 位小数，≤ 单笔上限 100,000,000,000，≤ 计划剩余分配）
+             * @example 4000.0000
+             */
+            amount: string;
+            /**
+             * @description 使用日期（ISO 8601，服务端截取 UTC 0 点；不晚于今天 UTC+8 口径、不早于记账起点）
+             * @example 2026-09-20T00:00:00.000Z
+             */
+            usedAt: string;
+            /**
+             * @description 备注（可选，≤ 200 字符；缺省存 null）
+             * @example 秋季学费第一期
+             */
+            remark?: string;
+        };
+        UsageDto: {
+            /**
+             * @description 使用记录 ID（cuid）
+             * @example cme…
+             */
+            id: string;
+            /**
+             * @description 所属计划 ID（cuid）
+             * @example cmd…
+             */
+            planId: string;
+            /**
+             * @description 币种（ISO 4217，即计划目标币种）
+             * @example USD
+             */
+            currencyCode: string;
+            /**
+             * @description 使用金额（固定 4 位小数字符串）
+             * @example 4000.0000
+             */
+            amount: string;
+            /**
+             * @description 使用日期（ISO 8601 UTC 0 点）
+             * @example 2026-09-20T00:00:00.000Z
+             */
+            usedAt: string;
+            /**
+             * @description 备注（未填为 null）
+             * @example 秋季学费第一期
+             */
+            remark: string | null;
+            /**
+             * @description 本笔使用成本（FIFO 分摊合计，本位币，固定 4 位小数字符串）
+             * @example 9400.0000
+             */
+            cost: string;
+            /**
+             * @description 版本号（恒 1，M8 使用更正预留，本期只写不改）
+             * @example 1
+             */
+            version: number;
+            /**
+             * @description 记录时间（ISO 8601，同日排序次序键）
+             * @example 2026-09-20T08:00:00.000Z
+             */
+            createdAt: string;
+        };
+        PlanFundSummaryDto: {
+            /**
+             * @description 目标金额（固定 4 位小数字符串）
+             * @example 10000.0000
+             */
+            targetAmount: string;
+            /**
+             * @description 累计已使用（扣减后，固定 4 位小数字符串）
+             * @example 4000.0000
+             */
+            usedAmount: string;
+            /**
+             * @description 分配总额（固定 4 位小数字符串）
+             * @example 10000.0000
+             */
+            allocatedAmount: string;
+            /**
+             * @description 计划剩余分配（扣减后，固定 4 位小数字符串）
+             * @example 6000.0000
+             */
+            remainingAllocation: string;
+            /**
+             * @description 还需使用金额 = max(0, 目标 − 累计已使用)（固定 4 位小数字符串）
+             * @example 6000.0000
+             */
+            stillNeeded: string;
+            /**
+             * @description 资金缺口（固定 4 位小数字符串）
+             * @example 0.0000
+             */
+            gap: string;
+            /**
+             * @description 资金状态（服务端计算）：PREPARING=准备中（有缺口）/ READY=资金已备齐 / USED_UP=资金已使用完成
+             * @example READY
+             * @enum {string}
+             */
+            fundStatus: "PREPARING" | "READY" | "USED_UP";
+            /**
+             * @description 可否完成确认（复用计划详情 canComplete 口径）
+             * @example false
+             */
+            canComplete: boolean;
+        };
+        CreateUsageRespDto: {
+            /** @description 本次写入的使用记录 */
+            usage: components["schemas"]["UsageDto"];
+            /** @description 提交后计划资金面快照 */
+            plan: components["schemas"]["PlanFundSummaryDto"];
+        };
+        UsageListRespDto: {
+            /** @description 使用记录（usedAt 倒序、同刻 createdAt 倒序；limit 100 兑底） */
+            items: components["schemas"]["UsageDto"][];
+        };
+        UsageErrorDto: {
+            /**
+             * @description 错误码：INVALID_USAGE_PARAMS / PLAN_NOT_FOUND / PLAN_INVALID_TRANSITION / INSUFFICIENT_PLAN_ALLOCATION / INSUFFICIENT_ACCOUNT_BALANCE / USAGE_LOT_SHORTAGE
+             * @example INSUFFICIENT_PLAN_ALLOCATION
+             */
+            code: string;
+            /**
+             * @description 错误描述
+             * @example 计划剩余分配不足
+             */
+            message: string;
+        };
+        CorrectionDiffItemDto: {
+            /**
+             * @description 字段名
+             * @example feeAmount
+             */
+            field: string;
+            /**
+             * @description 原值（手续费未知时为 null）
+             * @example null
+             */
+            before: string | null;
+            /**
+             * @description 新值
+             * @example 20.0000
+             */
+            after: string | null;
+            /**
+             * @description 展示摘要（金额 4 位；日期 yyyy-MM-dd）
+             * @example 未知 → 20.0000
+             */
+            display: string;
+        };
+        CorrectionBalanceImpactDto: {
+            /**
+             * @description 币种
+             * @example USD
+             */
+            currencyCode: string;
+            /**
+             * @description 更正前余额（4 位）
+             * @example 600.0000
+             */
+            before: string;
+            /**
+             * @description 更正后余额（4 位）
+             * @example 600.0000
+             */
+            after: string;
+        };
+        CorrectionAllocationImpactDto: {
+            /**
+             * @description 计划 ID
+             * @example cmb1...
+             */
+            planId: string;
+            /**
+             * @description 币种
+             * @example USD
+             */
+            currencyCode: string;
+            /**
+             * @description 分配总额 前值（4 位）
+             * @example 600.0000
+             */
+            amountBefore: string;
+            /**
+             * @description 分配总额 后值（4 位）
+             * @example 600.0000
+             */
+            amountAfter: string;
+            /**
+             * @description 累计已使用 前值（4 位）
+             * @example 400.0000
+             */
+            usedBefore: string;
+            /**
+             * @description 累计已使用 后值（4 位）
+             * @example 400.0000
+             */
+            usedAfter: string;
+        };
+        CorrectionCostImpactDto: {
+            /**
+             * @description 使用记录 ID
+             * @example cmbU...
+             */
+            usageId: string;
+            /**
+             * @description 更正前成本（4 位；无分摊明细时为 null）
+             * @example 9400.0000
+             */
+            costBefore: string | null;
+            /**
+             * @description 更正后成本（4 位；无分摊明细时为 null）
+             * @example 9560.0000
+             */
+            costAfter: string | null;
+        };
+        CorrectionImpactSummaryDto: {
+            /** @description 余额影响（受影响币种） */
+            balances: components["schemas"]["CorrectionBalanceImpactDto"][];
+            /** @description 计划分配影响（使用改小/改大时，本期为空数组） */
+            allocations: components["schemas"]["CorrectionAllocationImpactDto"][];
+            /** @description 使用成本影响（受影响币种内每笔使用） */
+            costs: components["schemas"]["CorrectionCostImpactDto"][];
+            /** @description 提示（如「存在手续费未明确的记录，成本说明继续保留」） */
+            warnings: string[];
+        };
+        CorrectionBlockerDetailDto: {
+            /**
+             * @description 币种（资金/分配类拦截时）
+             * @example USD
+             */
+            currencyCode: string | null;
+            /**
+             * @description 缺口数量（时点/终态不足时）
+             * @example 400.0000
+             */
+            shortfall: string | null;
+            /**
+             * @description 发生时间（历史时点缺口时，ISO 8601）
+             * @example 2026-09-02T00:00:00.000Z
+             */
+            usedAt: string | null;
+            /**
+             * @description 受影响计划 ID（分配冲突时）
+             * @example cmb1...
+             */
+            planId: string | null;
+        };
+        CorrectionBlockerDto: {
+            /**
+             * @description 拦截类型（CORRECTION_INSUFFICIENT_FUNDS / CORRECTION_ALLOCATION_CONFLICT / CORRECTION_HISTORICAL_SHORTFALL / CORRECTION_NO_CHANGES）
+             * @example CORRECTION_HISTORICAL_SHORTFALL
+             * @enum {string}
+             */
+            code: "CORRECTION_INSUFFICIENT_FUNDS" | "CORRECTION_ALLOCATION_CONFLICT" | "CORRECTION_HISTORICAL_SHORTFALL";
+            /**
+             * @description 不能提交的原因（面向用户展示）
+             * @example 更正后 2026-09-02 的使用发生时同币种资金不足
+             */
+            message: string;
+            /** @description 缺口/受影响明细 */
+            details: components["schemas"]["CorrectionBlockerDetailDto"][];
+        };
+        CorrectionPreviewDto: {
+            /**
+             * @description 目标类型
+             * @example TRANSACTION
+             * @enum {string}
+             */
+            targetType: "TRANSACTION" | "USAGE" | "INITIAL_HOLDING";
+            /**
+             * @description 被更正记录 id
+             * @example cmb9...
+             */
+            targetId: string;
+            /** @description 目标当前完整内容（金额 4 位、时间 ISO；字段随 targetType 不同） */
+            before: {
+                [key: string]: unknown;
+            };
+            /** @description 应用变更后的完整内容（未落库，仅供预览） */
+            after: {
+                [key: string]: unknown;
+            };
+            /** @description 逐字段前后对比（仅列发生变化且有展示语义的字段） */
+            diff: components["schemas"]["CorrectionDiffItemDto"][];
+            /** @description 影响面汇总 */
+            impacts: components["schemas"]["CorrectionImpactSummaryDto"];
+            /** @description 拦截明细（非空 = 不能提交，确认按钮应禁用） */
+            blockers: components["schemas"]["CorrectionBlockerDto"][];
+        };
+        CorrectionApplyResultDto: {
+            /**
+             * @description 更正记录 ID（Correction.id）
+             * @example cmbC...
+             */
+            correctionId: string;
+            /**
+             * @description 结果状态（apply 成功恒为 APPLIED）
+             * @example APPLIED
+             */
+            status: string;
+            /**
+             * @description 目标类型
+             * @example TRANSACTION
+             */
+            targetType: string;
+            /**
+             * @description 被更正记录 id
+             * @example cmb9...
+             */
+            targetId: string;
+            /**
+             * @description 更正后版本号（TRANSACTION/USAGE = version+1；INITIAL_HOLDING 无版本列返回 null）
+             * @example 2
+             */
+            targetVersion: number | null;
+            /**
+             * @description 留痕时间（ISO 8601）
+             * @example 2026-09-20T12:00:00.000Z
+             */
+            createdAt: string;
+        };
+        CorrectionDto: {
+            /**
+             * @description 更正记录 ID
+             * @example cmbC...
+             */
+            id: string;
+            /**
+             * @description 目标类型
+             * @example TRANSACTION
+             * @enum {string}
+             */
+            targetType: "TRANSACTION" | "USAGE" | "INITIAL_HOLDING";
+            /**
+             * @description 被更正记录 id
+             * @example cmb9...
+             */
+            targetId: string;
+            /**
+             * @description 修改原因
+             * @example 手续费实际为 20 港元
+             */
+            reason: string;
+            /** @description 修改前快照（完整字段 + 影响面摘要；手续费保留 null 语义） */
+            beforeSnapshot: {
+                [key: string]: unknown;
+            };
+            /** @description 修改后快照（FAILED 时为空对象） */
+            afterSnapshot: {
+                [key: string]: unknown;
+            };
+            /**
+             * @description 结果状态：APPLIED = 已生效；FAILED = 提交失败（原数据不变）
+             * @example APPLIED
+             * @enum {string}
+             */
+            status: "APPLIED" | "FAILED";
+            /**
+             * @description 失败原因（FAILED 时）
+             * @example 更正后 USD 余额将变负
+             */
+            failReason: string | null;
+            /**
+             * @description 留痕时间（ISO 8601）
+             * @example 2026-09-20T12:00:00.000Z
+             */
+            createdAt: string;
+        };
+        CorrectionListDto: {
+            /** @description 修改记录（createdAt 倒序；含 APPLIED 与 FAILED） */
+            items: components["schemas"]["CorrectionDto"][];
+            /**
+             * @description 总条数
+             * @example 3
+             */
+            total: number;
+            /**
+             * @description 当前页（从 1 起）
+             * @example 1
+             */
+            page: number;
+            /**
+             * @description 每页条数（固定 20）
+             * @example 20
+             */
+            pageSize: number;
+        };
+        CorrectionTargetDto: {
+            /**
+             * @description 目标类型
+             * @example TRANSACTION
+             * @enum {string}
+             */
+            targetType: "TRANSACTION" | "USAGE" | "INITIAL_HOLDING";
+            /**
+             * @description 被更正记录 id
+             * @example cmb9...
+             */
+            targetId: string;
+            /** @description 目标当前完整内容（金额 4 位、时间 ISO；含乐观校验基准字段 version / updatedAt） */
+            target: {
+                [key: string]: unknown;
+            };
+        };
+        CorrectionChangesDto: {
+            /**
+             * @description 目标币种（TRANSACTION / INITIAL_HOLDING 可改；15 币种内；改币种触发两币种全量重放）
+             * @example CAD
+             */
+            currencyCode?: string;
+            /**
+             * @description 本金金额（TRANSACTION 可改；正数字符串，≤ 4 位小数）
+             * @example 7800.00
+             */
+            principalAmount?: string;
+            /**
+             * @description 到账数量（TRANSACTION 可改；正数字符串，小数位 ≤ 币种精度）
+             * @example 1000.00
+             */
+            quantity?: string;
+            /**
+             * @description 手续费（TRANSACTION 可改）；提供即生效——字符串 = 补录金额，null = 改回「未知」（≠ 0）；缺省字段 = 不修改
+             * @example 20.00
+             */
+            feeAmount?: string | null;
+            /**
+             * @description 交易日期（TRANSACTION 可改；ISO 8601；UTC+8 口径不晚于今天、不早于账本起点）
+             * @example 2026-09-20T00:00:00.000Z
+             */
+            transactedAt?: string;
+            /**
+             * @description 金额（USAGE = 使用金额须 > 0；INITIAL_HOLDING = 初始金额，允许 0）
+             * @example 1000.0000
+             */
+            amount?: string;
+            /**
+             * @description 使用日期（USAGE 可改；ISO 8601；不能早于账本起点）
+             * @example 2026-09-04T00:00:00.000Z
+             */
+            usedAt?: string;
+        };
+        CorrectionRequestDto: {
+            /**
+             * @description 更正目标类型（USAGE 依赖 M7，落地前返回 400 CORRECTION_TARGET_TYPE_UNAVAILABLE）
+             * @example TRANSACTION
+             * @enum {string}
+             */
+            targetType: "TRANSACTION" | "USAGE" | "INITIAL_HOLDING";
+            /**
+             * @description 被更正记录 id
+             * @example cmb9...
+             */
+            targetId: string;
+            /**
+             * @description 乐观校验基准版本（TRANSACTION/USAGE 必填；preview 时所读到的目标 version）
+             * @example 1
+             */
+            baseVersion?: number;
+            /**
+             * @description 乐观校验基准更新时间（INITIAL_HOLDING 用，无 version 列；preview 时所读到的目标 updatedAt）
+             * @example 2026-09-20T12:00:00.000Z
+             */
+            baseUpdatedAt?: string;
+            /**
+             * @description 修改原因（必填；失败尝试亦留痕该原因）
+             * @example 手续费实际为 20 港元，当时漏填
+             */
+            reason: string;
+            /** @description 拟变更集合（按 targetType 白名单校验；缺省字段 = 不修改；至少一项有效变化） */
+            changes: components["schemas"]["CorrectionChangesDto"];
+        };
+        CorrectionErrorDto: {
+            /**
+             * @description 错误码（见 enum）
+             * @example CORRECTION_HISTORICAL_SHORTFALL
+             * @enum {string}
+             */
+            code: "CORRECTION_TARGET_NOT_FOUND" | "INVALID_CORRECTION_PARAMS" | "CORRECTION_NOT_ALLOWED" | "RATE_QUOTE_UNAVAILABLE" | "CORRECTION_TARGET_TYPE_UNAVAILABLE" | "CORRECTION_TARGET_CHANGED" | "CORRECTION_INSUFFICIENT_FUNDS" | "CORRECTION_ALLOCATION_CONFLICT" | "CORRECTION_HISTORICAL_SHORTFALL";
+            /**
+             * @description 错误描述（面向用户展示）
+             * @example 更正后历史使用发生时同币种资金不足，不能提交
+             */
+            message: string;
+            /** @description 缺口/受影响计划明细（可选） */
+            details?: components["schemas"]["CorrectionBlockerDetailDto"][];
+        };
+        DataRequestDownloadDto: {
+            /**
+             * @description 下载地址（相对 API 前缀）
+             * @example /api/data-requests/xxx/download
+             */
+            url: string;
+            /** @description 下载失效时刻（ISO 8601） */
+            expiresAt: string;
+        };
+        DataRequestViewDto: {
+            /** @description 请求 ID */
+            id: string;
+            /**
+             * @description 请求类型
+             * @enum {string}
+             */
+            type: "EXPORT" | "CLEAR" | "DELETION";
+            /**
+             * @description 处理状态
+             * @enum {string}
+             */
+            status: "PENDING" | "PROCESSING" | "COMPLETED" | "CANCELLED" | "FAILED";
+            /** @description 提交时间 */
+            requestedAt: string;
+            /** @description 截止时间（CLEAR 清理期限 / DELETION 撤回期截止） */
+            dueAt: string;
+            /** @description 终态时间 */
+            processedAt?: string | null;
+            /**
+             * @description 展示状态（含注销撤回期映射）
+             * @enum {string}
+             */
+            displayStatus: "SUBMITTED" | "WITHDRAWAL_PERIOD" | "PROCESSING" | "COMPLETED" | "CANCELLED" | "FAILED";
+            /** @description 是否可撤回（CLEAR PENDING / DELETION PENDING） */
+            canCancel: boolean;
+            /** @description DELETION 撤回期截止（=dueAt），其余为 null */
+            withdrawDeadline?: string | null;
+            /** @description EXPORT COMPLETED 且未过期时的下载入口，其余为 null */
+            download?: components["schemas"]["DataRequestDownloadDto"] | null;
+        };
+        VerifyResultDto: {
+            /** @description 验证凭证 ID（提交请求时回传） */
+            challengeId: string;
+            /**
+             * @description 验证用途
+             * @enum {string}
+             */
+            purpose: "EXPORT" | "CLEAR" | "DELETION";
+            /** @description 确认截止时刻（消费时刻 +10 分钟，ISO 8601） */
+            confirmDeadline: string;
+        };
+        ImpactTotalsDto: {
+            /**
+             * @description 外汇账户数
+             * @example 2
+             */
+            accounts: number;
+            /**
+             * @description 买入记录数
+             * @example 3
+             */
+            transactions: number;
+            /**
+             * @description 初始外币记录数
+             * @example 1
+             */
+            initialHoldings: number;
+            /**
+             * @description 换汇计划数
+             * @example 2
+             */
+            plans: number;
+            /**
+             * @description 资金使用记录数
+             * @example 4
+             */
+            usageRecords: number;
+            /**
+             * @description 更正记录数
+             * @example 1
+             */
+            corrections: number;
+        };
+        ImpactViewDto: {
+            /** @description 各业务记录数量 */
+            totals: components["schemas"]["ImpactTotalsDto"];
+            /**
+             * @description 是否存在可下载的导出包（确认页提示先下载）
+             * @example false
+             */
+            hasDownloadableExport: boolean;
+        };
+        VerifyDataRequestDto: {
+            /** @description send-code 返回的挑战 ID */
+            challengeId: string;
+            /**
+             * @description 6 位验证码
+             * @example 123456
+             */
+            code: string;
+            /**
+             * @description 验证用途（LOGIN 不放行数据操作）
+             * @example CLEAR
+             * @enum {string}
+             */
+            purpose: "EXPORT" | "CLEAR" | "DELETION";
+        };
+        DataRequestErrorDto: {
+            /** @description success 恒为 false */
+            success: boolean;
+            /** @description 错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE */
+            code: string;
+            /** @description 人类可读信息 */
+            message: string;
+        };
+        CreateDataRequestDto: {
+            /**
+             * @description 请求类型
+             * @enum {string}
+             */
+            type: "EXPORT" | "CLEAR" | "DELETION";
+            /** @description verify 返回的验证凭证 ID */
+            challengeId: string;
+            /** @description CLEAR 必带：确认页展示时的记录数量快照，与服务端重算不一致 → 409 IMPACT_CHANGED */
+            confirmedTotals?: components["schemas"]["ImpactTotalsDto"];
+        };
+        DataRequestConflictBodyDto: {
+            /** @description success 恒为 false */
+            success: boolean;
+            /** @description 错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE */
+            code: string;
+            /** @description 人类可读信息 */
+            message: string;
+            /** @description 进行中的原请求视图 */
+            data: components["schemas"]["DataRequestViewDto"] | null;
+        };
+        CancelDataRequestDto: {
+            /** @description DELETION 撤回必带：verify（purpose=DELETION）返回的挑战 ID（已消费凭证，仅登录不算撤回）；CLEAR 直接撤回无需携带 */
+            challengeId?: string;
         };
     };
     responses: never;
@@ -3110,6 +4333,665 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettingsErrorDto"];
+                };
+            };
+        };
+    };
+    ReminderController_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 获取成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["RemindersViewDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 尚未完成首次设置（ONBOARDING_NOT_COMPLETED） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderErrorDto"];
+                };
+            };
+        };
+    };
+    ReminderController_markRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 标记成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["ReminderReadResultDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 提醒不存在或不属于本人（REMINDER_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderErrorDto"];
+                };
+            };
+        };
+    };
+    ReminderController_markAllRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 标记成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["ReminderReadAllResultDto"];
+                        message?: string;
+                    };
+                };
+            };
+        };
+    };
+    ReportController_listPlans: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 获取成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["ReportPlanListDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description status 不在三值枚举内，或币种不在支持的 15 币种内（INVALID_REPORT_PARAMS） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportErrorDto"];
+                };
+            };
+        };
+    };
+    ReportController_getPlanReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 获取成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["PlanReportDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 计划 ID 格式非法（INVALID_REPORT_PARAMS） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportErrorDto"];
+                };
+            };
+            /** @description 计划不存在或不属于本人（PLAN_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportErrorDto"];
+                };
+            };
+        };
+    };
+    UsageController_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 获取成功，响应体为 { success, data: { items }, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageListRespDto"];
+                };
+            };
+            /** @description 计划不存在或不属于本人（PLAN_NOT_FOUND，防枚举） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageErrorDto"];
+                };
+            };
+        };
+    };
+    UsageController_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUsageDto"];
+            };
+        };
+        responses: {
+            /** @description 记账成功，响应体为 { success, data: { usage, plan }, message } 包装 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateUsageRespDto"];
+                };
+            };
+            /** @description 参数非法（INVALID_USAGE_PARAMS：金额/精度/上限/日期上下界/备注长度） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageErrorDto"];
+                };
+            };
+            /** @description 计划不存在或不属于本人（PLAN_NOT_FOUND，防枚举） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageErrorDto"];
+                };
+            };
+            /** @description 非进行中计划（PLAN_INVALID_TRANSITION）/ 剩余分配不足（INSUFFICIENT_PLAN_ALLOCATION，附 remainingAllocation）/ 余额不足（INSUFFICIENT_ACCOUNT_BALANCE）/ 批次不足（USAGE_LOT_SHORTAGE） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageErrorDto"];
+                };
+            };
+        };
+    };
+    CorrectionController_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CorrectionRequestDto"];
+            };
+        };
+        responses: {
+            /** @description 预览成功（blockers 非空表示存在拦截项） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["CorrectionPreviewDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 参数非法（INVALID_CORRECTION_PARAMS）/ 待确定项拦截（CORRECTION_NOT_ALLOWED）/ 原时点报价不可得（RATE_QUOTE_UNAVAILABLE）/ USAGE 依赖未就绪（CORRECTION_TARGET_TYPE_UNAVAILABLE） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrectionErrorDto"];
+                };
+            };
+            /** @description 目标不存在或不属于本人（CORRECTION_TARGET_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrectionErrorDto"];
+                };
+            };
+            /** @description 预览后目标已被其他修改更新（CORRECTION_TARGET_CHANGED） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrectionErrorDto"];
+                };
+            };
+        };
+    };
+    CorrectionController_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 查询成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["CorrectionListDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 参数缺失（INVALID_CORRECTION_PARAMS） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrectionErrorDto"];
+                };
+            };
+            /** @description 目标不存在或不属于本人（CORRECTION_TARGET_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrectionErrorDto"];
+                };
+            };
+        };
+    };
+    CorrectionController_apply: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CorrectionRequestDto"];
+            };
+        };
+        responses: {
+            /** @description 更正成功，响应体为 { success, data, message } 包装 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["CorrectionApplyResultDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 参数非法（INVALID_CORRECTION_PARAMS）/ 待确定项拦截（CORRECTION_NOT_ALLOWED）/ 报价不可得（RATE_QUOTE_UNAVAILABLE）/ USAGE 依赖未就绪（CORRECTION_TARGET_TYPE_UNAVAILABLE） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrectionErrorDto"];
+                };
+            };
+            /** @description 目标不存在或不属于本人（CORRECTION_TARGET_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrectionErrorDto"];
+                };
+            };
+            /** @description 乐观校验失配（CORRECTION_TARGET_CHANGED）/ 资金缺口（CORRECTION_INSUFFICIENT_FUNDS）/ 分配冲突（CORRECTION_ALLOCATION_CONFLICT）/ 历史时点缺口（CORRECTION_HISTORICAL_SHORTFALL） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrectionErrorDto"];
+                };
+            };
+        };
+    };
+    CorrectionController_getTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 查询成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["CorrectionTargetDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 目标不存在或不属于本人（CORRECTION_TARGET_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrectionErrorDto"];
+                };
+            };
+        };
+    };
+    DataRequestController_getCurrent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 当前请求视图或 null */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["DataRequestViewDto"] | null;
+                        message?: string;
+                    };
+                };
+            };
+        };
+    };
+    DataRequestController_getImpact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 记录数量与可下载导出提示 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["ImpactViewDto"];
+                        message?: string;
+                    };
+                };
+            };
+        };
+    };
+    DataRequestController_verify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifyDataRequestDto"];
+            };
+        };
+        responses: {
+            /** @description 验证通过，返回确认凭证与截止时刻 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["VerifyResultDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 用途不匹配 / 验证码无效 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
+                };
+            };
+        };
+    };
+    DataRequestController_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDataRequestDto"];
+            };
+        };
+        responses: {
+            /** @description 请求视图（EXPORT 为 COMPLETED 含下载入口） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["DataRequestViewDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 互斥（DATA_REQUEST_CONFLICT 附原请求）/ 影响变化（IMPACT_CHANGED） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestConflictBodyDto"];
+                };
+            };
+        };
+    };
+    DataRequestController_cancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelDataRequestDto"];
+            };
+        };
+        responses: {
+            /** @description 撤回后的请求视图（CANCELLED） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["DataRequestViewDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description DELETION 撤回缺验证凭证 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
+                };
+            };
+            /** @description 请求不存在或非本人 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
+                };
+            };
+            /** @description 当前状态不可撤回 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
+                };
+            };
+        };
+    };
+    DataRequestController_download: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ZIP 二进制（Content-Disposition 附件下载） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string;
+                };
+            };
+            /** @description 请求不存在或非本人 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
+                };
+            };
+            /** @description 下载链接已失效 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
                 };
             };
         };

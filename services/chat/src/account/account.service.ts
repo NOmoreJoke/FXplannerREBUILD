@@ -47,7 +47,7 @@ export class AccountNotFoundException extends HttpException {
 /** 流水源行的内存中间形态：排序键（Date）+ 展示字段，排序后剥离 createdAt 映射出参 DTO */
 interface LedgerSourceItem {
 	id: string;
-	type: "PURCHASE" | "USAGE";
+	type: "PURCHASE" | "USAGE" | "INITIAL";
 	occurredAt: Date;
 	createdAt: Date;
 	quantity: string;
@@ -131,9 +131,10 @@ export class AccountService {
 
 	/**
 	 * 账户流水（GET /api/accounts/:currencyCode/transactions，§4.3）：
-	 * Transaction（type=PURCHASE）+ UsageRecord（type=USAGE，M7 前为空表）并行查询后内存合并，
-	 * occurredAt 倒序、同刻 createdAt 倒序。UsageRecord 无成本字段，USAGE 行 totalCost 恒 null，
-	 * M7 上线时追加 UsageLotAllocation 按 usageId 聚合（方案 §9.3 遗留，契约与前端零改动）。
+	 * Transaction（type=PURCHASE）+ UsageRecord（type=USAGE）+ InitialHolding（type=INITIAL，
+	 * M8 起：账户流水初始持仓行承载「更正」入口，corrections 技术方案 §7）并行查询后内存合并，
+	 * occurredAt 倒序、同刻 createdAt 倒序。USAGE 行 totalCost 由 M7 起
+	 * 按 UsageLotAllocation 按 usageId 聚合填实（方案 §3.5 遗留落地），契约与前端零改动。
 	 */
 	async ledger(userId: string, currencyCodeRaw: string): Promise<AccountLedgerDto> {
 		const currencyCode = this.normalizeCurrency(currencyCodeRaw);
@@ -149,10 +150,28 @@ export class AccountService {
 		if (!account) {
 			throw new AccountNotFoundException();
 		}
-		const [transactions, usageRecords] = await Promise.all([
+		const [transactions, usageRecords, initialHoldings] = await Promise.all([
 			this.prisma.transaction.findMany({ where: { userId, currencyCode } }),
 			this.prisma.usageRecord.findMany({ where: { userId, currencyCode } }),
+			this.prisma.initialHolding.findMany({ where: { userId, currencyCode } }),
 		]);
+		// USAGE 行成本（M7 落地）：按 usageId 聚合分摊明细（一次 groupBy，禁止循环内查询）
+		const usageCostRows =
+			usageRecords.length > 0
+				? await this.prisma.usageLotAllocation.groupBy({
+						by: ["usageId"],
+						where: {
+							usageId: { in: usageRecords.map((record) => record.id) },
+						},
+						_sum: { cost: true },
+					})
+				: [];
+		const costByUsage = new Map(
+			usageCostRows.map((row) => [
+				row.usageId,
+				row._sum.cost ?? new Prisma.Decimal(0),
+			]),
+		);
 
 		// 内部行：occurredAt/createdAt 为排序键（Date），排序后剥离 createdAt
 		const purchases: LedgerSourceItem[] = transactions.map((transaction) => ({
@@ -174,13 +193,27 @@ export class AccountService {
 			occurredAt: record.usedAt,
 			createdAt: record.createdAt,
 			quantity: record.amount.toFixed(4),
-			// UsageRecord 无成本字段（schema 冻结）；M7 上线时按 UsageLotAllocation 聚合（§9.3）
-			totalCost: null,
+			// 本笔使用成本 = UsageLotAllocation 按 usageId 聚合（M7 落地，§3.5）
+			totalCost: (
+				costByUsage.get(record.id) ?? new Prisma.Decimal(0)
+			).toFixed(4),
 			feeKnown: true,
 			version: record.version,
 		}));
 
-		const merged = mergeLedgerItems(purchases, usages);
+		const initialItems: LedgerSourceItem[] = initialHoldings.map((holding) => ({
+			id: holding.id,
+			type: "INITIAL" as const,
+			// 展示日期用确认时刻（用户视角的「初始记录日」）；批次 acquiredAt 的账本起点口径仅用于 FIFO 排序
+			occurredAt: holding.confirmedAt,
+			createdAt: holding.createdAt,
+			quantity: holding.amount.toFixed(4),
+			totalCost: holding.cost.toFixed(4),
+			feeKnown: true,
+			version: 1,
+		}));
+
+		const merged = mergeLedgerItems(purchases, usages, initialItems);
 		const items: AccountLedgerItemDto[] = merged.map(
 			// 排序完成后剥离 createdAt 排序键，occurredAt 序列化为 ISO 字符串
 			({ occurredAt, createdAt: _createdAt, ...rest }) => ({

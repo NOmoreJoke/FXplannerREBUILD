@@ -181,6 +181,72 @@ export class RateService {
     } satisfies LatestRateGroupResponse;
   }
 
+  /**
+   * 原时点取价（corrections 技术方案 §5.3，初始持仓币种更正依赖）：
+   * 查找 observedAt ∈ (at − 5min, at] 窗口内「1 外币 = X 本位币」的最后一笔报价；
+   * 本地无则按当前路由源 fetchHistory 回补当日历史后重查（doc 02:113「取最后一笔」）；
+   * 仍无 → 返回 null，上层抛 400 RATE_QUOTE_UNAVAILABLE。
+   * 方向与采用价口径与 onboarding 取价一致（sellRate ?? rate，1 外币 = X 本位币）。
+   * 注意：M2 历史汇率为日级粒度，历史确认时点常落在窗口外——调用方必须处理 null 失败路径。
+   */
+  async findQuoteAt(
+    baseCurrency: string,
+    currencyCode: string,
+    at: Date,
+  ): Promise<{
+    rate: string;
+    sellRate?: string;
+    source: string;
+    observedAt: Date;
+  } | null> {
+    const windowStart = new Date(at.getTime() - QUOTE_TTL_MS);
+    const findInWindow = () =>
+      this.prisma.exchangeRate.findFirst({
+        where: {
+          base: baseCurrency,
+          quote: currencyCode,
+          observedAt: { gt: windowStart, lte: at },
+        },
+        orderBy: { observedAt: 'desc' },
+      });
+
+    let row = await findInWindow();
+    if (!row) {
+      // 本地窗口无报价：回补当日历史后重查（与 getHistory 同一落库通道，skipDuplicates 幂等）
+      const dayStart = this.startOfUtcDay(at);
+      try {
+        const fetched = await this.provider.fetchHistory(
+          baseCurrency,
+          currencyCode,
+          this.formatDate(dayStart),
+          this.formatDate(at),
+        );
+        if (fetched.length > 0) {
+          await this.prisma.exchangeRate.createMany({
+            data: fetched.map((point) => ({
+              base: baseCurrency,
+              quote: currencyCode,
+              rate: point.rate,
+              source: this.provider.sourceForPair(baseCurrency, currencyCode),
+              observedAt: point.observedAt,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      } catch {
+        // 数据源不可用：不阻断失败路径，按「窗口内无报价」处理（返回 null）
+      }
+      row = await findInWindow();
+    }
+    if (!row) return null;
+    return {
+      rate: row.rate.toString(),
+      ...(row.sellRate != null ? { sellRate: row.sellRate.toString() } : {}),
+      source: row.source,
+      observedAt: row.observedAt,
+    };
+  }
+
   async getHistory(base: string, target: string, period: number) {
     const normalizedBase = this.validateCurrency(base, 'base');
     const normalizedTarget = this.validateCurrency(target, 'target');

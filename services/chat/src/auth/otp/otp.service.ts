@@ -81,6 +81,7 @@ type OtpChallengeDelegate = {
     data: {
       channel: string;
       target: string;
+      purpose?: string;
       codeHash: string;
       expiresAt: Date;
       requestIp: string;
@@ -192,12 +193,26 @@ export class OtpService {
     this.maxAttempts = options.maxAttempts ?? OTP_MAX_ATTEMPTS;
     this.targetWindowMs = options.targetWindowMs ?? OTP_TARGET_WINDOW_MS;
     this.ipWindowMs = options.ipWindowMs ?? OTP_IP_WINDOW_MS;
-    this.targetMaxRequests = options.targetMaxRequests ?? OTP_TARGET_MAX_REQUESTS;
-    this.ipMaxRequests = options.ipMaxRequests ?? OTP_IP_MAX_REQUESTS;
+    // 频控上限支持 env 覆盖（先例 AUTH_THROTTLE_LIMIT）：默认值不变，
+    // E2E 集中发码时由运行环境放大（同 IP 60s 窗口跨用例累计，默认 5 次不够）
+    const envTargetMax = Number(process.env.OTP_TARGET_MAX_REQUESTS ?? NaN);
+    const envIpMax = Number(process.env.OTP_IP_MAX_REQUESTS ?? NaN);
+    this.targetMaxRequests =
+      options.targetMaxRequests ??
+      (Number.isFinite(envTargetMax) ? envTargetMax : OTP_TARGET_MAX_REQUESTS);
+    this.ipMaxRequests =
+      options.ipMaxRequests ??
+      (Number.isFinite(envIpMax) ? envIpMax : OTP_IP_MAX_REQUESTS);
     this.sendWindow1hMs = options.sendWindow1hMs ?? OTP_SEND_WINDOW_1H_MS;
     this.sendWindow24hMs = options.sendWindow24hMs ?? OTP_SEND_WINDOW_24H_MS;
-    this.sendMaxPerHour = options.sendMaxPerHour ?? OTP_SEND_MAX_PER_HOUR;
-    this.sendMaxPerDay = options.sendMaxPerDay ?? OTP_SEND_MAX_PER_DAY;
+    const envSendHour = Number(process.env.OTP_SEND_MAX_PER_HOUR ?? NaN);
+    const envSendDay = Number(process.env.OTP_SEND_MAX_PER_DAY ?? NaN);
+    this.sendMaxPerHour =
+      options.sendMaxPerHour ??
+      (Number.isFinite(envSendHour) ? envSendHour : OTP_SEND_MAX_PER_HOUR);
+    this.sendMaxPerDay =
+      options.sendMaxPerDay ??
+      (Number.isFinite(envSendDay) ? envSendDay : OTP_SEND_MAX_PER_DAY);
     this.verifyLockWindowMs = options.verifyLockWindowMs ?? OTP_VERIFY_LOCK_WINDOW_MS;
     this.verifyLockThreshold = options.verifyLockThreshold ?? OTP_VERIFY_LOCK_THRESHOLD;
     const codeSecret = options.codeSecret ?? process.env.OTP_CODE_SECRET;
@@ -242,6 +257,8 @@ export class OtpService {
         data: {
           channel: dto.channel,
           target,
+          // 用途默认 LOGIN（旧客户端零破坏；导出/清空/注销由 data-request 模块透传）
+          purpose: dto.purpose ?? "LOGIN",
           codeHash: hashCode(code, this.codeSecret),
           expiresAt,
           requestIp: normalizedIp,

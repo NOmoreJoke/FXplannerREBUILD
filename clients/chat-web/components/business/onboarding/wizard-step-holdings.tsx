@@ -5,9 +5,7 @@ import { Loader2, Plus, Trash2 } from "lucide-react";
 import {
 	assertAmountLimit,
 	AmountLimitExceededError,
-	finalAmountOf,
 	getCurrency,
-	roundRateTo8,
 } from "@fxplanner-new/money";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,8 +17,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { CURRENCY_OPTIONS } from "@/lib/api/currencies";
-import { ratesApi } from "@/lib/api/rates";
-import type { LatestRateItem } from "@/lib/api/rates";
+import { useHoldingsReview } from "@/lib/hooks/use-holdings-review";
 import type { InitialHoldingItem } from "@/lib/api/contract";
 
 /**
@@ -31,17 +28,18 @@ import type { InitialHoldingItem } from "@/lib/api/contract";
  *
  * 填写态：动态行列表（初始 1 行，最多 14 行 = 15 币种减本位币），每行币种 + 金额
  * （金额字符串，前端用 money 包 assertAmountLimit + 小数位校验即时校验）。
- * 核对区：金额行变化后（600ms 防抖）按「1 外币 = X 本位币」口径取价
- * （sellRate ?? rate，rate-reference-card 先例），逐币种展示报价与预计初始成本
- * （finalAmountOf 按币种小数位舍入；舍 0 抛 RoundToZeroError 时行内提示）。
- * 取价失败（请求级或项级 error）显示失败提示，绝不用 0 或手填价顶替。
+ * 核对区取价/成本计算内聚在 use-holdings-review hook：按「1 外币 = X 本位币」
+ * 口径取价（sellRate ?? rate，rate-reference-card 先例），成本按【本位币精度】
+ * 舍入一次，与后端入账（onboarding.service）一致；金额变化复用窗口缓存报价
+ * 本地重算，仅首次/币种集合变化强制回源（refresh=true）。取价失败（请求级或
+ * 项级 error）显示失败提示，绝不用 0 或手填价顶替。
  *
- * 改本位币重核（需求场景 3）：取价签名含 baseCurrency，返回第一步改币再进第二步
- * （或组件未卸载时直接改币）→ 签名变化使核对区清空并重新取价，已填金额保留。
+ * 改本位币重核（需求场景 3）：hook 输入含 baseCurrency，改币后核对区清空并
+ * 按新本位币重新取价，已填金额保留；同时本组件联动清空与新本位币冲突的行币种
+ * （该币种已不属于可选清单，保留会导致「下拉空白但核对区照算」的矛盾态）。
+ *
+ * 空金额行（N3）：已选币种但金额留空的行给行内提示并阻断提交，不再静默丢弃。
  */
-
-/** 防抖时长（金额行停止变化后再取价，避免逐键请求） */
-const REVIEW_DEBOUNCE_MS = 600;
 
 /** 单用户初始持仓行数上限（15 币种 - 1 本位币，与后端校验一致） */
 const MAX_HOLDING_ROWS = 14;
@@ -54,27 +52,6 @@ export interface HoldingRow {
 	currencyCode: string;
 	amount: string;
 }
-
-/** 核对区单行结果（取价成功后按当时快照计算） */
-interface ReviewRowData {
-	target: string;
-	amount: string;
-	/** 采用价（sellRate ?? rate）四舍五入到 8 位后的展示值 */
-	rateDisplay: string;
-	/** 报价来源展示文案 */
-	source: string;
-	/** 报价时间（observedAt 日期部分） */
-	observedDate: string;
-	/** 预计初始成本（本位币）；RoundToZero 等计算失败时为 null */
-	costDisplay: string | null;
-	costError?: string;
-}
-
-type ReviewState =
-	| { status: "idle"; rows: [] }
-	| { status: "loading"; rows: [] }
-	| { status: "error"; rows: [] }
-	| { status: "success"; rows: ReviewRowData[] };
 
 export interface WizardStepHoldingsProps {
 	/** 本位币（核对区取价 base；排除在本位币选项外） */
@@ -118,30 +95,7 @@ function validateAmount(code: string, amount: string): string | null {
 	return null;
 }
 
-/** 报价来源展示文案（对齐 rate-reference-card：abc 源标注现汇卖出价） */
-function resolveSourceLabel(source: string): string {
-	return source === "abc" ? "农行牌价 · 现汇卖出价" : source;
-}
-
-/** 单/多目标响应归一为 items（多目标为向导核对区唯一实际形态，平铺分支防御性保留） */
-function normalizeItems(
-	response: Awaited<ReturnType<typeof ratesApi.latest>>,
-): LatestRateItem[] {
-	if ("items" in response) return response.items;
-	return [
-		{
-			target: response.target,
-			rate: response.rate,
-			...(response.sellRate !== undefined
-				? { sellRate: response.sellRate }
-				: {}),
-			source: response.source,
-			observedAt: response.observedAt,
-			validUntil: response.validUntil,
-			fresh: response.fresh,
-		},
-	];
-}
+/** 报价来源展示文案移至 use-holdings-review（随取价状态机内聚） */
 
 export function WizardStepHoldings({
 	baseCurrency,
@@ -181,24 +135,44 @@ export function WizardStepHoldings({
 			setInternalRows(next);
 		}
 	};
-	const [review, setReview] = useState<ReviewState>({
-		status: "idle",
-		rows: [],
-	});
 
-	// 取价请求序号：仅最新一次请求的响应可落地（防过期响应覆盖新输入）
-	const seqRef = useRef(0);
+	// 改本位币联动（UI-P1）：与新本位币冲突的行（币种 = 本位币）已不在可选清单，
+	// 保留会导致「下拉空白但核对区按 identity 照算且可提交」的矛盾态，清空行币种；
+	// 金额保留，重新选币种即可（金额不随币种变化失效的既有语义不变）
+	const prevBaseCurrencyRef = useRef(baseCurrency);
+	useEffect(() => {
+		if (prevBaseCurrencyRef.current === baseCurrency) return;
+		prevBaseCurrencyRef.current = baseCurrency;
+		setRows((prev) =>
+			prev.map((row) =>
+				row.currencyCode === baseCurrency ? { ...row, currencyCode: "" } : row,
+			),
+		);
+	}, [baseCurrency]);
 
-	/** 有效行：币种已选且金额合法（参与取价与提交） */
+	/** 有效行：币种已选、金额已填且合法（参与取价与提交；空金额行仅提示不取价） */
 	const validRows = useMemo(
 		() =>
 			rows.filter(
 				(row) =>
 					row.currencyCode !== "" &&
+					row.amount.trim() !== "" &&
 					validateAmount(row.currencyCode, row.amount) === null,
 			),
 		[rows],
 	);
+
+	// 核对区取价状态机（含 N1 本位币精度、N2 refresh 决策、防抖与竞态丢弃）；
+	// 输入引用必须 memo 稳定（hook effect 依赖 rows 引用，内联 map 会无限重跑）
+	const reviewInput = useMemo(
+		() =>
+			validRows.map((row) => ({
+				currencyCode: row.currencyCode,
+				amount: row.amount,
+			})),
+		[validRows],
+	);
+	const review = useHoldingsReview(baseCurrency, reviewInput);
 
 	/** 存在「已选币种但金额非法」的行（阻断填写态提交） */
 	const hasInvalidRow = rows.some((row) => {
@@ -206,88 +180,17 @@ export function WizardStepHoldings({
 		return validateAmount(row.currencyCode, row.amount) !== null;
 	});
 
-	// 取价签名：本位币 + 有效行（币种+金额）任一变化即重新核对；
-	// 改本位币（需求场景 3）→ 签名变化 → 核对区清空重取，金额保留
-	const reviewSignature = useMemo(
-		() =>
-			JSON.stringify([
-				baseCurrency,
-				validRows.map((row) => [row.currencyCode, row.amount]),
-			]),
-		[baseCurrency, validRows],
+	/** 存在「已选币种但金额留空」的行（N3：行内提示并阻断提交，不再静默丢弃） */
+	const hasEmptyAmountRow = rows.some(
+		(row) => row.currencyCode !== "" && row.amount.trim() === "",
 	);
 
-	useEffect(() => {
-		const codes = validRows.map((row) => row.currencyCode);
-		if (codes.length === 0) {
-			setReview({ status: "idle", rows: [] });
-			return;
-		}
-		// 输入变化即先置 loading（旧核对结果立即失效），防抖后取价
-		setReview({ status: "loading", rows: [] });
-		const timer = setTimeout(() => {
-			const seq = ++seqRef.current;
-			void (async () => {
-				try {
-					const response = await ratesApi.latest(baseCurrency, codes, true);
-					if (seq !== seqRef.current) return;
-					const items = normalizeItems(response);
-					// 项级 error（含报价数据缺失）：整体视为失败，绝不用 0 或手填价
-					const byTarget = new Map(items.map((item) => [item.target, item]));
-					const failed = codes.some((code) => {
-						const item = byTarget.get(code);
-						return !item || item.error !== undefined;
-					});
-					if (failed) {
-						setReview({ status: "error", rows: [] });
-						return;
-					}
-					const nextRows: ReviewRowData[] = validRows.map((row) => {
-						// failed 已排除缺项，此处必有数据
-						// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-						const item = byTarget.get(row.currencyCode)!;
-						// 录入价口径（rate-reference-card 先例）：sellRate ?? rate =「1 外币 = X 本位币」
-						const adoptedRate = roundRateTo8(item.sellRate ?? item.rate ?? 0);
-						const decimalPlaces =
-							getCurrency(row.currencyCode)?.decimalPlaces ?? 2;
-						let costDisplay: string | null = null;
-						let costError: string | undefined;
-						try {
-							costDisplay = finalAmountOf(
-								row.amount,
-								adoptedRate,
-								decimalPlaces,
-							).toFixed(decimalPlaces);
-						} catch {
-							// 正数成本被舍入为 0（RoundToZeroError）：拦截展示，不得入账
-							costError = "金额过小，折算成本舍入为 0，无法入账";
-						}
-						return {
-							target: row.currencyCode,
-							amount: row.amount,
-							rateDisplay: adoptedRate.toFixed(8),
-							source: resolveSourceLabel(item.source ?? ""),
-							observedDate: (item.observedAt ?? "").slice(0, 10) || "—",
-							costDisplay,
-							costError,
-						};
-					});
-					setReview({ status: "success", rows: nextRows });
-				} catch {
-					if (seq !== seqRef.current) return;
-					setReview({ status: "error", rows: [] });
-				}
-			})();
-		}, REVIEW_DEBOUNCE_MS);
-		return () => clearTimeout(timer);
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- validRows 经 reviewSignature 稳定化
-	}, [reviewSignature]);
-
-	/** 填写态可提交：有效行非空、无非法行、核对区对当前输入已成功且无舍 0 拦截 */
+	/** 填写态可提交：有效行非空、无非法/空金额行、核对区对当前输入已成功且无舍 0 拦截 */
 	const canSubmitFill =
 		!submitting &&
 		validRows.length > 0 &&
 		!hasInvalidRow &&
+		!hasEmptyAmountRow &&
 		review.status === "success" &&
 		review.rows.every((row) => row.costError === undefined);
 
@@ -403,10 +306,13 @@ export function WizardStepHoldings({
 					{/* 填写态：动态行列表 */}
 					<div className="space-y-3">
 						{rows.map((row, index) => {
+							// N3：已选币种但金额留空的行给行内提示，不再静默丢弃
 							const amountError =
 								row.currencyCode === ""
 									? null
-									: validateAmount(row.currencyCode, row.amount);
+									: row.amount.trim() === ""
+										? "请填写持有金额，或删除该行"
+										: validateAmount(row.currencyCode, row.amount);
 							return (
 								<div
 									key={index}
@@ -512,9 +418,7 @@ export function WizardStepHoldings({
 								正在获取报价…
 							</p>
 						)}
-						{(review.status === "error" ||
-							(review.status === "success" &&
-								review.rows.some((row) => row.costError !== undefined))) && (
+						{review.status === "error" && (
 							<p
 								className="mt-4 rounded-lg bg-cream-100 px-3 py-2 text-sm text-ink-600"
 								role="alert"

@@ -31,6 +31,11 @@ services:
         required: false
     environment:
       - NODE_ENV=production
+      # 数据导出 ZIP 落盘目录（account-data 技术方案 §3.1 决策二；路径可经 chat.env 覆盖）
+      - DATA_EXPORT_DIR=/app/services/chat/data-exports
+    volumes:
+      # 导出文件持久化（24h 下载期限内重建容器不丢文件）
+      - export-data:/app/services/chat/data-exports
     # 端口由 .env 文件中的 API_PORT 变量驱动
     ports:
       - "${API_PORT:-4001}:${API_PORT:-4001}"
@@ -65,3 +70,7 @@ services:
     depends_on:
       chat:
         condition: service_healthy
+
+# 数据导出临时文件（EXPORT 请求生成，24h 下载期限内有效）
+volumes:
+  export-data:

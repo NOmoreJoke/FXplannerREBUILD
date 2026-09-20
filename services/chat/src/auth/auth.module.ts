@@ -40,6 +40,8 @@ import { SmsOtpChannel } from "./otp/sms-otp.channel";
 			useValue: {},
 		},
 	],
-	exports: [AuthService],
+	// OtpService 导出供 data-request 模块复用验证凭证链路（account-data 技术方案 §3.4）；
+	// JwtModule 导出供锁守卫（DataRequestLockGuard）验签 JWT
+	exports: [AuthService, OtpService, JwtModule],
 })
 export class AuthModule {}

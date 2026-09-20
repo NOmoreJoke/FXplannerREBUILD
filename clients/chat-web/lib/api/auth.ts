@@ -34,15 +34,16 @@ export const authApi = {
 	},
 
 	/**
-	 * 发送 OTP 登录验证码
+	 * 发送 OTP 验证码（purpose 可选，默认 LOGIN；导出/清空/注销分别验证）
 	 */
 	async sendOtpCode(
 		channel: OtpChannel,
 		target: string,
+		purpose?: "LOGIN" | "EXPORT" | "CLEAR" | "DELETION",
 	): Promise<OtpChallengeResult> {
 		return apiClient<OtpChallengeResult>("/auth/otp/send-code", {
 			method: "POST",
-			body: JSON.stringify({ channel, target }),
+			body: JSON.stringify({ channel, target, purpose }),
 			skipAuth: true,
 		});
 	},

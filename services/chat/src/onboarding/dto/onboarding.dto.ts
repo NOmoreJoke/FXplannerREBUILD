@@ -4,6 +4,7 @@ import {
 	ArrayMinSize,
 	IsArray,
 	IsBoolean,
+	IsIn,
 	IsNotEmpty,
 	IsOptional,
 	IsString,
@@ -54,6 +55,8 @@ export class SaveInitialHoldingsDto {
 }
 
 /** POST /api/onboarding/complete 请求体：完整最终设置数据（向导一次性提交，无草稿） */
+import { PREP_PREFERENCE_VALUES } from "../../settings/dto/update-settings.dto";
+
 export class CompleteOnboardingDto {
 	@ApiProperty({
 		description: "地区（ISO 3166 国家/地区码或用户自填标识）",
@@ -92,6 +95,9 @@ export class CompleteOnboardingDto {
 	@IsOptional()
 	@IsString({ message: "准备偏好必须是字符串" })
 	@IsNotEmpty({ message: "准备偏好不能为空" })
+	@IsIn(PREP_PREFERENCE_VALUES, {
+		message: "准备偏好必须是 cautious / balanced / proactive 之一",
+	})
 	prepPreference?: string;
 
 	@ApiPropertyOptional({

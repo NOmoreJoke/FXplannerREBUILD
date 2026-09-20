@@ -14,6 +14,58 @@
 
 const API_URL = process.env.API_URL ?? "http://localhost:4001";
 
+/** 连通性已检查（首次 api() 调用时探针一次，避免环境错配时逐用例报 fetch failed 噪声） */
+let apiReachabilityChecked = false;
+
+/** 首次造数前探针：后端不可达时直接给出可行动的诊断，而不是 N 条 fetch failed */
+async function ensureApiReachable(): Promise<void> {
+	if (apiReachabilityChecked) return;
+	apiReachabilityChecked = true;
+	try {
+		const res = await fetch(`${API_URL}/api/health`, {
+			signal: AbortSignal.timeout(5_000),
+		});
+		if (!res.ok) {
+			throw new Error(`HTTP ${res.status}`);
+		}
+	} catch (error) {
+		throw new Error(
+			`后端不可达：${API_URL}/api/health 探针失败（${error instanceof Error ? error.message : error}）。` +
+				`请确认服务已启动，且 API_URL/API_PORT 与实际端口一致（根 .env.local 的 API_PORT）。`,
+		);
+	}
+}
+
+/** auth Throttler 窗口 60s；触发 429 时等到窗口重置后重试（后端未注入 AUTH_THROTTLE_LIMIT 放大时的兑底） */
+const THROTTLE_RETRY_DELAY_MS = 61_000;
+
+/** 带退避的 fetch：429 等窗口重置重试一次；网络层失败给出可行动诊断 */
+async function fetchWithBackoff(
+	path: string,
+	init: RequestInit,
+): Promise<Response> {
+	let res: Response;
+	try {
+		res = await fetch(`${API_URL}${path}`, init);
+	} catch (error) {
+		throw new Error(
+			`后端连接失败：${API_URL}${path}（${error instanceof Error ? error.message : error}）。` +
+				`请检查后端是否存活、API_URL/API_PORT 是否与实际端口一致。`,
+		);
+	}
+	if (res.status === 429) {
+		console.warn(
+			`⏳ [api-seeder] ${path} 触发 429 限流，等待 ${THROTTLE_RETRY_DELAY_MS / 1000}s 窗口重置后重试一次` +
+				`（长期方案：后端以 AUTH_THROTTLE_LIMIT 放大启动，见 services/chat/.env.local.example）`,
+		);
+		await new Promise((resolve) =>
+			setTimeout(resolve, THROTTLE_RETRY_DELAY_MS),
+		);
+		res = await fetch(`${API_URL}${path}`, init);
+	}
+	return res;
+}
+
 /** 前端登录态 cookie 名（与 clients/chat-web/lib/auth/token.ts 唯一事实来源一致） */
 export const ACCESS_TOKEN_COOKIE = "accessToken";
 
@@ -57,17 +109,19 @@ function nowIso(): string {
 const PLAN_EXPECT_USE_DATE = "2030-02-15T00:00:00.000Z";
 const PLAN_START_DATE = "2030-01-01T00:00:00.000Z";
 
-async function api<T>(
+/** HTTP 请求封装（success 包装校验；报告等模块 seeder 复用；含探针与 429 退避） */
+export async function api<T>(
 	path: string,
 	init: { method: string; token?: string; body?: unknown },
 ): Promise<T> {
+	await ensureApiReachable();
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
 	};
 	if (init.token) {
 		headers.Authorization = `Bearer ${init.token}`;
 	}
-	const res = await fetch(`${API_URL}${path}`, {
+	const res = await fetchWithBackoff(path, {
 		method: init.method,
 		headers,
 		body: init.body === undefined ? undefined : JSON.stringify(init.body),
@@ -212,6 +266,23 @@ export async function seedAccountScenario(
 	};
 }
 
+/** 记录一笔使用（M7：POST /api/plans/:id/usages；汇率 1 造数下成本 = 金额），返回使用记录 */
+export async function seedUsage(
+	token: string,
+	planId: string,
+	amount: string,
+): Promise<{ id: string; cost: string }> {
+	const data = await api<{ id: string; cost: string }>(
+		`/api/plans/${planId}/usages`,
+		{
+			method: "POST",
+			token,
+			body: { amount, usedAt: nowIso() },
+		},
+	);
+	return data;
+}
+
 /** 将 accessToken 注入浏览器上下文（前端以 cookie 为唯一登录态事实来源） */
 export async function injectLoginCookie(
 	context: BrowserContext,
@@ -237,4 +308,64 @@ export async function injectLoginCookie(
 			sameSite: "Lax",
 		},
 	]);
+}
+
+// ---------------------------------------------------------------------------
+// 提醒域造数（changes/reminders：M9 提醒与到期处理）
+// ---------------------------------------------------------------------------
+
+/** UTC+8 业务日「今天」的 0 点（UTC 标尺时刻；与后端 reminder-rules.utcPlus8Midnight 同口径） */
+function bizTodayUtcStart(): Date {
+	const shifted = new Date(Date.now() + 8 * 3_600_000);
+	return new Date(
+		Date.UTC(
+			shifted.getUTCFullYear(),
+			shifted.getUTCMonth(),
+			shifted.getUTCDate(),
+		),
+	);
+}
+
+/** 业务今天（UTC+8）是否工作日（E2E 首批节点命中今天的前提；周末跳过用例） */
+export function isBizTodayWorkday(): boolean {
+	const day = bizTodayUtcStart().getUTCDay();
+	return day !== 0 && day !== 6;
+}
+
+/** from（00:00Z）之后第 n 个工作日的 00:00Z */
+function addWorkdaysUtc(from: Date, n: number): Date {
+	const day = new Date(from);
+	let left = n;
+	while (left > 0) {
+		day.setUTCDate(day.getUTCDate() + 1);
+		if (day.getUTCDay() !== 0 && day.getUTCDay() !== 6) left--;
+	}
+	return day;
+}
+
+/**
+ * 创建「首个准备节点命中业务今天」的计划（POST /api/plans，allocatedAmount=0 不占余额）：
+ * startDate = 业务今天 → 服务端排期首批 = 今天 → 打开首页即触发 PREP_DUE 提醒。
+ * 返回计划 id。
+ */
+export async function seedPlanDueToday(
+	token: string,
+	targetCurrency = "USD",
+	targetAmount = "10000",
+): Promise<string> {
+	const today = bizTodayUtcStart();
+	const data = await api<{ id: string }>("/api/plans", {
+		method: "POST",
+		token,
+		body: {
+			targetCurrency,
+			targetAmount,
+			expectUseDate: addWorkdaysUtc(today, 8).toISOString(),
+			prepLeadDays: 3,
+			pacePreference: "balanced",
+			startDate: today.toISOString(),
+			allocatedAmount: "0",
+		},
+	});
+	return data.id;
 }

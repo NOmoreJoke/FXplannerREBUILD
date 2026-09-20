@@ -53,6 +53,8 @@ model OtpChallenge {
   id         String    @id @default(cuid())
   channel    String
   target     String
+  /// 验证码用途（account-data 技术方案 §3.4）：登录/导出/清空/注销分别验证，互相不能顶用
+  purpose    String    @default("LOGIN")
   codeHash   String    @map("code_hash")
   expiresAt  DateTime  @map("expires_at")
   attempts   Int       @default(0)
@@ -298,6 +300,8 @@ model UsageRecord {
   currencyCode String   @map("currency_code")
   amount       Decimal  @db.Decimal(20, 4)
   usedAt       DateTime @map("used_at")
+  /// 备注（M7 增量：可空，无默认值，兼容存量；≤ 200 字符由业务层校验）
+  remark       String?
   version      Int      @default(1)
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
@@ -342,17 +346,20 @@ model Correction {
 
 /// 站内提醒（同计划同日合并防打扰：userId + dedupKey + scheduledFor 唯一）
 model Reminder {
-  id           String   @id @default(cuid())
-  userId       String   @map("user_id")
+  id           String    @id @default(cuid())
+  userId       String    @map("user_id")
   type         String
-  planId       String?  @map("plan_id")
-  dedupKey     String   @map("dedup_key")
-  scheduledFor DateTime @map("scheduled_for")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId       String?   @map("plan_id")
+  dedupKey     String    @map("dedup_key")
+  scheduledFor DateTime  @map("scheduled_for")
+  /// 已读时间（M9：null = 未读；读时派生 matters，行仅承载「何时该提醒 + 是否已读」）
+  readAt       DateTime? @map("read_at") @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, dedupKey, scheduledFor])
+  @@index([userId, scheduledFor])
   @@map("reminders")
 }
 
@@ -366,9 +373,16 @@ model DataRequest {
   dueAt             DateTime  @map("due_at")
   downloadExpiresAt DateTime? @map("download_expires_at")
   fileUrl           String?   @map("file_url")
+  /// 验证凭证一次性绑定（account-data 技术方案 §3.4）：指向已消费的 OtpChallenge，
+  /// unique 保证「提交后本次验证立即失效」，重放被唯一约束拒绝
+  verifiedChallengeId String?   @unique @map("verified_challenge_id")
+  /// 终态时间戳（COMPLETED 完成时刻；读时推进/导出生成的审计与进度展示）
+  processedAt       DateTime? @map("processed_at") @db.Timestamptz(3)
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")
   user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  /// 同时服务互斥查询、锁守卫查询与「查当前请求」，避免每请求多索引开销
+  @@index([userId, status])
   @@map("data_requests")
 }

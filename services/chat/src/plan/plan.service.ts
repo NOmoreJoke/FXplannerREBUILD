@@ -8,6 +8,7 @@ import { getCurrency } from "@fxplanner-new/money";
 import type { Plan, PlanAllocation } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
 import type {
 	AdjustPreviewDto,
 	AdjustPreviewResultDto,
@@ -49,6 +50,7 @@ import {
 	type AdjustPreviewStateSnapshot,
 	type ComputeAdjustPreviewInput,
 } from "./plan-calculator";
+import { computeFundStatus } from "../usage/usage-calculator";
 
 /**
  * 模块错误（错误响应统一 { code, message }，风格与 onboarding 模块一致）。
@@ -199,6 +201,18 @@ export class PlanService {
 	 * ④ 3 条 PlanInstallment；任一失败全部回滚。
 	 */
 	async create(userId: string, dto: CreatePlanDto): Promise<PlanDto> {
+		// BE-03 防线：与 reminder/settings/data-request 的 409 ONBOARDING_NOT_COMPLETED
+		// 一致——未建账（无 UserSettings）不允许建计划；错误体附 /onboarding 引导。
+		// preview 不拦（无副作用计算）；adjust/complete/cancel 前置已含计划归属 404。
+		const settings = await this.prisma.userSettings.findUnique({
+			where: { userId },
+			select: { userId: true },
+		});
+		if (!settings) {
+			throw new OnboardingNotCompletedException(
+				"尚未完成首次设置，请先前往 /onboarding 完成建账后再创建计划",
+			);
+		}
 		const params = this.parsePlanParams(dto);
 		const allocatedAmount =
 			dto.allocatedAmount !== undefined && dto.allocatedAmount !== null
@@ -367,6 +381,13 @@ export class PlanService {
 		]);
 		const usedAmount = allocation?.usedAmount ?? new Prisma.Decimal(0);
 		const allocatedAmount = allocation?.amount ?? new Prisma.Decimal(0);
+		// 派生量与资金状态（§3.4 口径唯一）：stillNeeded 复用 computeDerived、
+		// fundStatus 复用 usage-calculator.computeFundStatus，禁止另行实现公式
+		const derived = computeDerived({
+			targetAmount: plan.targetAmount,
+			usedAmount,
+			allocatedAmount,
+		});
 
 		// canComplete（§4.2）：仅 ACTIVE 且通过完成前置校验（checkCompleteReady：无超用 + 已用=目标 + 剩余分配=0）
 		let canComplete = false;
@@ -413,6 +434,8 @@ export class PlanService {
 				amount: installment.amount.toFixed(4),
 			})),
 			changeLogs: changeLogs.map((log) => this.toChangeLogDto(log)),
+			stillNeeded: derived.stillNeeded.toFixed(4),
+			fundStatus: computeFundStatus(derived),
 			canModify: plan.status === "ACTIVE",
 			canCancel: plan.status === "ACTIVE",
 			canComplete,

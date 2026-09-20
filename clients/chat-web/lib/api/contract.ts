@@ -187,6 +187,26 @@ export type AdjustCaps = Schemas["AdjustCapsDto"];
 /** 计划模块错误码（400/404/409 响应体的 code 枚举，前端据此分支提示） */
 export type PlanErrorCode = Schemas["PlanErrorDto"]["code"];
 
+// ---------------------------------------------------------------------------
+// 资金使用（usage-recording M7）：后端 UsageModule 已落地，
+// 类型经 bun run generate:api 生成后在此别名。
+// ---------------------------------------------------------------------------
+
+/** 记录使用入参（POST /plans/:id/usages；金额字符串、日期 ISO、备注可选） */
+export type CreateUsageReq = Schemas["CreateUsageDto"];
+
+/** 单条使用记录（含本笔 FIFO 使用成本与 version，M8 更正预留恒 1） */
+export type UsageRecord = Schemas["UsageDto"];
+
+/** 使用记录列表响应（GET /plans/:id/usages 的 data：{ items }） */
+export type UsageListResp = Schemas["UsageListRespDto"];
+
+/** 计划资金面快照（记录使用成功后返回，含 fundStatus/canComplete） */
+export type PlanFundSummary = Schemas["PlanFundSummaryDto"];
+
+/** 资金状态（服务端计算：准备中/资金已备齐/资金已使用完成） */
+export type FundStatus = Schemas["PlanFundSummaryDto"]["fundStatus"];
+
 /** 计划详情（后端 PlanDto，POST /plans 的 data） */
 export type PlanDto = {
 	/** 计划 ID（cuid） */
@@ -214,3 +234,113 @@ export type PlanDto = {
 	/** 3 条分批排期 */
 	installments: PlanInstallment[];
 };
+
+// ---------------------------------------------------------------------------
+// 站内提醒（reminders）：后端 ReminderModule 已落地（GET /reminders、
+// POST /reminders/:id/read、POST /reminders/read-all），
+// 类型经 bun run generate:api 生成后在此别名。
+// ---------------------------------------------------------------------------
+
+/** 提醒列表视图（后端 RemindersViewDto，GET /reminders 的 data；入口内置读时懒生成） */
+export type RemindersView = Schemas["RemindersViewDto"];
+
+/** 提醒列表项（后端 ReminderItemDto；matters 为读时派生的事项数组） */
+export type ReminderItem = Schemas["ReminderItemDto"];
+
+/** 提醒事项（后端 ReminderMatterDto；同计划同日合并后可并列多条） */
+export type ReminderMatter = Schemas["ReminderMatterDto"];
+
+/** 单条已读结果（后端 ReminderReadResultDto，幂等返回既有 readAt） */
+export type ReminderReadResult = Schemas["ReminderReadResultDto"];
+
+/** 全部已读结果（后端 ReminderReadAllResultDto） */
+export type ReminderReadAllResult = Schemas["ReminderReadAllResultDto"];
+
+// ---------------------------------------------------------------------------
+// 成本摘要与报告（reports M10）：后端 ReportModule 已落地，
+// 类型经 bun run generate:api 生成后在此别名（reports 技术方案 §5/§6）。
+// ---------------------------------------------------------------------------
+
+/** 报告中心列表项（GET /reports/plans 出参 items 元素；金额 4 位字符串、均价 8 位字符串） */
+export type ReportPlanListItem = Schemas["ReportPlanListItemDto"];
+
+/** 报告中心列表响应 data（GET /reports/plans 的 data：baseCurrency + items） */
+export type ReportPlanList = Schemas["ReportPlanListDto"];
+
+/** 报告列表状态筛选值（GET /reports/plans?status=；缺省全部） */
+export type ReportListStatus = Schemas["ReportPlanListItemDto"]["status"];
+
+/** 单计划报告（GET /reports/plans/:id 的 data；页面摘要与打印视图共用数据源） */
+export type PlanReport = Schemas["PlanReportDto"];
+
+/** 报告模块错误码（400 INVALID_REPORT_PARAMS / 404 PLAN_NOT_FOUND） */
+export type ReportErrorCode = Schemas["ReportErrorDto"]["code"];
+
+// ---------------------------------------------------------------------------
+// 更正与日志（corrections M8）：后端 CorrectionModule 已落地，
+// 类型经 bun run generate:api 生成后在此别名（corrections 技术方案 §6）。
+// ---------------------------------------------------------------------------
+
+/** 更正目标类型（TRANSACTION / USAGE / INITIAL_HOLDING；USAGE 依赖 M7，落地前 400 降级） */
+export type CorrectionTargetType =
+	Schemas["CorrectionRequestDto"]["targetType"];
+
+/** 影响预览 / 提交更正请求体（同构；apply 透传 baseVersion/baseUpdatedAt 做乐观校验） */
+export type CorrectionRequest = Schemas["CorrectionRequestDto"];
+
+/** 拟变更集合（缺省字段 = 不修改；feeAmount 显式 null = 改回「未知」） */
+export type CorrectionChanges = Schemas["CorrectionChangesDto"];
+
+/** 影响预览结果（前后对比 + 余额/分配/成本影响 + blockers 拦截明细） */
+export type CorrectionPreview = Schemas["CorrectionPreviewDto"];
+
+/** 提交更正结果（correctionId + 目标新版本号） */
+export type CorrectionApplyResult = Schemas["CorrectionApplyResultDto"];
+
+/** 修改记录条目（含 APPLIED 与 FAILED；FAILED 附 failReason） */
+export type CorrectionLogItem = Schemas["CorrectionDto"];
+
+/** 修改记录列表（createdAt 倒序分页） */
+export type CorrectionLogList = Schemas["CorrectionListDto"];
+
+/** 更正目标当前内容（更正页表单初值与乐观校验基准） */
+export type CorrectionTarget = Schemas["CorrectionTargetDto"];
+
+/** 更正模块错误码（400/404/409 响应体的 code 枚举） */
+export type CorrectionErrorCode = Schemas["CorrectionErrorDto"]["code"];
+
+/** 拦截项（blockers 元素；非空 = 不能提交） */
+export type CorrectionBlocker = Schemas["CorrectionBlockerDto"];
+
+/** 拦截明细（缺口日期/金额、受影响计划） */
+export type CorrectionBlockerDetail = Schemas["CorrectionBlockerDetailDto"];
+
+/** 逐字段前后对比项 */
+export type CorrectionDiffItem = Schemas["CorrectionDiffItemDto"];
+
+// ---------------------------------------------------------------------------
+// 账号与数据（account-data）：后端 DataRequest 模块已落地，
+// 类型经 bun run generate:api 生成后在此别名。
+// ---------------------------------------------------------------------------
+
+/** 数据请求类型（后端 CreateDataRequestDto.type） */
+export type DataRequestType = Schemas["CreateDataRequestDto"]["type"];
+
+/** 数据请求视图（后端 DataRequestViewDto，进度页/设置页统一展示模型） */
+export type DataRequestView = Schemas["DataRequestViewDto"];
+
+/** 数据请求展示状态（后端 DataRequestViewDto.displayStatus） */
+export type DataRequestDisplayStatus =
+	Schemas["DataRequestViewDto"]["displayStatus"];
+
+/** 清空影响视图（后端 ImpactViewDto，CLEAR 确认页） */
+export type ImpactView = Schemas["ImpactViewDto"];
+
+/** 确认页记录数量快照（后端 ImpactTotalsDto） */
+export type ImpactTotals = Schemas["ImpactTotalsDto"];
+
+/** 数据操作验证结果（后端 VerifyResultDto：凭证 + 10 分钟确认截止） */
+export type DataRequestVerifyResult = Schemas["VerifyResultDto"];
+
+/** 数据操作验证用途（LOGIN 不放行数据请求） */
+export type DataRequestPurpose = Schemas["VerifyDataRequestDto"]["purpose"];

@@ -15,6 +15,7 @@ import {
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
+import { ensureOnboarded } from "../helpers/onboarding-helper";
 import {
 	ensureAccount,
 	seedPlanWithAllocation,
@@ -53,6 +54,7 @@ describe("AccountController（接口）", () => {
 	let userOld: TestUser; // 回填前旧数据模拟用户
 	let userLedger: TestUser; // 流水用户（3 天前 + 昨天）
 	let userOther: TestUser; // 他人账户越权探测用户（无任何账户）
+	let userUsage: TestUser; // M7 流水成本用户（2 笔 CAD 买入 + 一笔使用）
 	let planAllocId = ""; // #4/#5 直插的超量分配计划（#5 取消时用）
 	const userIds: string[] = [];
 
@@ -96,6 +98,7 @@ describe("AccountController（接口）", () => {
 		userOld = await createTestUser(app, "acct-old");
 		userLedger = await createTestUser(app, "acct-ledger");
 		userOther = await createTestUser(app, "acct-other");
+		userUsage = await createTestUser(app, "acct-usage");
 		userIds.push(
 			userMain.userId,
 			userAlloc.userId,
@@ -103,7 +106,20 @@ describe("AccountController（接口）", () => {
 			userOld.userId,
 			userLedger.userId,
 			userOther.userId,
+			userUsage.userId,
 		);
+		// BE-03：经 API 造交易需已建账，否则写入口 409 ONBOARDING_NOT_COMPLETED。
+		// userOther 例外：保持无 settings/无账户（#2 空列表、#14 越权 404 语义依赖）
+		for (const user of [
+			userMain,
+			userAlloc,
+			userCost,
+			userOld,
+			userLedger,
+			userUsage,
+		]) {
+			await ensureOnboarded(ctx.prisma, user.userId);
+		}
 
 		// #9 详情成本造数：2 笔 CAD 买入，成本均可复算
 		// 第一笔：本金 10600 + 手续费 20，数量 10620（汇率按填法 B 反算 8 位舍入）
@@ -130,7 +146,7 @@ describe("AccountController（接口）", () => {
 			).toISOString(),
 		}).expect(201);
 		await postTx(userLedger, simpleBody("CAD", "2000")).expect(201); // fee 缺省 = 未知
-	});
+	}, 120_000); // 造数用户多（7 用户建账 + 多笔交易），放宽 hook 超时
 
 	afterAll(async () => {
 		for (const userId of userIds) {
@@ -159,7 +175,7 @@ describe("AccountController（接口）", () => {
 		await postTx(userMain, simpleBody("USD", "1000")).expect(201);
 
 		const res = await getAccounts(userMain).expect(200);
-		expect(res.body.data.baseCurrency).toBeNull(); // 未建 settings
+		expect(res.body.data.baseCurrency).toBe("CNY"); // settings 已由 ensureOnboarded 建
 		expect(res.body.data.accounts).toEqual([
 			{
 				currencyCode: "CAD",
@@ -221,7 +237,7 @@ describe("AccountController（接口）", () => {
 
 	it("#9 详情成本可复算：remainingTotalCost=18420、averageUnitCost=1（8 位）", async () => {
 		const res = await getDetail(userCost, "CAD").expect(200);
-		expect(res.body.data.baseCurrency).toBeNull();
+		expect(res.body.data.baseCurrency).toBe("CNY"); // settings 已由 ensureOnboarded 建
 		expect(res.body.data.currencyCode).toBe("CAD");
 		expect(res.body.data.balance).toBe("18420.0000"); // 10620 + 7800
 		expect(res.body.data.allocatedAmount).toBe("0.0000");
@@ -269,7 +285,7 @@ describe("AccountController（接口）", () => {
 
 	it("#12 流水混合买入：occurredAt 倒序、type/feeKnown/version 字段正确", async () => {
 		const res = await getLedger(userLedger, "CAD").expect(200);
-		expect(res.body.data.baseCurrency).toBeNull();
+		expect(res.body.data.baseCurrency).toBe("CNY"); // settings 已由 ensureOnboarded 建
 		expect(res.body.data.items).toHaveLength(2);
 
 		const [latest, earliest] = res.body.data.items;
@@ -304,5 +320,43 @@ describe("AccountController（接口）", () => {
 		// userCost 建有 CAD 账户；userOther 无任何账户
 		const res = await getDetail(userOther, "CAD").expect(404);
 		expect(res.body.code).toBe("ACCOUNT_NOT_FOUND");
+	});
+
+	it("#15 M7 使用行成本：USAGE 行 totalCost = FIFO 聚合成本（不再为 null）", async () => {
+		// 独立用户避免干扰 #12/#13 的流水断言：买 1,020（fee 20 → totalCost 1,020，unitCost = 1）
+		// + 2,000（unitCost 1）→ 两批同价，使用 1,500 成本 1,500.0000
+		await postTx(userUsage, {
+			currencyCode: "CAD",
+			principalAmount: "1000.00",
+			exchangeRate: "0.98039216", // 填法 B：impliedRate(1000, 1020) 8 位舍入，双向自洽
+			quantity: "1020.00",
+			feeAmount: "20.00",
+			transactedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+		}).expect(201);
+		await postTx(userUsage, simpleBody("CAD", "2000")).expect(201);
+		const planId = await seedPlanWithAllocation(ctx.prisma, userUsage.userId, {
+			targetCurrency: "CAD",
+			targetAmount: "2000",
+			allocatedAmount: "2000",
+		});
+		// 使用 1,500：FIFO 先耗 1,020@1 = 1,020 + 480@1 = 480 → 1,500
+		await request(app.getHttpServer())
+			.post(`/api/plans/${planId}/usages`)
+			.set(bearer(userUsage.accessToken))
+			.send({
+				amount: "1500",
+				usedAt: new Date().toISOString(),
+			})
+			.expect(201);
+
+		const res = await getLedger(userUsage, "CAD").expect(200);
+		const usageRow = res.body.data.items.find(
+			(item: { type: string }) => item.type === "USAGE",
+		);
+		expect(usageRow).toBeDefined();
+		expect(usageRow.quantity).toBe("1500.0000");
+		expect(usageRow.totalCost).toBe("1500.0000"); // §3.5 遗留落地：M7 起填实（两批同价 unitCost 1）
+		expect(usageRow.feeKnown).toBe(true);
+		expect(usageRow.version).toBe(1);
 	});
 });

@@ -23,6 +23,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  ├─ login/  register/          #   认证页
 │  │  └─ (protected)/               #   保护区（守卫在组内 layout.tsx）
 │  │     ├─ plans/                  #     换汇计划（new/ 创建、page 列表、[id]/ 详情）
+│  │     ├─ corrections/            #     更正与日志（new/ 更正页，targetType/targetId 由查询参数进入）
 │  │     └─ projects/               #     示例业务页
 │  ├─ components/
 │  │  ├─ ui/                        # shadcn 原语

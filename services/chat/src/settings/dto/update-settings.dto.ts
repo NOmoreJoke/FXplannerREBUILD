@@ -10,6 +10,19 @@ import { IsBoolean, IsIn, IsOptional } from "class-validator";
  * 静默剥离——含 baseCurrency 的请求剥后为空，由 service 空校验 400 拦截。
  */
 
+/**
+ * 准备偏好合法值集（prep 域唯一事实来源，拍板口径「后端合并值集」）。
+ * settings PATCH 校验、GET 视图标注与 onboarding CompleteOnboardingDto 的 @IsIn
+ * 均引用此常量；前端值集由 OpenAPI 生成类型（schema.gen）拉齐，禁止另写字面量。
+ */
+export const PREP_PREFERENCE_VALUES = [
+	"cautious",
+	"balanced",
+	"proactive",
+] as const;
+
+export type PrepPreference = (typeof PREP_PREFERENCE_VALUES)[number];
+
 /** PATCH /api/settings 请求体：偏好白名单四字段，全部可选（至少一项，全空 400） */
 export class UpdateSettingsDto {
 	@ApiPropertyOptional({
@@ -35,11 +48,11 @@ export class UpdateSettingsDto {
 	@ApiPropertyOptional({
 		description: "换汇准备偏好",
 		example: "balanced",
-		enum: ["cautious", "balanced", "proactive"],
+		enum: [...PREP_PREFERENCE_VALUES],
 		type: String,
 	})
 	@IsOptional()
-	@IsIn(["cautious", "balanced", "proactive"], {
+	@IsIn(PREP_PREFERENCE_VALUES, {
 		message: "准备偏好必须是 cautious / balanced / proactive 之一",
 	})
 	prepPreference?: string;
@@ -81,7 +94,7 @@ export class SettingsViewDto {
 	@ApiProperty({
 		description: "换汇准备偏好",
 		example: "balanced",
-		enum: ["cautious", "balanced", "proactive"],
+		enum: [...PREP_PREFERENCE_VALUES],
 		type: String,
 	})
 	prepPreference!: string;

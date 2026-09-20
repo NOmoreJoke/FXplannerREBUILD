@@ -143,16 +143,19 @@ export interface LedgerSortable {
 }
 
 /**
- * 跨源流水合并（§3.6）：PURCHASE 与 USAGE（以及未来 INITIAL）行合并后按
+ * 跨源流水合并（§3.6）：PURCHASE 与 USAGE 与 INITIAL 行合并后按
  * occurredAt 倒序、同刻按 createdAt 倒序稳定排列。
  * ⚠️ 展示顺序不是 FIFO 成本计算顺序（doc 02 的重算顺序仅用于成本核算，页面不承担该语义）。
  * 排序键剥离由调用方完成（service 映射出参时去掉 createdAt）；空输入返回空数组。
+ * initials 为可选第三参（M8 起流水含初始持仓行，方案 §7「账户流水初始持仓行更正入口」）：
+ * 缺省空数组，既有调用与排序语义零变化。
  */
 export function mergeLedgerItems<T extends LedgerSortable>(
 	purchases: T[],
 	usages: T[],
+	initials: T[] = [],
 ): T[] {
-	return [...purchases, ...usages].sort((a, b) => {
+	return [...purchases, ...usages, ...initials].sort((a, b) => {
 		const byOccurred = b.occurredAt.getTime() - a.occurredAt.getTime();
 		if (byOccurred !== 0) {
 			return byOccurred;

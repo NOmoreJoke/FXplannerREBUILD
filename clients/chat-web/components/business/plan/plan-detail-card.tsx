@@ -11,10 +11,14 @@ import {
 } from "@/components/business/plan/schedule-preview-card";
 
 /**
- * 换汇计划详情卡（changes/plan-management/技术方案.md §5.2 plan-detail-card）
+ * 换汇计划详情卡（changes/plan-management/技术方案.md §5.2 + usage-recording §3.4 双进度修正）
  *
- * 目标金额 / 累计已使用 / 分配总额 / 计划剩余分配 / 资金缺口 /
- * 最晚准备日期 + 准备节点进度展示；gap = 0 即「钱已备齐」。
+ * 目标金额 / 累计已使用 / 还需使用 / 分配总额 / 计划剩余分配 / 资金缺口 /
+ * 最晚准备日期 + 准备节点进度展示。
+ * 双进度（需求 §6.4：钱准备好了不等于已经花完）：
+ * - 准备进度 =（目标 − 缺口）/ 目标（缺口为 0 即「资金已备齐」）；
+ * - 使用进度 = 累计已使用 / 目标。
+ * fundStatus 徽标由服务端计算（PREPARING/READY/USED_UP），前端只展示。
  * 纯受控组件：只读展示 PlanDetail，操作按钮由页面按 canXxx 装配。
  */
 
@@ -25,15 +29,26 @@ const PACE_LABEL: Record<PacePreference, string> = {
 	aggressive: "主动",
 };
 
+/** 资金状态徽标文案（官方术语，服务端 fundStatus 唯一口径） */
+const FUND_STATUS_LABEL: Record<PlanDetail["fundStatus"], string> = {
+	PREPARING: "准备中",
+	READY: "资金已备齐",
+	USED_UP: "资金已使用完成",
+};
+
 export function PlanDetailCard({ plan }: { plan: PlanDetail }) {
-	// 准备进度 = 累计已使用 / 目标金额（服务端金额为字符串，这里仅展示层换算）
+	// 服务端金额为字符串，这里仅展示层换算；目标为 0 的防御分支不除零
 	const target = Number(plan.targetAmount);
+	const gap = Number(plan.gap);
 	const used = Number(plan.usedAmount);
-	const progressPercent =
-		Number.isFinite(target) && target > 0 && Number.isFinite(used)
-			? Math.min(100, Math.round((used / target) * 100))
+	const toPercent = (value: number) =>
+		Number.isFinite(target) && target > 0 && Number.isFinite(value)
+			? Math.min(100, Math.max(0, Math.round((value / target) * 100)))
 			: 0;
-	const isPrepared = Number(plan.gap) === 0;
+	// 准备进度 =（目标 − 缺口）/ 目标；使用进度 = 累计已使用 / 目标（修正：两条进度各归各位）
+	const preparedPercent = toPercent(target - gap);
+	const usedPercent = toPercent(used);
+	const isActive = plan.status === "ACTIVE";
 
 	return (
 		<div className="space-y-6">
@@ -50,22 +65,42 @@ export function PlanDetailCard({ plan }: { plan: PlanDetail }) {
 							个工作日
 						</p>
 					</div>
-					{isPrepared && plan.status === "ACTIVE" ? (
-						<Badge className="border-mint-200 bg-mint-50 text-mint-700">
-							钱已备齐
+					{isActive ? (
+						<Badge
+							className={
+								plan.fundStatus === "PREPARING"
+									? "border-cream-300 bg-cream-100 text-foreground"
+									: "border-mint-200 bg-mint-50 text-mint-700"
+							}
+						>
+							{FUND_STATUS_LABEL[plan.fundStatus]}
 						</Badge>
 					) : null}
 				</div>
 
-				<div className="mt-5">
-					<div className="flex items-center justify-between text-xs text-muted-foreground">
-						<span>
-							准备进度：已使用 {formatDisplayAmount(plan.usedAmount)} / 目标{" "}
-							{formatDisplayAmount(plan.targetAmount)} {plan.targetCurrency}
-						</span>
-						<span>{progressPercent}%</span>
+				{/* 双进度：准备、使用分开显示 */}
+				<div className="mt-5 space-y-4">
+					<div>
+						<div className="flex items-center justify-between text-xs text-muted-foreground">
+							<span>
+								准备进度：已备齐{" "}
+								{formatDisplayAmount((target - gap).toFixed(4))} / 目标{" "}
+								{formatDisplayAmount(plan.targetAmount)} {plan.targetCurrency}
+							</span>
+							<span>{preparedPercent}%</span>
+						</div>
+						<Progress value={preparedPercent} className="mt-2 h-2" />
 					</div>
-					<Progress value={progressPercent} className="mt-2 h-2" />
+					<div>
+						<div className="flex items-center justify-between text-xs text-muted-foreground">
+							<span>
+								使用进度：已使用 {formatDisplayAmount(plan.usedAmount)} / 目标{" "}
+								{formatDisplayAmount(plan.targetAmount)} {plan.targetCurrency}
+							</span>
+							<span>{usedPercent}%</span>
+						</div>
+						<Progress value={usedPercent} className="mt-2 h-2" />
+					</div>
 				</div>
 
 				<dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-4 md:grid-cols-4">
@@ -80,6 +115,11 @@ export function PlanDetailCard({ plan }: { plan: PlanDetail }) {
 						currency={plan.targetCurrency}
 					/>
 					<AmountCell
+						label="还需使用"
+						value={plan.stillNeeded}
+						currency={plan.targetCurrency}
+					/>
+					<AmountCell
 						label="分配总额"
 						value={plan.allocatedAmount}
 						currency={plan.targetCurrency}
@@ -91,25 +131,29 @@ export function PlanDetailCard({ plan }: { plan: PlanDetail }) {
 					/>
 				</dl>
 
-				<div
-					className={`mt-5 rounded-xl px-4 py-3 text-sm ${
-						isPrepared
-							? "bg-mint-50 text-mint-700"
-							: "bg-cream-100 text-foreground"
-					}`}
-				>
-					{isPrepared ? (
-						<>钱已备齐：还需使用的资金已全部有分配。</>
-					) : (
-						<>
-							资金缺口{" "}
-							<span className="font-bold">
-								{formatDisplayAmount(plan.gap)} {plan.targetCurrency}
-							</span>
-							，按排期分批准备即可。
-						</>
-					)}
-				</div>
+				{isActive ? (
+					<div
+						className={`mt-5 rounded-xl px-4 py-3 text-sm ${
+							plan.fundStatus === "PREPARING"
+								? "bg-cream-100 text-foreground"
+								: "bg-mint-50 text-mint-700"
+						}`}
+					>
+						{plan.fundStatus === "READY" ? (
+							<>资金已备齐：还需使用的资金已全部有分配。</>
+						) : plan.fundStatus === "USED_UP" ? (
+							<>资金已使用完成：可进行完成确认，完成后计划数据不再变化。</>
+						) : (
+							<>
+								资金缺口{" "}
+								<span className="font-bold">
+									{formatDisplayAmount(plan.gap)} {plan.targetCurrency}
+								</span>
+								，按排期分批准备即可。
+							</>
+						)}
+					</div>
+				) : null}
 
 				<div className="mt-4 grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
 					<span>预计使用日期：{formatDisplayDate(plan.expectUseDate)}</span>
@@ -175,7 +219,7 @@ function AmountCell({
 
 /** 完成确认入口的就绪提示（详情页按 canComplete 显隐按钮时复用文案） */
 export function PlanCompleteHint({ plan }: { plan: PlanDetail }) {
-	if (Number(plan.gap) !== 0 || plan.usedAmount !== plan.targetAmount) {
+	if (!plan.canComplete) {
 		return null;
 	}
 	return (

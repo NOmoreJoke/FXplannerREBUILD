@@ -26,6 +26,7 @@ import {
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
+import { ensureOnboarded } from "../helpers/onboarding-helper";
 import {
 	cleanupPlanData,
 	createPlanViaApi,
@@ -114,6 +115,10 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 			userErr.userId,
 			userFresh.userId,
 		);
+		// BE-03：建计划/preview caps 需已建账，否则写入口 409 ONBOARDING_NOT_COMPLETED
+		for (const user of [userCaps, userCreate, userErr, userFresh]) {
+			await ensureOnboarded(ctx.prisma, user.userId);
+		}
 
 		// userCaps：USD 余额 10000、USD 计划分配 2500.1234；JPY 余额 800、JPY 计划分配 800
 		await ensureAccount(ctx.prisma, userCaps.userId, "USD", "10000");
@@ -374,6 +379,27 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 		}
 	});
 
+	it("值集回归（FE-03 根治）：pace 合法值 conservative/aggressive 预览排期均生成（节奏分批体现值集语义；值集单一来源后端 DTO）", async () => {
+		// conservative 首批 50%（25000）；aggressive 首批 20%（10000，零头入尾批）
+		const conservative = await postPreview(
+			userErr,
+			planBody({ pacePreference: "conservative" }),
+		).expect(200);
+		expect(conservative.body.data.installments[0]).toMatchObject({
+			seq: 1,
+			amount: "25000.0000",
+		});
+
+		const aggressive = await postPreview(
+			userErr,
+			planBody({ pacePreference: "aggressive" }),
+		).expect(200);
+		expect(aggressive.body.data.installments[0]).toMatchObject({
+			seq: 1,
+			amount: "10000.0000",
+		});
+	});
+
 	it("#12 DTO 层拒绝 JSON number：400 Bad Request 无模块 code", async () => {
 		const res = await postPreview(
 			userErr,
@@ -413,6 +439,7 @@ describe("PlanController（接口）—— M5 管理端点", () => {
 	async function newUser(label: string): Promise<TestUser> {
 		const user = await createTestUser(app, label);
 		userIds.push(user.userId);
+		await ensureOnboarded(ctx.prisma, user.userId);
 		await ensureAccount(ctx.prisma, user.userId, "USD", "1000000");
 		return user;
 	}

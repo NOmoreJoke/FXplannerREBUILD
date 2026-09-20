@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { PenLine } from "lucide-react";
 import type {
 	AccountLedgerItem,
 	AccountLedgerItemType,
@@ -91,6 +92,7 @@ function LedgerRow({ item }: { item: AccountLedgerItem }) {
 	const router = useRouter();
 	const badge = TYPE_BADGE[item.type];
 	const isPurchase = item.type === "PURCHASE";
+	const isInitial = item.type === "INITIAL";
 
 	// 行级跳转兜底：点击已落在首个单元格内的真实 <a> 上时交给原生导航，避免重复跳转
 	const onRowClick = (event: React.MouseEvent<HTMLTableRowElement>) => {
@@ -117,6 +119,17 @@ function LedgerRow({ item }: { item: AccountLedgerItem }) {
 						className="absolute inset-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
 					>
 						<span className="sr-only">查看买入详情</span>
+					</Link>
+				) : null}
+				{isInitial ? (
+					// 初始持仓更正入口（corrections M8）：账户流水初始持仓行「更正」
+					<Link
+						href={`/corrections/new?targetType=INITIAL_HOLDING&targetId=${item.id}`}
+						className="ml-2 inline-flex items-center gap-0.5 text-xs font-medium text-mint-700 hover:underline"
+						data-testid="initial-correction-entry"
+					>
+						<PenLine className="size-3" />
+						更正
 					</Link>
 				) : null}
 			</TableCell>

@@ -42,11 +42,19 @@ const LOCALE_OPTIONS = [
 	{ value: "en", label: "英文" },
 ] as const;
 
+/**
+ * 准备偏好选项（值集单一来源 = 后端 settings DTO @IsIn/OpenAPI 契约）。
+ * satisfies 锁定：后端值集变更 → 此处编译报错强制同步（FE-03 根治，防漂移）；
+ * label 为纯前端展示文案，不入契约。
+ */
 const PREP_PREFERENCE_OPTIONS = [
 	{ value: "cautious", label: "安心" },
 	{ value: "balanced", label: "均衡" },
 	{ value: "proactive", label: "主动" },
-] as const;
+] as const satisfies readonly {
+	value: NonNullable<UpdateSettingsReq["prepPreference"]>;
+	label: string;
+}[];
 
 /** 可编辑表单值（与 PATCH 入参同形；枚举字面量取自生成契约，防漂移） */
 interface PreferencesFormState {
@@ -318,6 +326,10 @@ export function PreferencesForm() {
 						/>
 						准备提醒
 					</label>
+					{/* 开关说明（reminders §8：需求 §7.3 补充文案，逻辑不改） */}
+					<p className="ml-6 text-xs text-muted-foreground">
+						关闭后不再弹出准备提醒，仍可在计划页查看日期与进度。
+					</p>
 				</div>
 
 				<div className="mt-6 flex justify-end">

@@ -50,12 +50,9 @@ describe("OnboardingController（e2e）", () => {
 		ctx = await createTestApp((builder) =>
 			builder.overrideProvider(RateProvider).useFactory({
 				factory: (timeoutMs: number) =>
-					new RateProvider(
-						timeoutMs,
-						(async () => {
-							throw new Error("onboarding.spec: 未预期的汇率数据源外呼");
-						}) as unknown as typeof fetch,
-					),
+					new RateProvider(timeoutMs, (async () => {
+						throw new Error("onboarding.spec: 未预期的汇率数据源外呼");
+					}) as unknown as typeof fetch),
 				inject: [RATE_PROVIDER_TIMEOUT_TOKEN],
 			}),
 		);
@@ -66,7 +63,7 @@ describe("OnboardingController（e2e）", () => {
 
 	// 本文件新增：初始持仓/补录用例的测试用户与手工造数汇率行
 	const extraUserIds: string[] = [];
-	let createdRateIds: string[] = [];
+	const createdRateIds: string[] = [];
 
 	afterAll(async () => {
 		for (const id of extraUserIds) {
@@ -93,32 +90,6 @@ describe("OnboardingController（e2e）", () => {
 		});
 		createdRateIds.push(row.id);
 		return row;
-	}
-
-	/** 注册 + 条款确认 + 可选建账（含可选初始持仓），返回 userId */
-	async function setupUser(
-		label: string,
-		options: {
-			baseCurrency?: string;
-			holdings?: { currencyCode: string; amount: string }[];
-		} = {},
-	): Promise<string> {
-		const created = await createTestUser(app, label);
-		extraUserIds.push(created.userId);
-		await request(app.getHttpServer())
-			.post("/api/onboarding/consents")
-			.set(bearer(created.accessToken))
-			.send({ age18Confirmed: true, termsConfirmed: true })
-			.expect(201);
-		const res = await request(app.getHttpServer())
-			.post("/api/onboarding/complete")
-			.set(bearer(created.accessToken))
-			.send({
-				...wizard,
-				baseCurrency: options.baseCurrency ?? "CNY",
-				...(options.holdings ? { initialHoldings: options.holdings } : {}),
-			});
-		return created.userId;
 	}
 
 	it("未登录访问 status 应该 401", () => {
@@ -342,9 +313,7 @@ describe("OnboardingController（e2e）", () => {
 			.set(bearer(created.accessToken))
 			.send({
 				...wizard,
-				initialHoldings: [
-					{ currencyCode: "USD", amount: "100000000000" },
-				],
+				initialHoldings: [{ currencyCode: "USD", amount: "100000000000" }],
 			})
 			.expect(400);
 
@@ -425,7 +394,7 @@ describe("OnboardingController（e2e）", () => {
 			where: { userId: user.userId },
 		});
 		// baseCurrency 不变（本文件现有用例中该用户建账为 HKD）
-			expect(settings?.baseCurrency).toBe("HKD");
+		expect(settings?.baseCurrency).toBe("HKD");
 		const ledgerStartedAt = settings?.ledgerStartedAt?.toISOString();
 		expect(res.body.data.ledgerStartedAt).toBe(ledgerStartedAt);
 
@@ -434,7 +403,9 @@ describe("OnboardingController（e2e）", () => {
 		});
 		expect(lot?.acquiredAt.toISOString()).toBe(ledgerStartedAt);
 		const account = await ctx.prisma.account.findUnique({
-			where: { userId_currencyCode: { userId: user.userId, currencyCode: "EUR" } },
+			where: {
+				userId_currencyCode: { userId: user.userId, currencyCode: "EUR" },
+			},
 		});
 		expect(account?.balance.toFixed(4)).toBe("500.0000");
 
@@ -465,8 +436,44 @@ describe("OnboardingController（e2e）", () => {
 		});
 		expect(cadLot).toBeNull(); // 无部分成功
 		const cadAccount = await ctx.prisma.account.findUnique({
-			where: { userId_currencyCode: { userId: user.userId, currencyCode: "CAD" } },
+			where: {
+				userId_currencyCode: { userId: user.userId, currencyCode: "CAD" },
+			},
 		});
 		expect(cadAccount).toBeNull();
+	});
+
+	it("prepPreference 非法枚举 → 400 @IsIn（与 settings PATCH 同字段校验对称，N5 回归）", async () => {
+		const created = await createTestUser(app, "onb-prep-enum");
+		extraUserIds.push(created.userId);
+		await request(app.getHttpServer())
+			.post("/api/onboarding/consents")
+			.set(bearer(created.accessToken))
+			.send({ age18Confirmed: true, termsConfirmed: true })
+			.expect(201);
+
+		// 非法值（settings 侧枚举外）：拒绝且不落 settings
+		const bad = await request(app.getHttpServer())
+			.post("/api/onboarding/complete")
+			.set(bearer(created.accessToken))
+			.send({ ...wizard, prepPreference: "aggressive" })
+			.expect(400);
+		// DTO 层 ValidationPipe 拒绝（class-validator 格式，无业务 code）
+		expect(bad.body.statusCode).toBe(400);
+		expect(JSON.stringify(bad.body.message)).toMatch(
+			/cautious \/ balanced \/ proactive/,
+		);
+		const settingsAfterBad = await ctx.prisma.userSettings.findUnique({
+			where: { userId: created.userId },
+		});
+		expect(settingsAfterBad).toBeNull();
+
+		// 合法值放行且落库为传入值
+		const ok = await request(app.getHttpServer())
+			.post("/api/onboarding/complete")
+			.set(bearer(created.accessToken))
+			.send({ ...wizard, prepPreference: "cautious" })
+			.expect(201);
+		expect(ok.body.data.settings.prepPreference).toBe("cautious");
 	});
 });

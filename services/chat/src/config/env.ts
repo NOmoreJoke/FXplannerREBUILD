@@ -60,6 +60,9 @@ const schema = z
 		AUTH_THROTTLE_LIMIT: z.coerce.number().int().positive().optional(),
 		AUTH_OTP_THROTTLE_LIMIT: z.coerce.number().int().positive().optional(),
 		THROTTLE_GLOBAL_LIMIT: z.coerce.number().int().positive().optional(),
+		// ── 数据导出目录（account-data 技术方案 §3.1 决策二）──
+		// 导出 ZIP 落盘位置；未设置时回退 services/chat/data-exports（运行产物，已 gitignore）
+		DATA_EXPORT_DIR: optionalEnv(),
 		ALIYUN_ACCESS_KEY_ID: optionalEnv(),
 		ALIYUN_ACCESS_KEY_SECRET: optionalEnv(),
 		ALIYUN_SMS_SIGN_NAME: optionalEnv(),

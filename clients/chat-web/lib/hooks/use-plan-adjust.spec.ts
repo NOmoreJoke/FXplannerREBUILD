@@ -51,6 +51,8 @@ const planDetail: PlanDetail = {
 	usedAmount: "4000.0000",
 	allocatedAmount: "6000.0000",
 	remainingAllocation: "2000.0000",
+	stillNeeded: "6000.0000",
+	fundStatus: "PREPARING",
 	gap: "8000.0000",
 	latestPrepDate: "2027-07-28T00:00:00.000Z",
 	nextInstallmentAt: "2027-07-01T00:00:00.000Z",

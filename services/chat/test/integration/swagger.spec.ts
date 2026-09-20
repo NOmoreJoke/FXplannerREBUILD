@@ -51,8 +51,10 @@ describe("Swagger 接口说明", () => {
 		//   GET /api/accounts/:currencyCode/transactions
 		// + GET /api/home/portfolio（首页持仓成本聚合）
 		// + onboarding-rework 3 端点：POST /api/onboarding/initial-holdings（补录初始持仓）、
-		//   GET /api/settings、PATCH /api/settings（用户设置读写）= 31
-		expect(operations).toHaveLength(31);
+		//   GET /api/settings、PATCH /api/settings（用户设置读写）
+		// + 提醒 / 使用记录（M7）/ 更正（M8）/ 数据权利等模块端点（多模块并行追加，计数随模块合入递增）
+		// + M10 成本摘要与报告 2 端点：GET /api/reports/plans、GET /api/reports/plans/:id = 48
+		expect(operations).toHaveLength(48);
 		for (const { path, method, operation } of operations) {
 			expect(
 				operation.summary,

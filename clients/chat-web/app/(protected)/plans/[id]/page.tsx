@@ -13,6 +13,11 @@ import {
 	PlanDetailCard,
 } from "@/components/business/plan";
 import {
+	UsageRecordDialog,
+	UsageRecordList,
+} from "@/components/business/usage";
+import { PlanReportSection } from "@/components/business/report";
+import {
 	AlertDialog,
 	AlertDialogAction,
 	AlertDialogCancel,
@@ -26,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
 import { plansApi } from "@/lib/api/plans";
+import { usagesApi } from "@/lib/api/usages";
 import type { PlanDetail } from "@/lib/api/contract";
 
 /**
@@ -43,6 +49,11 @@ function planDetailKey(id: string) {
 	return ["plans", "detail", id] as const;
 }
 
+/** 使用记录列表查询 Key（M7 记账成功后失效刷新） */
+function usagesListKey(id: string) {
+	return ["usages", "list", id] as const;
+}
+
 export default function PlanDetailPage() {
 	const params = useParams<{ id: string }>();
 	const id = params?.id;
@@ -53,6 +64,15 @@ export default function PlanDetailPage() {
 		queryFn: () => plansApi.getDetail(id as string),
 		enabled: typeof id === "string" && id !== "",
 		retry: false, // 401 由 apiClient 统一跳登录；404 直接进提示态
+	});
+
+	// 使用记录列表（M7）；失败静默降级为空态（详情 404 已被上方拦截）。
+	// ⚠️ 必须在所有条件 return 之前调用（React Hooks 规则：hook 顺序恒定）
+	const usagesQuery = useQuery({
+		queryKey: usagesListKey(id as string),
+		queryFn: () => usagesApi.list(id as string),
+		enabled: typeof id === "string" && id !== "",
+		retry: false,
 	});
 
 	if (query.isLoading) {
@@ -95,6 +115,14 @@ export default function PlanDetailPage() {
 		return null; // 不可达：非 loading 非 error 时 data 必已就绪（类型收窄）
 	}
 
+	// 刷新：记账成功后失效详情 + 使用记录列表（M7）
+	const refreshAfterUsage = () => {
+		if (typeof id !== "string") return;
+		void queryClient.invalidateQueries({ queryKey: planDetailKey(id) });
+		void queryClient.invalidateQueries({ queryKey: ["plans", "list"] });
+		void queryClient.invalidateQueries({ queryKey: usagesListKey(id) });
+	};
+
 	return (
 		<div className="mx-auto max-w-3xl px-8 py-6">
 			<DetailHeader
@@ -105,10 +133,30 @@ export default function PlanDetailPage() {
 					void queryClient.invalidateQueries({ queryKey: ["plans", "list"] });
 				}}
 				onWriteFailed={() => void query.refetch()}
+				onUsageSaved={refreshAfterUsage}
 			/>
 
 			<PlanDetailCard plan={query.data} />
 			<PlanCompleteHint plan={query.data} />
+
+			{/* 使用记录（M7：日期/金额/备注/本笔成本，按使用日期由近到远） */}
+			<section className="mt-6 rounded-2xl border border-border bg-white p-6">
+				<h3 className="text-base font-bold text-foreground">使用记录</h3>
+				<p className="mt-1 text-xs text-muted-foreground">
+					按使用日期由近到远排列，成本按先进先出自动计算。
+				</p>
+				{usagesQuery.data ? (
+					<UsageRecordList
+						ledger={usagesQuery.data}
+						currencyCode={query.data.targetCurrency}
+					/>
+				) : (
+					<p className="mt-4 text-sm text-muted-foreground">加载中…</p>
+				)}
+			</section>
+
+			{/* 成本摘要（M10）：有使用显示成本/来源拆分/下载入口；无使用显示「尚未使用」 */}
+			<PlanReportSection planId={query.data.id} />
 
 			{/* 修改记录 */}
 			<section className="mt-6 rounded-2xl border border-border bg-white p-6">
@@ -133,16 +181,20 @@ function DetailHeader({
 	plan,
 	onApplied,
 	onWriteFailed,
+	onUsageSaved,
 }: {
 	plan: PlanDetail;
 	/** 写操作成功：回写详情缓存并失效列表 */
 	onApplied: (detail: PlanDetail) => void;
 	/** 写操作失败：状态可能已被并发操作改变，核对最新数据 */
 	onWriteFailed: () => void;
+	/** 记账成功（M7）：失效详情 + 使用记录列表 */
+	onUsageSaved: () => void;
 }) {
 	const [adjustOpen, setAdjustOpen] = useState(false);
 	const [completeOpen, setCompleteOpen] = useState(false);
 	const [cancelOpen, setCancelOpen] = useState(false);
+	const [usageOpen, setUsageOpen] = useState(false);
 
 	/** 写操作错误提示：ApiError 透出后端 message（官方术语文案），其余兜底 */
 	const writeError = (error: unknown, fallback: string) => {
@@ -189,6 +241,14 @@ function DetailHeader({
 					← 返回计划列表
 				</Link>
 				<div className="flex items-center gap-2">
+					{plan.canModify ? (
+						<Button
+							className="bg-mint-700 text-white hover:bg-mint-700/90"
+							onClick={() => setUsageOpen(true)}
+						>
+							记录使用
+						</Button>
+					) : null}
 					{plan.canModify ? (
 						<Button
 							asChild
@@ -238,6 +298,14 @@ function DetailHeader({
 					) : null}
 				</div>
 			</header>
+
+			{/* 记录使用：表单对话框（M7；成功后刷新详情与使用记录列表） */}
+			<UsageRecordDialog
+				plan={plan}
+				open={usageOpen}
+				onOpenChange={setUsageOpen}
+				onSuccess={() => onUsageSaved()}
+			/>
 
 			{/* 修改 / 重新开启：两段式对话框（预览 → 确认提交） */}
 			<PlanAdjustDialog

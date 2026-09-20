@@ -16,6 +16,7 @@ import {
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
+import { ensureOnboarded } from "../helpers/onboarding-helper";
 
 // 关闭全局接口限流：AppModule 以 { provide: APP_GUARD, useClass: ThrottlerGuard } 注册全局限流，
 // 但 Nest scanner 会把 APP_GUARD 的 token 改写为带 UUID 的内部 token（scanner.js insertProvider），
@@ -99,6 +100,10 @@ describe("TransactionController（接口）", () => {
 		userB = await createTestUser(app, "tx-b");
 		userC = await createTestUser(app, "tx-c");
 		userIds.push(userA.userId, userB.userId, userC.userId);
+		// BE-03：录交易需已建账，否则写入口 409 ONBOARDING_NOT_COMPLETED
+		for (const user of [userA, userB, userC]) {
+			await ensureOnboarded(ctx.prisma, user.userId);
+		}
 	});
 
 	afterAll(async () => {

@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { CircleAlert } from "lucide-react";
+import { CircleAlert, PenLine } from "lucide-react";
 import { getCurrencyName } from "@/lib/api/currencies";
 import type { TransactionDto } from "@/lib/api/contract";
+import { CorrectionHistoryList } from "@/components/business/correction";
 
 /**
  * 交易详情卡（changes/transaction-entry/技术方案.md §5.2 / §6）
@@ -11,6 +12,11 @@ import type { TransactionDto } from "@/lib/api/contract";
  * 纯展示组件：金额一律原样展示后端返回的 toFixed(4) / toFixed(8) 字符串，
  * 前端不做二次舍入。手续费未知时 feeAmount=null、totalCost=null、
  * feeKnown=false —— 显示「费用未明确」提示与「成本不完整」，绝不当 0 计算。
+ *
+ * 单位口径（FE-01 修复）：到账数量为买入外币（currencyCode）；本金/手续费/
+ * 交易总成本按后端契约（TransactionDto @description）一律为「本位币」，当前
+ * 系统本位币建账后锁定为 CNY（CompleteOnboardingDto），故标注 CNY；
+ * 若未来放开多本位币，需改为读用户 settings.baseCurrency。
  */
 
 export interface TransactionDetailProps {
@@ -34,9 +40,7 @@ export function TransactionDetail({ detail }: TransactionDetailProps) {
 				>
 					<CircleAlert className="mt-0.5 size-5 shrink-0 text-cream-300" />
 					<div>
-						<p className="text-sm font-semibold text-foreground">
-							费用未明确
-						</p>
+						<p className="text-sm font-semibold text-foreground">费用未明确</p>
 						<p className="mt-0.5 text-xs leading-5 text-ink-600">
 							本笔交易手续费未知（未知 ≠ 0），交易总成本不完整；
 							了解实际费用后可通过更正功能补录。
@@ -48,10 +52,20 @@ export function TransactionDetail({ detail }: TransactionDetailProps) {
 			<section className="rounded-2xl border border-border bg-white p-6">
 				<div className="flex items-start justify-between">
 					<h2 className="text-base font-bold text-foreground">买入详情</h2>
-					<span className="rounded-full bg-mint-50 px-3 py-1.5 text-xs font-medium text-mint-700">
-						{detail.currencyCode}
-						{currencyName ? ` · ${currencyName}` : ""}
-					</span>
+					<div className="flex items-center gap-2">
+						<span className="rounded-full bg-mint-50 px-3 py-1.5 text-xs font-medium text-mint-700">
+							{detail.currencyCode}
+							{currencyName ? ` · ${currencyName}` : ""}
+						</span>
+						<Link
+							href={`/corrections/new?targetType=TRANSACTION&targetId=${detail.id}`}
+							className="inline-flex items-center gap-1 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
+							data-testid="correction-entry"
+						>
+							<PenLine className="size-3.5" />
+							更正
+						</Link>
+					</div>
 				</div>
 
 				<dl className="mt-5 divide-y divide-border">
@@ -59,16 +73,13 @@ export function TransactionDetail({ detail }: TransactionDetailProps) {
 						label="到账数量"
 						value={`${detail.quantity} ${detail.currencyCode}`}
 					/>
-					<DetailRow
-						label="本金"
-						value={`${detail.principalAmount} ${detail.currencyCode}`}
-					/>
+					<DetailRow label="本金" value={`${detail.principalAmount} CNY`} />
 					<DetailRow
 						label="手续费"
 						value={
 							detail.feeAmount === null
 								? "未知（未明确，不当 0 计算）"
-								: `${detail.feeAmount} ${detail.currencyCode}`
+								: `${detail.feeAmount} CNY`
 						}
 						muted={detail.feeAmount === null}
 					/>
@@ -77,7 +88,7 @@ export function TransactionDetail({ detail }: TransactionDetailProps) {
 						value={
 							detail.totalCost === null
 								? "不完整（费用未明确）"
-								: `${detail.totalCost} ${detail.currencyCode}`
+								: `${detail.totalCost} CNY`
 						}
 						muted={detail.totalCost === null}
 					/>
@@ -92,13 +103,16 @@ export function TransactionDetail({ detail }: TransactionDetailProps) {
 					<DetailRow
 						label="关联计划"
 						value={
-							detail.planName ? (
+							detail.planName && detail.planId ? (
+								/* FE-02 修复：跳计划详情（原死链 /plans）；planId 缺失时降级纯文本 */
 								<Link
-									href={`/plans`}
+									href={`/plans/${detail.planId}`}
 									className="text-mint-700 hover:underline"
 								>
 									{detail.planName}
 								</Link>
+							) : detail.planName ? (
+								detail.planName
 							) : (
 								"未关联"
 							)
@@ -106,6 +120,14 @@ export function TransactionDetail({ detail }: TransactionDetailProps) {
 					/>
 					<DetailRow label="记录版本" value={`v${detail.version}`} />
 				</dl>
+			</section>
+
+			<section className="rounded-2xl border border-border bg-white p-6">
+				<h2 className="text-base font-bold text-foreground">修改记录</h2>
+				<p className="mb-4 mt-1 text-xs text-muted-foreground">
+					含失败的更正尝试；所有记录永久保留、不可删除。
+				</p>
+				<CorrectionHistoryList targetType="TRANSACTION" targetId={detail.id} />
 			</section>
 		</div>
 	);
@@ -125,9 +147,7 @@ function DetailRow({
 			<dt className="text-muted-foreground">{label}</dt>
 			<dd
 				className={
-					muted
-						? "font-medium text-ink-500"
-						: "font-semibold text-foreground"
+					muted ? "font-medium text-ink-500" : "font-semibold text-foreground"
 				}
 			>
 				{value}

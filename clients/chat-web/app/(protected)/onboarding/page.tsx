@@ -125,14 +125,17 @@ function OnboardingWizard() {
 		}
 	};
 
-	/** 补录模式：提交 saveInitialHoldings，成功回首页 */
+	/**
+	 * 补录模式：提交 saveInitialHoldings，成功回首页。
+	 * 用 replace 而非 push：避免返回键重入补录表单重复提交（同币种 409）。
+	 */
 	const handleBackfillSubmit = async (holdings: InitialHoldingItem[]) => {
 		setSubmitting(true);
 		try {
 			await onboardingApi.saveInitialHoldings({ holdings });
 			toast.success("初始持仓已入账");
 			invalidateHomeCaches();
-			router.push("/home");
+			router.replace("/home");
 		} catch (error) {
 			toast.error(
 				error instanceof ApiError ? error.message : "补录失败，请稍后重试",
@@ -181,7 +184,7 @@ function OnboardingWizard() {
 						补录初始持仓
 					</h1>
 					<p className="mt-1 text-sm text-muted-foreground">
-						以上是记账起点当日已持有的金额，按当前有效报价折算初始成本。
+						以下是记账起点当日已持有的金额，按当前有效报价折算初始成本。
 					</p>
 				</header>
 				<section className="rounded-2xl border border-border bg-white p-6">

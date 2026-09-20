@@ -814,3 +814,113 @@ describe("RateService", () => {
 		);
 	});
 });
+
+// ────────────────────────── findQuoteAt（corrections M8，方案 §5.3）──────────────────────────
+
+describe("RateService.findQuoteAt 原时点取价", () => {
+	const AT = new Date("2026-09-10T02:00:00.000Z"); // 原确认时点
+	const inWindow = (minutesAgo: number) =>
+		new Date(AT.getTime() - minutesAgo * 60_000);
+
+	function build() {
+		const prisma = {
+			exchangeRate: {
+				findFirst: vi.fn(),
+				findMany: vi.fn(),
+				upsert: vi.fn(),
+				createMany: vi.fn(),
+			},
+		};
+		const provider = {
+			fetchLatest: vi.fn(),
+			fetchLatestBatch: vi.fn(),
+			fetchHistory: vi.fn(),
+			sourceForPair: vi.fn(() => "frankfurter"),
+		};
+		const service = new RateService(
+			prisma as unknown as PrismaService,
+			provider as never,
+		);
+		return { service, prisma, provider };
+	}
+
+	const mkQuoteRow = (overrides: Record<string, unknown> = {}) => ({
+		base: "CNY",
+		quote: "USD",
+		rate: decimal("7.2480000000"),
+		sellRate: null,
+		source: "frankfurter",
+		observedAt: inWindow(3),
+		...overrides,
+	});
+
+	it("窗口 (at−5min, at] 内取 observedAt 最后一笔；sellRate 优先于 rate", async () => {
+		const { service, prisma } = build();
+		prisma.exchangeRate.findFirst.mockResolvedValue(
+			mkQuoteRow({
+				rate: decimal("7.2400000000"),
+				sellRate: decimal("7.2512300000"),
+				observedAt: inWindow(1),
+			}),
+		);
+
+		const quote = await service.findQuoteAt("CNY", "USD", AT);
+		expect(quote).not.toBeNull();
+		expect(quote!.rate).toBe("7.2400000000");
+		expect(quote!.sellRate).toBe("7.2512300000");
+		expect(quote!.observedAt).toEqual(inWindow(1));
+		// 方向断言：1 外币 = X 本位币（base = 本位币、quote = 外币）
+		expect(prisma.exchangeRate.findFirst).toHaveBeenCalledWith(
+			expect.objectContaining({
+				where: expect.objectContaining({ base: "CNY", quote: "USD" }),
+			}),
+		);
+		// 窗口内命中：不回补历史
+		expect(prisma.exchangeRate.createMany).not.toHaveBeenCalled();
+	});
+
+	it("本地窗口无报价 → fetchHistory 回补当日历史后重查；仍无 → null", async () => {
+		const { service, prisma, provider } = build();
+		prisma.exchangeRate.findFirst
+			.mockResolvedValueOnce(null) // 第一次查询：本地无
+			.mockResolvedValueOnce(mkQuoteRow({ observedAt: inWindow(2) })); // 回补后重查命中
+		provider.fetchHistory.mockResolvedValue([
+			{ rate: "7.25", observedAt: inWindow(2) },
+		]);
+
+		const quote = await service.findQuoteAt("CNY", "USD", AT);
+		expect(quote).not.toBeNull();
+		expect(quote!.rate).toBe("7.2480000000");
+		// 回补落库：当日历史 + skipDuplicates 幂等
+		expect(provider.fetchHistory).toHaveBeenCalledWith(
+			"CNY",
+			"USD",
+			expect.any(String),
+			expect.any(String),
+		);
+		expect(prisma.exchangeRate.createMany).toHaveBeenCalledWith(
+			expect.objectContaining({ skipDuplicates: true }),
+		);
+	});
+
+	it("回补后窗口内仍无报价（M2 日级粒度常落在窗口外）→ null，上层抛 400", async () => {
+		const { service, prisma, provider } = build();
+		prisma.exchangeRate.findFirst.mockResolvedValue(null);
+		provider.fetchHistory.mockResolvedValue([
+			// 历史点在窗口之外（3 天前）：重查仍不命中
+			{ rate: "7.25", observedAt: new Date("2026-09-07T00:00:00.000Z") },
+		]);
+
+		const quote = await service.findQuoteAt("CNY", "USD", AT);
+		expect(quote).toBeNull();
+	});
+
+	it("回补外呼失败不阻断失败路径：按「窗口内无报价」返回 null", async () => {
+		const { service, prisma, provider } = build();
+		prisma.exchangeRate.findFirst.mockResolvedValue(null);
+		provider.fetchHistory.mockRejectedValue(new Error("source down"));
+
+		const quote = await service.findQuoteAt("CNY", "USD", AT);
+		expect(quote).toBeNull();
+	});
+});

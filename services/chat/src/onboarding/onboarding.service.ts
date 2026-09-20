@@ -88,11 +88,17 @@ export class OnboardingAlreadyCompletedException extends HttpException {
 }
 
 export class OnboardingNotCompletedException extends HttpException {
-	constructor() {
+	/**
+	 * @param message 缺省与 reminder/settings/data-request 既有防线一致；
+	 *   记账写入口（plan/transaction/usage，BE-03）传入含 /onboarding 引导的文案。
+	 */
+	constructor(
+		message = "尚未完成首次设置",
+	) {
 		super(
 			{
 				code: "ONBOARDING_NOT_COMPLETED",
-				message: "尚未完成首次设置",
+				message,
 			},
 			HttpStatus.CONFLICT,
 		);
@@ -104,7 +110,8 @@ export class InitialHoldingExistsException extends HttpException {
 		super(
 			{
 				code: "INITIAL_HOLDING_EXISTS",
-				message: "该币种已有初始持仓记录，请走更正流程",
+				message:
+					"该币种已有初始记录；金额有误请在对应币种账户的初始记录中发起更正",
 			},
 			HttpStatus.CONFLICT,
 		);

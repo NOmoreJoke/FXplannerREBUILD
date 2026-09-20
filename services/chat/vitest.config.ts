@@ -7,6 +7,21 @@ const root = path.resolve(__dirname, "../..");
 
 dotenvConfig({ path: path.join(root, ".env.local") });
 dotenvConfig({ path: path.join(__dirname, ".env.local") });
+
+// E2E 限流放大值只服务 Playwright 造数（services/chat/.env.local 的 OTP_*_MAX_*），
+// 不许泄漏进 vitest：限流用例按代码常量断言（发送 5/24h 20、target 1 次/ip 5 次），
+// 否则 429 用例静默失效（fx-checkup/test-coverage.md ①A）。
+// 仅主进程 delete 不够：Bun 启动的 worker 会自动重加载 .env.local；
+// 故再用 test.env 注入与 src 常量一致的显式值（优先级高于文件加载，覆盖自动加载值）。
+// ⚠️ 不可置空串：Number("") === 0 会被 isFinite 放行为 0 阈值，全量 429。
+for (const key of [
+	"OTP_SEND_MAX_PER_HOUR",
+	"OTP_SEND_MAX_PER_DAY",
+	"OTP_TARGET_MAX_REQUESTS",
+	"OTP_IP_MAX_REQUESTS",
+]) {
+	delete process.env[key];
+}
 process.env.OTP_CODE_SECRET ??=
 	"test-otp-code-secret-with-at-least-32-characters";
 
@@ -20,6 +35,13 @@ export default defineConfig({
 		// backfill 造数用户、rate 各组 deleteMany 币对），并行时序竞争导致偶发
 		// FK 违反 / 行丢失（onboarding-rework 实施期间复现频率过高，串行为最小侵入根治）
 		fileParallelism: false,
+		// 与 src/auth/otp/otp.service.ts 常量保持一致；改常量须同步这里
+		env: {
+			OTP_SEND_MAX_PER_HOUR: "5",
+			OTP_SEND_MAX_PER_DAY: "20",
+			OTP_TARGET_MAX_REQUESTS: "1",
+			OTP_IP_MAX_REQUESTS: "5",
+		},
 		server: {
 			deps: {
 				inline: ["@fxplanner-new/money"],

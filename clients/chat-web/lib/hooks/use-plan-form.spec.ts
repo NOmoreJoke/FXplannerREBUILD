@@ -4,6 +4,8 @@ import {
 	DEFAULT_PLAN_FORM_VALUES,
 	isPacePreference,
 	localTodayYmd,
+	PACE_PREFERENCES,
+	toPacePreference,
 	usePlanForm,
 	validatePlanForm,
 	type PlanFormValues,
@@ -49,14 +51,43 @@ describe("isPacePreference", () => {
 	});
 });
 
+describe("toPacePreference（FE-03 跨域同义桥）", () => {
+	it("pace 本域值原样返回", () => {
+		expect(toPacePreference("conservative")).toBe("conservative");
+		expect(toPacePreference("balanced")).toBe("balanced");
+		expect(toPacePreference("aggressive")).toBe("aggressive");
+	});
+
+	it("settings prep 同义词映射（cautious→conservative、proactive→aggressive）", () => {
+		expect(toPacePreference("cautious")).toBe("conservative");
+		expect(toPacePreference("proactive")).toBe("aggressive");
+	});
+
+	it("非法值（含空串/未知词）返回 null", () => {
+		expect(toPacePreference("")).toBeNull();
+		expect(toPacePreference("risky")).toBeNull();
+		expect(toPacePreference(undefined)).toBeNull();
+		expect(toPacePreference(42)).toBeNull();
+	});
+
+	it("PACE_PREFERENCES 与后端契约三档一致且顺序稳定", () => {
+		expect([...PACE_PREFERENCES]).toEqual([
+			"conservative",
+			"balanced",
+			"aggressive",
+		]);
+	});
+});
+
 describe("validatePlanForm", () => {
 	it("合法基线应无任何错误", () => {
 		expect(validatePlanForm(validValues, null)).toEqual({});
 	});
 
 	it("targetAmount：必填、> 0 且 < 1e11、格式合法", () => {
-		expect(validatePlanForm({ ...validValues, targetAmount: "" }, null))
-			.toHaveProperty("targetAmount");
+		expect(
+			validatePlanForm({ ...validValues, targetAmount: "" }, null),
+		).toHaveProperty("targetAmount");
 		expect(
 			validatePlanForm({ ...validValues, targetAmount: "0" }, null),
 		).toHaveProperty("targetAmount");
@@ -94,8 +125,9 @@ describe("validatePlanForm", () => {
 	});
 
 	it("prepLeadDays：须为 1~30 的整数", () => {
-		expect(validatePlanForm({ ...validValues, prepLeadDays: "" }, null))
-			.toHaveProperty("prepLeadDays");
+		expect(
+			validatePlanForm({ ...validValues, prepLeadDays: "" }, null),
+		).toHaveProperty("prepLeadDays");
 		expect(
 			validatePlanForm({ ...validValues, prepLeadDays: "0" }, null),
 		).toHaveProperty("prepLeadDays");
