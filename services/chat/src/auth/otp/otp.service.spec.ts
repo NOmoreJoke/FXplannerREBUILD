@@ -7,7 +7,6 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaService } from "../../prisma/prisma.service";
 import { EmailOtpChannel } from "./email-otp.channel";
-import type { OtpFetch } from "./otp-channel";
 import { OtpService } from "./otp.service";
 import type { OtpLoginDto } from "./dto/otp-login.dto";
 import type { SendOtpCodeDto } from "./dto/send-otp-code.dto";
@@ -122,17 +121,15 @@ function buildHarness(
 	let now = new Date(T0);
 	const prisma = createMemoryPrisma(() => new Date(now));
 	const sentCodes: string[] = [];
-	const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
-		const payload = JSON.parse(String(init?.body));
-		sentCodes.push(payload.text.match(/\d{6}/)?.[0] ?? "");
-		return new Response(JSON.stringify({ id: "email-message" }), {
-			status: 200,
-		});
+	const sendMail = vi.fn(async (mail: { html: string }) => {
+		// 验证码是模板中唯一的 6 位纯数字文本节点（>654321<）；CSS 色值如 #111827 不误提取
+		sentCodes.push(mail.html.match(">(\\d{6})<")?.[1] ?? "");
+		return { messageId: "email-message" };
 	});
 	const emailChannel = new EmailOtpChannel({
-		apiKey: "resend-test-key",
-		from: "no-reply@example.com",
-		fetchImpl: fetchMock as unknown as OtpFetch,
+		user: "noreply@test.local",
+		pass: "smtp-pass",
+		transport: { sendMail } as never,
 	});
 	const service = new OtpService(
 		prisma as unknown as PrismaService,
@@ -359,12 +356,12 @@ describe("邮件 mock 模式（未接入真实邮件服务，changes/ux-improvem
 		expect(prisma.challenges).toHaveLength(1);
 	});
 
-	it("真实渠道（已配置 Resend）：响应不携带 devCode（防泄漏）", async () => {
-		const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+	it("真实渠道（已配置 SMTP）：响应不携带 devCode（防泄漏）", async () => {
+		const sendMail = vi.fn(async () => ({ messageId: "email-message" }));
 		const realChannel = new EmailOtpChannel({
-			apiKey: "resend-test-key",
-			from: "no-reply@example.com",
-			fetchImpl: fetchMock as unknown as OtpFetch,
+			user: "noreply@test.local",
+			pass: "smtp-pass",
+			transport: { sendMail } as never,
 		});
 		expect(realChannel.devMode).toBe(false);
 		const { service } = buildService([realChannel]);
@@ -374,14 +371,28 @@ describe("邮件 mock 模式（未接入真实邮件服务，changes/ux-improvem
 			"192.0.2.11",
 		);
 		expect(result.devCode).toBeUndefined();
-		expect(fetchMock).toHaveBeenCalledOnce();
+		expect(sendMail).toHaveBeenCalledOnce();
 	});
 
 	it("显式 mock:false 且未配置供应商 → send 抛 503（保留原有行为）", async () => {
-		const strictChannel = new EmailOtpChannel({ mock: false });
-		expect(strictChannel.devMode).toBe(false);
-		await expect(
-			strictChannel.send("a@b.com", "123456"),
-		).rejects.toBeInstanceOf(ServiceUnavailableException);
+		// 隔离 .env.local 中可能存在的真实 SMTP 配置（本用例语义是「未配置」）
+		const saved = {
+			SMTP_USER: process.env.SMTP_USER,
+			SMTP_PASS: process.env.SMTP_PASS,
+		};
+		delete process.env.SMTP_USER;
+		delete process.env.SMTP_PASS;
+		try {
+			const strictChannel = new EmailOtpChannel({ mock: false });
+			expect(strictChannel.devMode).toBe(false);
+			await expect(
+				strictChannel.send("a@b.com", "123456"),
+			).rejects.toBeInstanceOf(ServiceUnavailableException);
+		} finally {
+			if (saved.SMTP_USER !== undefined)
+				process.env.SMTP_USER = saved.SMTP_USER;
+			if (saved.SMTP_PASS !== undefined)
+				process.env.SMTP_PASS = saved.SMTP_PASS;
+		}
 	});
 });

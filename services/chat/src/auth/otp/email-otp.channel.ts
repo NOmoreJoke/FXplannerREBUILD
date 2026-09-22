@@ -4,56 +4,90 @@ import {
 	Optional,
 	ServiceUnavailableException,
 } from "@nestjs/common";
+import { createTransport, type Transporter } from "nodemailer";
 import { isProd } from "../../config/env";
-import type { OtpChannel, OtpFetch } from "./otp-channel";
+import type { OtpChannel } from "./otp-channel";
+import { renderVerifyCodeHtml, VERIFY_CODE_SUBJECT } from "./email-otp.templates";
 
-const DEFAULT_RESEND_ENDPOINT = "https://api.resend.com/emails";
-const DEFAULT_TIMEOUT_MS = 5_000;
+const DEFAULT_SMTP_HOST = "smtpdm.aliyun.com"; // 阿里云邮件推送 DirectMail SMTP
+const DEFAULT_SMTP_PORT = 465; // SSL
+const DEFAULT_FROM_NAME = "FXPlanner";
 
 export interface EmailOtpChannelOptions {
-	apiKey?: string;
-	from?: string;
-	endpoint?: string;
-	fetchImpl?: OtpFetch;
-	timeoutMs?: number;
+	host?: string;
+	port?: number;
+	/** 发信地址（阿里云邮件推送控制台创建，如 noreply@example.com） */
+	user?: string;
+	pass?: string;
+	/** 发件人显示名 */
+	fromName?: string;
+	/** 直接注入 transporter（单测用）；注入后视为「已配置真实供应商」 */
+	transport?: Transporter;
 	/** 显式指定 mock 开关；未指定时按环境推导（见构造函数） */
 	mock?: boolean;
+}
+
+/** SMTP 三要素（HOST/USER/PASS）是否齐备 */
+export function isSmtpConfigured(options: {
+	host?: string;
+	user?: string;
+	pass?: string;
+}): boolean {
+	return Boolean(options.host && options.user && options.pass);
 }
 
 @Injectable()
 export class EmailOtpChannel implements OtpChannel {
 	readonly channel = "email" as const;
 
-	private readonly apiKey: string | undefined;
-	private readonly from: string | undefined;
-	private readonly endpoint: string;
-	private readonly fetchImpl: OtpFetch;
-	private readonly timeoutMs: number;
+	private readonly host: string | undefined;
+	private readonly port: number;
+	private readonly user: string | undefined;
+	private readonly pass: string | undefined;
+	private readonly fromName: string;
+	private readonly transport: Transporter | undefined;
 
 	/**
 	 * 开发模拟模式（未接入真实邮件服务）：
 	 * - 显式 OTP_EMAIL_MOCK=true 强制开启；OTP_EMAIL_MOCK=false 强制关闭；
-	 * - 未显式配置时：非生产 && 未配置 Resend → 自动开启（本地开箱可用）；
+	 * - 未显式配置时：非生产 && 未配置 SMTP → 自动开启（本地开箱可用）；
 	 * - 生产环境永不 mock：未配置供应商配置照旧抛 503。
 	 */
 	readonly devMode: boolean;
 
 	constructor(@Optional() options?: EmailOtpChannelOptions) {
-		this.apiKey = options?.apiKey ?? process.env.RESEND_API_KEY;
-		this.from = options?.from ?? process.env.RESEND_FROM_EMAIL;
-		this.endpoint =
-			options?.endpoint ?? process.env.RESEND_API_URL ?? DEFAULT_RESEND_ENDPOINT;
-		this.fetchImpl = options?.fetchImpl ?? globalThis.fetch.bind(globalThis);
-		this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+		this.host = options?.host ?? process.env.SMTP_HOST ?? DEFAULT_SMTP_HOST;
+		this.port =
+			options?.port ??
+			(process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : DEFAULT_SMTP_PORT);
+		this.user = options?.user ?? process.env.SMTP_USER;
+		this.pass = options?.pass ?? process.env.SMTP_PASS;
+		this.fromName =
+			options?.fromName ?? process.env.SMTP_FROM_NAME ?? DEFAULT_FROM_NAME;
+		this.transport = options?.transport;
 
 		if (options?.mock !== undefined) {
 			this.devMode = options.mock;
 		} else {
 			const explicit = process.env.OTP_EMAIL_MOCK;
-			const providerConfigured = Boolean(this.apiKey && this.from);
+			const providerConfigured =
+				Boolean(this.transport) ||
+				isSmtpConfigured({ host: this.host, user: this.user, pass: this.pass });
 			this.devMode =
 				explicit === "true" ||
 				(explicit !== "false" && !providerConfigured && !isProd());
+		}
+
+		if (!this.transport && this.host && this.user && this.pass) {
+			this.transport = createTransport({
+				host: this.host,
+				port: this.port,
+				secure: this.port === 465, // 465 SSL；其他端口走 STARTTLS（由 nodemailer 自动协商）
+				auth: { user: this.user, pass: this.pass },
+				connectionTimeout: 8_000,
+				greetingTimeout: 8_000,
+				socketTimeout: 15_000,
+			});
 		}
 	}
 
@@ -66,49 +100,26 @@ export class EmailOtpChannel implements OtpChannel {
 			return;
 		}
 
-		if (!this.apiKey || !this.from) {
+		if (!this.transport || !isSmtpConfigured({ host: this.host, user: this.user, pass: this.pass })) {
 			throw new ServiceUnavailableException(
-				"Resend OTP 配置缺失：需要 RESEND_API_KEY 和 RESEND_FROM_EMAIL",
+				"阿里云邮件推送 OTP 配置缺失：需要 SMTP_HOST、SMTP_USER 和 SMTP_PASS",
 			);
 		}
 
-		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-
 		try {
-			const response = await this.fetchImpl(this.endpoint, {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${this.apiKey}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					from: this.from,
-					to: [target],
-					subject: "Your verification code",
-					text: `Your verification code is ${code}. It expires in 10 minutes.`,
-				}),
-				signal: controller.signal,
+			await this.transport.sendMail({
+				// 阿里云邮件推送要求：发件地址必须与 SMTP_USER 一致
+				from: { name: this.fromName, address: this.user },
+				to: target,
+				subject: VERIFY_CODE_SUBJECT,
+				html: renderVerifyCodeHtml(code),
 			});
-
-			if (!response.ok) {
-				throw new BadGatewayException(
-					`Resend OTP 请求失败（HTTP ${response.status}）`,
-				);
-			}
 		} catch (error) {
-			if (
-				error instanceof ServiceUnavailableException ||
-				error instanceof BadGatewayException
-			) {
-				throw error;
+			const message = error instanceof Error ? error.message : String(error);
+			if (/timeout|ETIMEDOUT|ESOCKET|greeting/i.test(message)) {
+				throw new ServiceUnavailableException("阿里云邮件推送 SMTP 请求超时");
 			}
-			if (controller.signal.aborted) {
-				throw new ServiceUnavailableException("Resend OTP 请求超时");
-			}
-			throw new BadGatewayException("Resend OTP 服务不可用");
-		} finally {
-			clearTimeout(timeout);
+			throw new BadGatewayException(`阿里云邮件推送 SMTP 发送失败：${message}`);
 		}
 	}
 }

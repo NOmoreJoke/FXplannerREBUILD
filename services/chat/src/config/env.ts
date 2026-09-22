@@ -16,11 +16,6 @@ const optionalEnv = () =>
 		(value) => (value === "" ? undefined : value),
 		z.string().min(1).optional(),
 	);
-const optionalEmailEnv = () =>
-	z.preprocess(
-		(value) => (value === "" ? undefined : value),
-		z.string().email().optional(),
-	);
 const optionalUrlEnv = () =>
 	z.preprocess(
 		(value) => (value === "" ? undefined : value),
@@ -47,12 +42,14 @@ const schema = z
 		// ── OTP（必填；与 JWT_SECRET 分离，用于验证码 HMAC）──
 		OTP_CODE_SECRET: z.string().min(32),
 
-		// ── OTP 三方供应商（仅在启用对应 Channel 时必填）──
-		RESEND_API_KEY: optionalEnv(),
-		RESEND_FROM_EMAIL: optionalEmailEnv(),
-		RESEND_API_URL: optionalUrlEnv(),
+		// ── OTP 邮件通道：阿里云邮件推送 DirectMail SMTP（仅在启用 email Channel 时必填）──
+		SMTP_HOST: optionalEnv(), // 阿里云邮件推送：smtpdm.aliyun.com
+		SMTP_PORT: z.coerce.number().int().positive().optional(), // 默认 465（SSL）
+		SMTP_USER: optionalEnv(), // 发信地址（控制台创建，如 noreply@example.com）
+		SMTP_PASS: optionalEnv(), // 发信地址的 SMTP 密码
+		SMTP_FROM_NAME: optionalEnv(), // 发件人显示名，默认 FXPlanner
 		// ── OTP 邮件 mock 开关（未接入真实邮件服务时本地联调用）──
-		// true 强制 mock；false 强制走真实 Resend；未设置时：非生产 && 未配置 Resend → 自动 mock，生产永不 mock
+		// true 强制 mock；false 强制走真实 SMTP；未设置时：非生产 && 未配置 SMTP → 自动 mock，生产永不 mock
 		OTP_EMAIL_MOCK: z.enum(["true", "false"]).optional(),
 
 		// ── 汇率定时刷新开关（rate-refresh-cron 技术方案 §3.2）──

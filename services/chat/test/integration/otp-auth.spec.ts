@@ -117,28 +117,23 @@ describe("OTP auth integration", () => {
 	let now = new Date("2026-08-01T00:00:00.000Z");
 	const prisma = createMemoryPrisma();
 	const sentCodes: string[] = [];
-	const fetchMock = vi.fn(
-		async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-			if (init?.method === "POST") {
-				const payload = JSON.parse(String(init.body));
-				sentCodes.push(payload.text.match(/\d{6}/)?.[0] ?? "");
-				return new Response(JSON.stringify({ id: "email-message" }), {
-					status: 200,
-				});
-			}
-			expect(String(input)).toContain("Action=SendSms");
-			return new Response(
-				JSON.stringify({ Code: "OK", RequestId: "sms-request" }),
-				{ status: 200 },
-			);
-		},
-	);
+	// 邮件通道：注入 nodemailer transport mock（验证码是模板中唯一的 6 位纯数字文本节点）
+	const sendMail = vi.fn(async (mail: { html: string }) => {
+		sentCodes.push(mail.html.match(">(\\d{6})<")?.[1] ?? "");
+		return { messageId: "email-message" };
+	});
+	const fetchMock = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+		expect(String(input)).toContain("Action=SendSms");
+		return new Response(
+			JSON.stringify({ Code: "OK", RequestId: "sms-request" }),
+			{ status: 200 },
+		);
+	});
 
 	const emailChannel = new EmailOtpChannel({
-		apiKey: "resend-test-key",
-		from: "no-reply@example.com",
-		endpoint: "https://resend.test/emails",
-		fetchImpl: fetchMock as unknown as OtpFetch,
+		user: "noreply@test.local",
+		pass: "smtp-pass",
+		transport: { sendMail } as never,
 	});
 	const smsChannel = new SmsOtpChannel({
 		accessKeyId: "aliyun-id",
@@ -191,8 +186,10 @@ describe("OTP auth integration", () => {
 		expect(prisma.challenges[1].target).toBe("+8613800138000");
 		expect(prisma.challenges[0].codeHash).toMatch(/^[0-9a-f]{64}$/);
 		expect(prisma.challenges[0].codeHash).not.toMatch(/^\d{6}$/);
-		expect(fetchMock).toHaveBeenCalledTimes(2);
-		expect(String(fetchMock.mock.calls[1][0])).toContain(
+		// 邮件走注入的 transport，短信走 fetch
+		expect(sendMail).toHaveBeenCalledTimes(1);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(String(fetchMock.mock.calls[0][0])).toContain(
 			"PhoneNumbers=%2B8613800138000",
 		);
 	});
@@ -270,28 +267,28 @@ describe("OTP auth integration", () => {
 		expect(verified.target).toBe("resend@example.com");
 	});
 
-	it("供应商 HTTP 异常应该转为 BadGateway，超时应该转为 ServiceUnavailable", async () => {
+	it("供应商 SMTP 异常应该转为 BadGateway，超时应该转为 ServiceUnavailable", async () => {
 		const failedEmail = new EmailOtpChannel({
-			apiKey: "key",
-			from: "from@example.com",
-			fetchImpl: vi.fn(
-				async () => new Response("failed", { status: 503 }),
-			) as unknown as OtpFetch,
+			user: "noreply@test.local",
+			pass: "smtp-pass",
+			transport: {
+				sendMail: vi.fn(async () => {
+					throw new Error("550 send failed");
+				}),
+			} as never,
 		});
 		await expect(
 			failedEmail.send("user@example.com", "123456"),
 		).rejects.toBeInstanceOf(BadGatewayException);
 
 		const timeoutEmail = new EmailOtpChannel({
-			apiKey: "key",
-			from: "from@example.com",
-			timeoutMs: 1,
-			fetchImpl: (async (_input, init) =>
-				new Promise((_resolve, reject) => {
-					init?.signal?.addEventListener("abort", () =>
-						reject(new Error("aborted")),
-					);
-				})) as OtpFetch,
+			user: "noreply@test.local",
+			pass: "smtp-pass",
+			transport: {
+				sendMail: vi.fn(async () => {
+					throw new Error("Connection timeout");
+				}),
+			} as never,
 		});
 		await expect(
 			timeoutEmail.send("user@example.com", "123456"),
