@@ -12,8 +12,9 @@ deploy)
 	echo "==> 1/4 拉取镜像"
 	$COMPOSE pull chat web
 	echo "==> 2/4 启动数据库并等待就绪"
-	$COMPOSE up -d postgres
-	$COMPOSE wait postgres
+	# up --wait：等 healthcheck 变 healthy（compose wait 等的是容器退出，
+	# postgres 常驻运行会永久卡死，2026-09-22 部署实测踩坑）
+	$COMPOSE up -d --wait postgres
 	echo "==> 3/4 数据库迁移（prisma migrate deploy）"
 	$COMPOSE run --rm chat \
 		bunx prisma migrate deploy --schema prisma/schema.prisma

@@ -56,9 +56,6 @@
     "turbo": "^2.8.20",
     "wait-on": "^9.0.5"
   },
-  "dependencies": {
-    "nodemailer": "^10.0.10"
-  },
   "config": {
     "commitizen": {
       "path": "cz-conventional-changelog"
