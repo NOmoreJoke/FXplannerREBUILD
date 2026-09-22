@@ -79,6 +79,9 @@ export CORS_ORIGIN="http://localhost:${WEB_PORT}"
 export WEB_PORT API_PORT DEV_LOG_PORT
 # e2e 造数 helper（api-seeder）的后端地址：对齐实际 API 端口
 export API_URL="http://localhost:${API_PORT}"
+# E2E 必须走邮件 mock（用例依赖响应里的 devCode 取码）：
+# 若不强制，dev 服务会继承 services/chat/.env.local 的真实 SMTP 配置 → 真发邮件且无 devCode，E2E 全挂
+export OTP_EMAIL_MOCK=true
 # E2E 集中造数会触发限流（auth 5/10 次每分、全局 10 次每分）→ 测试运行时放大（生产默认不变）
 export AUTH_THROTTLE_LIMIT=200
 export AUTH_OTP_THROTTLE_LIMIT=200

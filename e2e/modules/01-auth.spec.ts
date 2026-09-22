@@ -38,6 +38,10 @@ test.describe("【认证模块】用户认证流程", () => {
 			await page.fill('input[name="confirmPassword"]', TEST_PASSWORD);
 			logger.log("action", "info", `✓ 表单已填充: ${TEST_EMAIL}`);
 
+			// 合规勾选（onboarding-rework 注册门槛，与登录页一致；不勾选则提交被拦截）
+			await page.check('[data-testid="consent-age18"]');
+			await page.check('[data-testid="consent-terms"]');
+
 			// 提交注册
 			await page.click('button[type="submit"]');
 			logger.log("action", "info", "⏳ 等待注册响应...");
