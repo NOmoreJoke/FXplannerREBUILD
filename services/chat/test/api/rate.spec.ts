@@ -2,7 +2,7 @@ import { type INestApplication, ValidationPipe } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
 import { createTestApp, type TestContext } from "../helpers/test-app";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ABC_RATE_URL, ERAPI_RATE_URL } from "../../src/rate/rate.constants";
 import {
 	RATE_PROVIDER_TIMEOUT_TOKEN,
@@ -27,6 +27,30 @@ import {
 // 15 币种全量 + 1 个重复，用于验证 targets 超量 400
 const SIXTEEN_TARGETS =
 	"HKD,USD,GBP,AUD,CAD,CNY,JPY,EUR,SGD,NZD,TWD,CHF,KRW,THB,MYR,CNY";
+
+/**
+ * 重置 app 内 AbcSource 的进程内状态（最小外呼间隔/成功全表缓存/并发单飞）。
+ *
+ * 根因（flaky 治理）：真实 AppModule 的 RateProvider 单例跨用例共享 abcSource，
+ * 上一用例残留的 lastFetchAt/lastTable 会让最小间隔（10s）内的后续用例复用旧表
+ * 或抛 BadGateway——是否复用取决于用例间的真实时间流逝（单独跑与全量并发节奏
+ * 不同），是「三源路由/cron-refresh 偶发失败」的根因。每个用例前重置，保证 stub
+ * 路由行为与断言确定性（私有字段重置仅限测试基建使用）。
+ */
+const resetAbcSourceState = (apps: INestApplication[]) => {
+	for (const app of apps) {
+		const provider = app.get(RateProvider) as unknown as {
+			abcSource: {
+				inFlight: Promise<unknown> | null;
+				lastTable: unknown | null;
+				lastFetchAt: number;
+			};
+		};
+		provider.abcSource.inFlight = null;
+		provider.abcSource.lastTable = null;
+		provider.abcSource.lastFetchAt = -Infinity;
+	}
+};
 
 /** 真实 AppModule + overrideProvider(RateProvider) 注入 fetch stub（按 URL 路由三源，不发真实请求）；
  *  三源路由契约与 cron-refresh 端点两组用例共用（rate-refresh-cron 方案 §6.2） */
@@ -378,6 +402,10 @@ describe("RateController（接口）", () => {
 			await degradedApp?.close();
 		});
 
+		// flaky 治理：multiApp 单例的 abcSource 状态跨用例残留，每用例前重置
+		//（failureApp 首呼即失败无成功表可复用，degradedApp 不走 abc，均无需处理）
+		beforeEach(() => resetAbcSourceState([multiApp]));
+
 		it("多源缺省 targets=USD 走 abc：rate=基准价、sellRate 返回、source=abc（§8.2 行1）", async () => {
 			const res = await request(multiApp.getHttpServer())
 				.get("/api/rates/latest/CNY?refresh=true")
@@ -604,6 +632,12 @@ describe("RateController（接口）", () => {
 			await failureCronApp?.close();
 			await dedupeApp?.close();
 		});
+
+		// flaky 治理：三个 app 单例的 abcSource 状态跨用例残留，每用例前重置
+		//（failureCronApp 首呼即失败亦需清 lastFetchAt，避免间隔窗口内快速失败被上一用例的时间戳放过/拦截）
+		beforeEach(() =>
+			resetAbcSourceState([cronApp, failureCronApp, dedupeApp]),
+		);
 
 		it("手动触发成功：succeeded 覆盖 15 币种，库内落库 15 行（14 外部 + 恒等）", async () => {
 			const res = await request(cronApp.getHttpServer())
