@@ -14,7 +14,8 @@ import { PACE_PREFERENCES, type PacePreference } from "../schedule-builder";
 /** POST /api/plans/schedule-preview 请求体 */
 export class SchedulePreviewDto {
 	@ApiProperty({
-		description: "目标币种（ISO 4217，必须在支持的 15 币种内）",
+		description:
+			"目标币种（ISO 4217，必须在支持的 15 币种内，且不能与本位币相同）",
 		example: "USD",
 		type: String,
 	})
@@ -65,9 +66,20 @@ export class SchedulePreviewDto {
 	@IsOptional()
 	@IsString({ message: "开始准备日必须是字符串" })
 	startDate?: string | null;
+
+	@ApiProperty({
+		description:
+			'本次计入已有外币的分配金额（≥ 0；缺省 "0"）。预览排期按 目标金额 − 该值 计算，与创建口径一致；≥ 目标金额时返回 400 AMOUNT_TOO_SMALL',
+		example: "12000.00",
+		type: String,
+		required: false,
+	})
+	@IsOptional()
+	@IsString({ message: "分配金额必须是字符串" })
+	allocatedAmount?: string;
 }
 
-/** POST /api/plans 请求体：排期参数全量 + 计划名称 + 本次分配金额 */
+/** POST /api/plans 请求体：排期参数全量（含 allocatedAmount）+ 计划名称 */
 export class CreatePlanDto extends SchedulePreviewDto {
 	@ApiProperty({
 		description: "目标名称（缺省存 null）",
@@ -78,17 +90,6 @@ export class CreatePlanDto extends SchedulePreviewDto {
 	@IsOptional()
 	@IsString({ message: "目标名称必须是字符串" })
 	name?: string;
-
-	@ApiProperty({
-		description:
-			'本次计入已有外币的分配金额（≥ 0，≤ 可分配余额与目标金额较小者；缺省 "0" 不占用余额）',
-		example: "12000.00",
-		type: String,
-		required: false,
-	})
-	@IsOptional()
-	@IsString({ message: "分配金额必须是字符串" })
-	allocatedAmount?: string;
 }
 
 /** 单条分批排期（preview 与 PlanDto 共用） */

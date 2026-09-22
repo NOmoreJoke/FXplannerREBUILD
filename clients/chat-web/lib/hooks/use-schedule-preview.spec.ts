@@ -37,6 +37,7 @@ const readyInput: SchedulePreviewInput = {
 	expectUseDate: "2030-08-01",
 	prepLeadDays: "3",
 	pacePreference: "balanced",
+	allocatedAmount: "0",
 };
 
 const previewResp: PlanSchedulePreviewResp = {
@@ -77,6 +78,7 @@ describe("useSchedulePreview", () => {
 			{ ...readyInput, targetAmount: "0" },
 			{ ...readyInput, expectUseDate: "2020-01-01" },
 			{ ...readyInput, prepLeadDays: "0" },
+			{ ...readyInput, allocatedAmount: "abc" }, // 计入金额格式非法
 		];
 
 		for (const input of cases) {
@@ -112,6 +114,7 @@ describe("useSchedulePreview", () => {
 			expectUseDate: "2030-08-01T00:00:00.000Z",
 			prepLeadDays: 3,
 			pacePreference: "balanced",
+			allocatedAmount: "0",
 		});
 		expect(result.current).toEqual({
 			installments: previewResp.installments,
@@ -140,7 +143,7 @@ describe("useSchedulePreview", () => {
 
 	it.each([
 		["NO_AVAILABLE_DATES", "用途日期过早"],
-		["AMOUNT_TOO_SMALL", "净到账金额过小"],
+		["AMOUNT_TOO_SMALL", "待准备金额过小"],
 		["INVALID_PLAN_PARAMS", "表单参数不合法"],
 	] as const)(
 		"preview 400 错误码 %s 应映射为中文文案，且失败清空 installments/caps",
@@ -166,8 +169,54 @@ describe("useSchedulePreview", () => {
 		const { result } = renderPreview(readyInput);
 		await advance(400);
 
-		expect(result.current.previewError).toBe(
-			"排期预览生成失败，请稍后重试",
+		expect(result.current.previewError).toBe("排期预览生成失败，请稍后重试");
+	});
+
+	it('计入已有外币随请求发送（空串归一为 "0"）', async () => {
+		vi.mocked(plansApi.preview).mockResolvedValue(previewResp);
+
+		const { rerender } = renderPreview({
+			...readyInput,
+			allocatedAmount: "",
+		});
+		await advance(400);
+		expect(plansApi.preview).toHaveBeenCalledWith(
+			expect.objectContaining({ allocatedAmount: "0" }),
+		);
+
+		rerender({ input: { ...readyInput, allocatedAmount: "20000.50" } });
+		await advance(400);
+		expect(plansApi.preview).toHaveBeenLastCalledWith(
+			expect.objectContaining({ allocatedAmount: "20000.50" }),
+		);
+	});
+
+	it("计入已有外币 ≥ 目标金额：不发请求，直接提示无需分批（创建同因被后端拒）", async () => {
+		const cases: SchedulePreviewInput[] = [
+			{ ...readyInput, targetAmount: "50000", allocatedAmount: "50000" }, // 等于
+			{ ...readyInput, targetAmount: "50000", allocatedAmount: "60000" }, // 超过
+		];
+
+		for (const input of cases) {
+			const { result } = renderPreview(input);
+			await advance(1000);
+			expect(plansApi.preview).not.toHaveBeenCalled();
+			expect(result.current.previewError).toBe(
+				"计入已有外币已达到或超过目标金额，无需分批准备；请降低计入金额或调高目标金额",
+			);
+			expect(result.current.installments).toEqual([]);
+			expect(result.current.isPreviewing).toBe(false);
+		}
+	});
+
+	it("计入已有外币低于目标：正常发请求参与扣减", async () => {
+		vi.mocked(plansApi.preview).mockResolvedValue(previewResp);
+
+		renderPreview({ ...readyInput, allocatedAmount: "49999.99" });
+		await advance(400);
+		expect(plansApi.preview).toHaveBeenCalledOnce();
+		expect(plansApi.preview).toHaveBeenCalledWith(
+			expect.objectContaining({ allocatedAmount: "49999.99" }),
 		);
 	});
 
@@ -219,7 +268,9 @@ describe("useSchedulePreview", () => {
 
 describe("mapPreviewError", () => {
 	it("非 ApiError 的任意抛出值应返回兜底文案", () => {
-		expect(mapPreviewError(new Error("x"))).toBe("排期预览生成失败，请稍后重试");
+		expect(mapPreviewError(new Error("x"))).toBe(
+			"排期预览生成失败，请稍后重试",
+		);
 		expect(mapPreviewError("string error")).toBe(
 			"排期预览生成失败，请稍后重试",
 		);

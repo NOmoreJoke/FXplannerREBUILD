@@ -34,6 +34,7 @@ export default function NewPlanPage() {
 		expectUseDate: form.values.expectUseDate,
 		prepLeadDays: form.values.prepLeadDays,
 		pacePreference: form.values.pacePreference,
+		allocatedAmount: form.values.allocatedAmount,
 	});
 
 	// 预览返回的分配上限 → 表单实时预检「计入已有外币」

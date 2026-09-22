@@ -118,10 +118,7 @@ export function PlanCreateForm({
 						/>
 					</FieldShell>
 
-					<FieldShell
-						label="目标币种"
-						error={getError("targetCurrency")}
-					>
+					<FieldShell label="目标币种" error={getError("targetCurrency")}>
 						<Select
 							value={values.targetCurrency}
 							onValueChange={(next) => setField("targetCurrency", next)}
@@ -135,8 +132,13 @@ export function PlanCreateForm({
 							</SelectTrigger>
 							<SelectContent>
 								{CURRENCY_OPTIONS.map((currency) => (
-									<SelectItem key={currency.code} value={currency.code}>
+									<SelectItem
+										key={currency.code}
+										value={currency.code}
+										disabled={currency.code === baseCurrency}
+									>
 										{currency.code} · {currency.nameZh}
+										{currency.code === baseCurrency ? "（本位币）" : ""}
 									</SelectItem>
 								))}
 							</SelectContent>
@@ -153,9 +155,7 @@ export function PlanCreateForm({
 							id="plan-target-amount"
 							inputMode="decimal"
 							value={values.targetAmount}
-							onChange={(event) =>
-								setField("targetAmount", event.target.value)
-							}
+							onChange={(event) => setField("targetAmount", event.target.value)}
 							placeholder="如 50000"
 						/>
 					</FieldShell>
@@ -190,9 +190,7 @@ export function PlanCreateForm({
 							max={30}
 							step={1}
 							value={values.prepLeadDays}
-							onChange={(event) =>
-								setField("prepLeadDays", event.target.value)
-							}
+							onChange={(event) => setField("prepLeadDays", event.target.value)}
 						/>
 					</FieldShell>
 

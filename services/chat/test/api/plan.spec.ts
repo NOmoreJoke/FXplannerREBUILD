@@ -214,6 +214,56 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 		});
 	});
 
+	it("#3a schedule-preview：allocatedAmount 参与分批总额扣减，与 create 排期口径一致", async () => {
+		// target 10000 − allocated 2500.1234 = 7499.8766，均衡三等分（按 USD 2 位精度
+		// 向下取整）：前两批 2499.95，零头入尾批 2499.9766（与用例 #4 create 同参数对照）
+		const res = await postPreview(
+			userCreate,
+			planBody({ targetAmount: "10000", allocatedAmount: "2500.1234" }),
+		).expect(200);
+		expect(res.body.data.installments).toHaveLength(3);
+		expect(res.body.data.installments[0].amount).toBe("2499.9500");
+		expect(res.body.data.installments[1].amount).toBe("2499.9500");
+		expect(res.body.data.installments[2].amount).toBe("2499.9766");
+	});
+
+	it("#3b schedule-preview：allocatedAmount 缺省 → 按全额目标排期（向后兼容）", async () => {
+		const res = await postPreview(
+			userFresh,
+			planBody({ targetAmount: "30000" }),
+		).expect(200);
+		// 30000 均衡三等分：10000/10000/10000
+		expect(
+			res.body.data.installments.map((i: { amount: string }) => i.amount),
+		).toEqual(["10000.0000", "10000.0000", "10000.0000"]);
+	});
+
+	it("#3c schedule-preview：allocatedAmount ≥ 目标金额 → 400 AMOUNT_TOO_SMALL", async () => {
+		// 等于：分批总额 = 0
+		const equal = await postPreview(
+			userFresh,
+			planBody({ targetAmount: "50000", allocatedAmount: "50000" }),
+		).expect(400);
+		expect(equal.body.code).toBe("AMOUNT_TOO_SMALL");
+
+		// 超过：分批总额为负，同样拒
+		const over = await postPreview(
+			userFresh,
+			planBody({ targetAmount: "50000", allocatedAmount: "60000" }),
+		).expect(400);
+		expect(over.body.code).toBe("AMOUNT_TOO_SMALL");
+	});
+
+	it("#3d schedule-preview：allocatedAmount 非法（负数/非数字）→ 400 INVALID_PLAN_PARAMS", async () => {
+		for (const allocatedAmount of ["-1", "abc"]) {
+			const res = await postPreview(
+				userFresh,
+				planBody({ targetAmount: "50000", allocatedAmount }),
+			).expect(400);
+			expect(res.body.code).toBe("INVALID_PLAN_PARAMS");
+		}
+	});
+
 	it("#4 create：分配额 4 位小数全链路（201 → allocation 行 → caps 回收）", async () => {
 		const res = await postCreate(
 			userCreate,
@@ -252,6 +302,13 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 			planBody({ targetAmount: "50000" }),
 		).expect(200);
 		expect(after.body.data.caps.allocatableBalance).toBe("7499.8766");
+
+		// FXP 缺陷修复验收点：同参数 preview 排期与 create 落库排期逐批一致
+		const sameParamsPreview = await postPreview(
+			userCreate,
+			planBody({ targetAmount: "10000", allocatedAmount: "2500.1234" }),
+		).expect(200);
+		expect(sameParamsPreview.body.data.installments).toEqual(plan.installments);
 	});
 
 	it("#5 create：allocatedAmount=0 仍建 allocation 行（无账户 caps=0 可分配）", async () => {
@@ -377,6 +434,31 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 			const res = await postPreview(userErr, body).expect(400);
 			expect(res.body.code).toBe("INVALID_PLAN_PARAMS");
 		}
+	});
+
+	it("目标币种 = 本位币：preview / create 均 400 INVALID_PLAN_PARAMS（大小写归一，不落库）", async () => {
+		// 本位币来自 UserSettings（ensureOnboarded 默认 CNY），显式重申防默认值漂移
+		await ensureOnboarded(ctx.prisma, userErr.userId, "CNY");
+		for (const targetCurrency of ["CNY", "cny"]) {
+			const preview = await postPreview(
+				userErr,
+				planBody({ targetCurrency }),
+			).expect(400);
+			expect(preview.body.code).toBe("INVALID_PLAN_PARAMS");
+			expect(preview.body.message).toContain("本位币");
+		}
+
+		const before = await ctx.prisma.plan.count({
+			where: { userId: userErr.userId },
+		});
+		const created = await postCreate(
+			userErr,
+			planBody({ targetCurrency: "CNY" }),
+		).expect(400);
+		expect(created.body.code).toBe("INVALID_PLAN_PARAMS");
+		expect(
+			await ctx.prisma.plan.count({ where: { userId: userErr.userId } }),
+		).toBe(before);
 	});
 
 	it("值集回归（FE-03 根治）：pace 合法值 conservative/aggressive 预览排期均生成（节奏分批体现值集语义；值集单一来源后端 DTO）", async () => {

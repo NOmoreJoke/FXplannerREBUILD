@@ -160,19 +160,31 @@ export class PlanService {
 	/**
 	 * 排期预览（POST /api/plans/schedule-preview，方案 §5.1）：
 	 * 参数校验 → caps → buildInstallments（R1~R6）。只读，不落库。
+	 * allocatedAmount（计入已有外币）与 create 同口径参与分批总额
+	 * （分批总额 = 目标 − 已使用 − allocatedAmount），保证预览与落库排期一致；
+	 * 超余额上限不在此拦（caps 随响应返回由前端预检，create 事务内权威重检）。
 	 */
 	async preview(
 		userId: string,
 		dto: SchedulePreviewDto,
 	): Promise<SchedulePreviewResultDto> {
-		const params = this.parsePlanParams(dto);
+		// 目标币种 ≠ 本位币（建账后才有值；preview 不拦未建账，缺 settings 跳过比对）
+		const settings = await this.prisma.userSettings.findUnique({
+			where: { userId },
+			select: { baseCurrency: true },
+		});
+		const params = this.parsePlanParams(dto, settings?.baseCurrency ?? null);
+		const allocatedAmount =
+			dto.allocatedAmount !== undefined && dto.allocatedAmount !== null
+				? this.parseNonNegativeAmount(dto.allocatedAmount, "分配金额")
+				: new Prisma.Decimal(0);
 		const latestPrepDate = computeLatestPrepDate(
 			params.expectUseDate,
 			params.prepLeadDays,
 		);
 		const installments = this.buildInstallmentsOrThrow({
 			targetAmount: params.targetAmount,
-			allocatedAmount: new Prisma.Decimal(0),
+			allocatedAmount,
 			decimalPlaces: params.decimalPlaces,
 			startDate: params.startDate,
 			latestPrepDate,
@@ -206,14 +218,14 @@ export class PlanService {
 		// preview 不拦（无副作用计算）；adjust/complete/cancel 前置已含计划归属 404。
 		const settings = await this.prisma.userSettings.findUnique({
 			where: { userId },
-			select: { userId: true },
+			select: { userId: true, baseCurrency: true },
 		});
 		if (!settings) {
 			throw new OnboardingNotCompletedException(
 				"尚未完成首次设置，请先前往 /onboarding 完成建账后再创建计划",
 			);
 		}
-		const params = this.parsePlanParams(dto);
+		const params = this.parsePlanParams(dto, settings.baseCurrency);
 		const allocatedAmount =
 			dto.allocatedAmount !== undefined && dto.allocatedAmount !== null
 				? this.parseNonNegativeAmount(dto.allocatedAmount, "分配金额")
@@ -1176,13 +1188,22 @@ private parseAdjustChange(dto: AdjustPreviewDto): {
 	/**
 	 * 入参规范化与合法性校验（方案 §4.3），全部失败路径抛 400 INVALID_PLAN_PARAMS。
 	 * buildInstallments 依赖本方法保证入参合法（builder 内仅防御性兜底）。
+	 * baseCurrency 传入时校验目标币种 ≠ 本位币（create 恒传；preview 未建账时为 null 跳过比对）。
 	 */
-	private parsePlanParams(dto: SchedulePreviewDto): ParsedPlanParams {
+	private parsePlanParams(
+		dto: SchedulePreviewDto,
+		baseCurrency?: string | null,
+	): ParsedPlanParams {
 		const normalizedCurrency = dto.targetCurrency?.trim().toUpperCase() ?? "";
 		const currencyInfo = getCurrency(normalizedCurrency);
 		if (!currencyInfo) {
 			throw new PlanInvalidParamsException(
 				`目标币种必须是支持的 15 种币种之一，收到：${dto.targetCurrency}`,
+			);
+		}
+		if (baseCurrency && normalizedCurrency === baseCurrency) {
+			throw new PlanInvalidParamsException(
+				`目标币种不能与本位币相同（本位币：${baseCurrency}）`,
 			);
 		}
 
