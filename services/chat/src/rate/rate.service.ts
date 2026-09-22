@@ -3,6 +3,7 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -104,6 +105,8 @@ export class RateService {
   /** 进程内单飞：同 base+targets 的进行中回源被后续请求复用（单实例语义，方案 §3.3） */
   private readonly inFlight = new Map<string, Promise<GroupResult>>();
 
+  private readonly logger = new Logger(RateService.name);
+
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(RateProvider) private readonly provider: RateProvider,
@@ -122,14 +125,18 @@ export class RateService {
   }
 
   /**
-   * 最新报价：批量 targets、5 分钟有效期窗口、单飞回源。
+   * 最新报价：批量 targets、5 分钟有效期窗口、单飞回源、陈旧回显（SWR）。
    *
    * - 窗口基准 = ExchangeRate.createdAt 物化的「最后确认时间」：回源成功（update 分支）
-   *   显式刷新 createdAt = now → 窗口重置；缓存命中绝不触碰 → 不重置（方案 §2.2 裁决，
-   *   schema 冻结下 updatedAt 语义的等价落点）；
+   *   显式刷新 createdAt = now → 窗口重置；缓存命中/陈旧回显绝不触碰 → 不重置
+   *   （方案 §2.2 裁决，schema 冻结下 updatedAt 语义的等价落点）；
    * - fresh = now < createdAt + 5min（严格小于，恰好满 5 分钟过期）；
    * - 同币种恒等报价 rate="1" 本地生成不外呼；
-   * - 任一目标过期/缺失 → 整组一次外呼（同一时点），错误逐项下沉或按单目标上抛。
+   * - refresh=false 的三档决策（changes/rate-stale-echo-fix/技术方案.md §3.1）：
+   *   ① 全部目标窗口内 → 命中返回；② 全部目标有行但超窗 → 立即回显旧值
+   *   （fresh=false 如实标注）+ 后台异步单飞回源（失败仅告警不上抛）；
+   *   ③ 任一目标无行（冷启动）→ 同步回源；
+   * - refresh=true 或冷启动路径：整组一次外呼（同一时点），错误逐项下沉或按单目标上抛。
    */
   async getLatest(base: string, targets?: string[], refresh = false) {
     const normalizedBase = this.validateCurrency(base, 'base');
@@ -145,17 +152,17 @@ export class RateService {
 
     let group: GroupResult;
     if (!refresh && allFresh) {
-      group = new Map();
-      for (const target of requested) {
-        const row = rows.get(target)!;
-        group.set(target, {
-          rate: row.rate.toString(),
-          ...(row.sellRate != null ? { sellRate: row.sellRate.toString() } : {}),
-          source: row.source,
-          observedAt: row.observedAt,
-          confirmedAt: row.createdAt,
-        });
-      }
+      group = this.cachedGroup(requested, rows);
+    } else if (!refresh && requested.every((target) => rows.has(target))) {
+      // SWR 陈旧回显：库内齐但超窗 → 先用旧值响应（不阻塞），后台异步回源落库；
+      // 回源成功经 upsert 刷新 createdAt 重置窗口，前端轮询自然拿到新值
+      group = this.cachedGroup(requested, rows);
+      this.kickBackgroundRefresh(
+        normalizedBase,
+        requested,
+        externalTargets,
+        rows,
+      );
     } else {
       group = await this.refreshWithSingleFlight(
         normalizedBase,
@@ -406,6 +413,49 @@ export class RateService {
       if (!latest.has(row.quote)) latest.set(row.quote, row);
     }
     return latest;
+  }
+
+  /** 窗口内命中/陈旧回显共用的组构建：行值原样映射，绝不触碰行（不重置窗口） */
+  private cachedGroup(
+    requested: string[],
+    rows: Map<string, LatestRow>,
+  ): GroupResult {
+    const group: GroupResult = new Map();
+    for (const target of requested) {
+      const row = rows.get(target)!;
+      group.set(target, {
+        rate: row.rate.toString(),
+        ...(row.sellRate != null ? { sellRate: row.sellRate.toString() } : {}),
+        source: row.source,
+        observedAt: row.observedAt,
+        confirmedAt: row.createdAt,
+      });
+    }
+    return group;
+  }
+
+  /**
+   * 后台异步回源（SWR 陈旧回显路径专用）：fire-and-forget，失败仅告警不上抛——
+   * 响应已用旧值返回，本次失败由下次轮询/进页重试；复用单飞避免与进行中的
+   * 同步回源重复外呼。
+   */
+  private kickBackgroundRefresh(
+    base: string,
+    requested: string[],
+    externalTargets: string[],
+    rows: Map<string, LatestRow>,
+  ): void {
+    void this.refreshWithSingleFlight(
+      base,
+      requested,
+      externalTargets,
+      rows,
+    ).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `后台汇率回源失败（base=${base}，targets=${requested.join(',')}）：${message}`,
+      );
+    });
   }
 
   /** 同键回源单飞：进行中请求复用，结束后清除（方案 §3.3） */

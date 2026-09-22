@@ -68,9 +68,10 @@ function resolveSourceLabel(source: string): string {
  *   与 onboarding.service 入账一致——绝不用持仓币种精度；
  * - 录入价口径同 rate-reference-card 先例：sellRate ?? rate =「1 外币 = X 本位币」。
  *
- * 取价频率（logic-audit N2）：金额变化不影响汇率，refresh 仅在首次取价或
- * 「本位币 + 币种集合」变化时置 true 强制回源；仅金额变化时走后端 5 分钟
- * 窗口缓存报价本地重算，避免逐次外呼放大外部汇率源压力。
+ * 取价频率（logic-audit N2 + changes/rate-stale-echo-fix）：金额变化不影响汇率；
+ * 首次取价与仅金额变化走 refresh=false（后端窗口缓存回显已落库报价，超窗由
+ * 后端陈旧回显 + 后台刷新，进页不再必等外呼）；仅「非首次的币种集合变化」
+ * 置 refresh=true 强制回源，避免逐次外呼放大外部汇率源压力。
  */
 export function useHoldingsReview(
 	baseCurrency: string,
@@ -116,8 +117,11 @@ export function useHoldingsReview(
 		const timer = setTimeout(() => {
 			const seq = ++seqRef.current;
 			// 在真正发出请求时才推进签名：effect 若在防抖窗口内被 cleanup
-			//（快速连续输入 / StrictMode 双挂载），不应把「首取/换币」标记消费掉
-			const shouldRefresh = prevCodesSignatureRef.current !== codesSignature;
+			//（快速连续输入 / StrictMode 双挂载），不应把「换币种」标记消费掉；
+			// 首次（prev 为 null）不强制——回显已落库报价，不等外呼（SWR）
+			const shouldRefresh =
+				prevCodesSignatureRef.current !== null &&
+				prevCodesSignatureRef.current !== codesSignature;
 			prevCodesSignatureRef.current = codesSignature;
 			void (async () => {
 				try {

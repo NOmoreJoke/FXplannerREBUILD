@@ -62,12 +62,12 @@ export class RateController {
   @ApiOperation({
     summary: '查询最新汇率（支持多目标批量）',
     description:
-      '返回 base 兑指定目标的最新报价；5 分钟有效期窗口内命中数据库缓存，过期或 refresh=true 时整组回源（同一时点）。'
+      '返回 base 兑指定目标的最新报价；5 分钟有效期窗口内命中数据库缓存直接返回；超窗但库内已有报价时立即回显旧值（fresh=false 如实标注陈旧）并后台异步回源落库；库内无报价（冷启动）或 refresh=true 时同步整组回源（同一时点）。'
       + '多源路由：农行牌价（abc，秒级双价）覆盖 HKD/USD/GBP/AUD/CAD/JPY/EUR/SGD/NZD/CHF/THB/KRW，'
       + 'TWD 由 er-api、MYR 由 frankfurter 补齐；RATE_SOURCE=frankfurter 时整组单源降级（TWD 422）。'
       + '仅 abc 源额外返回现汇卖出价 sellRate（录入价取 sellRate ?? rate）。'
       + '单目标（缺省 targets=USD）返回平铺结构；多目标返回 items[] 且错误下沉到项（币对不支持 422 语义、数据源不可用 502 语义）。'
-      + '绝不返回过期报价，无 0 兑底、无手填汇率。',
+      + '错误兜底场景绝不以旧报价冒充新鲜值（无 0 兑底、无手填汇率）；陈旧回显恒以 fresh=false 标注。',
   })
   @ApiParam({
     name: 'base',
@@ -83,7 +83,7 @@ export class RateController {
   })
   @ApiQuery({
     name: 'refresh',
-    description: '忽略 5 分钟有效期窗口，强制回源（录入页进入刷新、最终确认前重查用）',
+    description: '忽略 5 分钟有效期窗口强制同步回源（确认页锁数、手动刷新等强一致场景用；页面进入已改为陈旧回显 + 后台刷新，不再传 true）',
     required: false,
     type: Boolean,
     default: false,

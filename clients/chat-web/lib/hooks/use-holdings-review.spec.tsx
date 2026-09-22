@@ -99,7 +99,7 @@ describe("useHoldingsReview", () => {
 		expect(result.current.status).toBe("idle");
 	});
 
-	it("防抖：停止输入 600ms 后才取价；首次取价 refresh=true（N2）", async () => {
+	it("防抖：停止输入 600ms 后才取价；首次取价 refresh=false（回显已落库，N2）", async () => {
 		vi.mocked(ratesApi.latest).mockResolvedValue(
 			groupOf([{ target: "USD", rate: "6.71289000", sellRate: "6.71289000" }]),
 		);
@@ -111,7 +111,8 @@ describe("useHoldingsReview", () => {
 
 		await advance(1);
 		expect(ratesApi.latest).toHaveBeenCalledTimes(1);
-		expect(ratesApi.latest).toHaveBeenCalledWith("CNY", ["USD"], true);
+		// changes/rate-stale-echo-fix：进页首拉不强制回源，不等外呼
+		expect(ratesApi.latest).toHaveBeenCalledWith("CNY", ["USD"], false);
 
 		await advance(0);
 		expect(result.current.status).toBe("success");
@@ -147,7 +148,7 @@ describe("useHoldingsReview", () => {
 		expect(result.current.rows[0].costDisplay).toBe("471.23");
 	});
 
-	it("N2：仅金额变化时复用缓存报价（refresh=false），币种集合变化才 refresh=true", async () => {
+	it("N2：首拉与仅金额变化走缓存（refresh=false），币种集合变化才 refresh=true", async () => {
 		vi.mocked(ratesApi.latest).mockResolvedValue(
 			groupOf([
 				{ target: "USD", rate: "6.71289000", sellRate: "6.71289000" },
@@ -159,9 +160,9 @@ describe("useHoldingsReview", () => {
 			rows(["USD", "10000"], ["JPY", "50000"]),
 		);
 
-		// 首次：refresh=true
+		// 首次：refresh=false（进页回显已落库，changes/rate-stale-echo-fix）
 		await advance(600);
-		expect(vi.mocked(ratesApi.latest).mock.calls[0][2]).toBe(true);
+		expect(vi.mocked(ratesApi.latest).mock.calls[0][2]).toBe(false);
 
 		// 仅金额变化：refresh=false（金额不影响汇率，复用窗口缓存本地重算）
 		rerender({ base: "CNY", rows: rows(["USD", "20000"], ["JPY", "50000"]) });

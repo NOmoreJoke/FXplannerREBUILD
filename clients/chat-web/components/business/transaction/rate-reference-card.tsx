@@ -53,8 +53,10 @@ export function RateReferenceCard({
 	const enabled = baseCurrency !== null && targetCurrency !== "";
 	const query = useQuery({
 		queryKey: ["rates", "latest", baseCurrency, targetCurrency],
+		// 回显已落库报价优先（SWR，changes/rate-stale-echo-fix）：进页不等外呼，
+		// 超窗由后端回显旧值（fresh=false）+ 后台刷新；换币种由 queryKey 变化触发重查
 		queryFn: () =>
-			ratesApi.latest(baseCurrency as string, [targetCurrency], true),
+			ratesApi.latest(baseCurrency as string, [targetCurrency], false),
 		enabled,
 		// 参考汇率仅辅助回填：失败不阻塞录入，也不自动重试打扰
 		retry: false,

@@ -18,8 +18,10 @@ export const ratesApi = {
 	 *
 	 * 公开接口（skipAuth），只读幂等。targets 为空时不带参数（后端回落 USD，
 	 * 返回单目标平铺结构）；多目标返回 items 结构且错误下沉到项。
-	 * refresh=true 强制回源（打开录入页/换币种/确认前由消费方触发），
-	 * 绕过后端 5 分钟有效期窗口；不传走窗口缓存（60s 轮询命中不外呼）。
+	 * refresh=true 强制同步回源（换币种/确认页锁数等强一致场景），绕过后端
+	 * 5 分钟有效期窗口；不传走窗口缓存——窗口内命中直接回显，超窗由后端
+	 * 陈旧回显旧值（fresh=false）并后台刷新，进页不再阻塞「获取中」
+	 * （changes/rate-stale-echo-fix）。
 	 * history 本次不封装（留待报告波次）。
 	 */
 	async latest(

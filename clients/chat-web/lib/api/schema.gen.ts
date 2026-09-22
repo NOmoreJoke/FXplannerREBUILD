@@ -234,7 +234,7 @@ export interface paths {
         };
         /**
          * 查询最新汇率（支持多目标批量）
-         * @description 返回 base 兑指定目标的最新报价；5 分钟有效期窗口内命中数据库缓存，过期或 refresh=true 时整组回源（同一时点）。多源路由：农行牌价（abc，秒级双价）覆盖 HKD/USD/GBP/AUD/CAD/JPY/EUR/SGD/NZD/CHF/THB/KRW，TWD 由 er-api、MYR 由 frankfurter 补齐；RATE_SOURCE=frankfurter 时整组单源降级（TWD 422）。仅 abc 源额外返回现汇卖出价 sellRate（录入价取 sellRate ?? rate）。单目标（缺省 targets=USD）返回平铺结构；多目标返回 items[] 且错误下沉到项（币对不支持 422 语义、数据源不可用 502 语义）。绝不返回过期报价，无 0 兑底、无手填汇率。
+         * @description 返回 base 兑指定目标的最新报价；5 分钟有效期窗口内命中数据库缓存直接返回；超窗但库内已有报价时立即回显旧值（fresh=false 如实标注陈旧）并后台异步回源落库；库内无报价（冷启动）或 refresh=true 时同步整组回源（同一时点）。多源路由：农行牌价（abc，秒级双价）覆盖 HKD/USD/GBP/AUD/CAD/JPY/EUR/SGD/NZD/CHF/THB/KRW，TWD 由 er-api、MYR 由 frankfurter 补齐；RATE_SOURCE=frankfurter 时整组单源降级（TWD 422）。仅 abc 源额外返回现汇卖出价 sellRate（录入价取 sellRate ?? rate）。单目标（缺省 targets=USD）返回平铺结构；多目标返回 items[] 且错误下沉到项（币对不支持 422 语义、数据源不可用 502 语义）。错误兜底场景绝不以旧报价冒充新鲜值（无 0 兑底、无手填汇率）；陈旧回显恒以 fresh=false 标注。
          */
         get: operations["RateController_latest"];
         put?: never;
@@ -259,6 +259,26 @@ export interface paths {
         get: operations["RateController_history"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/rates/cron-refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 手动触发一轮汇率定时刷新（验证用）
+         * @description 与定时任务共用 runOnce（CNY 视角 15 币种强制回源落库），等价一轮整点/半点定时轮。runOnce 承诺不抛异常：单源失败在 failed 数组如实呈现，整轮逃逸异常进 fatal，故本端点无 500 路径。落库 upsert 幂等（唯一键 base+quote+observedAt），重复触发无副作用积累。
+         */
+        post: operations["RateController_cronRefresh"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1940,7 +1960,7 @@ export interface components {
         };
         SchedulePreviewDto: {
             /**
-             * @description 目标币种（ISO 4217，必须在支持的 15 币种内）
+             * @description 目标币种（ISO 4217，必须在支持的 15 币种内，且不能与本位币相同）
              * @example USD
              */
             targetCurrency: string;
@@ -1969,6 +1989,11 @@ export interface components {
              * @example null
              */
             startDate?: string | null;
+            /**
+             * @description 本次计入已有外币的分配金额（≥ 0；缺省 "0"）。预览排期按 目标金额 − 该值 计算，与创建口径一致；≥ 目标金额时返回 400 AMOUNT_TOO_SMALL
+             * @example 12000.00
+             */
+            allocatedAmount?: string;
         };
         PlanErrorDto: {
             /**
@@ -1984,7 +2009,7 @@ export interface components {
         };
         CreatePlanDto: {
             /**
-             * @description 目标币种（ISO 4217，必须在支持的 15 币种内）
+             * @description 目标币种（ISO 4217，必须在支持的 15 币种内，且不能与本位币相同）
              * @example USD
              */
             targetCurrency: string;
@@ -2014,15 +2039,15 @@ export interface components {
              */
             startDate?: string | null;
             /**
+             * @description 本次计入已有外币的分配金额（≥ 0；缺省 "0"）。预览排期按 目标金额 − 该值 计算，与创建口径一致；≥ 目标金额时返回 400 AMOUNT_TOO_SMALL
+             * @example 12000.00
+             */
+            allocatedAmount?: string;
+            /**
              * @description 目标名称（缺省存 null）
              * @example 今年换 5 万美元
              */
             name?: string;
-            /**
-             * @description 本次计入已有外币的分配金额（≥ 0，≤ 可分配余额与目标金额较小者；缺省 "0" 不占用余额）
-             * @example 12000.00
-             */
-            allocatedAmount?: string;
         };
         CurrencyResponseDto: {
             /**
@@ -3558,7 +3583,7 @@ export interface operations {
     RateController_latest: {
         parameters: {
             query?: {
-                /** @description 忽略 5 分钟有效期窗口，强制回源（录入页进入刷新、最终确认前重查用） */
+                /** @description 忽略 5 分钟有效期窗口强制同步回源（确认页锁数、手动刷新等强一致场景用；页面进入已改为陈旧回显 + 后台刷新，不再传 true） */
                 refresh?: boolean;
                 /** @description 逗号分隔的目标币种（≤15 个，须在支持清单内）；缺省 USD。与 base 相同的币种返回恒等报价（rate=1） */
                 targets?: unknown;
@@ -3624,6 +3649,24 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    RateController_cronRefresh: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 轮次摘要：triggeredAt + succeeded/failed 分类；fatal 仅整轮逃逸异常时出现 */
             200: {
                 headers: {
                     [name: string]: unknown;

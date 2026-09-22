@@ -97,7 +97,7 @@ export type TransactionErrorCode = Schemas["TransactionErrorDto"]["code"];
 /** 资金准备节奏（后端 pacePreference 枚举：安心/均衡/主动） */
 export type PacePreference = "conservative" | "balanced" | "aggressive";
 
-/** 排期预览请求（POST /plans/schedule-preview；startDate 缺省 = 最早可安排日） */
+/** 排期预览请求（POST /plans/schedule-preview；startDate/allocatedAmount 缺省见后端 DTO） */
 export type PlanSchedulePreviewReq = {
 	/** 目标币种（15 币种清单内） */
 	targetCurrency: string;
@@ -111,6 +111,8 @@ export type PlanSchedulePreviewReq = {
 	pacePreference: PacePreference;
 	/** 开始准备日，ISO 8601 UTC；null/缺省 = 最早可安排日 */
 	startDate?: string | null;
+	/** 计入已有外币（金额字符串；缺省 "0"；预览排期按 目标 − 该值 计算，与创建口径一致） */
+	allocatedAmount?: string;
 };
 
 /** 分批排期中的一批（后端 PlanInstallment） */
@@ -141,12 +143,10 @@ export type PlanSchedulePreviewResp = {
 	caps: PlanCaps;
 };
 
-/** 创建计划请求（POST /plans）= 预览请求全字段 + name + allocatedAmount */
+/** 创建计划请求（POST /plans）= 预览请求全字段（含 allocatedAmount）+ name */
 export type CreatePlanReq = PlanSchedulePreviewReq & {
 	/** 目标名称（可空；缺省时后端落 null） */
 	name?: string;
-	/** 计入已有外币（金额字符串，默认 "0"） */
-	allocatedAmount: string;
 };
 
 // ---------------------------------------------------------------------------

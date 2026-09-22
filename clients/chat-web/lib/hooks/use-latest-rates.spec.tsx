@@ -124,7 +124,7 @@ afterEach(() => {
 });
 
 describe("useLatestRates", () => {
-	it("初次挂载触发 refreshLatest：请求带 refresh=true（强制回源），单目标响应归一化为单元素数组", async () => {
+	it("初次挂载不强制回源：请求带 refresh=false（回显已落库），单目标响应归一化为单元素数组", async () => {
 		vi.mocked(ratesApi.latest).mockResolvedValue(
 			flatQuote(validUntilIn(300_000)),
 		);
@@ -136,7 +136,8 @@ describe("useLatestRates", () => {
 		await advance(0);
 
 		expect(ratesApi.latest).toHaveBeenCalledOnce();
-		expect(ratesApi.latest).toHaveBeenCalledWith("CNY", ["USD"], true);
+		// changes/rate-stale-echo-fix：进页首拉走缓存/陈旧回显，不等外呼
+		expect(ratesApi.latest).toHaveBeenCalledWith("CNY", ["USD"], false);
 		expect(result.current.isLoading).toBe(false);
 		expect(result.current.error).toBeNull();
 		expect(result.current.rates).toEqual([

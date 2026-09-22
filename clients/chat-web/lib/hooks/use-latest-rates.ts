@@ -55,7 +55,7 @@ export interface LatestRatesResult {
 	/** 首次请求进行中 */
 	isLoading: boolean;
 	error: LatestRatesError | null;
-	/** 一次性强制重查（refresh=true 绕过后端窗口）；打开页面/过期重试/确认前由消费方触发 */
+	/** 一次性强制重查（refresh=true 绕过后端窗口）；过期重试/确认前由消费方触发 */
 	refreshLatest: () => Promise<void>;
 }
 
@@ -113,10 +113,11 @@ function toLatestRatesError(error: unknown): LatestRatesError {
 /**
  * 最新报价消费层（changes/realtime-rate/技术方案.md §3.5 能力规格，消费层唯一入口）。
  *
- * 单数据通道设计：挂载后/queryKey 变化后的首次拉取带 refresh=true（进入页面
- * 强制回源），之后的 60s 轮询与焦点重取走 refresh=false（后端窗口缓存）；
- * refreshLatest 置强制标记后 refetch，对 locked（enabled:false）查询同样生效
- * （react-query 手动 refetch 不受 enabled 限制），确认页「先取数后锁数」即此路径。
+ * 单数据通道设计（changes/rate-stale-echo-fix）：进页/挂载首拉走 refresh=false
+ * （后端窗口内命中直接回显；超窗由后端陈旧回显 + 后台刷新，不再阻塞「获取中」）；
+ * queryKey 变化（换币种/locked↔live）后的首次拉取与 refreshLatest 仍带 refresh=true
+ * 强制回源（显式换目标/确认页锁数 = 强一致）；之后的 60s 轮询与焦点重取走
+ * refresh=false。
  *
  * hook 不持有任何表单状态（§3.5 防覆盖手填）；报价新鲜度由 validUntil 元数据
  * 表达，所有查询显式 staleTime: 0（不依赖 react-query 的 stale 语义）。
@@ -129,8 +130,9 @@ export function useLatestRates(
 
 	// 强制回源标记：refreshLatest 置位，由下一次 queryFn 消费（置位与消费同处
 	// 一个同步任务，轮询/焦点重取无法插队）；queryFn 内的标记自复位。
-	const forcedRef = useRef(true);
-	// 上次 fetch 服务的 Key 标识：Key 变化（换币种/locked↔live）后的首次拉取强制回源
+	const forcedRef = useRef(false);
+	// 上次 fetch 服务的 Key 标识：Key 变化（换币种/locked↔live）后的首次拉取强制回源；
+	// 首次挂载（null）不强制——进页回显已落库报价，不等外呼（SWR）
 	const keyRef = useRef<string | null>(null);
 	const keyId = buildLatestRatesQueryKey(base, targetsKey, locked).join(
 		"\u0000",
@@ -139,7 +141,9 @@ export function useLatestRates(
 	const query = useQuery({
 		queryKey: buildLatestRatesQueryKey(base, targetsKey, locked),
 		queryFn: () => {
-			const forced = forcedRef.current || keyRef.current !== keyId;
+			const forced =
+				forcedRef.current ||
+				(keyRef.current !== null && keyRef.current !== keyId);
 			forcedRef.current = false;
 			keyRef.current = keyId;
 			return ratesApi.latest(base, targets, forced);
