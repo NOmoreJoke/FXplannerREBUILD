@@ -2583,6 +2583,16 @@
         "description": "以首条消息创建会话（标题=消息前 20 字）后立即开始流式回复；body 可选 modelKey 指定模型（缺省用服务端默认，非法 key 400 AI_MODEL_UNKNOWN）。响应为 text/event-stream（帧协议 meta/tool/token/done/error），不走统一 JSON 包装。发消息 5/min/IP；用户级日配额超限 429 AI_QUOTA_EXCEEDED；系统并发满 429 AI_BUSY。",
         "operationId": "AiController_createWithMessage",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageDto"
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "description": ""
@@ -2625,6 +2635,16 @@
         "description": "向既有会话追加消息并流式回复；body 可选 modelKey 指定模型（缺省用服务端默认，非法 key 400 AI_MODEL_UNKNOWN）。会话归属校验：非本人/不存在统一 404（防枚举）；同会话流进行中再发 409 AI_CONVERSATION_BUSY（先标忙碌再落用户消息，无并发窗口）。",
         "operationId": "AiController_sendMessage",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageDto"
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "description": ""
@@ -6648,6 +6668,52 @@
             "description": "DELETION 撤回必带：verify（purpose=DELETION）返回的挑战 ID（已消费凭证，仅登录不算撤回）；CLEAR 直接撤回无需携带"
           }
         }
+      },
+      "ListConversationsQueryDto": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "条数上限（1~100）",
+            "default": 50,
+            "minimum": 1,
+            "maximum": 100
+          }
+        }
+      },
+      "ListMessagesQueryDto": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "条数上限（1~500），按创建时间升序",
+            "default": 200,
+            "minimum": 1,
+            "maximum": 500
+          }
+        }
+      },
+      "SendMessageDto": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "消息内容（trim 后 1~2000 字符；空白或超长返回 400 AI_MESSAGE_EMPTY）",
+            "example": "现在美元兑日元是多少？",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "modelKey": {
+            "type": "string",
+            "description": "模型白名单 key（可选；缺省回退服务端默认模型；非法 key 返回 400 AI_MODEL_UNKNOWN）",
+            "example": "gpt-4.1-mini",
+            "maxLength": 64,
+            "pattern": "^[a-zA-Z0-9._-]+$"
+          }
+        },
+        "required": [
+          "content"
+        ]
       }
     }
   }

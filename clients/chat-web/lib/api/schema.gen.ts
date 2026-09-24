@@ -3366,6 +3366,32 @@ export interface components {
             /** @description DELETION 撤回必带：verify（purpose=DELETION）返回的挑战 ID（已消费凭证，仅登录不算撤回）；CLEAR 直接撤回无需携带 */
             challengeId?: string;
         };
+        ListConversationsQueryDto: {
+            /**
+             * @description 条数上限（1~100）
+             * @default 50
+             */
+            limit: number;
+        };
+        ListMessagesQueryDto: {
+            /**
+             * @description 条数上限（1~500），按创建时间升序
+             * @default 200
+             */
+            limit: number;
+        };
+        SendMessageDto: {
+            /**
+             * @description 消息内容（trim 后 1~2000 字符；空白或超长返回 400 AI_MESSAGE_EMPTY）
+             * @example 现在美元兑日元是多少？
+             */
+            content: string;
+            /**
+             * @description 模型白名单 key（可选；缺省回退服务端默认模型；非法 key 返回 400 AI_MODEL_UNKNOWN）
+             * @example gpt-4.1-mini
+             */
+            modelKey?: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -5151,7 +5177,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendMessageDto"];
+            };
+        };
         responses: {
             201: {
                 headers: {
@@ -5202,7 +5232,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendMessageDto"];
+            };
+        };
         responses: {
             201: {
                 headers: {

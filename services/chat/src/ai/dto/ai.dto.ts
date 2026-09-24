@@ -23,6 +23,8 @@ export class SendMessageDto {
 		example: "现在美元兑日元是多少？",
 		minLength: 1,
 		maxLength: 2000,
+		// 显式声明类型：避免 swagger 依赖 design:type 元数据在 bun 下推断失败导致误报循环依赖
+		type: String,
 	})
 	@IsString({ message: "content 必须是字符串" })
 	content!: string;
@@ -34,6 +36,7 @@ export class SendMessageDto {
 		required: false,
 		maxLength: 64,
 		pattern: "^[a-zA-Z0-9._-]+$",
+		type: String,
 	})
 	@IsOptional()
 	@IsString({ message: "modelKey 必须是字符串" })
@@ -50,6 +53,8 @@ export class ListConversationsQueryDto {
 		required: false,
 		minimum: 1,
 		maximum: 100,
+		// 显式声明类型：避免 swagger 从 @Type(() => Number) 推断时误报循环依赖
+		type: Number,
 	})
 	@IsOptional()
 	@Type(() => Number)
@@ -66,6 +71,8 @@ export class ListMessagesQueryDto {
 		required: false,
 		minimum: 1,
 		maximum: 500,
+		// 显式声明类型：避免 swagger 从 @Type(() => Number) 推断时误报循环依赖
+		type: Number,
 	})
 	@IsOptional()
 	@Type(() => Number)
