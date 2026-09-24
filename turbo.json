@@ -33,7 +33,10 @@
         "AUTH_THROTTLE_LIMIT",
         "AUTH_OTP_THROTTLE_LIMIT",
         "THROTTLE_GLOBAL_LIMIT",
-        "OTP_EMAIL_MOCK"
+        "OTP_EMAIL_MOCK",
+        "AI_E2E_FAKE_STREAM",
+        "AI_LLM_API_KEY",
+        "AI_E2E_FAKE_INTERVAL_MS"
       ]
     },
     "start": {

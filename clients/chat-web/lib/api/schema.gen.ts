@@ -905,6 +905,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/ai/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 会话列表
+         * @description 仅返回本人会话，按 lastMessageAt 倒序；幂等只读。未配 LLM key 或总开关关闭时 503 整体降级。
+         */
+        get: operations["AiController_listConversations"];
+        put?: never;
+        /**
+         * 首条消息并建会话（SSE 流式回复）
+         * @description 以首条消息创建会话（标题=消息前 20 字）后立即开始流式回复；body 可选 modelKey 指定模型（缺省用服务端默认，非法 key 400 AI_MODEL_UNKNOWN）。响应为 text/event-stream（帧协议 meta/tool/token/done/error），不走统一 JSON 包装。发消息 5/min/IP；用户级日配额超限 429 AI_QUOTA_EXCEEDED；系统并发满 429 AI_BUSY。
+         */
+        post: operations["AiController_createWithMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ai/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 聊天模型白名单列表
+         * @description 返回可选聊天模型（按 costTier 升序）；幂等只读。仅展示字段（key/displayName/provider/capabilities/costTier/icon/description），不含密钥变量与上游模型名；密钥全未配时仍返回全量列表（可用性在发消息时判定）。
+         */
+        get: operations["AiController_listModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ai/conversations/{id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 会话消息列表
+         * @description 按 createdAt 升序返回本人会话消息；非本人/不存在统一 404（防枚举）；幂等只读。
+         */
+        get: operations["AiController_listMessages"];
+        put?: never;
+        /**
+         * 追问（SSE 流式回复）
+         * @description 向既有会话追加消息并流式回复；body 可选 modelKey 指定模型（缺省用服务端默认，非法 key 400 AI_MODEL_UNKNOWN）。会话归属校验：非本人/不存在统一 404（防枚举）；同会话流进行中再发 409 AI_CONVERSATION_BUSY（先标忙碌再落用户消息，无并发窗口）。
+         */
+        post: operations["AiController_sendMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ai/conversations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * 删除会话（物理删除，消息级联）
+         * @description 物理删除本人会话及其全部消息；流进行中 409 拒绝删除；非本人/不存在统一 404（防枚举）。
+         */
+        delete: operations["AiController_deleteConversation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3637,7 +3725,7 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description 查询天数 */
-                period?: 7 | 30 | 90;
+                period?: 7 | 30 | 90 | 365;
                 /** @description 目标货币代码 */
                 target?: "HKD" | "USD" | "GBP" | "AUD" | "CAD" | "CNY" | "JPY" | "EUR" | "SGD" | "NZD" | "TWD" | "CHF" | "KRW" | "THB" | "MYR";
                 /** @description 基准货币代码 */
@@ -5036,6 +5124,108 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["DataRequestErrorDto"];
                 };
+            };
+        };
+    };
+    AiController_listConversations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AiController_createWithMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AiController_listModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AiController_listMessages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AiController_sendMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AiController_deleteConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

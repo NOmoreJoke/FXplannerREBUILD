@@ -9,7 +9,7 @@ export const SUPPORTED_CURRENCIES = CURRENCIES.map((currency) => currency.code);
 export type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
 
 export const SUPPORTED_CURRENCY_SET = new Set<string>(SUPPORTED_CURRENCIES);
-export const VALID_PERIODS = [7, 30, 90] as const;
+export const VALID_PERIODS = [7, 30, 90, 365] as const;
 export type RatePeriod = (typeof VALID_PERIODS)[number];
 
 // ── 数据源（方案 realtime-rate §3.1：农行牌价主源 + frankfurter 补 MYR + er-api 补 TWD）──

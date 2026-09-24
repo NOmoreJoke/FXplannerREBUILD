@@ -5,10 +5,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
 	ArrowLeftRight,
+	Bot,
 	FileText,
 	Home,
 	LogOut,
 	Settings,
+	TrendingUp,
 	Wallet,
 } from "lucide-react";
 import { authApi } from "@/lib/api/auth";
@@ -164,5 +166,7 @@ const NAV_ITEMS = [
 	{ href: "/plans", label: "换汇计划", icon: ArrowLeftRight },
 	{ href: "/accounts", label: "外汇账户", icon: Wallet },
 	{ href: "/reports", label: "我的报告", icon: FileText },
+	{ href: "/market", label: "汇率行情", icon: TrendingUp },
+	{ href: "/chat", label: "AI 助手", icon: Bot },
 	{ href: "/settings", label: "设置", icon: Settings },
 ] as const;

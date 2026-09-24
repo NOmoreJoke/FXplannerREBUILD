@@ -62,6 +62,12 @@ interface QuoteToPersist {
 
 type GroupResult = Map<string, LatestQuoteData | LatestQuoteError>;
 
+/**
+ * 历史回源负缓存 TTL：回源后仍不完整的币对 10 分钟内不再重试回源
+ * （rate-chart 方案 §6，防「永远补不齐币对」的外呼放大器）
+ */
+const HISTORY_NEGATIVE_CACHE_TTL_MS = 10 * 60 * 1000;
+
 /** 单目标平铺响应（契约见 dto/rate-latest.dto.ts LatestRateResponseDto） */
 export interface LatestRateResponse {
   base: string;
@@ -104,6 +110,10 @@ export interface LatestRateGroupResponse {
 export class RateService {
   /** 进程内单飞：同 base+targets 的进行中回源被后续请求复用（单实例语义，方案 §3.3） */
   private readonly inFlight = new Map<string, Promise<GroupResult>>();
+  /** 历史回源 in-flight 单飞：同币对的进行中 fetchHistory 被并发缺口请求复用（rate-chart 方案 §6） */
+  private readonly historyInFlight = new Map<string, Promise<RateHistoryPoint[]>>();
+  /** 历史回源负缓存：币对 → 负缓存过期时间戳，窗口内不再回源直接返回积累序列（rate-chart 方案 §6） */
+  private readonly historyNegativeCache = new Map<string, number>();
 
   private readonly logger = new Logger(RateService.name);
 
@@ -277,15 +287,31 @@ export class RateService {
       return this.toHistoryResponse(normalizedBase, normalizedTarget, normalizedPeriod, cached);
     }
 
-    const fetched =
-      normalizedBase === normalizedTarget
-        ? this.localHistory(start, end)
-        : await this.provider.fetchHistory(
-            normalizedBase,
-            normalizedTarget,
-            this.formatDate(start),
-            this.formatDate(end),
-          );
+    // 回源防护（rate-chart 方案 §6）：负缓存窗口内不再外呼，直接返回积累序列；
+    // 并发缺口请求经单飞合并为一次回源——防「永远补不齐币对」的回源放大器。
+    // 两个防护对 7/30/90/365 全部档位同样生效（行为增强，非仅 365）。
+    const pairKey = `${normalizedBase}|${normalizedTarget}`;
+    const negativeUntil = this.historyNegativeCache.get(pairKey);
+    const negativeCached =
+      negativeUntil !== undefined && Date.now() < negativeUntil;
+    if (negativeCached) {
+      this.logger.debug(
+        `历史回源负缓存命中（${pairKey}），窗口内直接返回积累序列`,
+      );
+    }
+
+    let fetched: RateHistoryPoint[] = [];
+    if (normalizedBase === normalizedTarget) {
+      fetched = this.localHistory(start, end);
+    } else if (!negativeCached) {
+      fetched = await this.fetchHistoryWithSingleFlight(
+        pairKey,
+        normalizedBase,
+        normalizedTarget,
+        start,
+        end,
+      );
+    }
 
     if (fetched.length > 0) {
       await this.prisma.exchangeRate.createMany({
@@ -313,7 +339,41 @@ export class RateService {
       orderBy: { observedAt: 'asc' },
     });
 
+    // 负缓存登记：真实回源后仍不完整的币对（含回源为空序列的数据源）→
+    // 10 分钟内不再重试回源（方案 §6）；负缓存命中路径不刷新窗口，
+    // 保证窗口期满必然重新尝试。恒等币对本地生成不外呼，不参与登记。
+    if (
+      normalizedBase !== normalizedTarget &&
+      !negativeCached &&
+      !this.isHistoryCacheComplete(saved, start, end)
+    ) {
+      this.historyNegativeCache.set(
+        pairKey,
+        Date.now() + HISTORY_NEGATIVE_CACHE_TTL_MS,
+      );
+    }
+
     return this.toHistoryResponse(normalizedBase, normalizedTarget, normalizedPeriod, saved);
+  }
+
+  /** 历史回源单飞：同币对进行中的 fetchHistory 复用给并发缺口请求，结束即清除（rate-chart 方案 §6） */
+  private fetchHistoryWithSingleFlight(
+    pairKey: string,
+    base: string,
+    target: string,
+    start: Date,
+    end: Date,
+  ): Promise<RateHistoryPoint[]> {
+    const existing = this.historyInFlight.get(pairKey);
+    if (existing) return existing;
+
+    const promise = this.provider
+      .fetchHistory(base, target, this.formatDate(start), this.formatDate(end))
+      .finally(() => {
+        this.historyInFlight.delete(pairKey);
+      });
+    this.historyInFlight.set(pairKey, promise);
+    return promise;
   }
 
   private isHistoryCacheComplete(

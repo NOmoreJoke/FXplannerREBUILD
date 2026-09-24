@@ -29,6 +29,7 @@ model User {
   reminders       Reminder[]
   dataRequests    DataRequest[]
   initialHoldings InitialHolding[]
+  aiConversations AiConversation[]
 
   @@map("users")
 }
@@ -385,4 +386,34 @@ model DataRequest {
   /// 同时服务互斥查询、锁守卫查询与「查当前请求」，避免每请求多索引开销
   @@index([userId, status])
   @@map("data_requests")
+}
+
+/// AI 助手会话（ai-assistant 技术方案 §3.2；标题 = 首条消息前 20 字）
+model AiConversation {
+  id            String   @id @default(cuid())
+  userId        String   @map("user_id")
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String
+  lastMessageAt DateTime @default(now()) @map("last_message_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  messages      AiMessage[]
+
+  @@index([userId, updatedAt(sort: Desc)], map: "idx_user_updated")
+  @@map("ai_conversations")
+}
+
+/// AI 助手消息（role："user" | "assistant"；助手消息只在流式成功后落库，无 status 列）
+model AiMessage {
+  id             String         @id @default(cuid())
+  conversationId String         @map("conversation_id")
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String
+  content        String         @db.Text
+  /// assistant 消息所用的白名单 key（如 "gpt-4.1-mini"，ai-model-whitelist 技术方案 §3.2）；user 消息为 NULL，存量行为 NULL
+  model          String?
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  @@index([conversationId, createdAt], map: "idx_conversation_created")
+  @@map("ai_messages")
 }

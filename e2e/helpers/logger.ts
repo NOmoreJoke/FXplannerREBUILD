@@ -51,6 +51,17 @@ export class TestLogger {
         });
       }
     });
+
+    // 监听请求失败（网络层断连/取消；SSE 排查关键证据：net::ERR_ABORTED / ERR_CONNECTION_RESET）
+    page.on('requestfailed', request => {
+      const url = request.url();
+      if (url.includes('/api/') || url.includes('/stream')) {
+        this.log('network', 'error', `requestfailed ${request.failure()?.errorText} ${request.method()} ${url}`, {
+          url,
+          failureText: request.failure()?.errorText,
+        });
+      }
+    });
   }
 
   /**

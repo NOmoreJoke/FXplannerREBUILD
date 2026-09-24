@@ -23,6 +23,7 @@ import { UsageModule } from "./usage/usage.module";
 import { CorrectionModule } from "./correction/correction.module";
 import { DataRequestModule } from "./data-request/data-request.module";
 import { DataRequestLockGuard } from "./data-request/data-request-lock.guard";
+import { AiModule } from "./ai/ai.module";
 
 @Module({
 	imports: [
@@ -53,6 +54,8 @@ import { DataRequestLockGuard } from "./data-request/data-request-lock.guard";
 		UsageModule,
 		CorrectionModule,
 		DataRequestModule,
+		// AI 助手（ai-assistant 技术方案 §5.1）：ReAct agent 对话，唯一注册点
+		AiModule,
 	],
 	controllers: [AppController],
 	providers: [

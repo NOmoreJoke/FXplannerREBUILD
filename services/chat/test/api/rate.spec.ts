@@ -1,9 +1,22 @@
 import { type INestApplication, ValidationPipe } from "@nestjs/common";
-import { Test } from "@nestjs/testing";
+import { ThrottlerGuard } from "@nestjs/throttler";
+import { Test, type TestingModuleBuilder } from "@nestjs/testing";
 import request from "supertest";
 import { createTestApp, type TestContext } from "../helpers/test-app";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { ABC_RATE_URL, ERAPI_RATE_URL } from "../../src/rate/rate.constants";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
+import {
+	ABC_RATE_URL,
+	ERAPI_RATE_URL,
+	FRANKFURTER_RATE_URL,
+} from "../../src/rate/rate.constants";
 import {
 	RATE_PROVIDER_TIMEOUT_TOKEN,
 	RateProvider,
@@ -19,8 +32,11 @@ import {
 	ABC_SAMPLE_FIXTURE,
 	createRateSourceFetchStub,
 	erApiLatestBody,
+	frankfurterBusinessDaySeries,
 	frankfurterLatestBody,
+	frankfurterRouteWithHistory,
 	jsonResponse,
+	parseFrankfurterTimeSeriesRange,
 	type RateSourceRoutes,
 } from "../helpers/rate-source-fixtures";
 
@@ -52,22 +68,48 @@ const resetAbcSourceState = (apps: INestApplication[]) => {
 	}
 };
 
+/**
+ * 重置 RateService 历史回源防护状态（单飞/负缓存进程内 Map，rate-chart 方案 §6）。
+ * 私有字段重置仅限测试基建使用（先例：resetAbcSourceState）；行情用例组共用
+ * 真实 AppModule 的 RateService 单例，跨用例残留会让负缓存/单飞判定互相污染。
+ */
+const resetHistoryGuards = (apps: INestApplication[]) => {
+	for (const app of apps) {
+		const service = app.get(RateService) as unknown as {
+			historyInFlight: Map<string, unknown>;
+			historyNegativeCache: Map<string, number>;
+		};
+		service.historyInFlight.clear();
+		service.historyNegativeCache.clear();
+	}
+};
+
+/** 是否为 frankfurter time-series URL（/{start}..{end}?from=&to=，rate-chart 方案 §8.2） */
+const isTimeSeriesUrl = (href: string) =>
+	parseFrankfurterTimeSeriesRange(href) !== null;
+
+/** 关闭全局限流守卫：行情用例组单 app 请求数贴近 10/min/IP 缺省配额，避免边界 429 */
+const disableThrottler = (builder: TestingModuleBuilder) =>
+	builder.overrideGuard(ThrottlerGuard).useValue({ canActivate: () => true });
+
 /** 真实 AppModule + overrideProvider(RateProvider) 注入 fetch stub（按 URL 路由三源，不发真实请求）；
  *  三源路由契约与 cron-refresh 端点两组用例共用（rate-refresh-cron 方案 §6.2） */
 const buildRateApp = async (
 	rateSourceEnv: string,
 	stub: ReturnType<typeof vi.fn>,
+	configure?: (builder: TestingModuleBuilder) => TestingModuleBuilder,
 ): Promise<TestContext> => {
 	const previous = process.env.RATE_SOURCE;
 	process.env.RATE_SOURCE = rateSourceEnv;
 	try {
-		return await createTestApp((builder) =>
-			builder.overrideProvider(RateProvider).useFactory({
+		return await createTestApp((builder) => {
+			const wired = builder.overrideProvider(RateProvider).useFactory({
 				factory: (timeoutMs: number) =>
 					new RateProvider(timeoutMs, stub as unknown as typeof fetch),
 				inject: [RATE_PROVIDER_TIMEOUT_TOKEN],
-			}),
-		);
+			});
+			return configure ? configure(wired) : wired;
+		});
 	} finally {
 		if (previous === undefined) delete process.env.RATE_SOURCE;
 		else process.env.RATE_SOURCE = previous;
@@ -635,9 +677,7 @@ describe("RateController（接口）", () => {
 
 		// flaky 治理：三个 app 单例的 abcSource 状态跨用例残留，每用例前重置
 		//（failureCronApp 首呼即失败亦需清 lastFetchAt，避免间隔窗口内快速失败被上一用例的时间戳放过/拦截）
-		beforeEach(() =>
-			resetAbcSourceState([cronApp, failureCronApp, dedupeApp]),
-		);
+		beforeEach(() => resetAbcSourceState([cronApp, failureCronApp, dedupeApp]));
 
 		it("手动触发成功：succeeded 覆盖 15 币种，库内落库 15 行（14 外部 + 恒等）", async () => {
 			const res = await request(cronApp.getHttpServer())
@@ -690,6 +730,228 @@ describe("RateController（接口）", () => {
 			expect(second.body.data.succeeded).toHaveLength(15);
 
 			expect(await countCnyRows()).toBe(rowsAfterFirst);
+		});
+	});
+
+	// ── rate-chart 行情档位扩展追加用例（方案 §8.2）：仅追加，既有用例断言不动 ──
+	// 装配：真实 AppModule + overrideProvider(RateProvider) 注入 fetch stub（同上组手法）；
+	// time-series 回源 URL（/{start}..{end}）按区间动态生成工作日序列，与真实「now」解耦；
+	// 回源路由选 MYR（multi 模式下唯一具备历史回源能力的币种，方案 §1.3），
+	// 422 用例按用例表用 frankfurter 单源模式 + TWD。
+	describe("行情档位扩展（365）与回源防护（真实 AppModule + fetch stub）", () => {
+		const historyRoutes: RateSourceRoutes = {};
+		const historyStub = createRateSourceFetchStub(historyRoutes);
+		/** time-series 外呼计数（frankfurter /{start}..{end} URL，负缓存/单飞行为级断言用） */
+		const countHistoryCalls = () =>
+			historyStub.mock.calls.filter(
+				([url]) =>
+					String(url).startsWith(FRANKFURTER_RATE_URL) &&
+					isTimeSeriesUrl(String(url)),
+			).length;
+		const deleteMarketPairs = () =>
+			realCtx.prisma.exchangeRate.deleteMany({
+				where: {
+					OR: [
+						{ base: "USD", quote: "MYR" },
+						{ base: "JPY", quote: "MYR" },
+					],
+				},
+			});
+
+		let marketApp: INestApplication;
+		let singleSourceApp: INestApplication;
+
+		beforeAll(async () => {
+			marketApp = (await buildRateApp("multi", historyStub, disableThrottler))
+				.app;
+			// 清理本组币对落库残留（含上次运行可能留下的行），避免缓存完整/负缓存判定污染
+			await deleteMarketPairs();
+		});
+
+		afterAll(async () => {
+			await realCtx.prisma.exchangeRate.deleteMany({
+				where: {
+					OR: [
+						{ base: "USD", quote: "MYR" },
+						{ base: "JPY", quote: "MYR" },
+						{ base: "USD", quote: "TWD" },
+					],
+				},
+			});
+			await marketApp?.close();
+			await singleSourceApp?.close();
+		});
+
+		// flaky 治理：单飞/负缓存 Map 为 RateService 单例进程内状态，每用例前重置
+		beforeEach(() => resetHistoryGuards([marketApp]));
+
+		it("period=365 表无数据：frankfurter 完整回源落库，data_points 覆盖窗口工作日、current_rate 为末点（§8.2 行1）", async () => {
+			historyRoutes.frankfurter = frankfurterRouteWithHistory({
+				latestBody: frankfurterLatestBody("2026-09-15", { MYR: "0.6102" }),
+				target: "MYR",
+				rate: "0.61",
+			});
+			await realCtx.prisma.exchangeRate.deleteMany({
+				where: { base: "USD", quote: "MYR" },
+			});
+
+			const res = await request(marketApp.getHttpServer())
+				.get("/api/rates/history?base=USD&target=MYR&period=365")
+				.expect(200);
+
+			expect(res.body).toMatchObject({
+				success: true,
+				data: { base: "USD", target: "MYR", period: 365 },
+			});
+			// 期望序列 = stub 实际收到区间的工作日全序列（与真实 now 解耦的严格比对）
+			const historyCall = historyStub.mock.calls
+				.map(([url]) => String(url))
+				.find(isTimeSeriesUrl);
+			expect(historyCall).toBeTruthy();
+			const { start, end } = parseFrankfurterTimeSeriesRange(historyCall!)!;
+			const expectedDates = Object.keys(
+				frankfurterBusinessDaySeries(start, end, "MYR", "0.61"),
+			);
+			expect(expectedDates.length).toBeGreaterThan(250); // 365 天 ≈ 261 个工作日
+			const points = res.body.data.data_points;
+			expect(points.map((p: { date: string }) => p.date)).toEqual(
+				expectedDates,
+			);
+			expect(points.every((p: { rate: string }) => p.rate === "0.61")).toBe(
+				true,
+			);
+			// current_rate 为末点
+			expect(res.body.data.current_rate).toBe(points.at(-1).rate);
+			// 回源数据落库
+			const savedCount = await realCtx.prisma.exchangeRate.count({
+				where: { base: "USD", quote: "MYR" },
+			});
+			expect(savedCount).toBe(expectedDates.length);
+		});
+
+		it("period=365 部分序列：首次回源返回部分序列并落库；第二次请求零外呼（负缓存生效，§8.2 行2）", async () => {
+			historyRoutes.frankfurter = frankfurterRouteWithHistory({
+				latestBody: frankfurterLatestBody("2026-09-15", { MYR: "0.6102" }),
+				target: "MYR",
+				rate: "0.62",
+				skipTailBusinessDays: 5, // 缺尾部 5 个工作日 → 回源后仍不完整
+			});
+			await realCtx.prisma.exchangeRate.deleteMany({
+				where: { base: "USD", quote: "MYR" },
+			});
+
+			// 外呼计数为跨用例累积值，断言用增量（本用例首次请求 +1）
+			const callsBefore = countHistoryCalls();
+			const first = await request(marketApp.getHttpServer())
+				.get("/api/rates/history?base=USD&target=MYR&period=365")
+				.expect(200);
+			const points = first.body.data.data_points;
+			expect(points.length).toBeGreaterThan(250);
+			expect(first.body.data.current_rate).toBe(points.at(-1).rate);
+			const callsAfterFirst = countHistoryCalls();
+			expect(callsAfterFirst).toBe(callsBefore + 1);
+
+			// 第二次请求：负缓存窗口内 → 不再外呼，返回同一份积累序列
+			const second = await request(marketApp.getHttpServer())
+				.get("/api/rates/history?base=USD&target=MYR&period=365")
+				.expect(200);
+			expect(second.body.data.data_points).toEqual(points);
+			expect(countHistoryCalls()).toBe(callsAfterFirst);
+		});
+
+		it("period=365 同币对并发 3 请求：回源外呼仅 1 次（in-flight 单飞，§8.2 行3）", async () => {
+			historyRoutes.frankfurter = frankfurterRouteWithHistory({
+				latestBody: frankfurterLatestBody("2026-09-15", { MYR: "0.6102" }),
+				target: "MYR",
+				rate: "0.63",
+				// stub 放慢：保证 3 个请求都在首次回源 resolve 前进入单飞判定
+				//（否则过快应答会在后续请求到达前清除 in-flight，导致重复外呼）
+				historyDelayMs: 50,
+			});
+			await realCtx.prisma.exchangeRate.deleteMany({
+				where: { base: "JPY", quote: "MYR" },
+			});
+
+			// 外呼计数为跨用例累积值：并发 3 请求仅应比用例前多 1 次（单飞合并）
+			const callsBefore = countHistoryCalls();
+			const responses = await Promise.all(
+				[1, 2, 3].map(() =>
+					request(marketApp.getHttpServer()).get(
+						"/api/rates/history?base=JPY&target=MYR&period=365",
+					),
+				),
+			);
+			for (const res of responses) {
+				expect(res.status).toBe(200);
+			}
+			// 外呼计数为跨用例累积值：并发 3 请求仅应比用例前多 1 次（单飞合并）
+			expect(countHistoryCalls()).toBe(callsBefore + 1);
+			const [first, second, third] = responses;
+			expect(second.body.data.data_points).toEqual(first.body.data.data_points);
+			expect(third.body.data.data_points).toEqual(first.body.data.data_points);
+		});
+
+		it("period=180 不在枚举：400 校验错误，不触发外呼（422 仅留给不支持币对，§8.2 行4）", async () => {
+			const before = countHistoryCalls();
+			await request(marketApp.getHttpServer())
+				.get("/api/rates/history?base=USD&target=MYR&period=180")
+				.expect(400);
+			expect(countHistoryCalls()).toBe(before);
+		});
+
+		it("frankfurter 单源模式 TWD + period=365：数据源 404 → 422 RATE_PAIR_UNSUPPORTED（§8.2 行5）", async () => {
+			const unsupportedRoutes: RateSourceRoutes = {
+				abc: async () => {
+					throw new Error("降级模式不应外呼 ABC");
+				},
+				erApi: async () => {
+					throw new Error("降级模式不应外呼 er-api");
+				},
+				frankfurter: (href) => {
+					// ECB 无 TWD：time-series 404 → RatePairUnsupportedException（422 语义）
+					if (isTimeSeriesUrl(href)) {
+						return jsonResponse({ message: "Not Found" }, 404);
+					}
+					return jsonResponse(
+						frankfurterLatestBody("2026-09-15", { TWD: "4.5023" }),
+					);
+				},
+			};
+			singleSourceApp = (
+				await buildRateApp(
+					"frankfurter",
+					createRateSourceFetchStub(unsupportedRoutes),
+					disableThrottler,
+				)
+			).app;
+
+			const res = await request(singleSourceApp.getHttpServer())
+				.get("/api/rates/history?base=USD&target=TWD&period=365")
+				.expect(422);
+
+			expect(res.body).toMatchObject({ code: "RATE_PAIR_UNSUPPORTED" });
+		});
+
+		it("既有档位 7/30/90 回归：仍被接受且防护同样生效，序列随窗口扩大递增（§8.2 行6）", async () => {
+			historyRoutes.frankfurter = frankfurterRouteWithHistory({
+				latestBody: frankfurterLatestBody("2026-09-15", { MYR: "0.6102" }),
+				target: "MYR",
+				rate: "0.64",
+			});
+			await realCtx.prisma.exchangeRate.deleteMany({
+				where: { base: "USD", quote: "MYR" },
+			});
+
+			let previousLength = 0;
+			for (const period of [7, 30, 90]) {
+				const res = await request(marketApp.getHttpServer())
+					.get(`/api/rates/history?base=USD&target=MYR&period=${period}`)
+					.expect(200);
+				expect(res.body.data.period).toBe(period);
+				const length = res.body.data.data_points.length;
+				expect(length).toBeGreaterThan(previousLength);
+				previousLength = length;
+			}
 		});
 	});
 });

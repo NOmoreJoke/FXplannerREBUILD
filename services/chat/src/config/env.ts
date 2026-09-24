@@ -70,11 +70,53 @@ const schema = z
 		ALIYUN_SMS_SIGN_NAME: optionalEnv(),
 		ALIYUN_SMS_TEMPLATE_CODE: optionalEnv(),
 		ALIYUN_SMS_ENDPOINT: optionalUrlEnv(),
+
+		// ── AI 助手（ai-model-whitelist 技术方案 §3.4；模块 src/ai 运行时另经 resolveAiRuntimeConfig
+		// 读取 process.env 以支持测试按 app 实例注入，两处默认值必须保持一致）──
+		// aigysd.com OpenAI 兼容网关（同一网关，按上游模型区分密钥变量）：
+		// 主渠道密钥（gpt-4.1 / gpt-4.1-mini / gpt-5.5 共用）
+		AI_PROVIDER_AIGYSD_API_KEY: optionalEnv(),
+		// 网关地址（如 https://aigysd.com/v1；未配时 ChatOpenAI 走官方默认端点）
+		AI_PROVIDER_AIGYSD_BASE_URL: optionalUrlEnv(),
+		// claude-sonnet-4-6 专用密钥
+		AI_PROVIDER_AIGYSD_ANTHROPIC_API_KEY: optionalEnv(),
+		// gemini-3-flash-preview 专用密钥
+		AI_PROVIDER_AIGYSD_GEMINI_API_KEY: optionalEnv(),
+		// 缺省模型 key（请求缺省 modelKey 时的回退锚点，必须在白名单内——
+		// ai-models.config.ts 模块加载期断言把关，漂移直接拒绝启动；
+		// 默认值与 ai-models.config.ts resolveDefaultChatModelKey 兑底值双处同步）
+		AI_DEFAULT_CHAT_MODEL: z.preprocess(
+			(value) => (value === "" ? undefined : value),
+			z.string().min(1).default("gpt-4.1-mini"),
+		),
+		// 全部模型密钥缺失 → 全部 AI 端点 503 AI_NOT_CONFIGURED（运行时快照检查，不 fail-fast）
+		// 总开关：false → 端点 503 AI_DISABLED（紧急止血一键关停整模块）
+		AI_CHAT_ENABLED: z.enum(["true", "false"]).default("true"),
+		// 上下文窗口条数（最近 N 条历史 + 本次消息组装进 agent 输入）
+		AI_CHAT_HISTORY_WINDOW: z.coerce.number().int().positive().default(20),
+		// 进程内流式并发上限（超 → 429 AI_BUSY；集成测试设 1 以复现）
+		AI_CHAT_MAX_CONCURRENCY: z.coerce.number().int().positive().default(40),
+		// 用户级日配额（进程内计数，重启清零——可接受，防刷为主）
+		AI_DAILY_MESSAGE_QUOTA: z.coerce.number().int().positive().default(100),
+		// 仅 E2E：假流式模型，不外呼；production 必须为 false（下方 refine 强制）
+		AI_E2E_FAKE_STREAM: z.enum(["true", "false"]).default("false"),
+		// 假流式帧间隔（ms），供 E2E 流式断言采样
+		AI_E2E_FAKE_INTERVAL_MS: z.coerce.number().int().nonnegative().default(30),
 	})
 	.refine((values) => values.OTP_CODE_SECRET !== values.JWT_SECRET, {
 		message: "OTP_CODE_SECRET 不得复用 JWT_SECRET",
 		path: ["OTP_CODE_SECRET"],
-	});
+	})
+	.refine(
+		(values) =>
+			!(
+				values.NODE_ENV === "production" && values.AI_E2E_FAKE_STREAM === "true"
+			),
+		{
+			message: "生产环境禁止开启 AI_E2E_FAKE_STREAM（假流式模型仅限 E2E 测试）",
+			path: ["AI_E2E_FAKE_STREAM"],
+		},
+	);
 
 const parsed = schema.safeParse(process.env);
 if (!parsed.success) {

@@ -521,7 +521,8 @@
               "enum": [
                 7,
                 30,
-                90
+                90,
+                365
               ],
               "type": "number"
             }
@@ -2555,6 +2556,128 @@
         "summary": "下载导出包（ZIP 流式返回）",
         "tags": [
           "DataRequest"
+        ]
+      }
+    },
+    "/api/ai/conversations": {
+      "get": {
+        "description": "仅返回本人会话，按 lastMessageAt 倒序；幂等只读。未配 LLM key 或总开关关闭时 503 整体降级。",
+        "operationId": "AiController_listConversations",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "会话列表",
+        "tags": [
+          "Ai"
+        ]
+      },
+      "post": {
+        "description": "以首条消息创建会话（标题=消息前 20 字）后立即开始流式回复；body 可选 modelKey 指定模型（缺省用服务端默认，非法 key 400 AI_MODEL_UNKNOWN）。响应为 text/event-stream（帧协议 meta/tool/token/done/error），不走统一 JSON 包装。发消息 5/min/IP；用户级日配额超限 429 AI_QUOTA_EXCEEDED；系统并发满 429 AI_BUSY。",
+        "operationId": "AiController_createWithMessage",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "首条消息并建会话（SSE 流式回复）",
+        "tags": [
+          "Ai"
+        ]
+      }
+    },
+    "/api/ai/models": {
+      "get": {
+        "description": "返回可选聊天模型（按 costTier 升序）；幂等只读。仅展示字段（key/displayName/provider/capabilities/costTier/icon/description），不含密钥变量与上游模型名；密钥全未配时仍返回全量列表（可用性在发消息时判定）。",
+        "operationId": "AiController_listModels",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "聊天模型白名单列表",
+        "tags": [
+          "Ai"
+        ]
+      }
+    },
+    "/api/ai/conversations/{id}/messages": {
+      "post": {
+        "description": "向既有会话追加消息并流式回复；body 可选 modelKey 指定模型（缺省用服务端默认，非法 key 400 AI_MODEL_UNKNOWN）。会话归属校验：非本人/不存在统一 404（防枚举）；同会话流进行中再发 409 AI_CONVERSATION_BUSY（先标忙碌再落用户消息，无并发窗口）。",
+        "operationId": "AiController_sendMessage",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "追问（SSE 流式回复）",
+        "tags": [
+          "Ai"
+        ]
+      },
+      "get": {
+        "description": "按 createdAt 升序返回本人会话消息；非本人/不存在统一 404（防枚举）；幂等只读。",
+        "operationId": "AiController_listMessages",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "会话消息列表",
+        "tags": [
+          "Ai"
+        ]
+      }
+    },
+    "/api/ai/conversations/{id}": {
+      "delete": {
+        "description": "物理删除本人会话及其全部消息；流进行中 409 拒绝删除；非本人/不存在统一 404（防枚举）。",
+        "operationId": "AiController_deleteConversation",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "删除会话（物理删除，消息级联）",
+        "tags": [
+          "Ai"
         ]
       }
     }

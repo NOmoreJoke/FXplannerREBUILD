@@ -87,6 +87,88 @@ export function frankfurterLatestBody(
 	return { date, rates };
 }
 
+/** frankfurter time-series 响应体（/{start}..{end}?from=&to= 应答：rates 按日期 → 币种价） */
+export function frankfurterTimeSeriesBody(
+	rates: Record<string, Record<string, string | number>>,
+) {
+	return { rates };
+}
+
+/** 解析 frankfurter time-series URL 的 [start, end] 区间；latest 等 URL 返回 null */
+export function parseFrankfurterTimeSeriesRange(
+	href: string,
+): { start: string; end: string } | null {
+	const match = href.match(
+		/\/(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})(?:\?|$)/,
+	);
+	return match ? { start: match[1], end: match[2] } : null;
+}
+
+/**
+ * 生成 [start, end] 工作日全序列的 time-series rates（ECB 语义：周末无报价）。
+ * skipTailBusinessDays > 0 时去掉尾部 N 个工作日（构造「缺尾部」部分序列，负缓存用例）。
+ */
+export function frankfurterBusinessDaySeries(
+	start: string,
+	end: string,
+	target: string,
+	rate: string | number,
+	skipTailBusinessDays = 0,
+): Record<string, Record<string, string | number>> {
+	const days: string[] = [];
+	const cursor = new Date(`${start}T00:00:00.000Z`);
+	const last = new Date(`${end}T00:00:00.000Z`);
+	while (cursor <= last) {
+		const weekday = cursor.getUTCDay();
+		if (weekday !== 0 && weekday !== 6) {
+			days.push(cursor.toISOString().slice(0, 10));
+		}
+		cursor.setUTCDate(cursor.getUTCDate() + 1);
+	}
+	const rates: Record<string, Record<string, string | number>> = {};
+	for (const date of days.slice(0, days.length - skipTailBusinessDays)) {
+		rates[date] = { [target]: rate };
+	}
+	return rates;
+}
+
+/**
+ * frankfurter 路由工厂：latest URL 按 latestBody 应答；time-series URL（/{start}..{end}）
+ * 按 [start, end] 工作日序列（恒定汇率，可选缺尾部）应答。historyDelayMs 用于单飞用例
+ * 放慢回源应答，保证并发请求都在首次回源 resolve 前进入单飞判定（否则 stub 过快
+ * 会在后续请求到达前清除 in-flight，导致重复外呼）。
+ */
+export function frankfurterRouteWithHistory(options: {
+	latestBody: ReturnType<typeof frankfurterLatestBody>;
+	target: string;
+	rate: string | number;
+	skipTailBusinessDays?: number;
+	historyDelayMs?: number;
+}): (href: string) => Promise<Response> {
+	return async (href) => {
+		const range = parseFrankfurterTimeSeriesRange(href);
+		if (range) {
+			if (options.historyDelayMs) {
+				await new Promise((resolve) =>
+					setTimeout(resolve, options.historyDelayMs),
+				);
+			}
+			return jsonResponse(
+				frankfurterTimeSeriesBody(
+					frankfurterBusinessDaySeries(
+						range.start,
+						range.end,
+						options.target,
+						options.rate,
+						options.skipTailBusinessDays ?? 0,
+					),
+				),
+			);
+		}
+		return jsonResponse(options.latestBody);
+	};
+}
+
 /** JSON Response 构造（fetch stub 用） */
 export function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), {

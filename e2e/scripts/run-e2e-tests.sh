@@ -86,6 +86,18 @@ export OTP_EMAIL_MOCK=true
 export AUTH_THROTTLE_LIMIT=200
 export AUTH_OTP_THROTTLE_LIMIT=200
 export THROTTLE_GLOBAL_LIMIT=500
+# 行情 E2E（changes/rate-chart §5.3）：RATE_SOURCE=frankfurter 单源降级开关——
+# 未被用例网络层 stub 拦截的汇率外呼一律单源走 frankfurter，避免 E2E 真实外呼农行 ABC 源
+export RATE_SOURCE=frankfurter
+# AI 助手 E2E（changes/ai-assistant §5.3）：假流式模型开关——LlmFactory 切换官方
+# FakeStreamingChatModel（真链路前端→后端 SSE→fake LLM，零外呼）；services/chat 的
+# dotenv 不覆盖已存在 process.env，export 必然生效。AI_* 变量其他模块不读，对既有用例零影响
+export AI_E2E_FAKE_STREAM=true
+# 降级 gate 要求至少一个白名单模型密钥可用（resolve 期快照，ai-runtime-config.ts），
+# fake 模式不外呼、占位即可（changes/ai-model-whitelist/技术方案.md §5.3）
+export AI_PROVIDER_AIGYSD_API_KEY=e2e-dummy
+# 帧间隔放大（默认 30ms）：固定回复 38 字符 × 80ms ≈ 3s 流窗口，保证「光标出现→点停止」时序余量
+export AI_E2E_FAKE_INTERVAL_MS=80
 
 # ============================================================================
 # 2. 清理端口 → 启动服务
