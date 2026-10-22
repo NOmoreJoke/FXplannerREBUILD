@@ -3,6 +3,7 @@ import { TestLogger } from "../helpers/logger";
 import { saveScreenshot } from "../helpers/save-screenshot";
 import { selectRadixOption } from "../helpers/test-utils";
 import { seedRegisterAndLogin } from "../helpers/api-seeder";
+import { TEST_PASSWORD } from "../helpers/test-credentials";
 
 /**
  * 最小建账向导 E2E（changes/onboarding-rework/技术方案.md §8.3 场景 1/2/3）
@@ -20,7 +21,6 @@ import { seedRegisterAndLogin } from "../helpers/api-seeder";
  */
 
 const BASE_URL = process.env.CORS_ORIGIN || "http://localhost:3001";
-const TEST_PASSWORD = "TestPass123";
 
 test.describe("【建账向导】登录即用 + 最小建账", () => {
 	const logger = new TestLogger("onboarding-wizard");

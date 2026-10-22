@@ -1,10 +1,11 @@
 import { ConflictException, UnauthorizedException } from "@nestjs/common";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaService } from "../prisma/prisma.service";
+import {
+	TEST_ALT_PASSWORD,
+	TEST_PASSWORD,
+} from "../../test/fixtures/test-credentials";
 import { AuthService } from "./auth.service";
-
-const STRONG_PASSWORD = ["Strong", "Pass", "123"].join("");
-const WRONG_PASSWORD = ["Wrong", "Pass", "123"].join("");
 
 const user = {
 	id: "user-1",
@@ -50,7 +51,7 @@ describe("AuthService", () => {
 
 		const result = await service.register({
 			email: "new@example.com",
-			password: "StrongPass123",
+			password: TEST_PASSWORD,
 		});
 
 		expect(result.accessToken).toBe("access-token");
@@ -69,7 +70,7 @@ describe("AuthService", () => {
 			}),
 		});
 		expect(prisma.user.create.mock.calls[0][0].data.passwordHash).not.toBe(
-			"StrongPass123",
+			TEST_PASSWORD,
 		);
 	});
 
@@ -79,7 +80,7 @@ describe("AuthService", () => {
 
 		await service.register({
 			email: " USER@Example.COM ",
-			password: STRONG_PASSWORD,
+			password: TEST_PASSWORD,
 		});
 		expect(prisma.user.findUnique).toHaveBeenCalledWith({
 			where: { email: "user@example.com" },
@@ -89,12 +90,12 @@ describe("AuthService", () => {
 		});
 
 		const passwordHash = await import("bcrypt").then(({ hash }) =>
-			hash("StrongPass123", 10),
+			hash(TEST_PASSWORD, 10),
 		);
 		prisma.user.findUnique.mockResolvedValue({ ...user, passwordHash });
 		await service.login({
 			email: " USER@Example.COM ",
-			password: STRONG_PASSWORD,
+			password: TEST_PASSWORD,
 		});
 		expect(prisma.user.findUnique).toHaveBeenLastCalledWith({
 			where: { email: "user@example.com" },
@@ -105,27 +106,27 @@ describe("AuthService", () => {
 		prisma.user.findUnique.mockResolvedValue(user);
 
 		await expect(
-			service.register({ email: user.email, password: "StrongPass123" }),
+			service.register({ email: user.email, password: TEST_PASSWORD }),
 		).rejects.toBeInstanceOf(ConflictException);
 		expect(prisma.user.create).not.toHaveBeenCalled();
 	});
 
 	it("登录成功签发 JWT，错误密码返回 UnauthorizedException", async () => {
 		const passwordHash = await import("bcrypt").then(({ hash }) =>
-			hash("StrongPass123", 10),
+			hash(TEST_PASSWORD, 10),
 		);
 		prisma.user.findUnique.mockResolvedValue({ ...user, passwordHash });
 
 		const result = await service.login({
 			email: user.email,
-			password: "StrongPass123",
+			password: TEST_PASSWORD,
 		});
 
 		expect(result.accessToken).toBe("access-token");
 		expect(result.user).not.toHaveProperty("passwordHash");
 
 		await expect(
-			service.login({ email: user.email, password: "WrongPass123" }),
+			service.login({ email: user.email, password: TEST_ALT_PASSWORD }),
 		).rejects.toBeInstanceOf(UnauthorizedException);
 	});
 

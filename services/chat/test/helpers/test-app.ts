@@ -7,6 +7,7 @@ import { type INestApplication, ValidationPipe } from "@nestjs/common";
 import request from "supertest";
 import { AppModule } from "../../src/app.module";
 import { PrismaService } from "../../src/prisma/prisma.service";
+import { TEST_PASSWORD } from "../fixtures/test-credentials";
 
 /**
  * 接口测试共享工具
@@ -56,7 +57,7 @@ export async function createTestUser(
 	label: string,
 ): Promise<TestUser> {
 	const email = `${label}-${Date.now()}@example.com`;
-	const password = "TestPass123";
+	const password = TEST_PASSWORD;
 
 	await request(app.getHttpServer())
 		.post("/api/auth/register")

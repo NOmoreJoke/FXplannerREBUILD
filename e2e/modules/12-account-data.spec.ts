@@ -2,6 +2,7 @@ import os from "node:os";
 import { test, expect } from "../fixtures/auto-screenshot";
 import { TestLogger } from "../helpers/logger";
 import { saveScreenshot } from "../helpers/save-screenshot";
+import { buildApiUrl, resolveApiBase } from "../helpers/api-url";
 import {
 	injectLoginCookie,
 	seedOnboarding,
@@ -34,7 +35,7 @@ import {
  */
 
 const BASE_URL = process.env.CORS_ORIGIN || "http://localhost:3001";
-const API_URL = process.env.API_URL ?? "http://localhost:4001";
+const API_URL = resolveApiBase(process.env.API_URL, "http://localhost:4001");
 
 /**
  * 后端局域网地址：OTP_IP 频控按来源 IP 分桶（默认 5 次/60s），
@@ -57,7 +58,7 @@ async function fetchDevCode(
 	email: string,
 	purpose?: string,
 ): Promise<{ challengeId: string; devCode?: string }> {
-	const res = await fetch(`${lanApiUrl()}/api/auth/otp/send-code`, {
+	const res = await fetch(buildApiUrl(lanApiUrl(), "/api/auth/otp/send-code"), {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ channel: "email", target: email, purpose }),
@@ -467,7 +468,7 @@ test.describe("【账号与数据】导出/清空/注销", () => {
 
 		// API 层：用途隔离精确语义。LOGIN challenge 直接提交导出验证 →
 		// 用途先行校验（不消费、不累计尝试）→ 403 VERIFICATION_PURPOSE_MISMATCH。
-		const verifyRes = await fetch(`${lanApiUrl()}/api/data-requests/verify`, {
+		const verifyRes = await fetch(buildApiUrl(lanApiUrl(), "/api/data-requests/verify"), {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",

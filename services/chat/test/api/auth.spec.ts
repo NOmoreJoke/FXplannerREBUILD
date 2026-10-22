@@ -1,6 +1,7 @@
 import type { INestApplication } from "@nestjs/common";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
+import { TEST_PASSWORD } from "../fixtures/test-credentials";
 import {
 	createTestApp,
 	createTestUser,
@@ -20,7 +21,7 @@ describe("AuthController（e2e）", () => {
 	let user: TestUser;
 
 	const EMAIL = `auth-${Date.now()}@example.com`;
-	const PASSWORD = "AuthTest123";
+	const PASSWORD = TEST_PASSWORD;
 
 	beforeAll(async () => {
 		ctx = await createTestApp();

@@ -10,9 +10,13 @@
  *
  * 后端地址：process.env.API_URL ?? http://localhost:4001（对齐 playwright.config 注释：
  * E2E 依赖人工预启动的前后端服务，本文件不拉起任何服务）。
+ * 地址经 resolveApiBase 校验（仅 http/https、不带用户信息），拼接统一走 buildApiUrl。
  */
 
-const API_URL = process.env.API_URL ?? "http://localhost:4001";
+import { buildApiUrl, resolveApiBase } from "./api-url";
+import { TEST_PASSWORD } from "./test-credentials";
+
+const API_URL = resolveApiBase(process.env.API_URL, "http://localhost:4001");
 
 /** 连通性已检查（首次 api() 调用时探针一次，避免环境错配时逐用例报 fetch failed 噪声） */
 let apiReachabilityChecked = false;
@@ -22,7 +26,7 @@ async function ensureApiReachable(): Promise<void> {
 	if (apiReachabilityChecked) return;
 	apiReachabilityChecked = true;
 	try {
-		const res = await fetch(`${API_URL}/api/health`, {
+		const res = await fetch(buildApiUrl(API_URL, "/api/health"), {
 			signal: AbortSignal.timeout(5_000),
 		});
 		if (!res.ok) {
@@ -46,7 +50,7 @@ async function fetchWithBackoff(
 ): Promise<Response> {
 	let res: Response;
 	try {
-		res = await fetch(`${API_URL}${path}`, init);
+		res = await fetch(buildApiUrl(API_URL, path), init);
 	} catch (error) {
 		throw new Error(
 			`后端连接失败：${API_URL}${path}（${error instanceof Error ? error.message : error}）。` +
@@ -61,7 +65,7 @@ async function fetchWithBackoff(
 		await new Promise((resolve) =>
 			setTimeout(resolve, THROTTLE_RETRY_DELAY_MS),
 		);
-		res = await fetch(`${API_URL}${path}`, init);
+		res = await fetch(buildApiUrl(API_URL, path), init);
 	}
 	return res;
 }
@@ -146,7 +150,7 @@ export async function seedRegisterAndLogin(label: string): Promise<{
 	userId: string;
 }> {
 	const email = `e2e-account-${label}-${Date.now()}@example.com`;
-	const password = "TestPass123";
+	const password = TEST_PASSWORD;
 	await api("/api/auth/register", {
 		method: "POST",
 		body: { email, password, name: label },

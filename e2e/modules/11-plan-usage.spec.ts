@@ -1,6 +1,7 @@
 import { test, expect } from "../fixtures/auto-screenshot";
 import { TestLogger } from "../helpers/logger";
 import { saveScreenshot } from "../helpers/save-screenshot";
+import { buildApiUrl, resolveApiBase } from "../helpers/api-url";
 import {
 	injectLoginCookie,
 	seedOnboarding,
@@ -25,8 +26,8 @@ import {
  */
 
 const BASE_URL = process.env.CORS_ORIGIN || "http://localhost:3001";
-/** 造数用后端地址（对齐 api-seeder 的 API_URL） */
-const API_URL = process.env.API_URL ?? "http://localhost:4001";
+/** 造数用后端地址（对齐 api-seeder 的 API_URL，经 resolveApiBase 校验） */
+const API_URL = resolveApiBase(process.env.API_URL, "http://localhost:4001");
 
 /** 造数直连 API（对齐 api-seeder 的 api() 封装，仅本文件 adjust 链路使用） */
 async function api<T>(
@@ -37,7 +38,7 @@ async function api<T>(
 		"Content-Type": "application/json",
 	};
 	if (init.token) headers.Authorization = `Bearer ${init.token}`;
-	const res = await fetch(`${API_URL}${path}`, {
+	const res = await fetch(buildApiUrl(API_URL, path), {
 		method: init.method,
 		headers,
 		body: init.body === undefined ? undefined : JSON.stringify(init.body),

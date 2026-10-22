@@ -2,6 +2,7 @@ import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
 import { bearer, type TestUser } from "./test-app";
 import { ensureAccount } from "./plan-test-helper";
+import { TEST_PASSWORD } from "../fixtures/test-credentials";
 import type { PrismaService } from "../../src/prisma/prisma.service";
 
 /**
@@ -62,7 +63,7 @@ export async function createOnboardedUser(
 	label: string,
 ): Promise<TestUser> {
 	const email = `rem-${label}-${REAL_NOW_MS}-${Math.random().toString(36).slice(2, 8)}@example.com`;
-	const password = "Passw0rd!234";
+	const password = TEST_PASSWORD;
 	await request(app.getHttpServer())
 		.post("/api/auth/register")
 		.send({ email, password, name: label })

@@ -1,6 +1,7 @@
 import { test, expect } from "../fixtures/auto-screenshot";
 import { TestLogger } from "../helpers/logger";
 import { saveScreenshot } from "../helpers/save-screenshot";
+import { buildApiUrl, resolveApiBase } from "../helpers/api-url";
 import {
 	injectLoginCookie,
 	seedOnboarding,
@@ -24,14 +25,14 @@ import {
 
 const BASE_URL = process.env.CORS_ORIGIN || "http://localhost:3001";
 // 造数直连后端（对齐 api-seeder：前端无 /api 代理，经前端地址会 404）
-const API_URL = process.env.API_URL ?? "http://localhost:6001";
+const API_URL = resolveApiBase(process.env.API_URL, "http://localhost:6001");
 
 /** 录入一笔费用未知的买入（feeAmount 缺省 = 未知，doc 05），返回交易 id */
 async function seedUnknownFeePurchase(
 	token: string,
 	currencyCode: string,
 ): Promise<string> {
-	const res = await fetch(`${API_URL}/api/transactions`, {
+	const res = await fetch(buildApiUrl(API_URL, "/api/transactions"), {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
@@ -179,7 +180,7 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 
 		const user = await seedRegisterAndLogin(`corr-holding-${Date.now()}`);
 		// complete 带初始持仓（依赖真实外部汇率源；不可用环境 skip）
-		await fetch(`${API_URL}/api/onboarding/consents`, {
+		await fetch(buildApiUrl(API_URL, "/api/onboarding/consents"), {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -187,7 +188,7 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 			},
 			body: JSON.stringify({ age18Confirmed: true, termsConfirmed: true }),
 		}).then((res) => res.json());
-		const completeRes = await fetch(`${API_URL}/api/onboarding/complete`, {
+		const completeRes = await fetch(buildApiUrl(API_URL, "/api/onboarding/complete"), {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",

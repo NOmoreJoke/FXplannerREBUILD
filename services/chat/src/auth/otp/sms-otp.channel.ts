@@ -33,7 +33,9 @@ function sign(secret: string, parameters: Record<string, string>): string {
 		.map((key) => `${encode(key)}=${encode(parameters[key])}`)
 		.join("&");
 	const stringToSign = `GET&%2F&${encode(canonicalized)}`;
-	return createHmac("sha1", `${secret}&`).update(stringToSign).digest("base64");
+	// 阿里云 RPC 签名 V1.0 支持 HMAC-SHA256（流程与 SHA1 一致，仅哈希不同）；
+	// SHA1 已被安全扫描列为弱算法，这里统一使用 SHA256。
+	return createHmac("sha256", `${secret}&`).update(stringToSign).digest("base64");
 }
 
 @Injectable()
@@ -81,7 +83,7 @@ export class SmsOtpChannel implements OtpChannel {
 			Format: "JSON",
 			PhoneNumbers: target,
 			RegionId: "cn-hangzhou",
-			SignatureMethod: "HMAC-SHA1",
+			SignatureMethod: "HMAC-SHA256",
 			SignatureNonce: randomUUID(),
 			SignatureVersion: "1.0",
 			SignName: this.signName,

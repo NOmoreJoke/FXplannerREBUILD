@@ -1,6 +1,7 @@
 import { test, expect } from "../fixtures/auto-screenshot";
 import { TestLogger } from "../helpers/logger";
 import { saveScreenshot } from "../helpers/save-screenshot";
+import { TEST_ALT_PASSWORD, TEST_PASSWORD } from "../helpers/test-credentials";
 
 /**
  * 认证模块 E2E 测试
@@ -14,7 +15,6 @@ import { saveScreenshot } from "../helpers/save-screenshot";
 
 const BASE_URL = process.env.CORS_ORIGIN || "http://localhost:3001";
 const TEST_EMAIL = `e2e-auth-${Date.now()}@example.com`;
-const TEST_PASSWORD = "TestPass123";
 
 test.describe("【认证模块】用户认证流程", () => {
 	const logger = new TestLogger("auth-module");
@@ -70,8 +70,8 @@ test.describe("【认证模块】用户认证流程", () => {
 
 			// 使用已存在的邮箱
 			await page.fill('input[name="email"]', TEST_EMAIL);
-			await page.fill('input[name="password"]', "AnotherPass123");
-			await page.fill('input[name="confirmPassword"]', "AnotherPass123");
+			await page.fill('input[name="password"]', TEST_ALT_PASSWORD);
+			await page.fill('input[name="confirmPassword"]', TEST_ALT_PASSWORD);
 			logger.log("action", "info", "✓ 使用已存在邮箱填充表单");
 
 			// 提交

@@ -1,13 +1,33 @@
 import { captureApiError } from "@/lib/dev-log/monitor";
 import { clearToken, getToken } from "@/lib/auth/token";
 
-// 从环境变量读取后端 API 地址（必需）
-if (!process.env.NEXT_PUBLIC_API_BASE_URL) {
-	throw new Error(
-		"环境变量 NEXT_PUBLIC_API_BASE_URL 未设置，请确保已加载 .env.local",
-	);
+// 从环境变量读取后端 API 地址（必需）。
+// 仅允许 http/https 且不携带用户名/密码的地址，防止配置被注入成
+// 其他协议或带凭据的 URL（CWE-918 整改：校验后再进入 fetch）。
+function resolveApiBaseUrl(): string {
+	const raw = process.env.NEXT_PUBLIC_API_BASE_URL;
+	if (!raw) {
+		throw new Error(
+			"环境变量 NEXT_PUBLIC_API_BASE_URL 未设置，请确保已加载 .env.local",
+		);
+	}
+	let parsed: URL;
+	try {
+		parsed = new URL(raw);
+	} catch {
+		throw new Error(`NEXT_PUBLIC_API_BASE_URL 不是合法 URL：${raw}`);
+	}
+	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+		throw new Error(
+			`NEXT_PUBLIC_API_BASE_URL 仅允许 http/https 协议，当前为 ${parsed.protocol}`,
+		);
+	}
+	if (parsed.username || parsed.password) {
+		throw new Error("NEXT_PUBLIC_API_BASE_URL 不允许携带用户名/密码");
+	}
+	return parsed.toString().replace(/\/+$/, "");
 }
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
+const API_BASE_URL = resolveApiBaseUrl();
 
 interface RequestConfig extends RequestInit {
 	skipAuth?: boolean;
@@ -50,6 +70,15 @@ export async function apiClient<T>(
 	config: RequestConfig = {},
 ): Promise<T> {
 	const { skipAuth = false, ...fetchConfig } = config;
+
+	// endpoint 只允许站内相对路径：拒绝绝对 URL 与协议相对 URL，
+	// 防止调用方把请求转发到外部主机（CWE-918 整改）。
+	if (typeof endpoint !== "string" || !endpoint.startsWith("/")) {
+		throw new Error(`endpoint 必须是以 / 开头的相对路径：${endpoint}`);
+	}
+	if (endpoint.startsWith("//")) {
+		throw new Error(`endpoint 不允许是协议相对 URL：${endpoint}`);
+	}
 
 	// 自动添加 Authorization Header
 	const headers: Record<string, string> = {
