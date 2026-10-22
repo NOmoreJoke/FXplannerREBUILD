@@ -1,5 +1,6 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "fxplanner-new",
@@ -63,6 +64,7 @@
         "zustand": "^5.0.14",
       },
       "devDependencies": {
+        "@fxplanner-new/typescript-config": "workspace:*",
         "@hookform/resolvers": "^5.4.0",
         "@tanstack/react-query-devtools": "^5.101.4",
         "@testing-library/react": "^16.3.2",
@@ -106,6 +108,10 @@
       "version": "0.1.0",
       "dependencies": {
         "decimal.js": "^10.6.0",
+      },
+      "devDependencies": {
+        "typescript": "^5.7.0",
+        "vitest": "^4.1.10",
       },
     },
     "packages/typescript-config": {
@@ -153,6 +159,7 @@
         "zod": "^3.23.8",
       },
       "devDependencies": {
+        "@fxplanner-new/typescript-config": "workspace:*",
         "@nestjs/cli": "^11.0.0",
         "@nestjs/schematics": "^11.0.0",
         "@nestjs/testing": "^11.1.27",

@@ -19,5 +19,9 @@
 	},
 	"dependencies": {
 		"decimal.js": "^10.6.0"
+	},
+	"devDependencies": {
+		"typescript": "^5.7.0",
+		"vitest": "^4.1.10"
 	}
 }
