@@ -1,9 +1,9 @@
 import { test, expect } from "../fixtures/auto-screenshot";
 import { TestLogger } from "../helpers/logger";
 import { saveScreenshot } from "../helpers/save-screenshot";
-import { buildApiUrl, resolveApiBase } from "../helpers/api-url";
 import {
 	injectLoginCookie,
+	seedFullyAllocatedPlan,
 	seedOnboarding,
 	seedPlanWithAllocation,
 	seedRegisterAndLogin,
@@ -26,36 +26,6 @@ import {
  */
 
 const BASE_URL = process.env.CORS_ORIGIN || "http://localhost:3001";
-/** 造数用后端地址（对齐 api-seeder 的 API_URL，经 resolveApiBase 校验） */
-const API_URL = resolveApiBase(process.env.API_URL, "http://localhost:4001");
-
-/** 造数直连 API（对齐 api-seeder 的 api() 封装，仅本文件 adjust 链路使用） */
-async function api<T>(
-	path: string,
-	init: { method: string; token?: string; body?: unknown },
-): Promise<T> {
-	const headers: Record<string, string> = {
-		"Content-Type": "application/json",
-	};
-	if (init.token) headers.Authorization = `Bearer ${init.token}`;
-	const res = await fetch(buildApiUrl(API_URL, path), {
-		method: init.method,
-		headers,
-		body: init.body === undefined ? undefined : JSON.stringify(init.body),
-	});
-	const json = (await res.json()) as {
-		success: boolean;
-		data: T;
-		code?: string;
-		message?: string;
-	};
-	if (!res.ok || !json.success) {
-		throw new Error(
-			`API 造数失败 ${init.method} ${path} → ${res.status} ${json.code ?? ""} ${json.message ?? ""}`,
-		);
-	}
-	return json.data;
-}
 
 /** 今天（UTC+8 口径，与前端 utc8TodayYmd 同源算法）：YYYY-MM-DD */
 function utc8TodayYmd(): string {
@@ -65,32 +35,6 @@ function utc8TodayYmd(): string {
 /** 明天（UTC+8 口径）：日期拦截用例输入 */
 function utc8TomorrowYmd(): string {
 	return new Date(Date.now() + 32 * 60 * 60 * 1000).toISOString().slice(0, 10);
-}
-
-/**
- * 创建「分配总额 = 目标金额」的计划：
- * 创建路径分配 = 目标时分批总额为 0（400 AMOUNT_TOO_SMALL），故走真实两步链路——
- * 创建（分配 6000，分批总额 > 0）→ PATCH /plans/:id 调高分配至全额（缺口 0 清空排期）。
- */
-async function seedFullyAllocatedPlan(
-	token: string,
-	targetCurrency: string,
-	targetAmount: string,
-): Promise<string> {
-	const planId = await seedPlanWithAllocation(token, targetCurrency, "6000");
-	const detail = await api<{ updatedAt: string }>(`/api/plans/${planId}`, {
-		method: "GET",
-		token,
-	});
-	await api(`/api/plans/${planId}`, {
-		method: "PATCH",
-		token,
-		body: {
-			newAllocAmount: targetAmount,
-			expectedUpdatedAt: detail.updatedAt,
-		},
-	});
-	return planId;
 }
 
 /** 打开记录使用对话框并填写提交（页面唯一入口：详情页头「记录使用」按钮） */

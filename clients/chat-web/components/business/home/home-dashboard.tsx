@@ -13,6 +13,7 @@ import {
 import { format, parseISO } from "date-fns";
 import { buttonVariants } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { ComplianceDisclaimer } from "@/components/base";
 import { InitialBackfillCard } from "@/components/business/home/initial-backfill-card";
 import { ReminderSection } from "@/components/business/reminder";
 import {
@@ -30,7 +31,7 @@ import { cn } from "@/lib/utils";
  * 工作台首页仪表盘（真实数据版，changes/home-dashboard/接口契约.md §4）
  *
  * 数据全部来自 useHomeState 归一的 dashboard（页面分流后传入），页面无写死业务数字：
- * - 顶栏：当天日期 + 录入买入快捷入口 + 汇率监控角标（latestRateObservedAt 为 null 不显示）
+ * - 顶栏：当天日期 + 录入买入快捷入口 + 新建计划次级入口（阶段5 §1）+ 汇率监控角标（latestRateObservedAt 为 null 不显示）
  * - 统计卡：账户数 / 持仓总成本（portfolio 失败显示 "—" 不阻塞整页）/ 最新汇率刷新 / 最晚备汇日（无 ACTIVE 计划不出卡）
  * - 账户卡：余额 + 平均成本，整卡点击进 /accounts/:currencyCode
  * - 计划提醒横幅：焦点计划分配进度 + 备汇日倒计时（逾期红色），「查看计划」进 /plans/:id；无焦点计划不渲染
@@ -68,6 +69,14 @@ export function HomeDashboard({ dashboard }: HomeDashboardProps) {
 					</p>
 				</div>
 				<div className="flex items-center gap-3">
+					{/* 新建计划次级入口（阶段5 §1）：与录入买入并排，主次分明；空态分支有自己的引导入口，互斥不重复 */}
+					<Link
+						href="/plans/new"
+						className={buttonVariants({ variant: "outline" })}
+					>
+						<Plus className="size-4" />
+						新建计划
+					</Link>
 					{/* 快速录入入口（changes/transaction-entry/技术方案.md §6） */}
 					<Link
 						href="/transactions/new"
@@ -208,6 +217,11 @@ export function HomeDashboard({ dashboard }: HomeDashboardProps) {
 					</div>
 				</section>
 			)}
+
+			{/* 最小合规免责声明（P0-5）：登录后首页固定展示（空态分支已有自己的免责提示条） */}
+			<div className="mt-8">
+				<ComplianceDisclaimer />
+			</div>
 		</div>
 	);
 }

@@ -81,10 +81,17 @@ test.describe("【外汇账户模块】账户列表 / 详情 / 流水", () => {
 		await page.waitForLoadState("networkidle");
 
 		// 金额卡四值：原样渲染接口字符串（平均单位成本 8 位），null 显示「—」的降级由详情降级用例覆盖
-		await expect(page.getByText("余额", { exact: true })).toBeVisible();
-		await expect(page.getByText("已分配", { exact: true })).toBeVisible();
-		await expect(page.getByText("未分配余额", { exact: true })).toBeVisible();
-		await expect(page.getByText("平均单位成本", { exact: true })).toBeVisible();
+		// 「未分配余额」限定摘要区：阶段5 §2 后账户详情页新增「计划分配」只读表，
+		// 其合计行同样使用官方术语「未分配余额」（全局断言会 strict 冲突）
+		const summaryCards = page.getByLabel("账户金额概览");
+		await expect(summaryCards.getByText("余额", { exact: true })).toBeVisible();
+		await expect(summaryCards.getByText("已分配", { exact: true })).toBeVisible();
+		await expect(
+			summaryCards.getByText("未分配余额", { exact: true }),
+		).toBeVisible();
+		await expect(
+			summaryCards.getByText("平均单位成本", { exact: true }),
+		).toBeVisible();
 		await expect(page.getByText("12000.0000").first()).toBeVisible();
 		await expect(page.getByText("6000.0000").first()).toBeVisible();
 		await expect(page.getByText("1.00000000")).toBeVisible(); // (6000+6000) ÷ 12000，toFixed(8)
@@ -95,13 +102,19 @@ test.describe("【外汇账户模块】账户列表 / 详情 / 流水", () => {
 		);
 
 		// 流水表：两行买入记录按日期倒序（同日按录入倒序）；类型标签「买入」
-		const rows = page.locator("tbody tr");
+		// 锚定流水表（阶段5 §2 后页面新增「计划分配」只读表，页内不止一个 tbody）
+		const ledgerTable = page.locator("section", {
+			has: page.getByRole("heading", { name: "账户流水" }),
+		});
+		const rows = ledgerTable.locator("tbody tr");
 		await expect(rows).toHaveCount(2);
 		await expect(rows.first()).toContainText("买入");
 		await expect(rows.nth(1)).toContainText("买入");
 
 		// 成本列表头动态本位币（baseCurrency=CNY 由接口返回，前端不硬编码）
-		await expect(page.locator("th", { hasText: "成本（CNY）" })).toBeVisible();
+		await expect(
+			ledgerTable.locator("th", { hasText: "成本（CNY）" }),
+		).toBeVisible();
 
 		// 买入行级跳转：倒序首行 = 后录入的一笔，取行内 stretched link 的目标作为断言基准（不硬编码 id）
 		const rowHref = await rows

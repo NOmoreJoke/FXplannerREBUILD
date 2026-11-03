@@ -8,6 +8,7 @@ import {
 	ReportPlanList,
 	PlanReportPrintDialog,
 } from "@/components/business/report";
+import { ComplianceDisclaimer } from "@/components/base";
 
 /**
  * 我的报告（报告中心，reports 技术方案 §6 reports/page）。
@@ -74,6 +75,11 @@ export default function ReportsPage() {
 				open={printPlanId !== null}
 				onClose={() => setPrintPlanId(null)}
 			/>
+
+			{/* 最小合规免责声明（P0-5）：报告页固定展示（成本数据仅记录口径） */}
+			<div className="mt-6">
+				<ComplianceDisclaimer />
+			</div>
 		</div>
 	);
 }

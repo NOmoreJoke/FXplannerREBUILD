@@ -234,6 +234,39 @@ export async function seedPlanWithAllocation(
 }
 
 /**
+ * 创建「分配总额 = 目标金额」的全额计划（07-plan-lifecycle / 11-plan-usage 共用，
+ * 禁止 spec 间复制）：创建路径分配 = 目标时分批总额为 0（400 AMOUNT_TOO_SMALL），
+ * 故走真实两步链路——创建（先分配 initialAlloc，分批总额 > 0）→
+ * PATCH /plans/:id 调高分配至目标全额（缺口清 0，排期清空）。
+ */
+export async function seedFullyAllocatedPlan(
+	token: string,
+	targetCurrency: string,
+	targetAmount = "10000",
+	initialAlloc = "6000",
+): Promise<string> {
+	const planId = await seedPlanWithAllocation(token, targetCurrency, initialAlloc);
+	const detail = await api<{ updatedAt: string }>(`/api/plans/${planId}`, {
+		method: "GET",
+		token,
+	});
+	await api(`/api/plans/${planId}`, {
+		method: "PATCH",
+		token,
+		body: {
+			newAllocAmount: targetAmount,
+			expectedUpdatedAt: detail.updatedAt,
+		},
+	});
+	return planId;
+}
+
+/** 完成确认（POST /api/plans/:id/complete，无请求体；前置：已使用 = 目标且剩余分配 0） */
+export async function completePlanViaApi(token: string, planId: string) {
+	return api(`/api/plans/${planId}/complete`, { method: "POST", token });
+}
+
+/**
  * 账户列表/详情场景全套造数（方案 §8.3 场景 1/2 前置）：
  * 注册登录 → 完成设置（baseCurrency 默认 CNY）→ 录入 2 笔同币种买入 → 创建计划分配 6,000。
  * 默认账本：CAD 余额 12,000.0000 / 已分配 6,000.0000 / 未分配余额 6,000.0000 /
