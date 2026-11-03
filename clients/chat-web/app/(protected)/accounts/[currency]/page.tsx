@@ -7,6 +7,7 @@ import { ArrowLeft, CircleAlert } from "lucide-react";
 import {
 	AccountLedgerTable,
 	AccountSummaryCards,
+	PlanAllocationTable,
 } from "@/components/business/account";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,15 @@ export default function AccountDetailPage() {
 	const ledgerQuery = useQuery({
 		queryKey: ["accounts", "ledger", code],
 		queryFn: () => accountsApi.ledger(code as string),
+		enabled: code !== null,
+		retry: false,
+	});
+
+	// 按计划分配明细（阶段5 §2 功能 13）：只读事实展示，与摘要/流水并行；
+	// 失败静默降级不阻塞整页（明细缺失不该挡住余额/流水查看）
+	const allocationsQuery = useQuery({
+		queryKey: ["accounts", "allocations", code],
+		queryFn: () => accountsApi.allocations(code as string),
 		enabled: code !== null,
 		retry: false,
 	});
@@ -89,6 +99,26 @@ export default function AccountDetailPage() {
 			</header>
 
 			<AccountSummaryCards detail={detailQuery.data} />
+
+			{/* 按计划分配（阶段5 §2）：只读明细 + 未分配余额合计；分配与调整操作在计划中 */}
+			<section className="mt-8" aria-label="按计划分配">
+				<h2 className="text-base font-bold text-foreground">计划分配</h2>
+				<p className="mb-4 mt-1 text-xs text-muted-foreground">
+					该币种的余额分给了哪些计划；分配与调整请在计划详情中操作。
+				</p>
+				{allocationsQuery.data ? (
+					<PlanAllocationTable
+						allocation={allocationsQuery.data.items}
+						detail={detailQuery.data}
+					/>
+				) : allocationsQuery.isError ? (
+					<p className="text-sm text-muted-foreground">
+						计划分配明细加载失败，可稍后刷新重试。
+					</p>
+				) : (
+					<p className="text-sm text-muted-foreground">加载中…</p>
+				)}
+			</section>
 
 			<section className="mt-8">
 				<h2 className="text-base font-bold text-foreground">账户流水</h2>

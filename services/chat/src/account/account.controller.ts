@@ -28,11 +28,13 @@ import {
 	AccountLedgerItemDto,
 	AccountListDto,
 	AccountListItemDto,
+	AccountPlanAllocationDto,
+	AccountPlanAllocationListDto,
 } from "./dto/account.dto";
 import { AccountService } from "./account.service";
 
 /**
- * 外汇账户（account-module 技术方案 §4）：三个只读端点，全部需登录。
+ * 外汇账户（account-module 技术方案 §4 + 阶段5 §2）：四个只读端点，全部需登录。
  * ⚠️ 项目无全局 JWT 守卫（app.module 仅全局挂 ThrottlerGuard），Controller 级
  * @UseGuards(JwtAuthGuard) + @ApiBearerAuth() 必须显式挂载（plan.controller 先例）；
  * userId 取自鉴权上下文（@CurrentUser），禁止入参传入。
@@ -47,6 +49,8 @@ import { AccountService } from "./account.service";
 	AccountDetailDto,
 	AccountLedgerDto,
 	AccountLedgerItemDto,
+	AccountPlanAllocationDto,
+	AccountPlanAllocationListDto,
 	AccountErrorDto,
 )
 @Controller("accounts")
@@ -140,6 +144,42 @@ export class AccountController {
 			params.currencyCode,
 			() => this.accountService.detail(user.id, params.currencyCode),
 		).then((data) => ({ success: true, data, message: "账户详情获取成功" }));
+	}
+
+	@Get(":currencyCode/allocations")
+	@ApiOperation({
+		summary: "账户按计划分配明细（只读；分配与调整操作在计划中，本端点无写操作）",
+		description:
+			"按计划逐条返回该币种的分配明细（计划名/状态、分配总额、累计已使用、剩余分配），按计划创建时间升序，无分页（个位到十位级，take 100 兜底）。不过滤计划状态，与列表/详情 allocatedAmount 汇总口径一致（CANCELLED 已释放剩余 0 仍如实列出）；amount 与 usedAmount 均为 0 的计划不出明细行。鉴权与 400/404 口径同详情接口（ACCOUNT_NOT_FOUND 不泄露存在性）。",
+	})
+	@ApiOkResponse({
+		description: "获取成功，响应体为 { success, data, message } 包装",
+		schema: {
+			properties: {
+				success: { type: "boolean", example: true },
+				data: { $ref: "#/components/schemas/AccountPlanAllocationListDto" },
+				message: { type: "string" },
+			},
+		},
+	})
+	@ApiBadRequestResponse({
+		description: "币种不在支持的 15 币种内（INVALID_ACCOUNT_CURRENCY）",
+		type: AccountErrorDto,
+	})
+	@ApiNotFoundResponse({
+		description: "该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND）",
+		type: AccountErrorDto,
+	})
+	async getAllocations(
+		@CurrentUser() user: User,
+		@Param() params: AccountCurrencyParamDto,
+	) {
+		return this.withLog(
+			"GET /accounts/:currencyCode/allocations",
+			user.id,
+			params.currencyCode,
+			() => this.accountService.allocations(user.id, params.currencyCode),
+		).then((data) => ({ success: true, data, message: "计划分配获取成功" }));
 	}
 
 	@Get(":currencyCode/transactions")

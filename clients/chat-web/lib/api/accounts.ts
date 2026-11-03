@@ -1,11 +1,14 @@
 import { apiClient } from "@/lib/api/client";
+import type { components } from "@/lib/api/schema.gen";
 
 // ---------------------------------------------------------------------------
-// 外汇账户（account-module M3，临时手写）：后端 AccountModule 已落地，
-// `bun run generate:api` OpenAPI 生成链路覆盖后迁移至 contract.ts 别名层
-// （对齐 contract.ts 中 HomeState 的「临时手写」先例注释）。
+// 外汇账户（account-module M3 + 阶段5 §2 分配视图）：后端 AccountModule 已落地。
+// 旧类型为「临时手写」先例（迁移待办见文件头注释）；新增类型一律取
+// bun run generate:api 生成的 schema.gen（后端 DTO 唯一来源，禁止手写）。
 // 金额一律字符串：账户金额 toFixed(4)、平均单位成本 toFixed(8)，前端不做二次舍入。
 // ---------------------------------------------------------------------------
+
+type Schemas = components["schemas"];
 
 /** 账户列表项（GET /accounts 出参 accounts 元素；官方术语：持仓 = 余额） */
 export type AccountListItem = {
@@ -64,6 +67,12 @@ export type AccountLedgerResp = {
 	items: AccountLedgerItem[];
 };
 
+/** 按计划分配明细项（后端 AccountPlanAllocationDto，GET /accounts/:currencyCode/allocations 的 items 元素；阶段5 §2） */
+export type AccountPlanAllocation = Schemas["AccountPlanAllocationDto"];
+
+/** 按计划分配明细响应（GET /accounts/:currencyCode/allocations 的 data） */
+export type AccountPlanAllocationResp = Schemas["AccountPlanAllocationListDto"];
+
 export const accountsApi = {
 	/**
 	 * 账户列表（GET /accounts）
@@ -100,6 +109,22 @@ export const accountsApi = {
 	async ledger(currencyCode: string): Promise<AccountLedgerResp> {
 		return apiClient<AccountLedgerResp>(
 			`/accounts/${currencyCode}/transactions`,
+			{
+				method: "GET",
+			},
+		);
+	},
+
+	/**
+	 * 按计划分配明细（GET /accounts/:currencyCode/allocations，阶段5 §2 功能 13）
+	 *
+	 * 需登录，只读幂等；按计划创建时间升序、无分页。不过滤计划状态
+	 * （CANCELLED 剩余 0 仍列出）；剩余分配由服务端算好下发，前端禁止重算。
+	 * 失败：400 INVALID_ACCOUNT_CURRENCY / 404 ACCOUNT_NOT_FOUND（同 detail）。
+	 */
+	async allocations(currencyCode: string): Promise<AccountPlanAllocationResp> {
+		return apiClient<AccountPlanAllocationResp>(
+			`/accounts/${currencyCode}/allocations`,
 			{
 				method: "GET",
 			},

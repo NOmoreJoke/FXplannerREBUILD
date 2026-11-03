@@ -553,6 +553,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{currencyCode}/allocations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 账户按计划分配明细（只读；分配与调整操作在计划中，本端点无写操作）
+         * @description 按计划逐条返回该币种的分配明细（计划名/状态、分配总额、累计已使用、剩余分配），按计划创建时间升序，无分页（个位到十位级，take 100 兜底）。不过滤计划状态，与列表/详情 allocatedAmount 汇总口径一致（CANCELLED 已释放剩余 0 仍如实列出）；amount 与 usedAmount 均为 0 的计划不出明细行。鉴权与 400/404 口径同详情接口（ACCOUNT_NOT_FOUND 不泄露存在性）。
+         */
+        get: operations["AccountController_getAllocations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{currencyCode}/transactions": {
         parameters: {
             query?: never;
@@ -2381,6 +2401,43 @@ export interface components {
             baseCurrency: string | null;
             /** @description 流水条目，按 occurredAt 倒序、同刻按录入时间倒序；无分页（单用户 ≤ 万级，§3.6） */
             items: components["schemas"]["AccountLedgerItemDto"][];
+        };
+        AccountPlanAllocationDto: {
+            /**
+             * @description 计划 ID（跳转计划详情用）
+             * @example cm9plan...
+             */
+            planId: string;
+            /**
+             * @description 计划名称；未命名计划为 null（前端显示「未命名计划」）
+             * @example 学费计划
+             */
+            planName: string | null;
+            /**
+             * @description 计划状态（不过滤：CANCELLED 已释放剩余 0 仍如实列出，与 allocatedAmount 汇总口径一致）
+             * @example ACTIVE
+             * @enum {string}
+             */
+            planStatus: "ACTIVE" | "COMPLETED" | "CANCELLED";
+            /**
+             * @description 分配总额（PlanAllocation.amount，toFixed(4) 字符串）
+             * @example 6000.0000
+             */
+            amount: string;
+            /**
+             * @description 累计已使用（PlanAllocation.usedAmount，toFixed(4) 字符串）
+             * @example 4000.0000
+             */
+            usedAmount: string;
+            /**
+             * @description 剩余分配 = 分配总额 − 累计已使用（Decimal 服务端算好，toFixed(4) 字符串）；CANCELLED 计划为 0（取消时释放）
+             * @example 2000.0000
+             */
+            remainingAllocation: string;
+        };
+        AccountPlanAllocationListDto: {
+            /** @description 按计划逐条分配明细，按计划创建时间升序（稳定确定）；无分配账户为空数组 */
+            items: components["schemas"]["AccountPlanAllocationDto"][];
         };
         AccountErrorDto: {
             /**
@@ -4346,6 +4403,49 @@ export interface operations {
                         /** @example true */
                         success?: boolean;
                         data?: components["schemas"]["AccountDetailDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 币种不在支持的 15 币种内（INVALID_ACCOUNT_CURRENCY） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountErrorDto"];
+                };
+            };
+            /** @description 该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountErrorDto"];
+                };
+            };
+        };
+    };
+    AccountController_getAllocations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 获取成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["AccountPlanAllocationListDto"];
                         message?: string;
                     };
                 };
