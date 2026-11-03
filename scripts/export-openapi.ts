@@ -16,6 +16,7 @@
  */
 import "reflect-metadata"; // Nest 装饰器元数据 polyfill，必须先于 AppModule 加载
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,8 +30,13 @@ const outPath = path.resolve(
 async function main() {
 	process.chdir(chatDir); // env.ts 依赖 cwd 定位 .env.local，与 nest start 行为一致
 
-	const { NestFactory } = await import("@nestjs/core");
-	const { SwaggerModule } = await import("@nestjs/swagger");
+	// Bun isolated linker 下本脚本（scripts/）的裸导入无法解析 services/chat 的依赖闭包，
+	// 经 createRequire 锚定 chat package.json 取运行时包（先例 e2e/helpers/data-request-db.ts）；
+	// AppModule 等 TS 模块仍走相对路径动态 import（Bun 实时转译，且其内部裸导入从
+	// services/chat/src 解析，天然落在 chat 依赖闭包内，与 CJS 实例同一物理文件不重复加载）。
+	const chatRequire = createRequire(path.resolve(chatDir, "package.json"));
+	const { NestFactory } = chatRequire("@nestjs/core");
+	const { SwaggerModule } = chatRequire("@nestjs/swagger");
 	const { AppModule } = await import("../services/chat/src/app.module");
 	const { createSwaggerConfig } = await import(
 		"../services/chat/src/config/swagger"
