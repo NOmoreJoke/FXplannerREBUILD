@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
+import { ComplianceDisclaimer } from "@/components/base";
 
 /**
  * 公开落地页（纯静态服务端组件）
@@ -47,6 +48,11 @@ export default function HomePage() {
 				<p className="mt-8 text-sm text-ink-400">
 					换汇计划 · 多平台比价 · 汇率提醒
 				</p>
+
+				{/* 最小合规免责声明（P0-5）：公开页固定展示 */}
+				<div className="mt-6">
+					<ComplianceDisclaimer />
+				</div>
 			</div>
 		</main>
 	);

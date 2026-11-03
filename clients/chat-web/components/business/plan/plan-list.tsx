@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { CircleAlert, Plus } from "lucide-react";
+import Decimal from "decimal.js";
 import type { PlanDetail, PlanListItem } from "@/lib/api/contract";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
 	formatDisplayAmount,
@@ -14,8 +16,8 @@ import {
 /**
  * 换汇计划列表卡（changes/plan-management/技术方案.md §5.2 plan-list）
  *
- * 列表卡片 + 状态徽标 + 「新建计划」按钮；金额/日期为服务端口径的
- * 展示格式化（去尾零 / 取日期部分）。纯受控组件，数据由页面装配。
+ * 列表卡片 + 状态徽标 + 「新建计划」按钮 + 准备进度条（阶段5 §3）；
+ * 金额/日期为服务端口径的展示格式化（去尾零 / 取日期部分）。纯受控组件，数据由页面装配。
  */
 
 /** 状态徽标文案与配色（官方术语：进行中/已完成/已取消） */
@@ -36,6 +38,25 @@ const STATUS_BADGE: Record<
 		className: "bg-muted text-muted-foreground border-border",
 	},
 };
+
+/**
+ * 准备进度百分比（阶段5 §3 口径，与 M7 双进度同源）：
+ * （目标 − 缺口）÷ 目标 × 100。gap 由服务端 plan-calculator 唯一计算下发，
+ * 前端只做一次展示除法；Decimal 字符串运算，四舍五入取整、钳位 0-100、目标 ≤ 0 → 0
+ * （先例 use-home-state.ts deriveFocusPlan）。所有状态按同一公式如实展示，不做特判。
+ */
+function preparationPercent(plan: PlanDetail | PlanListItem): number {
+	const target = new Decimal(plan.targetAmount);
+	if (target.lte(0)) {
+		return 0;
+	}
+	const prepared = target.minus(new Decimal(plan.gap));
+	const percent = prepared
+		.div(target)
+		.mul(100)
+		.toDecimalPlaces(0, Decimal.ROUND_HALF_UP);
+	return Math.min(100, Math.max(0, percent.toNumber()));
+}
 
 export interface PlanListProps {
 	items: PlanListItem[];
@@ -172,6 +193,17 @@ function PlanCard({ plan }: { plan: PlanDetail | PlanListItem }) {
 					currency={plan.targetCurrency}
 				/>
 			</dl>
+
+			{/* 准备进度条（阶段5 §3）：所有状态同一公式如实展示 */}
+			<div className="mt-3">
+				<div className="flex items-center justify-between text-xs text-ink-600">
+					<span>准备进度</span>
+					<span className="font-semibold tabular-nums">
+						{preparationPercent(plan)}%
+					</span>
+				</div>
+				<Progress value={preparationPercent(plan)} className="mt-1.5" />
+			</div>
 
 			<div className="mt-3 border-t border-border pt-3 text-xs text-muted-foreground">
 				最晚准备日期 {formatDisplayDate(plan.latestPrepDate)}
