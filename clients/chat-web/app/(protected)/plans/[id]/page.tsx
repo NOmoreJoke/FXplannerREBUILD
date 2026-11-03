@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
 import { plansApi } from "@/lib/api/plans";
+import { HOME_STATE_QUERY_KEY } from "@/lib/hooks/use-home-state";
 import { usagesApi } from "@/lib/api/usages";
 import type { PlanDetail } from "@/lib/api/contract";
 
@@ -131,6 +132,9 @@ export default function PlanDetailPage() {
 					if (typeof id !== "string") return;
 					queryClient.setQueryData(planDetailKey(id), detail);
 					void queryClient.invalidateQueries({ queryKey: ["plans", "list"] });
+					// 分配随调整/取消/完成/重开变化：账户系（余额/分配明细/流水）一并失效
+					void queryClient.invalidateQueries({ queryKey: ["accounts"] });
+					void queryClient.invalidateQueries({ queryKey: HOME_STATE_QUERY_KEY });
 				}}
 				onWriteFailed={() => void query.refetch()}
 				onUsageSaved={refreshAfterUsage}

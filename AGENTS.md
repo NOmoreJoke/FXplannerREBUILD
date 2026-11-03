@@ -75,6 +75,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 ├─ scripts/                         # 工程脚本（init / test / worktree）+ __tests__/
 ├─ changes/                         # ⛔ 变更文档唯一位置（需求/方案/验收），按功能名称分目录
 ├─ docs/                            # 长期规范文档
+│  └─ handoff/                      # 跨会话交接（夜间批次产出：OVERNIGHT-* / 状态快照）
 ├─ .changeset/                      # Changesets 配置与变更记录
 ├─ .husky/                          # git hooks
 └─ .pi/skills/                      # AI 工作流技能存档

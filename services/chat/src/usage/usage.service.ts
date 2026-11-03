@@ -19,7 +19,6 @@ import {
 	assertUsedAtInRange,
 	allocateLotsFifo,
 	computeFundStatus,
-	utc8DayStart,
 	UsageCalcError,
 	UsageLotShortageError,
 } from "./usage-calculator";
@@ -436,7 +435,7 @@ export class UsageService {
 		return amount;
 	}
 
-	/** 使用日期解析：有效 ISO 8601，服务端截取 UTC 0 点（对齐 plan 模块日期口径） */
+	/** 使用日期解析：有效 ISO 8601，保存精确时刻（与买入 transactedAt 原样存储口径一致） */
 	private parseUsedAt(value: string): Date {
 		const date = new Date(value);
 		if (Number.isNaN(date.getTime())) {
@@ -444,10 +443,11 @@ export class UsageService {
 				`使用日期必须是有效的 ISO 8601 日期，收到：${value}`,
 			);
 		}
-		// 取整到 UTC+8 当日 0 点：与 assertUsedAtInRange 的日界同源。
-		// 曾取整到 UTC 0 点，两套日界在 00:00-08:00 +0800 窗口错位一天，
-		// 导致「晚于今天」校验被绕过、账本起点当日被误拒。
-		return utc8DayStart(date);
+		// 禁止截断到日 0 点：FIFO 权威比较器（compareLedgerEntries）按精确时刻排序，
+		// 截断会把同日使用排到买入之前，更正账本重放误报资金不足并阻断合法更正
+		// （对抗审 B1）。上下界校验（assertUsedAtInRange）按 UTC+8 日历日窗口比较，
+		// 任意当日时刻原样通过；「不早于账本起点」为日粒度（当日任意时刻可补录）。
+		return date;
 	}
 
 	/** 备注解析：trim 后空串归 null；超 200 字 400（§4.1） */

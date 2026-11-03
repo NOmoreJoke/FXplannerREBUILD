@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { toast } from "sonner";
@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import type { CreatePlanReq } from "@/lib/api/contract";
 import { onboardingApi } from "@/lib/api/onboarding";
 import { plansApi } from "@/lib/api/plans";
+import { HOME_STATE_QUERY_KEY } from "@/lib/hooks/use-home-state";
 import { toPacePreference, usePlanForm } from "@/lib/hooks/use-plan-form";
 import { useSchedulePreview } from "@/lib/hooks/use-schedule-preview";
 
@@ -26,6 +27,7 @@ const ONBOARDING_STATUS_QUERY_KEY = ["onboarding", "status"] as const;
 
 export default function NewPlanPage() {
 	const router = useRouter();
+	const queryClient = useQueryClient();
 	const form = usePlanForm();
 
 	const preview = useSchedulePreview({
@@ -69,6 +71,9 @@ export default function NewPlanPage() {
 		mutationFn: (req: CreatePlanReq) => plansApi.create(req),
 		onSuccess: () => {
 			toast.success("计划创建成功");
+			// 创建可携带分配：账户系（余额/分配明细）与首页状态一并失效，避免回看旧缓存
+			void queryClient.invalidateQueries({ queryKey: ["accounts"] });
+			void queryClient.invalidateQueries({ queryKey: HOME_STATE_QUERY_KEY });
 			router.replace("/home"); // hasPlans=true 自动切换正常首页
 		},
 		onError: (error: unknown) => {

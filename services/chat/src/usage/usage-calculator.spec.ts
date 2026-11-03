@@ -326,10 +326,14 @@ describe("assertUsedAtInRange（使用日期上下界）", () => {
 		).not.toThrow();
 	});
 
-	it("早于账本起点拒；等于起点当日放行；起点为 null 跳过下界", () => {
+	it("早于账本起点所在日（UTC+8）拒；起点当日任意时刻放行；起点为 null 跳过下界", () => {
+		// 起点日界：起点 09-10T00:00Z（UTC+8 当日 = 09-10，该日 0 点 = 09-09T16:00Z）
+		expect(() =>
+			assertUsedAtInRange(TS("2026-09-09T15:59:59.000Z"), now, ledgerStart),
+		).toThrow(/不能早于记账起点/);
 		expect(() =>
 			assertUsedAtInRange(TS("2026-09-09T23:59:59.000Z"), now, ledgerStart),
-		).toThrow(/不能早于记账起点/);
+		).not.toThrow(); // 起点当日 0-8 点窗口（UTC+8 日内任意时刻可补录）
 		expect(() =>
 			assertUsedAtInRange(TS("2026-09-10T00:00:00.000Z"), now, ledgerStart),
 		).not.toThrow();
@@ -343,7 +347,8 @@ describe("assertUsedAtInRange（使用日期上下界）", () => {
 			[TS("2026-09-21T00:00:00.000Z"), now, null], // 明天：双拒
 			[TS("2026-09-20T16:00:00.000Z"), now, null], // UTC+8 明天 0 点：双拒
 			[TS("2026-09-19T16:00:00.000Z"), now, null], // 今天 0 点：双过
-			[TS("2026-09-09T23:59:59.000Z"), now, ledgerStart], // 起点前：双拒
+			[TS("2026-09-09T15:59:59.000Z"), now, ledgerStart], // 起点前一日最后一刻：双拒
+			[TS("2026-09-09T23:59:59.000Z"), now, ledgerStart], // 起点当日早窗：双过（日粒度下界）
 			[TS("2026-09-10T00:00:00.000Z"), now, ledgerStart], // 起点当日：双过
 			[TS("2020-01-01T00:00:00.000Z"), now, null], // 无起点：双过
 		];

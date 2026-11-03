@@ -57,8 +57,9 @@ describe("Swagger 接口说明", () => {
 		// + rate-refresh-cron 1 端点：POST /api/rates/cron-refresh（手动触发定时刷新）
 		// + AI 助手 6 端点（ai-assistant §4 + ai-model-whitelist §4.1）：
 		//   GET /api/ai/models、GET/POST /api/ai/conversations、
-		//   POST/GET /api/ai/conversations/:id/messages、DELETE /api/ai/conversations/:id = 55
-		expect(operations).toHaveLength(55);
+		//   POST/GET /api/ai/conversations/:id/messages、DELETE /api/ai/conversations/:id
+		// + 阶段5 §2 账户分配视图 1 端点：GET /api/accounts/:currencyCode/allocations = 56
+		expect(operations).toHaveLength(56);
 		for (const { path, method, operation } of operations) {
 			expect(
 				operation.summary,
