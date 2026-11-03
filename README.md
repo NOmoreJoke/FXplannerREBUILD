@@ -1,11 +1,14 @@
 # FXplanner — 换汇计划工作台
 
+> **唯一工程根**：本仓库（`NOmoreJoke/FXplannerREBUILD`）是 FXplanner 的唯一 SoT；旧 Vue/FastAPI 仓不参与上线排期，其进度不计入完成度。
+> 进度真相：`changes/mvp-completion/审查报告-20261103.md`（功能逐项 ✅/🟡/❌）· 迭代节奏：`docs/NOMI-FX-ITERATION-AND-BACKLOG-20261103.md` · 上线范围：`docs/NOMI-FX-CONSOLIDATION-20261103.md` §7 · 本地起服：`docs/LOCAL_BOOTSTRAP.md` · 上线预检：`docs/LAUNCH-CHECKLIST.md`
+
 面向有分批换汇需求用户（留学缴费、跨境用汇等场景）的外汇计划与成本管理工作台。
 核心闭环：**建换汇计划 → 分批准备 → 记录买入 → 记录实际使用 → 更正纠错 → 成本报告**，辅以提醒、汇率行情、AI 汇率助手。
 
 ## 产品能力（MVP 已交付）
 
-- **换汇计划**：目标币种/金额/使用日期，分配上限校验（防重复分配），目标调整预览（缺口/释放），完成、取消、重开全生命周期
+- **换汇计划**：目标币种/金额/使用日期，分配上限校验（防重复分配），目标调整预览（缺口/释放），完成、取消、重开全生命周期；首页「新建计划」直达入口、列表准备进度条、账户页按计划分配只读表（阶段5 §1-§3 收尾）
 - **分批准备**：安心/均衡/主动三种节奏，临期自动降级，零头归尾，安排变更先预览后替换
 - **买入交易**：本金+汇率 / 本金+到账两种互算，手续费三态（无/未知/明确，未知≠0），关联计划仅标记
 - **资金使用**：分次使用，扣账户余额与计划分配，FIFO 成本消耗（初始持仓 → 买入，同日按录入顺序），准备/使用双进度与资金状态（PREPARING/READY/USED_UP）
@@ -29,7 +32,7 @@ Bun + Turbo Monorepo：Next.js（App Router）前端 / NestJS + Prisma + Postgre
 │                                #   prisma schema + migrations + seed，三层测试在 test/
 ├─ packages/money/              # 跨端共享精度计算纯函数库（15 币种小数位、汇率 8 位、Decimal 舍入规则）
 ├─ packages/                    # dev-log-server / eslint-config / typescript-config
-├─ e2e/                         # Playwright E2E（16 个 spec）+ run-e2e-tests.sh 统一编排
+├─ e2e/                         # Playwright E2E（17 个 spec，含 07-plan-lifecycle 生命周期）+ run-e2e-tests.sh 统一编排
 ├─ infra/compose/               # Docker 镜像 + 生产部署编排（deploy.sh）
 ├─ changes/                     # 变更文档（需求/方案/验收，按功能分目录）——进度事实来源
 └─ docs/                        # 长期规范：MVP 功能模块与业务逻辑（15 份）+ 开发计划（含 2026-11-03 审计勾选）
