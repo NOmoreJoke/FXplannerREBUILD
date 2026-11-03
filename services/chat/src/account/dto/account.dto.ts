@@ -172,6 +172,62 @@ export class AccountLedgerDto {
 	items!: AccountLedgerItemDto[];
 }
 
+/** 账户按计划分配明细单项（GET /api/accounts/:currencyCode/allocations；阶段5 §2 功能 13 收尾） */
+export class AccountPlanAllocationDto {
+	@ApiProperty({
+		description: "计划 ID（跳转计划详情用）",
+		example: "cm9plan...",
+		type: String,
+	})
+	planId!: string;
+
+	@ApiProperty({
+		description: "计划名称；未命名计划为 null（前端显示「未命名计划」）",
+		example: "学费计划",
+		type: String,
+		nullable: true,
+	})
+	planName!: string | null;
+
+	@ApiProperty({
+		description: "计划状态（不过滤：CANCELLED 已释放剩余 0 仍如实列出，与 allocatedAmount 汇总口径一致）",
+		example: "ACTIVE",
+		enum: ["ACTIVE", "COMPLETED", "CANCELLED"],
+		type: String,
+	})
+	planStatus!: string;
+
+	@ApiProperty({
+		description: "分配总额（PlanAllocation.amount，toFixed(4) 字符串）",
+		example: "6000.0000",
+		type: String,
+	})
+	amount!: string;
+
+	@ApiProperty({
+		description: "累计已使用（PlanAllocation.usedAmount，toFixed(4) 字符串）",
+		example: "4000.0000",
+		type: String,
+	})
+	usedAmount!: string;
+
+	@ApiProperty({
+		description: "剩余分配 = 分配总额 − 累计已使用（Decimal 服务端算好，toFixed(4) 字符串）；CANCELLED 计划为 0（取消时释放）",
+		example: "2000.0000",
+		type: String,
+	})
+	remainingAllocation!: string;
+}
+
+/** GET /api/accounts/:currencyCode/allocations 出参 */
+export class AccountPlanAllocationListDto {
+	@ApiProperty({
+		description: "按计划逐条分配明细，按计划创建时间升序（稳定确定）；无分配账户为空数组",
+		type: [AccountPlanAllocationDto],
+	})
+	items!: AccountPlanAllocationDto[];
+}
+
 /** 路径参数：币种代码（大小写不敏感，服务端统一转大写后按 money 包校验） */
 export class AccountCurrencyParamDto {
 	@ApiProperty({

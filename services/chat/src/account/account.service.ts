@@ -19,6 +19,8 @@ import type {
 	AccountLedgerItemDto,
 	AccountListDto,
 	AccountListItemDto,
+	AccountPlanAllocationDto,
+	AccountPlanAllocationListDto,
 } from "./dto/account.dto";
 
 /**
@@ -127,6 +129,64 @@ export class AccountService {
 			averageUnitCost:
 				averageUnitCost === null ? null : averageUnitCost.toFixed(8),
 		};
+	}
+
+	/**
+	 * 账户按计划分配明细（GET /api/accounts/:currencyCode/allocations，阶段5 §2 功能 13 收尾）：
+	 * 纯只读事实展示——不过滤计划状态（与 allocatedAmount 汇总口径一致：CANCELLED
+	 * 已释放 amount=max(used,0)，剩余 0 仍如实列出）；remainingAllocation = amount −
+	 * usedAmount（Decimal 服务端算好，前端禁止重算）。amount 与 usedAmount 均为 0 的
+	 * 计划（从未分配/取消且无使用）不产生明细行——对汇总贡献为 0，列出即噪声。
+	 * PlanAllocation 与 Plan 裸外键无 relation，沿用内存 join 先例（§3.3）。
+	 * 排序：计划创建时间升序（稳定确定）；无分页（个位到十位级，take 100 兜底对齐 plan 列表约定）。
+	 */
+	async allocations(
+		userId: string,
+		currencyCodeRaw: string,
+	): Promise<AccountPlanAllocationListDto> {
+		const currencyCode = this.normalizeCurrency(currencyCodeRaw);
+		const [account, plans] = await Promise.all([
+			this.prisma.account.findUnique({
+				where: { userId_currencyCode: { userId, currencyCode } },
+			}),
+			this.prisma.plan.findMany({
+				where: { userId, targetCurrency: currencyCode },
+				orderBy: { createdAt: "asc" },
+				take: 100,
+				select: { id: true, name: true, status: true },
+			}),
+		]);
+		if (!account) {
+			throw new AccountNotFoundException();
+		}
+		const allocations =
+			plans.length > 0
+				? await this.prisma.planAllocation.findMany({
+						where: { planId: { in: plans.map((plan) => plan.id) } },
+					})
+				: [];
+		const allocationByPlanId = new Map(
+			allocations.map((allocation) => [allocation.planId, allocation]),
+		);
+		const items: AccountPlanAllocationDto[] = [];
+		for (const plan of plans) {
+			const allocation = allocationByPlanId.get(plan.id);
+			if (!allocation) continue; // 无分配行：对汇总贡献 0，不出明细
+			if (allocation.amount.isZero() && allocation.usedAmount.isZero()) {
+				continue; // 全 0 行（从未分配/取消且无使用）：无事实可展示
+			}
+			items.push({
+				planId: plan.id,
+				planName: plan.name,
+				planStatus: plan.status,
+				amount: allocation.amount.toFixed(4),
+				usedAmount: allocation.usedAmount.toFixed(4),
+				remainingAllocation: allocation.amount
+					.sub(allocation.usedAmount)
+					.toFixed(4),
+			});
+		}
+		return { items };
 	}
 
 	/**

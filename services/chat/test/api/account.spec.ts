@@ -19,6 +19,8 @@ import { ensureOnboarded } from "../helpers/onboarding-helper";
 import {
 	ensureAccount,
 	seedPlanWithAllocation,
+	setAllocationUsedAmount,
+	cleanupPlanData,
 } from "../helpers/plan-test-helper";
 
 // 关闭全局接口限流：AppModule 以 { provide: APP_GUARD, useClass: ThrottlerGuard } 注册全局限流，
@@ -55,7 +57,9 @@ describe("AccountController（接口）", () => {
 	let userLedger: TestUser; // 流水用户（3 天前 + 昨天）
 	let userOther: TestUser; // 他人账户越权探测用户（无任何账户）
 	let userUsage: TestUser; // M7 流水成本用户（2 笔 CAD 买入 + 一笔使用）
+	let userAllocView: TestUser; // 阶段5 §2 分配视图用户（多计划 + 取消链路）
 	let planAllocId = ""; // #4/#5 直插的超量分配计划（#5 取消时用）
+	const planAllocViewIds: string[] = []; // #17/#18 直插计划（allocation 无级联，afterAll 显式清理）
 	const userIds: string[] = [];
 
 	function getAccounts(user: TestUser) {
@@ -73,6 +77,12 @@ describe("AccountController（接口）", () => {
 	function getLedger(user: TestUser, currencyCode: string) {
 		return request(app.getHttpServer())
 			.get(`/api/accounts/${currencyCode}/transactions`)
+			.set(bearer(user.accessToken));
+	}
+
+	function getAllocations(user: TestUser, currencyCode: string) {
+		return request(app.getHttpServer())
+			.get(`/api/accounts/${currencyCode}/allocations`)
 			.set(bearer(user.accessToken));
 	}
 
@@ -99,6 +109,7 @@ describe("AccountController（接口）", () => {
 		userLedger = await createTestUser(app, "acct-ledger");
 		userOther = await createTestUser(app, "acct-other");
 		userUsage = await createTestUser(app, "acct-usage");
+		userAllocView = await createTestUser(app, "acct-alloc-view");
 		userIds.push(
 			userMain.userId,
 			userAlloc.userId,
@@ -107,6 +118,7 @@ describe("AccountController（接口）", () => {
 			userLedger.userId,
 			userOther.userId,
 			userUsage.userId,
+			userAllocView.userId,
 		);
 		// BE-03：经 API 造交易需已建账，否则写入口 409 ONBOARDING_NOT_COMPLETED。
 		// userOther 例外：保持无 settings/无账户（#2 空列表、#14 越权 404 语义依赖）
@@ -117,6 +129,7 @@ describe("AccountController（接口）", () => {
 			userOld,
 			userLedger,
 			userUsage,
+			userAllocView,
 		]) {
 			await ensureOnboarded(ctx.prisma, user.userId);
 		}
@@ -149,17 +162,21 @@ describe("AccountController（接口）", () => {
 	}, 120_000); // 造数用户多（7 用户建账 + 多笔交易），放宽 hook 超时
 
 	afterAll(async () => {
+		await cleanupPlanData(ctx.prisma, [...planAllocViewIds, planAllocId]);
 		for (const userId of userIds) {
 			await cleanupUser(ctx.prisma, userId);
 		}
 		await app.close();
 	});
 
-	it("#1 未登录访问三个端点均 401（Controller 级守卫）", async () => {
+	it("#1 未登录访问四个端点均 401（Controller 级守卫）", async () => {
 		await request(app.getHttpServer()).get("/api/accounts").expect(401);
 		await request(app.getHttpServer()).get("/api/accounts/CAD").expect(401);
 		await request(app.getHttpServer())
 			.get("/api/accounts/CAD/transactions")
+			.expect(401);
+		await request(app.getHttpServer())
+			.get("/api/accounts/CAD/allocations")
 			.expect(401);
 	});
 
@@ -358,5 +375,93 @@ describe("AccountController（接口）", () => {
 		expect(usageRow.totalCost).toBe("1500.0000"); // §3.5 遗留落地：M7 起填实（两批同价 unitCost 1）
 		expect(usageRow.feeKnown).toBe(true);
 		expect(usageRow.version).toBe(1);
+	});
+
+	// ── 阶段5 §2 分配明细视图（GET /api/accounts/:currencyCode/allocations）──
+
+	it("#16 多计划分配：逐条金额与剩余分配正确、按计划创建时间升序", async () => {
+		// 独立用户：账户 10000 + 两个计划（A 分配 6000 已用 1000；B 分配 3000 未用）
+		await ensureAccount(ctx.prisma, userAllocView.userId, "CAD", "10000");
+		const planA = await seedPlanWithAllocation(ctx.prisma, userAllocView.userId, {
+			targetCurrency: "CAD",
+			name: "计划A",
+			targetAmount: "10000",
+			allocatedAmount: "6000",
+		});
+		await setAllocationUsedAmount(ctx.prisma, planA, "1000");
+		const planB = await seedPlanWithAllocation(ctx.prisma, userAllocView.userId, {
+			targetCurrency: "CAD",
+			name: "计划B",
+			targetAmount: "10000",
+			allocatedAmount: "3000",
+		});
+		planAllocViewIds.push(planA, planB);
+
+		const res = await getAllocations(userAllocView, "CAD").expect(200);
+		expect(res.body.success).toBe(true);
+		const items = res.body.data.items;
+		expect(items).toHaveLength(2);
+		// 升序 = 创建顺序（A 先建）；remainingAllocation 服务端算好
+		expect(items[0]).toEqual({
+			planId: planA,
+			planName: "计划A",
+			planStatus: "ACTIVE",
+			amount: "6000.0000",
+			usedAmount: "1000.0000",
+			remainingAllocation: "5000.0000",
+		});
+		expect(items[1]).toEqual({
+			planId: planB,
+			planName: "计划B",
+			planStatus: "ACTIVE",
+			amount: "3000.0000",
+			usedAmount: "0.0000",
+			remainingAllocation: "3000.0000",
+		});
+	});
+
+	it("#17 已取消计划：剩余 0 如实返回（amount 收敛为已用）；未分配余额恢复可对账", async () => {
+		// 新建计划分配 6000 已用 2000 → 取消：amount → max(used,0)=2000，剩余 0，仍列出
+		const planId = await seedPlanWithAllocation(ctx.prisma, userAllocView.userId, {
+			targetCurrency: "CAD",
+			name: "待取消计划",
+			targetAmount: "10000",
+			allocatedAmount: "6000",
+		});
+		await setAllocationUsedAmount(ctx.prisma, planId, "2000");
+		planAllocViewIds.push(planId);
+		await cancelPlan(userAllocView, planId).expect(200);
+
+		const res = await getAllocations(userAllocView, "CAD").expect(200);
+		const cancelled = res.body.data.items.find(
+			(item: { planId: string }) => item.planId === planId,
+		);
+		expect(cancelled).toEqual({
+			planId,
+			planName: "待取消计划",
+			planStatus: "CANCELLED",
+			amount: "2000.0000", // 取消释放后 amount = 已用（§3.4）
+			usedAmount: "2000.0000",
+			remainingAllocation: "0.0000",
+		});
+		// 对账：Σ剩余分配（A 5000 + B 3000 + 取消 0）与列表 allocatedAmount 一致
+		const list = await getAccounts(userAllocView).expect(200);
+		const cad = list.body.data.accounts.find(
+			(account: { currencyCode: string }) => account.currencyCode === "CAD",
+		);
+		expect(cad.allocatedAmount).toBe("8000.0000");
+		expect(cad.unallocatedAmount).toBe("2000.0000");
+	});
+
+	it("#18 无计划账户：items 空数组；400/404/他人 404 口径与详情接口一致", async () => {
+		// userMain 有 USD 账户但无任何 USD 计划 → 空数组
+		const empty = await getAllocations(userMain, "USD").expect(200);
+		expect(empty.body.data).toEqual({ items: [] });
+
+		await getAllocations(userMain, "XYZ").expect(400); // INVALID_ACCOUNT_CURRENCY
+		await getAllocations(userMain, "JPY").expect(404); // 未建账户
+		// 他人账户币种：404 不泄露存在性（userOther 无账户，userCost 有 CAD）
+		const res = await getAllocations(userOther, "CAD").expect(404);
+		expect(res.body.code).toBe("ACCOUNT_NOT_FOUND");
 	});
 });
