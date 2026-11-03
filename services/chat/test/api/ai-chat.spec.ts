@@ -235,14 +235,24 @@ const waitUntil = async (
 
 // ────────────────────────── env 注入 app 构建（§8.2 装配③）──────────────────────────
 
+/** 测试夹具假密钥（占位形态，非真实凭据；三渠道共用不同后缀便于日志区分） */
+const FAKE_LLM_KEYS = {
+	main: "test-fixture-key-main-not-real",
+	anthropic: "test-fixture-key-anthropic-not-real",
+	gemini: "test-fixture-key-gemini-not-real",
+} as const;
+
 const buildAiApp = async (
 	overrides: Record<string, string | undefined> = {},
 ): Promise<TestContext> => {
 	// 测试 .env.local 无 aigysd 密钥（gate 快照会判全未配 503）：除显式注入 undefined
-	// 的场景外，默认补一个主渠道测试 key（保存/恢复机制不变，§8.2 装配③）；
-	// AI_DEFAULT_CHAT_MODEL 固定默认值，隔离本地 .env.local 的个性化设置
+	// 的场景外，默认补齐三个渠道的夹具 key（主渠道 + claude/gemini 专用，白名单 5 模型
+	// 全可用，「追问带 modelKey=claude」用例依赖 claude 快照可用；保存/恢复机制不变，
+	// §8.2 装配③）；AI_DEFAULT_CHAT_MODEL 固定默认值，隔离本地 .env.local 的个性化设置
 	const merged = {
-		AI_PROVIDER_AIGYSD_API_KEY: "test-llm-key",
+		AI_PROVIDER_AIGYSD_API_KEY: FAKE_LLM_KEYS.main,
+		AI_PROVIDER_AIGYSD_ANTHROPIC_API_KEY: FAKE_LLM_KEYS.anthropic,
+		AI_PROVIDER_AIGYSD_GEMINI_API_KEY: FAKE_LLM_KEYS.gemini,
 		AI_DEFAULT_CHAT_MODEL: "gpt-4.1-mini",
 		...overrides,
 	};
@@ -266,11 +276,6 @@ const buildAiApp = async (
 
 // ────────────────────────── 测试 ───────────────────────────
 
-// [TEMP-PROBE]
-import "reflect-metadata";
-import { AiController as __AiCtrl } from "../../src/ai/ai.controller";
-console.log("[PROBE] design:paramtypes:", JSON.stringify(Reflect.getMetadata("design:paramtypes", __AiCtrl.prototype, "createWithMessage")?.map((t) => t?.name)));
-console.log("[PROBE] routeArgs keys:", JSON.stringify(Object.keys(Reflect.getMetadata("__routeArguments__", __AiCtrl, "createWithMessage") ?? {})));
 describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 	let ctx: TestContext;
 	let app: INestApplication;

@@ -1,0 +1,12 @@
+stateDiagram-v2
+    direction TB
+    state "进行中" as ACTIVE
+    state "已完成" as COMPLETED
+    state "已取消" as CANCELLED
+    state "已停止" as STOPPED
+    [*] --> ACTIVE: T01 创建
+    ACTIVE --> ACTIVE: T02 常规调整
+    ACTIVE --> COMPLETED: T03 确认完成
+    ACTIVE --> CANCELLED: T04 取消
+    COMPLETED --> ACTIVE: T05 提高目标重开
+    ACTIVE --> STOPPED: T06 本位币变更

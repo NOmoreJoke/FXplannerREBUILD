@@ -1,0 +1,15 @@
+stateDiagram-v2
+    direction TB
+    state "已提交" as SUBMITTED
+    state "处理中" as PROCESSING
+    state "处理异常" as EXCEPTION
+    state "已完成" as COMPLETED
+    state "已撤回" as WITHDRAWN
+    [*] --> SUBMITTED: T01 提交
+    SUBMITTED --> PROCESSING: T02 制作
+    PROCESSING --> COMPLETED: T03 完成
+    PROCESSING --> EXCEPTION: T04 异常
+    EXCEPTION --> PROCESSING: T05 继续处理
+    SUBMITTED --> WITHDRAWN: T06 取消
+    PROCESSING --> WITHDRAWN: T06 取消
+    EXCEPTION --> WITHDRAWN: T06 取消

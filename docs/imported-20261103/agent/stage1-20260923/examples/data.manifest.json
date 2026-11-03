@@ -1,0 +1,20 @@
+{
+  "schema_version": "fxplanner.phase-a.data.manifest.v1",
+  "request_id": "fixture_request_001",
+  "snapshot_id": "fixture_snapshot_001",
+  "context_hash": "903013968560b86cf222a188f87cc1729367f5c42336274d21a0bd11fed26daa",
+  "resource_version": "1",
+  "eligibility": "DEGRADED",
+  "issue_codes": [
+    "CHANNEL_COSTS_UNKNOWN",
+    "SOURCE_CASH_NOT_ASSESSED"
+  ],
+  "execution_gate": {
+    "progress_state": "draft",
+    "candidate_generation_allowed": true,
+    "reason_code": "DRAFT",
+    "evidence_ids": [
+      "ledger_fixture"
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": "fxplanner.phase-a.quality.output.v1",
+  "request_id": "fixture_request_001",
+  "snapshot_id": "fixture_snapshot_001",
+  "draft_hash": "90cba693be9138c7083e680690885cc2095c2e70beef8a669c60633d4132cdb1",
+  "decision": "reject",
+  "issues": [
+    {
+      "code": "GUARANTEED_BENEFIT",
+      "section": "reference_comparison",
+      "message": "把条件性的参考比较描述为保证节省。",
+      "related_ids": [
+        "curve.diff"
+      ]
+    }
+  ]
+}

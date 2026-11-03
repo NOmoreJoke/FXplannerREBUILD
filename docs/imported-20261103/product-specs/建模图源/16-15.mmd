@@ -1,0 +1,18 @@
+sequenceDiagram
+    actor U as 用户
+    participant UI as 注销进度
+    participant C as 请求协调
+    participant W as 清理处理
+    U->>UI: 验证注销用途并查看影响
+    U->>UI: 最后确认注销
+    UI->>C: 校验授权及请求互斥
+    C->>C: 保存请求并结束全部会话
+    C-->>UI: 显示七日撤回截止时间
+    alt 截止前验证并明确撤回
+        U->>C: 撤回注销
+        C-->>UI: 恢复原账号及原设置
+    else 撤回期结束
+        C->>C: 关闭原账号
+        C--)W: 清理在线账号及业务数据
+        W-->>UI: 完成或异常进度
+    end

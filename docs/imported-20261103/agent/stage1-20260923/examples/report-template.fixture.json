@@ -1,0 +1,77 @@
+{
+  "schema_version": "fxplanner.agent.output.v0.2",
+  "request_id": "fixture_request_001",
+  "snapshot_id": "fixture_snapshot_001",
+  "status": "DEGRADED",
+  "selected_candidate_id": "candidate_balanced",
+  "recommendation_reason": "USER_SELECTED_PACE",
+  "sections": {
+    "summary": {
+      "text": "本报告根据已保存的目标、持仓与计划快照生成。",
+      "metric_ids": [],
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "missing_ids": []
+    },
+    "holdings": {
+      "text": "持仓与成本见事实表格；不同来源成本币分别列示。",
+      "metric_ids": [],
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "missing_ids": []
+    },
+    "schedule": {
+      "text": "分批建议与已确认安排在事实表格中分别展示；预览需确认后才成为正式安排。",
+      "metric_ids": [],
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "missing_ids": []
+    },
+    "reference_comparison": {
+      "text": "参考比较请查看事实表格及其可用状态；期限盘面不代表未来实际成交价。",
+      "metric_ids": [],
+      "evidence_ids": [
+        "knowledge_carry"
+      ],
+      "missing_ids": []
+    },
+    "execution_review": {
+      "text": "执行与使用仅按有效记录展示；关联交易不等于分配。",
+      "metric_ids": [],
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "missing_ids": []
+    },
+    "education": {
+      "text": "分批准备安排表达准备节奏，不保证降低成本。",
+      "metric_ids": [],
+      "evidence_ids": [
+        "knowledge_carry"
+      ],
+      "missing_ids": []
+    },
+    "data_notes": {
+      "text": "这是用于接口验算的虚构样例，不能作为当前行情或真实交易。",
+      "metric_ids": [],
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "missing_ids": []
+    }
+  },
+  "actions": [],
+  "mandatory_notice_codes": [
+    "CURVE_NOT_FORECAST",
+    "FEES_UNKNOWN",
+    "INITIAL_COST_IS_VALUATION",
+    "TIME_VALUE_EXCLUDED",
+    "REFERENCE_NOT_EXECUTABLE",
+    "FIXTURE_DATA",
+    "PARTIAL_DATA"
+  ],
+  "review_flags": []
+}

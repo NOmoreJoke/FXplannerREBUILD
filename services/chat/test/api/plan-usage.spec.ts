@@ -222,7 +222,7 @@ describe("UsageController（接口）", () => {
 			planId: planMain,
 			currencyCode: "USD",
 			amount: "4000.0000",
-			usedAt: `${todayIso().slice(0, 10)}T00:00:00.000Z`, // 服务端截取 UTC 0 点
+			usedAt: todayIso(), // 服务端归一化到 UTC+8 当日 0 点（与校验日界同源）
 			remark: "秋季学费第一期",
 			cost: "3120.0000", // 4,000 × 0.78
 			version: 1,

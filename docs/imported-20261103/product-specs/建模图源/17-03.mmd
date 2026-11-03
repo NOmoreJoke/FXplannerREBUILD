@@ -1,0 +1,8 @@
+erDiagram
+    FXAccount ||--o| InitialHolding : "有效初始记录"
+    FXAccount ||--o{ Transaction : "买入"
+    Plan o|--o{ Transaction : "可选关联"
+    Plan ||--o{ Usage : "实际使用"
+    FXAccount ||--o{ Usage : "扣减"
+    Transaction ||--|{ TransactionVersion : "版本"
+    Usage ||--|{ UsageVersion : "版本"

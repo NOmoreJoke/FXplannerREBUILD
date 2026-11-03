@@ -1,0 +1,7 @@
+erDiagram
+    User ||--|| UserProfile : "配置"
+    User ||--o{ ConsentRecord : "同意"
+    User ||--o{ LoginSession : "登录"
+    User ||--o| SetupDraft : "首次草稿"
+    User ||--o{ DataRequest : "数据请求"
+    DataRequest ||--o| ExportFile : "导出文件"

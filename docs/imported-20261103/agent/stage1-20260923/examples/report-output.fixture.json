@@ -1,0 +1,116 @@
+{
+  "schema_version": "fxplanner.agent.output.v0.2",
+  "request_id": "fixture_request_001",
+  "snapshot_id": "fixture_snapshot_001",
+  "status": "DEGRADED",
+  "selected_candidate_id": "candidate_balanced",
+  "recommendation_reason": "USER_SELECTED_PACE",
+  "sections": {
+    "summary": {
+      "text": "这是虚构验算样例。按当前拟分配，本计划还需准备{{m:plan.gap}}；下方展示你选择的均衡安排。费用资料尚缺，不能确定含费总差额。",
+      "metric_ids": [
+        "plan.gap"
+      ],
+      "evidence_ids": [
+        "ledger_fixture",
+        "calc_fixture"
+      ],
+      "missing_ids": [
+        "total.diff",
+        "total.pct"
+      ]
+    },
+    "holdings": {
+      "text": "账户持有{{m:account.balance}}，拟分配后仍有{{m:account.unallocated}}未分配；草稿尚未形成正式占用。已记录成本为{{m:account.recorded_cost}}，其中初始来源与真实买入来源分表展示。这不是本次待准备部分的支出。",
+      "metric_ids": [
+        "account.balance",
+        "account.unallocated",
+        "account.recorded_cost"
+      ],
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "missing_ids": []
+    },
+    "schedule": {
+      "text": "候选沿用你选择的均衡节奏，具体日期和数量见系统生成的分批表。此处只提供建议，需确认后才能成为正式安排；未来来源币现金购买力尚未核验。",
+      "metric_ids": [],
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "missing_ids": []
+    },
+    "reference_comparison": {
+      "text": "这组虚构曲线下，一次性本金参考折算为{{m:baseline.principal}}，均衡安排为{{m:balanced.principal}}，不含渠道成本的参考差额为{{m:curve.diff}}，差额比例为{{m:curve.pct}}。这是曲线情景对照，不是未来实际节省，也不是选择该节奏的依据。",
+      "metric_ids": [
+        "baseline.principal",
+        "balanced.principal",
+        "curve.diff",
+        "curve.pct"
+      ],
+      "evidence_ids": [
+        "calc_fixture",
+        "curve_fixture"
+      ],
+      "missing_ids": [
+        "total.diff",
+        "total.pct"
+      ]
+    },
+    "execution_review": {
+      "text": "当前没有实际使用记录，使用均价暂不适用。目标日尚未到，暂不能生成目标日现货基准对照。",
+      "metric_ids": [],
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "missing_ids": [
+        "plan.used_average"
+      ]
+    },
+    "education": {
+      "text": "期货与即期的差价包含期限及两币利差等因素；不同到期日的期货价格不能直接解释为未来各日银行将给出的换汇价。",
+      "metric_ids": [],
+      "evidence_ids": [
+        "knowledge_carry"
+      ],
+      "missing_ids": []
+    },
+    "data_notes": {
+      "text": "行情、合约节点及日历均为虚构验算数据；中间期限点由示例线性插值形成。渠道费用和点差未明确，含费结果保留为空。",
+      "metric_ids": [],
+      "evidence_ids": [
+        "curve_fixture",
+        "calc_fixture"
+      ],
+      "missing_ids": [
+        "total.diff",
+        "total.pct"
+      ]
+    }
+  },
+  "actions": [
+    {
+      "code": "REVIEW_PLAN",
+      "related_ids": [
+        "candidate_balanced"
+      ]
+    },
+    {
+      "code": "PROVIDE_CHANNEL_COSTS",
+      "related_ids": [
+        "total.diff",
+        "total.pct"
+      ]
+    }
+  ],
+  "mandatory_notice_codes": [
+    "CURVE_NOT_FORECAST",
+    "FEES_UNKNOWN",
+    "INITIAL_COST_IS_VALUATION",
+    "TIME_VALUE_EXCLUDED",
+    "REFERENCE_NOT_EXECUTABLE",
+    "FIXTURE_DATA",
+    "PARTIAL_DATA"
+  ],
+  "review_flags": []
+}

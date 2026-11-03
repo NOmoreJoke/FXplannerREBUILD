@@ -1,0 +1,10 @@
+stateDiagram-v2
+    direction TB
+    state "有效" as VALID
+    state "已使用" as USED
+    state "已失效" as INVALID
+    [*] --> VALID: T01 发送成功
+    VALID --> USED: T02 验证成功
+    VALID --> INVALID: T03 失效
+    USED --> [*]
+    INVALID --> [*]

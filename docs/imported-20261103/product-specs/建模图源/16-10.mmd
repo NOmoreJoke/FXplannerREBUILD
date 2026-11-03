@@ -1,0 +1,20 @@
+sequenceDiagram
+    actor U as 用户
+    participant UI as 单笔记录更正
+    participant C as 更正协调
+    participant L as 账本与成本
+    U->>UI: 从该笔详情填写更正及原因
+    UI->>C: 查看影响
+    C->>L: 模拟余额分配和历史成本
+    L-->>UI: 原值新值及影响
+    U->>UI: 确认更正
+    UI->>C: 提交原对象及版本依据
+    C->>L: 重新校验完整资金历史
+    alt 校验失败或依据已变化
+        C-->>UI: 保持原记录并返回核对
+    else 正式提交成功
+        C->>L: 整体保存新版本及账务差额
+        L-->>UI: 返回同笔详情及更正记录
+    else 正式提交明确失败
+        C-->>UI: 无有效新版并显示失败结果
+    end

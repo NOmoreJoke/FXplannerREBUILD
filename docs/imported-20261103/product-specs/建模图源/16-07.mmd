@@ -1,0 +1,22 @@
+sequenceDiagram
+    actor U as 用户
+    participant UI as 目标与安排
+    participant C as 规划协调
+    participant L as 外币账本
+    U->>UI: 修改允许的目标或参数
+    UI->>C: 查看影响
+    opt 已有计划且需调整安排
+        C->>L: 读取累计使用及分配影响
+    end
+    C-->>UI: 预览本次适用的变化
+    U->>UI: 确认修改
+    UI->>C: 重验本次适用规则
+    alt 无计划或纯改名且校验通过
+        C->>L: 仅保存目标信息
+        C-->>UI: 返回同一目标
+    else 需要更新计划且依据有效
+        C->>L: 原子保存目标释放及新版本
+        C-->>UI: 返回原目标和原计划
+    else 依据失效或不符合规则
+        C-->>UI: 保留原数据返回修改
+    end

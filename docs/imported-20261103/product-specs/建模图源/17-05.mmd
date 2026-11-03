@@ -1,0 +1,9 @@
+erDiagram
+    FXAccount ||--o{ CostLot : "取得来源"
+    CostLot ||--|{ CostComponent : "原币成本"
+    CostLot ||--o{ CostConsumption : "消耗数量"
+    UsageVersion ||--o{ CostConsumption : "成本依据"
+    CostConsumption ||--o{ ConsumedCostComponent : "原币消耗成本"
+    Allocation ||--o{ AllocationEvent : "分配变动"
+    Correction o|--o{ AllocationEvent : "同次更正"
+    Correction o|--o{ CostConsumption : "重算依据"

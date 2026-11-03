@@ -1,0 +1,9 @@
+stateDiagram-v2
+    direction TB
+    state "生成中" as GENERATING
+    state "已生成" as GENERATED
+    state "生成失败" as FAILED
+    [*] --> GENERATING: T01 建立任务
+    GENERATING --> GENERATED: T02 文件就绪
+    GENERATING --> FAILED: T03 生成失败
+    FAILED --> GENERATING: T04 重试生成

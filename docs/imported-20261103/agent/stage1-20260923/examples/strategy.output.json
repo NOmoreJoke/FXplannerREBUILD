@@ -1,0 +1,15 @@
+{
+  "schema_version": "fxplanner.phase-a.strategy.output.v1",
+  "request_id": "fixture_request_001",
+  "snapshot_id": "fixture_snapshot_001",
+  "selected_candidate_id": "candidate_balanced",
+  "reason": "USER_SELECTED_PACE",
+  "explanation": {
+    "text": "按照已确认的均衡准备节奏解释服务提供的候选，具体安排见事实表格。",
+    "metric_ids": [],
+    "evidence_ids": [
+      "calc_fixture"
+    ],
+    "missing_ids": []
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "schema_version": "fxplanner.report.question.request.v1",
+  "report_id": "fixture_report_001",
+  "expected_snapshot_id": "fixture_snapshot_001",
+  "question": "为什么使用均衡准备节奏？"
+}

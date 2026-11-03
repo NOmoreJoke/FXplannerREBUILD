@@ -1,0 +1,19 @@
+sequenceDiagram
+    actor U as 用户
+    participant UI as 账号与数据
+    participant C as 请求协调
+    participant W as 导出处理
+    U->>UI: 选择导出并验证邮箱
+    UI->>C: 查看范围及最新影响
+    C-->>UI: 展示提交时数据范围
+    U->>UI: 确认导出
+    UI->>C: 校验本次验证及请求互斥
+    C->>C: 保存请求并消耗授权
+    C--)W: 制作提交时的数据副本
+    alt 完成前成功取消
+        C->>W: 取消交付并删除临时文件
+    else 生成完成且未取消
+        W-->>UI: 开放同账号下载24小时
+    else 处理异常
+        W-->>UI: 显示原因及原请求进度
+    end

@@ -1,0 +1,40 @@
+{
+  "schema_version": "fxplanner.phase-a.response.v1",
+  "result": {
+    "schema_version": "fxplanner.report.response.v0.2",
+    "request_id": "fixture_request_001",
+    "trace_id": "fixture_trace_001",
+    "delivery_status": "retryable_error",
+    "report": null,
+    "error": {
+      "errorCode": "REPORT_PERSISTENCE_FAILED",
+      "messageKey": "report.persistence_failed",
+      "requestId": "fixture_request_001",
+      "details": []
+    }
+  },
+  "pipeline_audit": {
+    "policy_version": "fxplanner.phase-a.policy.v1",
+    "facts_validation": "passed",
+    "delivered_output_validation": "not_run",
+    "semantic_review": {
+      "status": "passed",
+      "scope": "undelivered_ai",
+      "narrative_hash": "8a92d1a123b0e1a53994d781f48cb7a9ef63c8bb18b182579d4c3c26cf8dcbc6"
+    },
+    "delivered_narrative_hash": null,
+    "model_calls": {
+      "report": 1,
+      "quality": 1,
+      "total": 2
+    },
+    "execution_gate": {
+      "progress_state": "draft",
+      "candidate_generation_allowed": true,
+      "reason_code": "DRAFT",
+      "evidence_ids": [
+        "ledger_fixture"
+      ]
+    }
+  }
+}

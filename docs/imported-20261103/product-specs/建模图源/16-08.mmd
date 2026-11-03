@@ -1,0 +1,20 @@
+sequenceDiagram
+    actor U as 用户
+    participant UI as 计划详情
+    participant C as 规划协调
+    participant L as 外币账本
+    U->>UI: 选择可用的生命周期操作
+    UI->>C: 查看结果及守卫
+    C-->>UI: 展示状态与金额影响
+    U->>UI: 确认操作
+    UI->>C: 重新校验最新条件
+    alt 确认完成条件满足
+        C->>L: 保存完成事实且不再扣款
+    else 取消进行中计划
+        C->>L: 同时取消并释放未用分配
+    else 提高目标重开条件全部满足
+        C->>L: 同时提高目标并重开原计划
+    else 任一条件不满足
+        C-->>UI: 保持原状态返回核对
+    end
+    C-->>UI: 返回该计划实际处理结果
