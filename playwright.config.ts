@@ -27,6 +27,10 @@ const rootEnv = readEnvFile(path.resolve(__dirname, ".env.local"));
 // 造数/断言直连后端地址：spec 默认值兜底为 4001，这里从 API_PORT 对齐真实服务
 process.env.API_URL ??= `http://localhost:${process.env.API_PORT ?? rootEnv.API_PORT ?? "4001"}`;
 
+// 前端地址（spec 内 BASE_URL 消费）：run-e2e-tests.sh 会显式注入；
+// 直接 bun run test:e2e 时回落根 .env.local 的 CORS_ORIGIN，自定义端口不回归（对抗审 M3）
+process.env.CORS_ORIGIN ??= rootEnv.CORS_ORIGIN || `http://localhost:${process.env.WEB_PORT ?? rootEnv.WEB_PORT ?? "3001"}`;
+
 const WEB_PORT = Number(process.env.WEB_PORT ?? rootEnv.WEB_PORT ?? 3001);
 
 export default defineConfig({

@@ -417,4 +417,72 @@ describe("更正重放一致性（集成）", () => {
 		// 终态余额 = 初始 1,000 + 三笔买入 3,000 − 使用 1,200（与批次 Σremaining 严格一致）
 		expect(balance.balance.toFixed(4)).toBe("2800.0000");
 	});
+
+	it("#6 B1 回归：同日买入与使用（UI 按 T00:00Z 提交）→ 使用原样存储不截断，重放无资金不足违规", async () => {
+		const user = await newUser("corr-it-sameday");
+
+		// 前端两处表单均按「所选日期 + T00:00:00.000Z」提交；今天（UTC+8 口径）
+		const todayMidnightUtc = `${new Date(Date.now() + 8 * 3_600_000)
+			.toISOString()
+			.slice(0, 10)}T00:00:00.000Z`;
+
+		// 同日买入 1,000（UI 口径）
+		const tx = await request(app.getHttpServer())
+			.post("/api/transactions")
+			.set(bearer(user.accessToken))
+			.send({
+				currencyCode: "USD",
+				principalAmount: "1000",
+				exchangeRate: "1",
+				quantity: "1000",
+				transactedAt: todayMidnightUtc,
+			})
+			.expect(201);
+
+		// 计划分配 500（真实创建路径）
+		const plan = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(bearer(user.accessToken))
+			.send({
+				targetCurrency: "USD",
+				targetAmount: "10000",
+				expectUseDate: "2030-02-15T00:00:00.000Z",
+				prepLeadDays: 3,
+				pacePreference: "balanced",
+				startDate: "2030-01-01T00:00:00.000Z",
+				allocatedAmount: "500",
+			})
+			.expect(201);
+
+		// 同日使用 500（UI 口径）：曾截断到 UTC+8 日 0 点（前一日 16:00Z），
+		// 使重放把使用排到买入之前 → 违规 → 更正被 blockers 阻断
+		await request(app.getHttpServer())
+			.post(`/api/plans/${plan.body.data.id}/usages`)
+			.set(bearer(user.accessToken))
+			.send({ amount: "500", usedAt: todayMidnightUtc })
+			.expect(201);
+
+		// 存储口径：usedAt 原样保留提交时刻（未被截断）
+		const usage = await ctx.prisma.usageRecord.findFirstOrThrow({
+			where: { userId: user.userId },
+		});
+		expect(usage.usedAt.toISOString()).toBe(todayMidnightUtc);
+
+		// fee 补录预览（不改日期，纯触发账本重放）：同刻 T00:00Z 下类型序
+		// 保证 PURCHASE(1) 先于 USAGE(2)，无资金不足违规
+		const preview = await request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send({
+				targetType: "TRANSACTION",
+				targetId: tx.body.data.id,
+				baseVersion: 1,
+				reason: "补录手续费（B1 回归）",
+				changes: { feeAmount: "10" },
+			})
+			.expect(200);
+		expect(preview.body.data.blockers).toHaveLength(0);
+
+		await assertInvariants(ctx.prisma, user.userId);
+	});
 });

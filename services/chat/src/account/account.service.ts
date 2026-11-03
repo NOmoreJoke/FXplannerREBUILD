@@ -138,7 +138,9 @@ export class AccountService {
 	 * usedAmount（Decimal 服务端算好，前端禁止重算）。amount 与 usedAmount 均为 0 的
 	 * 计划（从未分配/取消且无使用）不产生明细行——对汇总贡献为 0，列出即噪声。
 	 * PlanAllocation 与 Plan 裸外键无 relation，沿用内存 join 先例（§3.3）。
-	 * 排序：计划创建时间升序（稳定确定）；无分页（个位到十位级，take 100 兜底对齐 plan 列表约定）。
+	 * 排序：计划创建时间升序（稳定确定）；无分页无上限（个位到十位级；上限截断会与
+	 * allocatedAmount 全量汇总口径错位——前 N 个全零而第 N+1 个有分配时出现
+	 * 「明细为空、汇总非零」的不一致，对抗审 M2）。
 	 */
 	async allocations(
 		userId: string,
@@ -152,7 +154,6 @@ export class AccountService {
 			this.prisma.plan.findMany({
 				where: { userId, targetCurrency: currencyCode },
 				orderBy: { createdAt: "asc" },
-				take: 100,
 				select: { id: true, name: true, status: true },
 			}),
 		]);

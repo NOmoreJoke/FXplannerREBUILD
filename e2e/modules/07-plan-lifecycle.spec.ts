@@ -252,8 +252,17 @@ test.describe("【换汇计划生命周期】新建 / 调目标 / 调分配 / �
 		await expect(allocationSection).toBeVisible();
 		// 取消且无使用：amount = used = 0 → 不产生明细行（全 0 行过滤）→ 空态文案
 		await expect(allocationSection.getByText("暂无计划分配该币种")).toBeVisible();
-		// 未分配余额恢复全额（摘要卡原样渲染 toFixed(4)）
-		await expect(page.getByText("10000.0000").first()).toBeVisible();
+		// 未分配余额恢复全额：锚定摘要区「未分配余额」卡（余额卡同为 10000.0000，勿混），
+		// 且已分配归零——两者共同证明释放（对抗审 m1）
+		const summaryCards = page.getByLabel("账户金额概览");
+		const unallocatedCard = summaryCards
+			.locator('[data-slot="card"]')
+			.filter({ hasText: "未分配余额" });
+		await expect(unallocatedCard.getByText("10000.0000")).toBeVisible();
+		const allocatedCard = summaryCards
+			.locator('[data-slot="card"]')
+			.filter({ hasText: "已分配" });
+		await expect(allocatedCard.getByText("0.0000")).toBeVisible();
 		await saveScreenshot(page, "07-plan-lifecycle", "T-PLAN-LC-004-02-account");
 		await logger.saveToFile();
 	});

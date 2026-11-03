@@ -184,8 +184,10 @@ export function utc8DayStart(instant: Date): Date {
 
 /**
  * 交易日期上下界校验（方案 §4.6）：
- * - UTC+8 口径不晚于今天（允许补录历史）；
- * - 不早于账本起点 ledgerStartedAt（未设置时跳过下界校验）。
+ * - UTC+8 口径不晚于今天（允许补录历史；上界按日历日窗口比较）；
+ * - 不早于账本起点 ledgerStartedAt（未设置时跳过；下界按 UTC+8 日历日粒度——
+ *   起点当日任意时刻可补录，早于起点所在日才拒绝。对齐 usage-calculator
+ *   assertUsedAtInRange 同步修正，前端两处均按日期提交 T00:00Z）。
  * 两类失败的 message 必须可区分（接口测试 §8.2 #11 断言依据）。
  */
 export function assertTransactedAtInRange(
@@ -199,7 +201,10 @@ export function assertTransactedAtInRange(
 			"交易日期不能晚于今天（UTC+8 口径）",
 		);
 	}
-	if (ledgerStartedAt && transactedAt.getTime() < ledgerStartedAt.getTime()) {
+	if (
+		ledgerStartedAt &&
+		transactedAt.getTime() < utc8DayStart(ledgerStartedAt).getTime()
+	) {
 		throw new TransactionInvalidParamsException("交易日期不能早于账本起点");
 	}
 }

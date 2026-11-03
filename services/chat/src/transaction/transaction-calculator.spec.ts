@@ -275,17 +275,25 @@ describe("日期上下界（方案 §4.6，UTC+8 日界；vi.setSystemTime 固�
 		}
 	});
 
-	it("早于账本起点拒绝；恰为账本起点（边界含）通过", () => {
+	it("早于账本起点所在日（UTC+8）拒绝；起点当日任意时刻通过（下界日粒度）", () => {
 		freezeNow();
 		try {
+			// 起点日界：起点 01-10T00:00Z（UTC+8 当日 = 01-10，该日 0 点 = 01-09T16:00Z）
 			const ledgerStart = new Date("2026-01-10T00:00:00.000Z");
 			expect(() =>
 				assertTransactedAtInRange(
-					new Date("2026-01-09T23:59:59.999Z"),
+					new Date("2026-01-09T15:59:59.999Z"), // 前一日最后一刻（UTC+8 01-09 23:59:59）
 					new Date(),
 					ledgerStart,
 				),
 			).toThrow(/账本起点/);
+			expect(() =>
+				assertTransactedAtInRange(
+					new Date("2026-01-09T23:59:59.999Z"), // 起点当日 0-8 点窗口
+					new Date(),
+					ledgerStart,
+				),
+			).not.toThrow();
 			expect(() =>
 				assertTransactedAtInRange(
 					new Date("2026-01-10T00:00:00.000Z"),
