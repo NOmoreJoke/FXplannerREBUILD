@@ -103,6 +103,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | 集成测试         | `services/chat/test/integration/<模块组合>.spec.ts`（一个业务流一个文件） |
 | 单元测试         | 与源码同目录`<被测文件>.spec.ts`                                          |
 | E2E 用例         | `e2e/modules/<编号>-<模块>.spec.ts`                                       |
+| 跨会话交接文档   | `docs/handoff/`（夜间批次产出：OVERNIGHT-* / 状态快照；需求/方案/验收仍归 `changes/`） |
 
 ### 组件引用
 
