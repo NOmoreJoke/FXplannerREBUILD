@@ -262,7 +262,7 @@ test.describe("【换汇计划生命周期】新建 / 调目标 / 调分配 / �
 		const allocatedCard = summaryCards
 			.locator('[data-slot="card"]')
 			.filter({ hasText: "已分配" });
-		await expect(allocatedCard.getByText("0.0000")).toBeVisible();
+		await expect(allocatedCard.getByText("0.0000", { exact: true })).toBeVisible();
 		await saveScreenshot(page, "07-plan-lifecycle", "T-PLAN-LC-004-02-account");
 		await logger.saveToFile();
 	});
