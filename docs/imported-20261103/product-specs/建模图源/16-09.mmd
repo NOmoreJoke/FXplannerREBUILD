@@ -1,0 +1,21 @@
+sequenceDiagram
+    actor U as 用户
+    participant UI as 修改本位币
+    participant C as 变更协调
+    participant L as 正式业务数据
+    participant R as 报告生成
+    U->>UI: 选择新本位币并查看影响
+    C->>L: 读取受影响计划及目标历史使用
+    L-->>UI: 展示停旧释放与后继安排
+    U->>UI: 确认本次变更
+    UI->>C: 提交同一预览依据
+    C->>L: 重验全部目标和当前状态
+    alt 任一目标失败或依据变化
+        C-->>UI: 全不生效并重新核对
+    else 全部校验通过
+        C->>L: 一次保存配置停旧释放及必要新计划
+        Note over C,L: 同时保存停止快照与报告任务
+        L-->>UI: 本位币已更新及实际新计划
+        C--)R: 处理已保存的报告任务
+        R-->>UI: 可查询文件生成状态
+    end

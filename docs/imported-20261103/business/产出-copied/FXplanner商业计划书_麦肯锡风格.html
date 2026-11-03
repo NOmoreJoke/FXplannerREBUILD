@@ -1,0 +1,1180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FXplanner — 市场可行性分析</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+:root {
+  --mckinsey-blue: #00338D;
+  --mckinsey-light: #005EB8;
+  --mckinsey-accent: #009FDA;
+  --dark: #1A1A1A;
+  --body: #333333;
+  --gray-700: #4A4A4A;
+  --gray-500: #767676;
+  --gray-300: #B0B0B0;
+  --gray-200: #D9D9D9;
+  --gray-100: #F2F2F2;
+  --white: #FFFFFF;
+  --green: #2E7D32;
+  --amber: #C68A00;
+  --red-muted: #B71C1C;
+  --teal: #00695C;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Georgia', 'Noto Serif SC', 'SimSun', serif;
+  background: var(--gray-100);
+  color: var(--body);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+.sans { font-family: -apple-system, 'Helvetica Neue', 'PingFang SC', 'Noto Sans SC', Arial, sans-serif; }
+
+/* Page system */
+.page {
+  max-width: 1000px;
+  margin: 24px auto;
+  background: var(--white);
+  padding: 48px 56px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  position: relative;
+  page-break-after: always;
+}
+.page-num {
+  position: absolute; bottom: 24px; right: 56px;
+  font-family: -apple-system, sans-serif;
+  font-size: 11px; color: var(--gray-300);
+}
+
+/* Cover */
+.cover {
+  max-width: 1000px;
+  margin: 24px auto;
+  background: var(--mckinsey-blue);
+  padding: 80px 56px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+  color: var(--white);
+  min-height: 500px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+.cover-label {
+  font-family: -apple-system, sans-serif;
+  font-size: 13px; font-weight: 600;
+  letter-spacing: 2px; text-transform: uppercase;
+  color: rgba(255,255,255,0.5);
+  margin-bottom: 24px;
+}
+.cover h1 {
+  font-size: 36px; font-weight: 700;
+  line-height: 1.25; margin-bottom: 12px;
+  letter-spacing: -0.5px;
+}
+.cover .sub {
+  font-size: 18px; font-weight: 400;
+  color: rgba(255,255,255,0.75);
+  margin-bottom: 48px;
+  max-width: 600px;
+}
+.cover-meta {
+  font-family: -apple-system, sans-serif;
+  font-size: 13px; color: rgba(255,255,255,0.4);
+  border-top: 1px solid rgba(255,255,255,0.15);
+  padding-top: 20px;
+}
+
+/* Page Header */
+.page-header {
+  border-bottom: 3px solid var(--mckinsey-blue);
+  padding-bottom: 12px;
+  margin-bottom: 28px;
+}
+.page-header .section-num {
+  font-family: -apple-system, sans-serif;
+  font-size: 12px; font-weight: 700;
+  color: var(--mckinsey-blue);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.page-header h2 {
+  font-size: 22px; font-weight: 700;
+  color: var(--dark);
+  line-height: 1.3;
+}
+
+/* Key Insight Box */
+.insight {
+  background: var(--mckinsey-blue);
+  color: var(--white);
+  padding: 16px 24px;
+  margin-bottom: 24px;
+  font-family: -apple-system, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.insight strong { color: #9ECFFF; }
+
+/* Exhibit */
+.exhibit {
+  margin: 24px 0;
+}
+.exhibit-label {
+  font-family: -apple-system, sans-serif;
+  font-size: 11px; font-weight: 700;
+  color: var(--mckinsey-blue);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.exhibit-title {
+  font-size: 15px; font-weight: 700;
+  color: var(--dark);
+  margin-bottom: 16px;
+  font-family: -apple-system, sans-serif;
+}
+.exhibit-source {
+  font-family: -apple-system, sans-serif;
+  font-size: 10px; color: var(--gray-500);
+  margin-top: 8px;
+  border-top: 1px solid var(--gray-200);
+  padding-top: 6px;
+}
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; font-family: -apple-system, sans-serif; font-size: 13px; }
+th {
+  background: var(--mckinsey-blue);
+  color: var(--white);
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  border: 1px solid var(--mckinsey-blue);
+}
+td {
+  padding: 9px 12px;
+  border: 1px solid var(--gray-200);
+  color: var(--gray-700);
+}
+tr:nth-child(even) td { background: var(--gray-100); }
+.td-bold { font-weight: 700; color: var(--dark); }
+.td-blue { color: var(--mckinsey-blue); font-weight: 700; }
+.td-highlight { background: #E8F0FE !important; font-weight: 700; color: var(--mckinsey-blue); }
+
+/* Grid */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+.grid-4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 16px; }
+
+/* KPI */
+.kpi-row { display: flex; gap: 0; margin-bottom: 24px; }
+.kpi-item {
+  flex: 1;
+  padding: 20px 16px;
+  text-align: center;
+  border: 1px solid var(--gray-200);
+  border-right: none;
+  font-family: -apple-system, sans-serif;
+}
+.kpi-item:last-child { border-right: 1px solid var(--gray-200); }
+.kpi-item .kpi-num {
+  font-size: 28px; font-weight: 800;
+  color: var(--mckinsey-blue);
+  line-height: 1.1;
+}
+.kpi-item .kpi-label {
+  font-size: 11px; color: var(--gray-500);
+  margin-top: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+/* Chart */
+.chart-box { position: relative; height: 280px; }
+.chart-box-lg { position: relative; height: 320px; }
+
+/* Callout */
+.callout {
+  border-left: 4px solid var(--mckinsey-blue);
+  padding: 12px 20px;
+  margin: 20px 0;
+  background: #F5F8FC;
+  font-family: -apple-system, sans-serif;
+  font-size: 13px;
+  color: var(--gray-700);
+  line-height: 1.6;
+}
+.callout b { color: var(--mckinsey-blue); }
+
+/* Bullet list */
+.findings {
+  font-family: -apple-system, sans-serif;
+  font-size: 13px;
+  margin: 16px 0;
+  padding-left: 0;
+  list-style: none;
+}
+.findings li {
+  padding: 6px 0 6px 20px;
+  position: relative;
+  line-height: 1.5;
+  color: var(--gray-700);
+}
+.findings li::before {
+  content: '■';
+  position: absolute; left: 0; top: 6px;
+  color: var(--mckinsey-blue);
+  font-size: 8px;
+}
+.findings li strong { color: var(--dark); }
+
+/* Matrix */
+.mx-y { color: var(--green); font-weight: 700; }
+.mx-n { color: var(--gray-300); }
+.mx-p { color: var(--amber); font-weight: 600; }
+.mx-star { color: var(--mckinsey-blue); font-weight: 800; }
+
+/* Tags */
+.tag {
+  display: inline-block; padding: 2px 8px;
+  font-family: -apple-system, sans-serif;
+  font-size: 10px; font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.tag-p0 { background: var(--mckinsey-blue); color: #fff; }
+.tag-p1 { background: var(--mckinsey-accent); color: #fff; }
+.tag-p2 { background: var(--gray-300); color: #fff; }
+.tag-later { background: var(--gray-200); color: var(--gray-500); }
+
+/* Timeline */
+.tl { border-left: 3px solid var(--mckinsey-blue); padding-left: 24px; margin: 20px 0; }
+.tl-item { margin-bottom: 24px; position: relative; }
+.tl-item::before {
+  content: '';
+  position: absolute; left: -30px; top: 4px;
+  width: 10px; height: 10px;
+  background: var(--mckinsey-blue);
+}
+.tl-item .tl-time {
+  font-family: -apple-system, sans-serif;
+  font-size: 11px; font-weight: 700;
+  color: var(--mckinsey-blue);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.tl-item h4 {
+  font-family: -apple-system, sans-serif;
+  font-size: 14px; font-weight: 700;
+  color: var(--dark); margin: 4px 0;
+}
+.tl-item p {
+  font-family: -apple-system, sans-serif;
+  font-size: 13px; color: var(--gray-700);
+  line-height: 1.5;
+}
+
+/* Separator */
+.sep { border: none; border-top: 1px solid var(--gray-200); margin: 28px 0; }
+
+/* Scenario tabs */
+.tabs { display: flex; gap: 0; margin-bottom: 20px; font-family: -apple-system, sans-serif; }
+.tab {
+  padding: 8px 24px; cursor: pointer;
+  font-size: 12px; font-weight: 600;
+  border: 1px solid var(--gray-200);
+  background: var(--white);
+  color: var(--gray-500);
+  letter-spacing: 0.3px;
+}
+.tab:first-child { border-right: none; }
+.tab:last-child { border-left: none; }
+.tab.active { background: var(--mckinsey-blue); color: #fff; border-color: var(--mckinsey-blue); }
+.scenario-panel { display: none; }
+.scenario-panel.active { display: block; }
+
+/* Footer bar */
+.footer-bar {
+  max-width: 1000px;
+  margin: 0 auto 48px;
+  padding: 20px 56px;
+  font-family: -apple-system, sans-serif;
+  font-size: 11px;
+  color: var(--gray-500);
+  text-align: center;
+  line-height: 1.6;
+}
+
+/* Two-col text */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+.col-head {
+  font-family: -apple-system, sans-serif;
+  font-size: 12px; font-weight: 700;
+  color: var(--mckinsey-blue);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--mckinsey-blue);
+}
+
+@media (max-width: 768px) {
+  .page { padding: 24px 20px; margin: 12px; }
+  .cover { padding: 40px 20px; }
+  .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+  .kpi-row { flex-direction: column; }
+  .kpi-item { border-right: 1px solid var(--gray-200); border-bottom: none; }
+  .kpi-item:last-child { border-bottom: 1px solid var(--gray-200); }
+  .two-col { grid-template-columns: 1fr; gap: 20px; }
+  .cover h1 { font-size: 24px; }
+}
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-label">Market Feasibility Study</div>
+  <h1>FXplanner<br>市场可行性分析</h1>
+  <p class="sub">把留学生、跨境收入者已有的换汇行为，从"临时查汇率/单次转账"提升为多节点预算、分批换汇、路径比较、成本复盘的决策工具</p>
+  <div class="cover-meta">
+    <p>2026年5月 · V1.2 · 保密文件</p>
+    <p style="margin-top:4px;">数据来源：OECD · UNESCO · IIE · UN Tourism · MBO Partners · Wise FY2025 · Revolut 2024 · Payoneer FY2024 · McKinsey Global Payments</p>
+  </div>
+</div>
+
+<!-- PAGE 1: EXECUTIVE SUMMARY -->
+<div class="page">
+  <div class="page-header">
+    <div class="section-num">Executive Summary</div>
+    <h2>FXplanner 补足跨币种支付决策层缺口</h2>
+  </div>
+
+  <div class="insight">
+    现有工具覆盖单点能力（如Wise的汇率提醒/自动换汇、Revolut的外汇限价订单），但<strong>缺少面向留学生/家庭预算的多节点现金流规划闭环</strong>。FXplanner 不替代现有工具，而是在其上构建决策层。
+  </div>
+
+  <div class="kpi-row">
+    <div class="kpi-item">
+      <div class="kpi-num">6,250亿</div>
+      <div class="kpi-label">SOM年跨境支付额（RMB · 商业假设）</div>
+    </div>
+    <div class="kpi-item">
+      <div class="kpi-num">675万</div>
+      <div class="kpi-label">SOM用户基数（商业假设）</div>
+    </div>
+    <div class="kpi-item">
+      <div class="kpi-num">2%–10%</div>
+      <div class="kpi-label">不同路径成本差异</div>
+    </div>
+    <div class="kpi-item">
+      <div class="kpi-num" style="font-size:20px;">尚未发现</div>
+      <div class="kpi-label">主流产品完整覆盖规划闭环</div>
+    </div>
+  </div>
+
+  <ul class="findings">
+    <li><strong>早期可行性成立</strong> — SOM假设用户基数约675万人、年跨境支付约6,250亿元（其中留学生在读存量90-105万为有官方统计支撑的中置信区间，其余为商业假设）。可优化空间因用户认知水平分层（低认知1.5%-3%，普通0.5%-1.5%，成熟0.2%-0.8%）</li>
+    <li><strong>现有工具覆盖单点，缺少规划闭环</strong> — Wise有汇率提醒/自动换汇，Revolut有限价订单，但无产品覆盖面向家庭预算的多节点现金流规划闭环</li>
+    <li><strong>用户痛点可量化</strong> — 留学生家庭不同支付路径年成本差异可达6,000–30,000元，FXplanner可帮助加权年均节省约2,600–6,300元</li>
+    <li><strong>商业模式可验证</strong> — 功能模块化订阅（AI规划¥19.9/月 + 报告¥5–10/份），国内/国际版双轨定价，低价降低获客门槛</li>
+    <li><strong>渠道驱动型获客</strong> — 通过小红书/知乎/SEO/B2B/家长社群等渠道组合，2027年实现累计注册5.2万、2028年累计15.2万。基准2028年收入约¥63万元，乐观情景约¥190万元</li>
+  </ul>
+
+  <div class="page-num">1</div>
+</div>
+
+<!-- PAGE 2: MARKET DEFINITION -->
+<div class="page">
+  <div class="page-header">
+    <div class="section-num">01 市场定义</div>
+    <h2>跨币种现金流管理市场的三层边界</h2>
+  </div>
+
+  <div class="insight">
+    FXplanner 所在市场应定义为"个人跨币种现金流管理与外汇支付成本优化市场"，而非"汇率查询工具"或"外汇App"——后两者已被XE、银行App、Wise等充分占据。
+  </div>
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 1</div>
+    <div class="exhibit-title">TAM / SAM / SOM 分层结构</div>
+    <div class="chart-box"><canvas id="tamChart"></canvas></div>
+    <div class="exhibit-source">Source: OECD, UNESCO, UN Tourism, MBO Partners, McKinsey Global Payments Report; Analysis. 图表为美元折算口径（SOM 860亿$ ≈ 6,250亿RMB），正文以人民币为准。</div>
+  </div>
+
+  <hr class="sep">
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 2</div>
+    <div class="exhibit-title">SOM 用户群体与交易额构成</div>
+    <div class="grid-2">
+      <div class="chart-box"><canvas id="somUserChart"></canvas></div>
+      <div class="chart-box"><canvas id="somValueChart"></canvas></div>
+    </div>
+    <table style="margin-top:16px;">
+      <tr><th>用户群体</th><th>SOM规模</th><th>人均年交易额</th><th>总交易额（亿RMB）</th><th>数据置信度</th></tr>
+      <tr><td class="td-bold">中国留学生（海外在读存量）</td><td>约90-105万（基准105）</td><td>约30万</td><td class="td-blue">2,700-3,200</td><td>中</td></tr>
+      <tr><td class="td-bold">近5年赴港/海外工作活跃池</td><td>约40万（商业假设）</td><td>约40万</td><td class="td-blue">1,600</td><td>低</td></tr>
+      <tr><td class="td-bold">跨境自由职业/开发者</td><td>约30万（商业假设）</td><td>约15万</td><td>450</td><td>低</td></tr>
+      <tr><td class="td-bold">高消费出境旅行者（出境游人次×3-4%折算）</td><td>约500万（商业假设）</td><td>约2万</td><td>1,000</td><td>低</td></tr>
+      <tr><td class="td-bold" style="background:#E8F0FE;">合计</td><td style="background:#E8F0FE;" class="td-blue">约675万人</td><td style="background:#E8F0FE;">—</td><td class="td-highlight">6,250</td><td style="background:#E8F0FE;">—</td></tr>
+    </table>
+    <div class="exhibit-source">Source: IIE Open Doors 2024, HESA, DHA, IRCC, JASSO, DAAD, UGC HK（在读存量）; 香港入境处, 文旅部 2024, 行业估计; Analysis</div>
+  </div>
+
+  <div class="page-num">2</div>
+</div>
+
+<!-- PAGE 3: STUDENTS -->
+<div class="page">
+  <div class="page-header">
+    <div class="section-num">02 用户画像 — 留学生</div>
+    <h2>留学生群体：支付节点最明确，适合MVP首发市场</h2>
+  </div>
+
+    中国海外在读留学生存量约90-105万人（基准105万，综合IIE Open Doors 2025/HESA/DHA/IRCC等各国官方在读统计核心目的国88.6万 + 其他目的国估算），人均年跨币种支出约30万RMB，<strong>年跨境支付总额约2,700-3,200亿元（基准3,200亿）</strong>。可优化比例因用户认知分层：低认知1.5%-3%，普通0.5%-1.5%，成熟0.2%-0.8%。
+  </div>
+
+  <div class="grid-2">
+    <div class="exhibit">
+      <div class="exhibit-label">Exhibit 3</div>
+      <div class="exhibit-title">全球国际学生趋势（2023–2025）</div>
+      <div class="chart-box"><canvas id="studentChart"></canvas></div>
+      <div class="exhibit-source">Source: OECD Education at a Glance 2024, ICEF Monitor. 全球数据为国际学生总数。</div>
+    </div>
+    <div class="exhibit">
+      <div class="exhibit-label">Exhibit 4</div>
+      <div class="exhibit-title">中国出国留学生趋势（2023–2025）</div>
+      <div class="chart-box"><canvas id="chinaStudentChart"></canvas></div>
+      <div class="exhibit-source">Source: 教育部历史数据 + QS《Global Student Flows 2025》、启德/新东方/新通等机构白皮书综合估算。年度出国人数，非海外在读存量。</div>
+    </div>
+  </div>
+
+  <hr class="sep">
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 5</div>
+    <div class="exhibit-title">中国留学生主要目的地在读存量参考与年均支出（非年度出国人数）</div>
+    <div class="grid-2">
+      <div class="chart-box"><canvas id="destChart"></canvas></div>
+      <div>
+        <table>
+          <tr><th>目的国</th><th>人数（万）</th><th>年均总支出</th><th>币种</th></tr>
+          <tr><td class="td-bold">美国</td><td class="td-blue">29–31</td><td>$40K–65K</td><td>USD</td></tr>
+          <tr><td class="td-bold">澳大利亚</td><td>16–17</td><td>$36K–56K</td><td>AUD</td></tr>
+          <tr><td class="td-bold">英国</td><td>15–17</td><td>$30K–51K</td><td>GBP</td></tr>
+          <tr><td class="td-bold">日本</td><td>11.5–12</td><td>$13K–27K</td><td>JPY</td></tr>
+          <tr><td class="td-bold">加拿大</td><td>10–10.5</td><td>$28K–47K</td><td>CAD</td></tr>
+          <tr><td>德国</td><td>4–4.2</td><td>$10K–16K</td><td>EUR</td></tr>
+          <tr><td>中国香港</td><td>2.5–3</td><td>$25K–39K</td><td>HKD</td></tr>
+        </table>
+        <div class="exhibit-source">Source: IIE 2024, HESA, DHA, IRCC, JASSO, College Board, UCAS</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-num">3</div>
+</div>
+
+<!-- PAGE 4: OTHER USERS -->
+<div class="page">
+  <div class="page-header">
+    <div class="section-num">02 用户画像 — 其他群体</div>
+    <h2>跨币种收入人群和旅行者构成长期增长与获客入口</h2>
+  </div>
+
+  <div class="grid-2">
+    <div class="exhibit">
+      <div class="exhibit-label">Exhibit 6</div>
+      <div class="exhibit-title">美国数字游民规模 · MBO Partners实际数据</div>
+      <div class="chart-box"><canvas id="nomadChart"></canvas></div>
+      <div class="exhibit-source">Source: MBO Partners 2023–2025年度报告（已发布实际数据）</div>
+    </div>
+    <div class="exhibit">
+      <div class="exhibit-label">Exhibit 7</div>
+      <div class="exhibit-title">全球国际游客与中国出境游恢复</div>
+      <div class="chart-box"><canvas id="travelChart"></canvas></div>
+      <div class="exhibit-source">Source: UN Tourism 2025, 文旅部, 中国旅游研究院</div>
+    </div>
+  </div>
+
+  <hr class="sep">
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 8</div>
+    <div class="exhibit-title">三类用户痛点强度对比</div>
+    <div class="chart-box-lg"><canvas id="painChart"></canvas></div>
+    <div class="exhibit-source">Source: 基于用户画像分析的定性评估。1=弱，5=强。</div>
+  </div>
+
+  <div class="callout">
+    <b>So What:</b> 留学生和跨币种收入人群在"换汇时机""路径选择""成本复盘"三个维度均为最高痛点（5/5），旅行者痛点集中在"手续费不透明"。三类用户的痛点结构差异决定了产品的分阶段进入策略。
+  </div>
+
+  <div class="page-num">4</div>
+</div>
+
+<!-- PAGE 5: COMPETITORS -->
+<div class="page">
+  <div class="page-header">
+    <div class="section-num">03 竞品分析</div>
+    <h2>现有工具覆盖单点能力，多节点规划闭环缺失</h2>
+  </div>
+
+  <div class="insight">
+    现有工具覆盖单点能力（Wise有汇率提醒/自动换汇，Revolut有外汇限价订单），但<strong>缺少面向留学生/家庭预算的多节点现金流规划闭环</strong>——交易节点规划、按预算分批规划、多路径成本比较、成本复盘。FXplanner的差异化不在于替代，而在于构建上层决策层。
+  </div>
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 9</div>
+    <div class="exhibit-title">竞品能力矩阵——FXplanner差异化定位（△ = 部分覆盖单点能力）</div>
+    <table>
+      <tr><th style="width:22%;">能力维度</th><th>Wise</th><th>Revolut</th><th>XE</th><th>银行App</th><th>YNAB</th><th style="background:#005EB8;">FXplanner</th></tr>
+      <tr><td class="td-bold">汇率查询</td><td class="mx-y">✓</td><td class="mx-y">✓</td><td class="mx-y">✓</td><td class="mx-y">✓</td><td class="mx-n">—</td><td class="mx-star">✓</td></tr>
+      <tr><td class="td-bold">汇率提醒</td><td class="mx-y">✓</td><td class="mx-y">✓</td><td class="mx-y">✓</td><td class="mx-p">△</td><td class="mx-n">—</td><td class="mx-star">✓</td></tr>
+      <tr><td class="td-bold">换汇执行</td><td class="mx-y">✓</td><td class="mx-y">✓</td><td class="mx-y">✓</td><td class="mx-y">✓</td><td class="mx-n">—</td><td>不涉及</td></tr>
+      <tr style="background:#E8F0FE;"><td class="td-bold" style="color:var(--mckinsey-blue);">交易节点规划</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-star">★ 完整覆盖</td></tr>
+      <tr style="background:#E8F0FE;"><td class="td-bold" style="color:var(--mckinsey-blue);">分批换汇计划</td><td class="mx-p">△</td><td class="mx-p">△</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-star">★</td></tr>
+      <tr style="background:#E8F0FE;"><td class="td-bold" style="color:var(--mckinsey-blue);">多路径成本比较</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-star">★ 完整覆盖</td></tr>
+      <tr style="background:#E8F0FE;"><td class="td-bold" style="color:var(--mckinsey-blue);">成本复盘</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-star">★ 完整覆盖</td></tr>
+      <tr><td class="td-bold">多币种预算</td><td class="mx-n">—</td><td class="mx-p">△</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-p">△</td><td class="mx-star">✓</td></tr>
+      <tr><td class="td-bold">中国用户可用</td><td class="mx-p">△</td><td class="mx-n">—</td><td class="mx-y">✓</td><td class="mx-y">✓</td><td class="mx-n">—</td><td class="mx-star">✓</td></tr>
+      <tr><td class="td-bold">中立性</td><td class="mx-n">—</td><td class="mx-n">—</td><td class="mx-p">△</td><td class="mx-n">—</td><td>N/A</td><td class="mx-star">✓</td></tr>
+    </table>
+    <div class="exhibit-source">Source: 各产品官网功能列表截至2026年4月; Analysis</div>
+  </div>
+
+  <hr class="sep">
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 10</div>
+    <div class="exhibit-title">同一笔10万RMB→USD转账的全成本对比</div>
+    <div class="chart-box"><canvas id="costChart"></canvas></div>
+    <div class="exhibit-source">Source: 各平台公示费率, 银行牌价, 行业调研. 成本含手续费+汇率加点+电报费等全部费用.</div>
+  </div>
+
+  <div class="page-num">5</div>
+</div>
+
+<!-- PAGE 5b: SUPPLY CAPACITY & PRICING (新增 - P0/P1) -->
+<div class="page">
+  <div class="page-header">
+    <div class="section-num">03b 市场供应能力</div>
+    <h2>"执行供给"已充分，"规划供给"是结构性缺口</h2>
+  </div>
+
+  <div class="insight">
+    "市场供应能力"独立于竞品功能矩阵，聚焦四个维度：①基础能力（查询/执行/记录），②中国大陆用户的可用性（合规、网络、支付方式），③规划闭环覆盖（节点录入→分批建议→路径比较→成本复盘），④是否中立。当前供给侧的关键事实：执行类供给（银行/Wise/支付宝）已充分；银行App、支付平台、记账工具具备部分提醒/预算/汇率功能，但<strong>尚未发现面向中国大陆个人用户、覆盖"节点录入→分批建议→路径比较→成本复盘"的完整中立规划闭环供给</strong>。
+  </div>
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 10b</div>
+    <div class="exhibit-title">现阶段市场供应能力与供给缺口对照</div>
+    <table>
+      <tr>
+        <th style="width:18%;">供给类别</th>
+        <th>代表产品</th>
+        <th>当前供应能力</th>
+        <th>对中国用户可用性</th>
+        <th style="background:#005EB8;">缺口</th>
+      </tr>
+      <tr><td class="td-bold">汇率查询工具</td><td>XE、Google Finance、Yahoo Finance</td><td>实时/历史汇率充分，免费</td><td class="mx-y">✓ 完全可用</td><td>不支持未来节点规划</td></tr>
+      <tr><td class="td-bold">跨境支付执行</td><td>Wise、Remitly、Payoneer</td><td>执行能力强，部分透明</td><td class="mx-p">△ 实名/合规受限</td><td>偏交易，不做家庭预算</td></tr>
+      <tr><td class="td-bold">多币种金融App</td><td>Revolut、N26、多币卡</td><td>对欧美用户供给较强</td><td class="mx-n">— 中国大陆几乎不可用</td><td>不做规划与中立比较</td></tr>
+      <tr><td class="td-bold">银行App</td><td>中行/工行/招行/建行</td><td>合规购汇与电汇能力强</td><td class="mx-y">✓ 完全可用</td><td>只推自身渠道</td></tr>
+      <tr><td class="td-bold">支付/钱包</td><td>支付宝、微信、银联</td><td>境外消费便捷</td><td class="mx-y">✓ 完全可用</td><td>事后记录，无成本复盘</td></tr>
+      <tr><td class="td-bold">记账/预算工具</td><td>YNAB、Monarch、随手记</td><td>预算和记账成熟</td><td class="mx-p">△ 国际产品需翻墙</td><td>不涉外汇优化</td></tr>
+      <tr style="background:#E8F0FE;"><td class="td-bold" style="color:var(--mckinsey-blue);">FXplanner</td><td style="color:var(--mckinsey-blue);">规划层（不碰资金）</td><td>规划/比较/提醒/复盘闭环</td><td class="mx-star">★ 中文优先</td><td>需验证录入与付费意愿</td></tr>
+    </table>
+    <div class="exhibit-source">Source: 各产品官网、合规公告、行业访谈截至2026年4月; Analysis</div>
+  </div>
+
+  <hr class="sep">
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 10c</div>
+    <div class="exhibit-title">国内外同类产品价格与收费模式（显性 vs 隐性）<span style="font-size:11px;color:var(--gray-500);font-weight:400;">— 为典型场景估算，非实时报价</span></div>
+    <table>
+      <tr>
+        <th style="width:18%;">产品/路径</th>
+        <th>典型收费方式</th>
+        <th>显性费用</th>
+        <th>隐性汇率加点</th>
+        <th>用户感知</th>
+      </tr>
+      <tr><td class="td-bold">银行电汇</td><td>固定手续费+电报费+汇率加点</td><td>¥150-300/笔</td><td>0.3%-0.8%</td><td>显性低、隐性偏高</td></tr>
+      <tr><td class="td-bold">信用卡跨币种</td><td>货币转换费+卡组织汇率</td><td>1.5%-3%</td><td>0.5%-1%</td><td>合计2%-4%但不透明</td></tr>
+      <tr><td class="td-bold">Wise / Remitly</td><td>按比例+中间汇率</td><td>0.4%-1.2%</td><td>≈0%</td><td>透明度较高</td></tr>
+      <tr><td class="td-bold">银联境外</td><td>免转换费+银联汇率</td><td>¥0</td><td>0.3%-0.6%</td><td>显性免费、隐性中等</td></tr>
+      <tr><td class="td-bold">支付宝/微信境外</td><td>免手续费+平台汇率</td><td>¥0</td><td>0.3%-0.7%</td><td>方便但隐性成本</td></tr>
+      <tr><td class="td-bold">多币卡（Revolut）</td><td>订阅费+月度免费额度</td><td>£0-12.99/月</td><td>≈0%（额度内）</td><td>欧美用户透明</td></tr>
+      <tr><td class="td-bold">预算/记账软件</td><td>月费/年费订阅</td><td>¥30-80/月</td><td>不涉换汇</td><td>与节省弱绑定</td></tr>
+      <tr style="background:#E8F0FE;"><td class="td-bold" style="color:var(--mckinsey-blue);">FXplanner</td><td style="color:var(--mckinsey-blue);">规划层订阅+按次报告</td><td>¥19.9/月、¥5-10/份</td><td>不涉换汇</td><td>用节省金额证明ROI</td></tr>
+    </table>
+    <div class="exhibit-source">Source: 各平台公示费率、官方年报（Wise FY2025 / Revolut 2024）、四大行公开费率综合; Analysis. <strong>免责说明：</strong>上表费率为典型场景估算，会随币种、金额阶梯、卡种、地区、平台促销活动与实时政策变化；上线/提交前需按目标币种与具体场景复核最新官方费率。</div>
+  </div>
+
+  <div class="insight" style="margin-top:20px;">
+    <strong>结论：</strong>①执行类供给的"显性费用"差异有限（普遍0.4%-3%），<strong>真正决定用户成本的是隐性汇率加点和路径选择</strong>；②FXplanner订阅费用（¥19.9/月）显著低于用户加权年节省（¥2,600-6,300元），<strong>用户ROI约13-30倍</strong>；③定价不与执行费率对位竞争，定位为"为更优决策付费"。
+  </div>
+
+  <div class="page-num">5b</div>
+</div>
+
+<!-- PAGE 6: FORECAST -->
+<div class="page">
+  <div class="page-header">
+    <div class="section-num">04 市场预测</div>
+    <h2>保守漏斗模型下的三年收入预测</h2>
+  </div>
+
+  <div class="insight">
+    2026年为产品测试验证阶段，收入为验证性流水，不纳入正式预测。正式收入预测从2027年开始，采用渠道获客模型（小红书/知乎/SEO/B2B/家长社群组合）和低价策略（月订阅¥19.9、报告¥5–10）。三情景定义：保守＝自然增长注册规模 + 保守订阅率（1.5%），2028收入<strong>约¥13万</strong>；基准＝B融资加速版基准（¥30-50万营销 + 2.5%订阅率），<strong>约¥63万</strong>；乐观＝B融资加速版乐观（¥50-80万营销 + 4%订阅率 + 国际版），<strong>约¥190万</strong>。完整V1.2 A/B双情景对照详见《Stage1_数据基线修订报告》表C。
+  </div>
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 11</div>
+    <div class="exhibit-title">目标用户规模趋势（2023–2028E）</div>
+    <div class="chart-box-lg"><canvas id="forecastChart"></canvas></div>
+    <div class="exhibit-source">Source: OECD, ICEF Monitor, MBO Partners, UN Tourism. 2025为初步/实际数据; 2026–2028为趋势预测.</div>
+  </div>
+
+  <hr class="sep">
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 12</div>
+    <div class="exhibit-title">FXplanner三年收入预测 — 三情景对比</div>
+
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('s1',this)">保守</div>
+      <div class="tab" onclick="switchTab('s2',this)">基准</div>
+      <div class="tab" onclick="switchTab('s3',this)">乐观</div>
+    </div>
+
+    <div class="callout" style="margin-bottom:20px;"><b>2026年定位：</b>产品测试验证阶段（2026 H2上线），聚焦MVP功能验证和用户反馈收集，收入为验证性流水，不纳入正式预测。收入预测从2027年正式商业化开始。<br><b>建模口径：</b>累计注册 = Σ(各渠道年度新增)；付费用户 = 累计注册 × 活跃订阅率；年收入 = 付费用户 × 加权ARPU。<br><b>三情景与V1.2基线对应（修订）：</b>本页"保守"＝自然增长注册规模（≈A基准注册量62,500）+ 保守订阅率1.5%（≈¥13万），<u>不直接等同于V1.2 A-基准（¥26万）</u>；"基准"＝V1.2 B-基准（¥63万）；"乐观"＝V1.2 B-乐观（¥190万）。如需严格V1.2 A/B六档完整对照，请参《Stage1_数据基线修订报告》表C。</div>
+
+    <div id="s1" class="scenario-panel active">
+      <table>
+        <tr><th>年份</th><th>阶段</th><th>累计注册</th><th>活跃订阅率</th><th>付费用户</th><th>ARPU</th><th>年收入</th></tr>
+        <tr style="background:#F5F5F5;"><td>2026</td><td>测试验证</td><td colspan="5" style="text-align:center;color:var(--gray-500);font-style:italic;">MVP测试阶段，收入为验证性流水，不纳入正式预测</td></tr>
+        <tr><td>2027E</td><td>商业化首年</td><td>22,500</td><td>1.5%</td><td>340</td><td>¥130</td><td class="td-highlight">¥4.4万</td></tr>
+        <tr><td>2028E</td><td>增长期</td><td>62,500</td><td>1.5%</td><td>940</td><td>¥140</td><td class="td-highlight">¥13万</td></tr>
+      </table>
+      <div class="callout" style="margin-top:12px;"><b>假设：</b>纯有机增长（小红书自营+知乎+SEO+口碑），无营销预算。活跃订阅率1.5%（类比假设，需MVP实测替换）。ARPU按月订阅¥19.9均5-6个月+1-2份报告估算。</div>
+    </div>
+    <div id="s2" class="scenario-panel">
+      <table>
+        <tr><th>年份</th><th>阶段</th><th>累计注册</th><th>活跃订阅率</th><th>付费用户</th><th>ARPU</th><th>年收入</th></tr>
+        <tr style="background:#F5F5F5;"><td>2026</td><td>测试验证</td><td colspan="5" style="text-align:center;color:var(--gray-500);font-style:italic;">MVP测试阶段，收入为验证性流水，不纳入正式预测</td></tr>
+        <tr><td>2027E</td><td>商业化首年</td><td>52,000</td><td>2.5%</td><td>1,300</td><td>¥150</td><td class="td-highlight">¥20万</td></tr>
+        <tr><td>2028E</td><td>增长期</td><td>152,000</td><td>2.5%</td><td>3,800</td><td>¥165</td><td class="td-highlight">¥63万</td></tr>
+      </table>
+      <div class="callout" style="margin-top:12px;"><b>假设：</b>有机渠道+小红书KOL投放+留学机构B2B合作。年营销预算¥30-50万。活跃订阅率2.5%（类比假设，需MVP实测替换）。</div>
+    </div>
+    <div id="s3" class="scenario-panel">
+      <table>
+        <tr><th>年份</th><th>阶段</th><th>累计注册</th><th>活跃订阅率</th><th>付费用户</th><th>ARPU</th><th>年收入</th></tr>
+        <tr style="background:#F5F5F5;"><td>2026</td><td>测试验证</td><td colspan="5" style="text-align:center;color:var(--gray-500);font-style:italic;">MVP测试阶段，收入为验证性流水，不纳入正式预测</td></tr>
+        <tr><td>2027E</td><td>商业化首年</td><td>80,000</td><td>3.5%</td><td>2,800</td><td>¥165</td><td class="td-highlight">¥46万</td></tr>
+        <tr><td>2028E</td><td>增长期</td><td>250,000</td><td>4%</td><td>10,000</td><td>¥190</td><td class="td-highlight">¥190万</td></tr>
+      </table>
+      <div class="callout" style="margin-top:12px;"><b>假设：</b>口碑放大+国际版上线+B2B规模化。年营销预算¥50-80万。活跃订阅率4%（类比假设，需MVP实测替换）。</div>
+    </div>
+  </div>
+
+  <div class="exhibit" style="margin-top:20px;">
+    <div class="chart-box"><canvas id="revenueChart"></canvas></div>
+  </div>
+
+  <div class="page-num">6</div>
+</div>
+
+<!-- PAGE 6b: SUPPLY/TECH/PRICE TREND (新增 - P1) -->
+<div class="page">
+  <div class="page-header">
+    <div class="section-num">04b 市场预测·供给与趋势</div>
+    <h2>需求侧规模扩张之外，供给/技术/价格三条结构性趋势</h2>
+  </div>
+
+  <div class="insight">
+    市场预测不止于用户规模与收入，更需要回答：①未来供给侧格局会如何演变？②FXplanner自身的技术水平如何分阶段演进？③替代方案与订阅类产品的价格趋势分别走向何方？三者共同决定FXplanner的中长期竞争空间。
+  </div>
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 12b</div>
+    <div class="exhibit-title">未来市场供应能力趋势（2026-2030）</div>
+    <table>
+      <tr><th style="width:22%;">供给方向</th><th>2026-2028 趋势</th><th>对FXplanner的含义</th></tr>
+      <tr><td class="td-bold">跨境支付执行工具</td><td>Wise/Remitly持续提升费率透明度，但仍以"单笔交易执行"为核心</td><td class="td-blue">规划层缺口长期存在</td></tr>
+      <tr><td class="td-bold">银行/支付平台</td><td>强化汇率提醒、汇率优惠券、快捷购汇，但<strong>横向中立比较的动力不足</strong></td><td class="td-blue">中立比较仍是FXplanner独占空间</td></tr>
+      <tr><td class="td-bold">AI财务助手</td><td>逐步进入个人预算场景，但外汇支付规划需要本地化数据，<strong>通用Agent短期难以替代垂直工具</strong></td><td class="td-blue">垂直深度构成壁垒</td></tr>
+      <tr><td class="td-bold">合规与监管</td><td>个人外汇额度、信息服务边界趋于明朗；"只做信息、不接触资金"反而具备政策优势</td><td class="td-blue">合规边界即差异化空间</td></tr>
+      <tr><td class="td-bold">留学/出海B2B生态</td><td>留学机构、移民服务、跨境电商对"用户成本规划"工具的API化需求上升</td><td class="td-blue">2027+ B2B分发渠道形成</td></tr>
+    </table>
+    <div class="exhibit-source">Source: 行业访谈、各支付/银行平台公开战略、监管公告; Analysis</div>
+  </div>
+
+  <hr class="sep">
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 12c</div>
+    <div class="exhibit-title">FXplanner产品技术水平发展趋势（按验证目标分阶段）</div>
+    <table>
+      <tr><th>阶段</th><th>时间</th><th>技术水平</th><th>关键能力</th><th>验证目标</th></tr>
+      <tr><td class="td-bold">种子期</td><td>2026 H1</td><td>规则计算 + 手动录入</td><td>汇率看板、节点录入、路径成本计算、提醒</td><td>用户是否愿意录入未来节点</td></tr>
+      <tr><td class="td-bold">验证期</td><td>2026 H2</td><td>半自动规划</td><td>分批换汇建议、家庭账簿、目的国模板</td><td>规划建议是否被信任</td></tr>
+      <tr><td class="td-bold">商业化</td><td>2027</td><td class="td-blue">AI 个性化规划</td><td>AI换汇策略、预算情景模拟、国际版、月度复盘</td><td>付费转化与续费留存</td></tr>
+      <tr><td class="td-bold">扩展期</td><td>2028</td><td class="td-blue">自动化与生态接入</td><td>自动账单读取、旅行模板、B2B开放API、风险预警</td><td>粘性提升与渠道规模化</td></tr>
+      <tr><td class="td-bold">远期</td><td>2029-2030</td><td>多Agent协作 + 行为预测</td><td>主动式财务Agent、跨平台账户聚合、个性化套利</td><td>从"工具"演进为"决策大脑"</td></tr>
+    </table>
+    <div class="exhibit-source">技术演进节奏由商业验证节奏决定：MVP用规则计算即可验证最关键的"录入意愿"，AI能力放在2027年付费规模出现后再投入。</div>
+  </div>
+
+  <hr class="sep">
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 12d</div>
+    <div class="exhibit-title">价格趋势与FXplanner定价策略</div>
+    <table>
+      <tr><th>价格线</th><th>2026-2028 趋势</th><th>对FXplanner定价的影响</th></tr>
+      <tr><td class="td-bold">执行环节费率</td><td>跨境支付费率透明化、Wise等推动行业基准下降；"更便宜汇款"建立壁垒越来越难</td><td class="td-blue">不与执行工具竞争费率，把"路径选择"作为价值</td></tr>
+      <tr><td class="td-bold">用户付费动机</td><td>从"查汇率"转向"降低决策成本、减少隐性损失、提供可解释规划"</td><td class="td-blue">定价锚点向"决策订阅"靠拢</td></tr>
+      <tr><td class="td-bold">中国市场订阅承受力</td><td>"工具类订阅"付费意愿抬升，但月付集中在¥10-30元区间</td><td class="td-blue">¥19.9/月处于该区间下沿，留出升级空间</td></tr>
+      <tr><td class="td-bold">FXplanner定价节奏</td><td>早期低价月/季订阅+按次报告，<strong>不设年付</strong>降低试用门槛；2028+视留存与口碑引入年付与高级套餐</td><td class="td-blue">定价不被执行工具费率下行所侵蚀</td></tr>
+    </table>
+    <div class="exhibit-source">Source: 雪球/得到/YNAB/随手记等订阅产品公开数据；中国知识付费行业报告; Analysis</div>
+  </div>
+
+  <div class="insight" style="margin-top:20px;">
+    <strong>三趋势综合判断：</strong>未来5年，"执行供给"会更便宜更透明，但<strong>"规划供给"的真空不会被现有玩家自发填补</strong>——执行工具有商业利益冲突、AI通用助手缺垂直深度、银行只推自身渠道。FXplanner作为中立规划层的长期空间来源即此供给真空；技术演进与定价节奏均按验证节奏分阶段推进，避免在未验证需求前重投入。
+  </div>
+
+  <div class="page-num">6b</div>
+</div>
+
+<!-- PAGE 7: BUSINESS MODEL -->
+<div class="page">
+  <div class="page-header">
+    <div class="section-num">05 商业化</div>
+    <h2>功能模块化订阅，低价策略降低验证门槛</h2>
+  </div>
+
+  <div class="insight">
+    不按用户人群分层，按功能模块订阅。仅支持月付/季付，不设年付。规划报告¥5–10/份按次购买。国内版与国际版仅语言、货币、定价不同，功能完全一致。
+  </div>
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 13</div>
+    <div class="exhibit-title">定价模型 — 国内版 / 国际版</div>
+    <table>
+      <tr><th>产品层级</th><th>国内版定价</th><th>国际版定价</th><th>功能范围</th></tr>
+      <tr><td class="td-bold">基础版（免费）</td><td>¥0</td><td>$0</td><td>汇率看板 · 交易节点录入 · 基础提醒 · 费用计算器</td></tr>
+      <tr><td class="td-bold">AI规划订阅</td><td class="td-blue">¥19.9/月 · ¥49.9/季</td><td class="td-blue">$3.99/月 · $9.99/季</td><td>AI换汇策略 · 分批规划 · 智能提醒 · 汇差复盘</td></tr>
+      <tr><td class="td-bold">规划报告（按次）</td><td>¥5–10/份</td><td>$1.99–2.99/份</td><td>单次换汇规划 · 路径推荐 · 成本预测</td></tr>
+    </table>
+    <div class="exhibit-source">Note: 仅支持月付和季付，不设年付。国际版定价按当地购买力调整。</div>
+  </div>
+
+  <hr class="sep">
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 14</div>
+    <div class="exhibit-title">单用户经济模型 — 三阶段演进</div>
+    <div class="grid-2">
+      <div>
+        <table>
+          <tr><th>阶段</th><th>LTV</th><th>CAC</th><th>LTV/CAC</th></tr>
+          <tr><td class="td-bold">2026 H1 早期</td><td>¥120-150</td><td>¥0-30</td><td class="td-blue">4-∞</td></tr>
+          <tr><td class="td-bold">2026 H2 - 2027 基准</td><td>¥159-200</td><td>¥30-100</td><td class="td-blue">1.6-6.7</td></tr>
+          <tr><td class="td-bold">2028+ 目标</td><td>¥250-350</td><td>¥30-80</td><td class="td-blue">3.1-11.7</td></tr>
+          <tr><td class="td-bold">国际版（参考）</td><td>$32 (~¥232)</td><td>$15-25</td><td class="td-blue">1.3-2.1</td></tr>
+        </table>
+      </div>
+      <div class="chart-box"><canvas id="ltvChart"></canvas></div>
+    </div>
+    <div class="exhibit-source">Note: LTV基于月订阅¥19.9 × 平均8个月 + 报告购买。CAC按渠道加权（小红书自营¥0/KOL投放¥13-30/B2B合作¥25-50）。产品成熟期LTV/CAC可提升至3-4:1区间。</div>
+  </div>
+
+  <div class="callout">
+    <b>渠道获客模型：</b>累计注册由各渠道贡献加总——小红书自营+知乎+SEO+留学社群（自然渠道，CAC≈¥0）+ 小红书KOL+抖音/B站KOL+留学机构B2B+家长社群（付费渠道，CAC ¥13-50）。基准情景2028年累计注册15.2万、活跃订阅率2.5%、付费用户约3,800人、加权ARPU约¥165、年收入约¥63万。
+  </div>
+
+  <div class="page-num">7</div>
+</div>
+
+<!-- PAGE 8: ROADMAP -->
+<div class="page">
+  <div class="page-header">
+    <div class="section-num">06 路线图</div>
+    <h2>从高价值垂直场景切入，逐步向泛场景扩展</h2>
+  </div>
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 15</div>
+    <div class="exhibit-title">MVP功能优先级矩阵</div>
+    <table>
+      <tr><th>功能</th><th>留学生</th><th>跨币种收入</th><th>旅行</th><th>优先级</th></tr>
+      <tr><td class="td-bold">多币种汇率看板</td><td>★★★</td><td>★★★</td><td>★★★</td><td><span class="tag tag-p0">P0</span></td></tr>
+      <tr><td class="td-bold">未来交易节点录入</td><td>★★★</td><td>★★★</td><td>★★☆</td><td><span class="tag tag-p0">P0</span></td></tr>
+      <tr><td class="td-bold">换汇提醒</td><td>★★★</td><td>★★★</td><td>★★★</td><td><span class="tag tag-p0">P0</span></td></tr>
+      <tr><td class="td-bold">分批换汇计划</td><td>★★★</td><td>★★★</td><td>★★☆</td><td><span class="tag tag-p0">P0</span></td></tr>
+      <tr><td class="td-bold">支付路径成本比较</td><td>★★★</td><td>★★★</td><td>★★★</td><td><span class="tag tag-p0">P0</span></td></tr>
+      <tr><td class="td-bold">AI换汇策略</td><td>★★★</td><td>★★★</td><td>★★☆</td><td><span class="tag tag-p1">P1</span></td></tr>
+      <tr><td class="td-bold">信用卡真实成本计算</td><td>★★☆</td><td>★★★</td><td>★★★</td><td><span class="tag tag-p1">P1</span></td></tr>
+      <tr><td class="td-bold">家庭关联账簿</td><td>★★★</td><td>★★☆</td><td>★☆☆</td><td><span class="tag tag-p1">P1</span></td></tr>
+      <tr><td class="td-bold">月度汇差复盘</td><td>★★☆</td><td>★★★</td><td>★★☆</td><td><span class="tag tag-p1">P1</span></td></tr>
+      <tr><td>旅行预算模板</td><td>★☆☆</td><td>★★☆</td><td>★★★</td><td><span class="tag tag-p2">P2</span></td></tr>
+      <tr><td>自动读取账单</td><td>★★☆</td><td>★★★</td><td>★★☆</td><td><span class="tag tag-later">远期</span></td></tr>
+    </table>
+  </div>
+
+  <hr class="sep">
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 16</div>
+    <div class="exhibit-title">三年市场进入路径</div>
+    <div class="tl">
+      <div class="tl-item">
+        <div class="tl-time">2026 H1 · 种子期</div>
+        <h4>留学生换汇规划MVP</h4>
+        <p>聚焦英美留学生，上线5个P0功能（国内版）。小红书自营+知乎+SEO渠道试水。目标：累计注册500、验证核心价值假设。</p>
+      </div>
+      <div class="tl-item">
+        <div class="tl-time">2026 H2 · 验证期</div>
+        <h4>扩展目的国 + 港漂 + 家庭账簿</h4>
+        <p>覆盖加澳日港德，上线家庭关联账簿（分享链接版）。3-4个渠道运营。目标：累计注册4,500。此阶段收入为验证性流水，不纳入正式预测。</p>
+      </div>
+      <div class="tl-item">
+        <div class="tl-time">2027 · 增长期</div>
+        <h4>国际版上线 + AI规划完善 + KOL投放</h4>
+        <p>上线国际版（多语言+美元定价），完善AI换汇策略，家庭账簿完整版。新增小红书KOL+留学机构B2B等付费渠道。目标：累计注册5.2万、付费用户1,300、基准收入¥20万。</p>
+      </div>
+      <div class="tl-item">
+        <div class="tl-time">2028 · 扩展期</div>
+        <h4>旅行场景 + B2B规模化 + 自动账单</h4>
+        <p>推出旅行模板，与留学机构/旅行平台B2B合作，上线自动账单读取。全渠道运营。目标：累计注册15.2万、付费用户3,800、基准收入¥63万。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-num">8</div>
+</div>
+
+<!-- PAGE 9: CONCLUSION -->
+<div class="page">
+  <div class="page-header">
+    <div class="section-num">结论</div>
+    <h2>FXplanner可行性评估与关键行动建议</h2>
+  </div>
+
+  <div class="two-col">
+    <div>
+      <div class="col-head">核心发现</div>
+      <p style="font-family:-apple-system,sans-serif;font-size:13px;color:var(--gray-700);line-height:1.6;margin-bottom:12px;">FXplanner 的机会不在于创造一个全新外汇市场，而在于把留学生、跨境收入者已有的换汇行为，从"临时查汇率/单次转账"提升为"多节点预算、分批换汇、路径比较、成本复盘"的决策工具。</p>
+      <ul class="findings">
+        <li><strong>早期可行性成立</strong> — SOM假设用户基数约675万人、年跨境支付约6,250亿元（其中留学生在读存量90-105万为有官方统计支撑的中置信区间，其余为商业假设）。现有工具覆盖单点能力，但缺少多节点规划闭环</li>
+        <li><strong>节省空间因用户认知分层</strong> — 低认知用户年省5,250-10,500元，普通用户1,750-5,250元，成熟用户700-2,800元，加权年均¥2,600-6,300元</li>
+        <li><strong>商业模式可验证</strong> — 低价策略（¥19.9/月、报告¥5–10/份）降低获客门槛，成熟期LTV/CAC可达3-4:1</li>
+        <li><strong>需优先验证</strong> — 用户是否愿意持续录入交易节点、是否相信节省测算、是否愿意为规划能力付费</li>
+        <li><strong>保守2028年收入约¥13万，基准约¥63万，乐观约¥190万</strong>（保守＝自然增长注册规模+1.5%保守订阅率，基准＝V1.2 B融资加速版基准，乐观＝V1.2 B融资加速版乐观；完整V1.2 A/B双情景六档详见《Stage1_数据基线修订报告》表C）</li>
+      </ul>
+    </div>
+    <div>
+      <div class="col-head">关键行动建议</div>
+      <ul class="findings">
+        <li><strong>第一阶段（2026 H1）</strong> — 以中国留学生（英美）为MVP首发市场，验证"交易节点规划"这一核心价值假设</li>
+        <li><strong>重点验证指标</strong> — 用户是否愿意持续录入交易节点（>50%）、是否相信节省测算结果、是否愿意为规划能力付费（注册→付费转化率>3%）</li>
+        <li><strong>获客渠道</strong> — 小红书/知乎内容营销（低CAC）→ 留学机构B2B2C → 口碑裂变（家长→家长）</li>
+        <li><strong>不做什么</strong> — 不涉及资金流转（规避合规风险）、不做导流（保持中立性）、不设年付（降低决策门槛）</li>
+        <li><strong>国际化节奏</strong> — 2027年上线国际版，功能相同，仅调整语言/货币/定价</li>
+      </ul>
+    </div>
+  </div>
+
+  <hr class="sep">
+
+  <div class="exhibit">
+    <div class="exhibit-label">Exhibit 17</div>
+    <div class="exhibit-title">风险矩阵与应对</div>
+    <table>
+      <tr><th>风险</th><th>概率</th><th>影响</th><th>应对措施</th></tr>
+      <tr><td class="td-bold">用户教育成本高</td><td>中</td><td>高</td><td>通过具体节省金额案例驱动认知（"帮你省了X元"）</td></tr>
+      <tr><td class="td-bold">Wise/Revolut增加规划功能</td><td>中</td><td>中</td><td>先发优势 + 中国市场深耕 + 中立性定位</td></tr>
+      <tr><td class="td-bold">外汇管制政策变化</td><td>低</td><td>高</td><td>产品仅做信息服务，不涉及资金流转</td></tr>
+      <tr><td class="td-bold">活跃订阅率低于1.5%</td><td>中</td><td>中</td><td>免费增值 + 规划报告¥5–10低价转化 + 家庭账簿提升粘性</td></tr>
+      <tr><td class="td-bold">用户数据安全与合规</td><td>中</td><td>高</td><td>不接触资金，仅处理用户自主录入的规划数据</td></tr>
+    </table>
+  </div>
+
+  <div class="page-num">9</div>
+</div>
+
+<!-- FOOTER -->
+<div class="footer-bar">
+  <p>FXplanner 市场可行性分析 · 2026年4月 · 保密文件</p>
+  <p>历史数据：2023–2025（实际/初步） · 预测：2026E–2028E · 标注"行业估计"的数据缺乏单一权威来源</p>
+  <p>OECD · UNESCO · IIE · UN Tourism · MBO Partners · Wise · Revolut · Payoneer · McKinsey Global Payments</p>
+</div>
+
+<script>
+const M = {
+  blue: '#00338D', light: '#005EB8', accent: '#009FDA',
+  teal: '#00695C', green: '#2E7D32', amber: '#C68A00',
+  gray: '#767676', dark: '#1A1A1A',
+  blueA: 'rgba(0,51,141,0.06)', accentA: 'rgba(0,159,218,0.06)',
+};
+Chart.defaults.font.family = "-apple-system,'Helvetica Neue','PingFang SC',sans-serif";
+Chart.defaults.font.size = 11;
+Chart.defaults.color = '#767676';
+Chart.defaults.plugins.legend.labels.usePointStyle = true;
+Chart.defaults.plugins.legend.labels.pointStyleWidth = 8;
+Chart.defaults.plugins.legend.labels.padding = 14;
+Chart.defaults.elements.bar.borderRadius = 2;
+
+// TAM
+new Chart(document.getElementById('tamChart'), {
+  type: 'bar',
+  data: {
+    labels: ['TAM（全球跨币种支付）','SAM（可服务人群）','SOM（中文用户·首年）'],
+    datasets: [{
+      data: [28000, 4900, 860],
+      backgroundColor: [M.gray, M.light, M.blue],
+      barThickness: 36,
+    }]
+  },
+  options: {
+    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { x: { grid: { display: false }, ticks: { callback: v=> (v>=1000?(v/1000)+'K':v)+'亿$' } }, y: { grid: { display: false } } }
+  }
+});
+
+// SOM Users
+new Chart(document.getElementById('somUserChart'), {
+  type: 'doughnut',
+  data: {
+    labels: ['出境旅行者','留学生（在读存量）','赴港/海外工作者','跨境自由职业'],
+    datasets: [{ data: [500,105,40,30], backgroundColor: [M.gray, M.blue, M.light, M.accent], borderWidth: 0 }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { title: { display: true, text: '用户规模（万人）', font: { size: 12, weight: '600' }, color: M.dark },
+    legend: { position: 'bottom', labels: { font: { size: 10 }, padding: 8 } } }, cutout: '55%',
+  }
+});
+
+// SOM Value
+new Chart(document.getElementById('somValueChart'), {
+  type: 'doughnut',
+  data: {
+    labels: ['留学生','赴港/海外工作者','出境旅行者','跨境自由职业'],
+    datasets: [{ data: [3200,1600,1000,450], backgroundColor: [M.blue, M.light, M.gray, M.accent], borderWidth: 0 }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { title: { display: true, text: '年交易额（亿RMB）', font: { size: 12, weight: '600' }, color: M.dark },
+    legend: { position: 'bottom', labels: { font: { size: 10 }, padding: 8 } } }, cutout: '55%',
+  }
+});
+
+// Students
+new Chart(document.getElementById('studentChart'), {
+  type: 'bar',
+  data: {
+    labels: ['2023','2024','2025（初步）'],
+    datasets: [{
+      label: '万人',
+      data: [500, 535, 570],
+      backgroundColor: M.blue,
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: false, min: 450, ticks: { callback: v=>v+'万' } }, x: { grid: { display: false } } }
+  }
+});
+
+// China Students
+new Chart(document.getElementById('chinaStudentChart'), {
+  type: 'bar',
+  data: {
+    labels: ['2023','2024','2025（初步）'],
+    datasets: [{
+      label: '万人',
+      data: [52, 55, 57],
+      backgroundColor: M.light,
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: false, min: 45, ticks: { callback: v=>v+'万' } }, x: { grid: { display: false } } }
+  }
+});
+
+// Destination
+new Chart(document.getElementById('destChart'), {
+  type: 'bar',
+  data: {
+    labels: ['美国','澳洲','英国','日本','加拿大','德国','香港'],
+    datasets: [{
+      label: '中国留学生（万人）',
+      data: [30, 16.5, 16, 11.8, 10.3, 4.1, 2.8],
+      backgroundColor: M.blue,
+    }]
+  },
+  options: {
+    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { x: { grid: { display: false }, ticks: { callback: v=>v+'万' } }, y: { grid: { display: false } } }
+  }
+});
+
+// Nomad
+new Chart(document.getElementById('nomadChart'), {
+  type: 'bar',
+  data: {
+    labels: ['2023','2024','2025'],
+    datasets: [{
+      label: '美国数字游民（万人）',
+      data: [1760, 1810, 1850],
+      backgroundColor: M.light,
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: false, min: 1700, ticks: { callback: v=>v+'万' } }, x: { grid: { display: false } } }
+  }
+});
+
+// Travel
+new Chart(document.getElementById('travelChart'), {
+  type: 'bar',
+  data: {
+    labels: ['2023','2024','2025'],
+    datasets: [
+      { label: '全球游客（亿）', data: [13, 14.0, 14.7], backgroundColor: M.blue, yAxisID: 'y' },
+      { label: '中国出境（万）', data: [8700, 11500, 14000], backgroundColor: M.accent, yAxisID: 'y1' },
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    scales: {
+      y: { position: 'left', beginAtZero: false, min: 10, ticks: { callback: v=>v+'亿' }, title: { display: true, text: '全球', font: { size: 10 } } },
+      y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, ticks: { callback: v=>(v/10000)+'万' }, title: { display: true, text: '中国', font: { size: 10 } } },
+      x: { grid: { display: false } }
+    }
+  }
+});
+
+// Pain Radar
+new Chart(document.getElementById('painChart'), {
+  type: 'radar',
+  data: {
+    labels: ['不知何时换汇','不知换多少','路径不透明','手续费不透明','信用卡锁汇','是否分批','历史复盘','预算混乱','汇率焦虑'],
+    datasets: [
+      { label: '留学生', data: [5,5,5,5,4,5,4,3,5], borderColor: M.blue, backgroundColor: 'rgba(0,51,141,0.05)', pointRadius: 3, pointBackgroundColor: M.blue, borderWidth: 2 },
+      { label: '跨币种收入', data: [5,5,5,5,4,5,5,5,4], borderColor: M.light, backgroundColor: 'rgba(0,94,184,0.05)', pointRadius: 3, pointBackgroundColor: M.light, borderWidth: 2 },
+      { label: '旅行者', data: [3,3,4,5,3,2,3,3,3], borderColor: M.accent, backgroundColor: 'rgba(0,159,218,0.05)', pointRadius: 3, pointBackgroundColor: M.accent, borderWidth: 2 },
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    scales: { r: { min: 0, max: 5, ticks: { stepSize: 1, display: false }, pointLabels: { font: { size: 10 } }, grid: { color: 'rgba(0,0,0,0.06)' } } }
+  }
+});
+
+// Cost Comparison
+new Chart(document.getElementById('costChart'), {
+  type: 'bar',
+  data: {
+    labels: ['Wise','银联卡','支付宝/微信','银行电汇','Visa/MC卡','机场换汇'],
+    datasets: [{
+      data: [0.9, 1.0, 1.0, 1.5, 2.3, 10],
+      backgroundColor: [M.green, M.teal, M.teal, M.amber, M.light, '#B71C1C'],
+    }]
+  },
+  options: {
+    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { x: { ticks: { callback: v=>v+'%' }, grid: { display: false } }, y: { grid: { display: false } } }
+  }
+});
+
+// Forecast
+new Chart(document.getElementById('forecastChart'), {
+  type: 'line',
+  data: {
+    labels: ['2023','2024','2025','2026E','2027E','2028E'],
+    datasets: [
+      { label: '国际学生（万）', data: [500,535,570,600,620,650], borderColor: M.blue, tension: 0.3, pointRadius: 4, pointBackgroundColor: M.blue, borderWidth: 2 },
+      { label: '美国数字游民（万，MBO实测）', data: [1760,1810,1850,1900,1950,2000], borderColor: M.light, tension: 0.3, pointRadius: 4, pointBackgroundColor: M.light, borderWidth: 2, yAxisID: 'y1' },
+      { label: '国际游客（亿）', data: [13,14.0,14.7,15.2,15.7,16.2], borderColor: M.accent, tension: 0.3, pointRadius: 4, pointBackgroundColor: M.accent, borderWidth: 2, yAxisID: 'y2' },
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    scales: {
+      y: { position: 'left', title: { display: true, text: '国际学生（万）', font: { size: 10 } }, beginAtZero: false, min: 400, grid: { color: 'rgba(0,0,0,0.04)' } },
+      y1: { position: 'right', title: { display: true, text: '美国数字游民（万）', font: { size: 10 } }, grid: { drawOnChartArea: false }, beginAtZero: false, min: 1700 },
+      y2: { display: false },
+      x: { grid: { display: false } }
+    }
+  }
+});
+
+// Revenue
+new Chart(document.getElementById('revenueChart'), {
+  type: 'bar',
+  data: {
+    labels: ['2026（测试验证）','2027E','2028E'],
+    datasets: [
+      { label: '保守', data: [0, 4.4, 13], backgroundColor: M.gray },
+      { label: '基准', data: [0, 20, 65], backgroundColor: M.light },
+      { label: '乐观', data: [0, 46, 190], backgroundColor: M.blue },
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { title: { display: true, text: '三情景收入对比（万元）', font: { size: 12, weight: '600' }, color: M.dark } },
+    scales: { y: { ticks: { callback: v=>v+'万' } }, x: { grid: { display: false } } }
+  }
+});
+
+// LTV
+new Chart(document.getElementById('ltvChart'), {
+  type: 'bar',
+  data: {
+    labels: ['2026 H1早期','2026 H2-27基准','2028+ 目标','国际版'],
+    datasets: [
+      { label: 'LTV', data: [135, 180, 300, 232], backgroundColor: M.blue },
+      { label: 'CAC', data: [15, 65, 55, 90], backgroundColor: M.gray },
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { title: { display: true, text: 'LTV vs CAC 三阶段演进（元）', font: { size: 12, weight: '600' }, color: M.dark } },
+    scales: { y: { ticks: { callback: v=>'¥'+v } }, x: { grid: { display: false } } }
+  }
+});
+
+function switchTab(id, el) {
+  document.querySelectorAll('.scenario-panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  el.classList.add('active');
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,20 @@
+sequenceDiagram
+    actor U as 用户
+    participant UI as 换汇录入
+    participant C as 录入协调
+    participant Q as 报价职责
+    participant L as 外币账本
+    U->>UI: 选择直接交易对A到B
+    UI->>Q: 查询报价及估算
+    Q-->>UI: 来源时间与参考结果
+    U->>UI: 填写实际本金到账及费用
+    UI->>C: 查看录入内容
+    C-->>UI: 核对交易对与实际金额
+    U->>UI: 确认录入
+    UI->>C: 提交本次记录
+    alt 币种或依据校验未通过
+        C-->>UI: 返回同笔输入重新核对
+    else 校验通过
+        C->>L: 保存交易版本及来源成本
+        L-->>UI: 返回该笔交易详情
+    end

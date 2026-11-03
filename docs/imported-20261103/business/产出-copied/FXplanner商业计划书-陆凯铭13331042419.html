@@ -1,0 +1,973 @@
+<!DOCTYPE html><html lang="zh-CN"><head>
+
+
+<meta charset="UTF-8">
+<title>FXplanner · OPC 路演</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800;900&amp;family=Noto+Serif+SC:wght@400;500;600;700&amp;family=Noto+Sans+SC:wght@300;400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<script src="deck-stage.js"></script>
+<style>
+:root{
+  --kraft:#C4B097;
+  --kraft-deep:#B59E80;
+  --kraft-light:#D4C2A8;
+  --paper:#FAF7F0;
+  --paper-pure:#FFFFFF;
+  --ink:#1A1612;
+  --ink-soft:#3D352B;
+  --ink-mute:#7A6F5F;
+  --ink-faint:#A89A85;
+  --rule:#1A1612;
+  --gold:#A88B5C;
+  --accent:#8B6F3F;
+  --warn:#9C3528;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:var(--kraft);font-family:'Noto Sans SC','Montserrat',sans-serif;color:var(--ink);}
+
+deck-stage{--bg:var(--kraft);}
+
+section{
+  position:relative;
+  width:1920px;height:1080px;
+  background:var(--kraft);
+  overflow:hidden;
+  font-feature-settings:"palt";
+}
+
+/* ============ shared editorial chrome ============ */
+.frame{
+  position:absolute;inset:60px 80px 60px 80px;
+  background:var(--paper);
+  display:grid;
+  grid-template-rows:auto 1fr auto;
+}
+.head{
+  display:flex;align-items:flex-end;justify-content:space-between;
+  padding:36px 56px 24px;
+  border-bottom:1px solid var(--ink);
+}
+.head .brand{
+  font-family:'Montserrat',sans-serif;
+  font-weight:800;font-size:14px;letter-spacing:.42em;
+  color:var(--ink);
+}
+.head .meta{
+  font-family:'Montserrat',sans-serif;
+  font-size:11px;letter-spacing:.3em;color:var(--ink-mute);
+  text-transform:uppercase;
+}
+.foot{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:20px 56px 24px;
+  border-top:1px solid var(--ink);
+  font-family:'Montserrat',sans-serif;
+  font-size:11px;letter-spacing:.25em;color:var(--ink-mute);
+  text-transform:uppercase;
+}
+.foot .pg{font-weight:700;color:var(--ink);font-size:13px;letter-spacing:.15em;}
+
+/* giant section number (editorial) */
+.bignum{
+  position:absolute;
+  font-family:'Montserrat',sans-serif;
+  font-weight:900;
+  font-size:480px;
+  line-height:.78;
+  color:var(--ink);
+  opacity:.045;
+  letter-spacing:-.04em;
+  pointer-events:none;
+  user-select:none;
+}
+
+/* ============ COVER ============ */
+.cover{position:relative;width:100%;height:100%;display:flex;flex-direction:column;}
+.cover .topbar{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:60px 100px 0;
+  font-family:'Montserrat',sans-serif;
+  font-size:13px;letter-spacing:.4em;color:var(--ink);font-weight:600;
+}
+.cover .topbar .right{font-size:11px;letter-spacing:.3em;color:var(--ink-mute);}
+.cover .center{
+  flex:1;display:flex;flex-direction:column;justify-content:center;
+  padding:0 100px;position:relative;
+}
+.cover .eyebrow{
+  font-family:'Montserrat',sans-serif;
+  font-size:14px;letter-spacing:.6em;color:var(--ink-mute);
+  text-transform:uppercase;
+  margin-bottom:32px;
+  display:flex;align-items:center;gap:24px;
+}
+.cover .eyebrow::before{content:"»";font-size:22px;color:var(--ink);font-weight:600;letter-spacing:0;}
+.cover h1{
+  font-family:'Montserrat',sans-serif;
+  font-weight:900;
+  font-size:240px;line-height:.88;letter-spacing:-.04em;
+  color:var(--ink);
+}
+.cover h1 .lo{display:block;font-size:64px;font-weight:300;letter-spacing:.18em;margin-top:24px;color:var(--ink-soft);font-family:'Noto Serif SC',serif;}
+.cover .tagline{
+  margin-top:56px;
+  font-family:'Noto Serif SC',serif;
+  font-size:34px;line-height:1.55;color:var(--ink-soft);
+  max-width:1100px;font-weight:400;
+  border-left:3px solid var(--ink);padding-left:32px;
+}
+.cover .ev-rail{
+  display:grid;grid-template-columns:repeat(3,1fr);
+  gap:1px;background:var(--ink);
+  margin:0 100px 60px;
+  border:1px solid var(--ink);
+}
+.cover .ev{background:var(--kraft);padding:24px 28px;}
+.cover .ev .lbl{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.35em;color:var(--ink-mute);text-transform:uppercase;}
+.cover .ev .v{font-family:'Montserrat',sans-serif;font-weight:700;font-size:22px;color:var(--ink);margin-top:8px;letter-spacing:.02em;}
+.cover .ev .v small{font-weight:400;font-family:'Noto Sans SC';font-size:13px;color:var(--ink-mute);margin-left:8px;letter-spacing:.05em;}
+.cover .footer-cover{
+  display:flex;justify-content:space-between;align-items:flex-end;
+  padding:0 100px 60px;
+  font-family:'Montserrat',sans-serif;
+  font-size:13px;letter-spacing:.2em;color:var(--ink-soft);
+  border-top:1px solid var(--ink);padding-top:32px;margin:0 100px;
+}
+.cover .footer-cover .left{display:flex;flex-direction:column;gap:8px;}
+.cover .footer-cover .left b{font-weight:700;letter-spacing:.25em;}
+.cover .footer-cover .left span{font-family:'Noto Sans SC';font-size:14px;letter-spacing:.05em;color:var(--ink-mute);font-weight:400;}
+.cover .footer-cover .right{text-align:right;font-family:'Noto Sans SC';font-size:14px;letter-spacing:.05em;color:var(--ink-mute);font-weight:400;line-height:1.7;}
+
+/* ============ SECTION HEAD (numbered) ============ */
+.numhead{
+  display:grid;grid-template-columns:auto 1fr;align-items:center;
+  gap:48px;padding:48px 80px 32px;border-bottom:1px solid var(--ink);
+}
+.numhead .num{
+  font-family:'Montserrat',sans-serif;font-weight:900;font-size:96px;
+  line-height:.85;color:var(--ink);letter-spacing:-.04em;
+}
+.numhead .title-block{display:flex;flex-direction:column;gap:8px;}
+.numhead .kicker{
+  font-family:'Montserrat',sans-serif;font-size:13px;letter-spacing:.5em;color:var(--ink-mute);text-transform:uppercase;
+  display:flex;align-items:center;gap:18px;
+}
+.numhead .kicker::before{content:"»";font-size:18px;color:var(--ink);font-weight:700;letter-spacing:0;}
+.numhead h2{
+  font-family:'Noto Serif SC',serif;font-weight:600;
+  font-size:42px;line-height:1.25;color:var(--ink);letter-spacing:.01em;
+}
+
+/* page body grid */
+.body{padding:36px 64px;display:grid;gap:24px;}
+
+/* lede paragraph */
+.lede{
+  font-family:'Noto Serif SC',serif;font-weight:400;
+  font-size:26px;line-height:1.5;color:var(--ink-soft);
+  max-width:1500px;
+}
+.lede em{font-style:normal;color:var(--ink);font-weight:600;border-bottom:2px solid var(--ink);}
+
+/* three column */
+.col3{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--ink);border:1px solid var(--ink);}
+.col3 .cell{background:var(--paper);padding:32px 32px 36px;display:flex;flex-direction:column;}
+.col3 .cell .ix{font-family:'Montserrat',sans-serif;font-weight:800;font-size:13px;letter-spacing:.4em;color:var(--ink);}
+.col3 .cell .ix small{display:block;font-weight:400;color:var(--ink-mute);letter-spacing:.3em;margin-top:6px;}
+.col3 .cell h3{
+  font-family:'Noto Serif SC',serif;font-weight:600;font-size:26px;color:var(--ink);
+  margin-top:18px;line-height:1.3;
+}
+.col3 .cell .pill{
+  display:inline-block;font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.25em;
+  border:1px solid var(--ink);padding:4px 10px;margin-top:14px;align-self:flex-start;
+  text-transform:uppercase;font-weight:600;
+}
+.col3 .cell .pill.gold{background:var(--ink);color:var(--paper);}
+.col3 .cell ul{list-style:none;margin-top:18px;}
+.col3 .cell ul li{
+  font-family:'Noto Sans SC';font-size:15px;color:var(--ink-soft);line-height:1.65;
+  padding-left:18px;position:relative;margin-bottom:8px;font-weight:400;
+}
+.col3 .cell ul li::before{content:"";position:absolute;left:0;top:11px;width:8px;height:1px;background:var(--ink);}
+
+/* note block */
+.note{
+  border-top:1px solid var(--ink);padding-top:20px;
+  display:grid;grid-template-columns:140px 1fr;gap:32px;align-items:start;
+}
+.note .lbl{
+  font-family:'Montserrat',sans-serif;font-weight:800;font-size:11px;letter-spacing:.35em;color:var(--ink);text-transform:uppercase;padding-top:4px;
+}
+.note .txt{font-family:'Noto Sans SC';font-size:15px;line-height:1.7;color:var(--ink-soft);}
+
+/* numbered steps row */
+.steps{display:grid;grid-template-columns:repeat(5,1fr);gap:0;}
+.steps .step{
+  padding:28px 24px;border-right:1px solid var(--ink);
+  display:flex;flex-direction:column;gap:14px;
+}
+.steps .step:last-child{border-right:none;}
+.steps .step .n{
+  font-family:'Montserrat',sans-serif;font-weight:900;font-size:38px;color:var(--ink);letter-spacing:-.02em;
+}
+.steps .step .t{font-family:'Noto Serif SC',serif;font-weight:600;font-size:20px;color:var(--ink);line-height:1.3;}
+.steps .step .d{font-family:'Noto Sans SC';font-size:13px;color:var(--ink-mute);line-height:1.55;}
+.steps .step .e{font-family:'Montserrat',sans-serif;font-size:11px;letter-spacing:.2em;color:var(--accent);text-transform:uppercase;font-weight:600;border-top:1px solid var(--ink-faint);padding-top:8px;margin-top:auto;}
+
+.frame.bordered .body{border-bottom:1px solid var(--ink);}
+
+/* split layout */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:start;}
+
+/* table editorial */
+table.ed{width:100%;border-collapse:collapse;font-family:'Noto Sans SC';font-size:15px;color:var(--ink-soft);}
+table.ed th{
+  font-family:'Montserrat',sans-serif;font-weight:700;font-size:11px;letter-spacing:.3em;
+  text-transform:uppercase;text-align:left;
+  border-top:2px solid var(--ink);border-bottom:1px solid var(--ink);
+  padding:12px 14px;color:var(--ink);background:transparent;
+}
+table.ed td{
+  padding:14px 14px;border-bottom:1px solid var(--ink-faint);vertical-align:top;line-height:1.6;
+}
+table.ed tr:last-child td{border-bottom:1px solid var(--ink);}
+table.ed td.k{font-family:'Montserrat',sans-serif;font-weight:700;font-size:13px;letter-spacing:.15em;color:var(--ink);text-transform:uppercase;}
+table.ed td.num{font-family:'Montserrat',sans-serif;font-weight:600;color:var(--ink);}
+
+/* feature row (4 col) */
+.feat4{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ink);border-top:1px solid var(--ink);border-bottom:1px solid var(--ink);}
+.feat4 .f{background:var(--paper);padding:24px 24px;display:flex;flex-direction:column;gap:10px;min-height:200px;}
+.feat4 .f .num{font-family:'Montserrat',sans-serif;font-weight:900;font-size:54px;line-height:.85;color:var(--ink);letter-spacing:-.03em;}
+.feat4 .f .label{font-family:'Montserrat',sans-serif;font-size:11px;letter-spacing:.3em;color:var(--accent);text-transform:uppercase;font-weight:700;}
+.feat4 .f h4{font-family:'Noto Serif SC',serif;font-weight:600;font-size:22px;color:var(--ink);line-height:1.3;}
+.feat4 .f p{font-family:'Noto Sans SC';font-size:14px;color:var(--ink-soft);line-height:1.7;}
+
+/* phase block */
+.phase{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--ink);border:1px solid var(--ink);}
+.phase .p{background:var(--paper);padding:32px;display:flex;flex-direction:column;gap:14px;}
+.phase .p.lead{background:var(--ink);color:var(--paper);}
+.phase .p.lead h4,.phase .p.lead .when{color:var(--paper);}
+.phase .p.lead .scope{color:rgba(250,247,240,.7);}
+.phase .when{font-family:'Montserrat',sans-serif;font-size:11px;letter-spacing:.3em;color:var(--ink-mute);text-transform:uppercase;font-weight:600;}
+.phase h4{font-family:'Noto Serif SC',serif;font-weight:600;font-size:24px;color:var(--ink);line-height:1.3;}
+.phase .scope{font-family:'Montserrat',sans-serif;font-size:11px;letter-spacing:.2em;color:var(--accent);text-transform:uppercase;font-weight:700;}
+.phase ul{list-style:none;margin-top:6px;}
+.phase ul li{font-family:'Noto Sans SC';font-size:14px;line-height:1.65;color:var(--ink-soft);padding-left:16px;position:relative;margin-bottom:6px;}
+.phase ul li::before{content:"";position:absolute;left:0;top:10px;width:8px;height:1px;background:currentColor;}
+.phase .p.lead ul li{color:rgba(250,247,240,.85);}
+
+/* risk row */
+.risks{display:grid;grid-template-columns:repeat(2,1fr);gap:0;border-top:1px solid var(--ink);}
+.risks .risk{
+  padding:18px 24px;border-bottom:1px solid var(--ink-faint);border-right:1px solid var(--ink-faint);
+  display:grid;grid-template-columns:64px 1fr;gap:18px;
+}
+.risks .risk:nth-child(2n){border-right:none;}
+.risks .risk .id{font-family:'Montserrat',sans-serif;font-weight:900;font-size:38px;color:var(--ink);letter-spacing:-.02em;line-height:.9;}
+.risks .risk .t{font-family:'Noto Serif SC',serif;font-weight:600;font-size:18px;color:var(--ink);margin-bottom:6px;}
+.risks .risk .tag{display:inline-block;font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.2em;background:var(--ink);color:var(--paper);padding:3px 8px;text-transform:uppercase;font-weight:600;margin-bottom:10px;}
+.risks .risk .body-r{font-family:'Noto Sans SC';font-size:14px;line-height:1.65;color:var(--ink-soft);}
+.risks .risk .body-r b{color:var(--ink);font-weight:600;}
+
+/* founder block */
+.founder-grid{display:grid;grid-template-columns:180px 1fr;gap:36px;align-items:center;}
+.founder-grid .photo{
+  width:180px;height:220px;background:var(--kraft-light);overflow:hidden;
+  border:1px solid var(--ink);
+}
+.founder-grid .photo img{width:100%;height:100%;object-fit:cover;mix-blend-mode:multiply;filter:contrast(1.05);}
+.founder-name{font-family:'Noto Serif SC',serif;font-weight:600;font-size:34px;color:var(--ink);}
+.founder-name small{display:block;font-family:'Montserrat',sans-serif;font-size:13px;letter-spacing:.3em;color:var(--ink-mute);font-weight:500;margin-top:8px;text-transform:uppercase;}
+
+/* ask box */
+.ask-box{
+  border-top:2px solid var(--ink);border-bottom:2px solid var(--ink);
+  padding:20px 0;margin-top:auto;
+  display:grid;grid-template-columns:auto 1fr;gap:48px;align-items:center;
+}
+.ask-box .label{font-family:'Montserrat',sans-serif;font-weight:900;font-size:18px;letter-spacing:.4em;color:var(--ink);text-transform:uppercase;}
+.ask-box .items{display:flex;flex-wrap:wrap;gap:24px;font-family:'Noto Sans SC';font-size:16px;color:var(--ink-soft);font-weight:500;}
+.ask-box .items span{padding:0 0 0 18px;position:relative;}
+.ask-box .items span::before{content:"»";position:absolute;left:0;color:var(--ink);font-weight:700;}
+
+/* fineprint */
+.fineprint{
+  font-family:'Noto Sans SC';font-size:12px;color:var(--ink-mute);line-height:1.7;
+  border-top:1px solid var(--ink-faint);padding-top:14px;font-weight:400;
+}
+
+/* utility */
+.kbd{font-family:'JetBrains Mono',monospace;font-size:.92em;background:var(--kraft-light);padding:1px 6px;border:1px solid var(--ink-faint);}
+hr.thin{border:none;border-top:1px solid var(--ink-faint);margin:8px 0;}
+hr.thick{border:none;border-top:1px solid var(--ink);margin:8px 0;}
+.tw{color:var(--accent);font-family:'Montserrat',sans-serif;font-weight:700;letter-spacing:.05em;}
+.gnum{font-family:'Montserrat',sans-serif;font-weight:700;letter-spacing:.02em;color:var(--ink);}
+
+</style>
+</head>
+<body style="">
+
+<deck-stage style="--deck-rail-w: 188px;">
+
+<!-- ============ 00 COVER ============ -->
+<section>
+  <div class="cover">
+    <div class="topbar">
+      <span style="">FXPLANNER&nbsp;&nbsp;</span>
+      <span class="right">PITCH DECK &nbsp;»&nbsp; 2026·05·07</span>
+    </div>
+
+    <div class="center">
+      <span class="bignum" style="right:80px;top:-60px;font-size:600px;">FX</span>
+      <div class="eyebrow">OPC 一人公司 · 轻资产 AI 应用创业项目</div>
+      <h1>FXplanner<span class="lo">跨币种交易换汇成本管理智能决策平台</span></h1>
+      <p class="tagline" style="">面向留学生家庭与跨境支付人群，<br>在换汇交易前智能规划换汇路径比较、预算规划与节点提醒。</p>
+    </div>
+
+    <div class="ev-rail">
+      <div class="ev">
+        <div class="lbl">公网产品已上线</div>
+        <div class="v" style="">v0.51 fxplanner.cn</div>
+      </div>
+      <div class="ev">
+        <div class="lbl">ICP 已备案</div>
+        <div class="v">沪ICP备2026012540号-1</div>
+      </div>
+      <div class="ev">
+        <div class="lbl" style="">自动化测试</div>
+        <div class="v" style="">257 / 0 <small>通过 / 失败</small></div>
+      </div>
+    </div>
+
+    <div class="footer-cover">
+      <div class="left">
+        <b style="">申请主体 · 拟设上海一人有限责任公司</b>
+        <span>创始人 陆凯铭</span>
+      </div>
+      <div class="right" style=""><br></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 01 PROBLEM ============ -->
+<section>
+  <span class="bignum" style="right:80px;top:-40px;">01</span>
+  <div class="frame">
+    <div class="head">
+      <span class="brand">FXPLANNER</span>
+      <span class="meta">01 / 09 &nbsp;»&nbsp; PROBLEM</span>
+    </div>
+    <div class="body">
+      <div class="numhead" style="padding:0 0 32px;">
+        <div class="num">01</div>
+        <div class="title-block">
+          <div class="kicker">痛点 · PROBLEM</div>
+          <h2>跨币种支出不是信息问题，<br>而是"何时换 / 换多少 / 走哪条路径"的决策问题。</h2>
+        </div>
+      </div>
+
+      <p class="lede" style="">
+        创始人本人曾在 <em style="">UBC 留学 6 年（2015–2021）</em>，是该场景的真实用户，<br>
+        也是 FXplanner 的<em>第一批产品验证对象</em>。
+      </p>
+
+      <div class="col3">
+        <div class="cell">
+          <div class="ix">中国留学生家庭<small>P0 · CHINESE STUDENT FAMILIES</small></div>
+          <span class="pill gold">P0 主线 · 已锁定</span>
+          <h3>学费、生活费按学期 / 月稳定外汇支出</h3>
+          <ul>
+            <li>5 万美元便利化额度需要前瞻管理</li>
+            <li>信用卡海外费率每张卡都不同，无人解释</li>
+            <li>决策人明确：家长付费 · 学生使用</li>
+          </ul>
+        </div>
+        <div class="cell">
+          <div class="ix">跨境订阅 · 出境旅游<small>P1 · SUBSCRIPTIONS &amp; TRAVEL</small></div>
+          <span class="pill" style="color: rgb(0, 0, 0);">P1 第二阶段</span>
+          <h3>每月被收 1.5–3% 货币转换费</h3>
+          <ul>
+            <li style="">规划的旅游 / 海淘计划但换汇缺乏路径推荐</li>
+            <li>事后记账只复盘，不能在花钱之前提示</li>
+          </ul>
+        </div>
+        <div class="cell">
+          <div class="ix">跨境工作者 · 数字游民<small>P2 · CROSS-BORDER WORKERS</small></div>
+          <span class="pill" style="color: rgb(0, 0, 0);">P2 第三阶段</span>
+          <h3>多币种工资、跨境收款节奏混乱</h3>
+          <ul>
+            <li>无中立工具横向比较通道与费率</li>
+            <li>汇率波动隐性损失从未被量化</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="note">
+        <div class="lbl">用户验证<br>VALIDATION</div>
+        <div class="txt" style="">
+          已启动结构化用户访谈：重点验证"额度提醒 / 路径比较"感知价值与 ¥5–10 单次报告付费意愿；入驻后 6 个月累计 <b style="color:var(--ink);">≥ 30 例</b>。
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>FXPLANNER 2026</span><span class="pg">PG 01</span></div>
+  </div>
+</section>
+
+<!-- ============ 02 SOLUTION ============ -->
+<section>
+  <span class="bignum" style="right:80px;top:-40px;">02</span>
+  <div class="frame">
+    <div class="head">
+      <span class="brand">FXPLANNER</span>
+      <span class="meta">02 / 09 &nbsp;»&nbsp; SOLUTION</span>
+    </div>
+    <div class="body">
+      <div class="numhead" style="padding:0 0 32px;">
+        <div class="num">02</div>
+        <div class="title-block">
+          <div class="kicker">解决方案 · SOLUTION</div>
+          <h2>支付前的换汇路径规划与提醒工具。</h2>
+        </div>
+      </div>
+
+      <p class="lede">
+        三件能力组成闭环 ·
+        <em>一句中文录入</em> &nbsp;»&nbsp;
+        <em>基于已知费率的低成本路径比较</em> &nbsp;»&nbsp;
+        <em>关键节点主动提醒</em>
+      </p>
+
+      <div class="col3">
+        <div class="cell">
+          <div class="ix">01<small>RATE AGGREGATION</small></div>
+          <h3>汇率与费率聚合</h3>
+          <ul>
+            <li>直连 3 行（农 / 工 / 招）+ k780 聚合（中 / 建 / 交）</li>
+            <li>信用卡七行外汇费率库</li>
+            <li>双层降级：任一银行失效不影响整体服务</li>
+          </ul>
+        </div>
+        <div class="cell">
+          <div class="ix">02<small>AI INTAKE</small></div>
+          <h3>AI 自然语言录入</h3>
+          <ul>
+            <li>GLM 解析 → 结构化字段 → 置信度标签</li>
+            <li>用户主动确认入库 — 规避 AI 幻觉</li>
+            <li>多 Provider 路由：GLM · Qwen · DeepSeek · Kimi</li>
+          </ul>
+        </div>
+        <div class="cell">
+          <div class="ix">03<small>ALERTS &amp; MODELING</small></div>
+          <h3>现金流建模 + 节点提醒</h3>
+          <ul>
+            <li>跨币种 A→B→C 三步内成本链路比较</li>
+            <li>5 万美元便利化额度前瞻预估</li>
+            <li>三档阈值（80 / 90 / 100%）+ WebSocket 推送</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="note">
+        <div class="lbl">为什么是<br>OPC 模式</div>
+        <div class="txt">
+          <b style="color:var(--ink);">不碰资金流</b> · <b style="color:var(--ink);">不需要重牌照系统</b> · <b style="color:var(--ink);">不依赖线下重资产</b>。<br>
+          通过数据聚合、算法计算与 AI 交互即可形成早期产品闭环 — <span class="tw">单人 + AI 工具栈即可交付</span>。
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>FXPLANNER 2026</span><span class="pg">PG 02</span></div>
+  </div>
+</section>
+
+<!-- ============ 03 PRODUCT STATUS ============ -->
+<section>
+  <span class="bignum" style="right:80px;top:-40px;">03</span>
+  <div class="frame">
+    <div class="head">
+      <span class="brand">FXPLANNER</span>
+      <span class="meta">03 / 09 &nbsp;»&nbsp; PRODUCT STATUS</span>
+    </div>
+    <div class="body">
+      <div class="numhead" style="padding:0 0 32px;">
+        <div class="num">03</div>
+        <div class="title-block">
+          <div class="kicker">产品进展 · PRODUCT STATUS</div>
+          <h2>已上线 MVP 与完整用户流程 ─ 这不是想法阶段。</h2>
+        </div>
+      </div>
+
+      <div class="steps" style="border-top:1px solid var(--ink);border-bottom:1px solid var(--ink);">
+        <div class="step">
+          <div class="n">01</div>
+          <div class="t">录入未来支出</div>
+          <div class="d">"我每月给孩子打 1500 美元"</div>
+          <div class="e">AI 解析 → 结构化</div>
+        </div>
+        <div class="step">
+          <div class="n">02</div>
+          <div class="t">识别币种与周期</div>
+          <div class="d">USD · 月度 · 留学场景</div>
+          <div class="e">命中 5 万额度模型</div>
+        </div>
+        <div class="step">
+          <div class="n">03</div>
+          <div class="t">比较换汇路径</div>
+          <div class="d">电汇 / 银行卡 / 第三方</div>
+          <div class="e">基于已知费率 · 低成本提示</div>
+        </div>
+        <div class="step">
+          <div class="n">04</div>
+          <div class="t">节点提醒</div>
+          <div class="d">80% / 90% / 100% 三档</div>
+          <div class="e">WebSocket 实时推送</div>
+        </div>
+        <div class="step">
+          <div class="n">05</div>
+          <div class="t">复盘费用差异</div>
+          <div class="d">本季度避免潜在费用 ¥XXX</div>
+          <div class="e">形成中立费率数据</div>
+        </div>
+      </div>
+
+      <div class="split" style="margin-top:8px;">
+        <div>
+          <div class="ix" style="font-family:'Montserrat',sans-serif;font-weight:800;font-size:13px;letter-spacing:.4em;color:var(--ink);">已上线<small style="display:block;font-weight:400;color:var(--ink-mute);letter-spacing:.3em;margin-top:6px;">v3.51 · 2026-04-15</small></div>
+          <ul style="list-style:none;margin-top:18px;">
+            <li style="font-family:'Noto Sans SC';font-size:16px;color:var(--ink-soft);line-height:1.8;padding-left:18px;position:relative;"><span style="position:absolute;left:0;top:13px;width:8px;height:1px;background:var(--ink);"></span>公网 <span class="kbd" style="">https://fxplanner.cn</span> · HTTPS+HSTS · ICP 已备案</li>
+            <li style="font-family:'Noto Sans SC';font-size:16px;color:var(--ink-soft);line-height:1.8;padding-left:18px;position:relative;"><span style="position:absolute;left:0;top:13px;width:8px;height:1px;background:var(--ink);"></span>18 项核心能力 · Web 三语（中 / EN / 日）</li>
+            <li style="font-family:'Noto Sans SC';font-size:16px;color:var(--ink-soft);line-height:1.8;padding-left:18px;position:relative;"><span style="position:absolute;left:0;top:13px;width:8px;height:1px;background:var(--ink);"></span>Vue3 + FastAPI + PG/Redis · Docker Compose 5 容器 · GitHub Actions 双门禁</li>
+          </ul>
+        </div>
+        <div>
+          <div class="ix" style="font-family:'Montserrat',sans-serif;font-weight:800;font-size:13px;letter-spacing:.4em;color:var(--ink);">近期里程碑<small style="display:block;font-weight:400;color:var(--ink-mute);letter-spacing:.3em;margin-top:6px;">用户与商业化</small></div>
+          <ul style="list-style:none;margin-top:18px;">
+            <li style="font-family:'Noto Sans SC';font-size:16px;color:var(--ink-soft);line-height:1.8;padding-left:18px;position:relative;"><span style="position:absolute;left:0;top:13px;width:8px;height:1px;background:var(--ink);"></span><span class="tw">2026 H2</span> · 累计注册 4,500 + 首批用户访谈 ≥ 30 例</li>
+            <li style="font-family:'Noto Sans SC';font-size:16px;color:var(--ink-soft);line-height:1.8;padding-left:18px;position:relative;"><span style="position:absolute;left:0;top:13px;width:8px;height:1px;background:var(--ink);"></span><span class="tw">2027 Q1</span> · 付费墙 + 微信支付上线（视 ICP 法务评估）</li>
+            <li style="font-family: &quot;Noto Sans SC&quot;; font-size: 16px; color: var(--ink-soft); line-height: 1.8; padding-left: 18px; position: relative;"><span style="position:absolute;left:0;top:13px;width:8px;height:1px;background:var(--ink);"></span><span class="tw">2027 H2</span> · B2B 留学机构 / 跨境财务顾问试点 1–2 家</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="note">
+        <div class="lbl">单人交付<br>EVIDENCE</div>
+        <div class="txt" style="">以上产品已独立主导完成需求设计、研发实现、部署上线、测试验证与 ICP 备案推进</div>
+      </div>
+    </div>
+    <div class="foot"><span>FXPLANNER 2026</span><span class="pg">PG 03</span></div>
+  </div>
+</section>
+
+<!-- ============ 04 TECH FEASIBILITY ============ -->
+<section>
+  <span class="bignum" style="right:80px;top:-40px;">04</span>
+  <div class="frame">
+    <div class="head">
+      <span class="brand">FXPLANNER</span>
+      <span class="meta">04 / 09 &nbsp;»&nbsp; TECH FEASIBILITY</span>
+    </div>
+    <div class="body">
+      <div class="numhead" style="padding:0 0 32px;">
+        <div class="num">04</div>
+        <div class="title-block">
+          <div class="kicker">技术可行性 · TECH FEASIBILITY</div>
+          <h2>轻资产架构支撑一人公司持续迭代。</h2>
+        </div>
+      </div>
+
+      <p class="lede">四个层面证明 <em>单人 + AI 工具栈</em> 的可持续性。</p>
+
+      <div class="feat4">
+        <div class="f">
+          <div class="num">01</div>
+          <div class="label">Light Stack</div>
+          <h4>轻架构</h4>
+          <p>Vue 3 + FastAPI + PostgreSQL 16 + Redis 7 + Docker Compose；DDD 六大上下文，前后端分离 ─ 技术栈简洁可被单人完整把握。</p>
+        </div>
+        <div class="f">
+          <div class="num">02</div>
+          <div class="label">Low Ops</div>
+          <h4>低运维</h4>
+          <p>1Panel OpenResty 反代 + Let's Encrypt 自动续期；GitHub Actions 双门禁 + 健康检查。阿里云 2026-03/04 月费实测 <span class="gnum">¥1,789.20</span>（含测试 / 部署 / 备案 / 冗余）；正式运营后可优化至 <span class="gnum">¥500–1,000</span> 区间。</p>
+        </div>
+        <div class="f">
+          <div class="num">03</div>
+          <div class="label">High Reliability</div>
+          <h4>高可靠</h4>
+          <p><span class="gnum">257 项</span>自动化测试通过（单元 + 集成 + Playwright E2E）；汇率层双层降级（直连 3 行 + 聚合 3 行）；LLM fail-soft 自动退手动表单。</p>
+        </div>
+        <div class="f">
+          <div class="num">04</div>
+          <div class="label">Compounding Data</div>
+          <h4>可积累</h4>
+          <p>用户主动确认型费率与支出节奏数据持续沉淀；不存原始账单 / 流水 / 卡号，仅保留脱敏费率事实 ─ 符合 PIPL 边界。</p>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>FXPLANNER 2026</span><span class="pg">PG 04</span></div>
+  </div>
+</section>
+
+<!-- ============ 05 MARKET ENTRY ============ -->
+<section>
+  <span class="bignum" style="right:80px;top:-40px;">05</span>
+  <div class="frame">
+    <div class="head">
+      <span class="brand">FXPLANNER</span>
+      <span class="meta">05 / 09 &nbsp;»&nbsp; MARKET ENTRY</span>
+    </div>
+    <div class="body">
+      <div class="numhead" style="padding:0 0 32px;">
+        <div class="num">05</div>
+        <div class="title-block">
+          <div class="kicker">市场进入 · MARKET ENTRY</div>
+          <h2>从留学生家庭切入，再扩展跨境支付人群。</h2>
+        </div>
+      </div>
+
+      <p class="lede">
+        OPC 阶段不追求一次性覆盖大市场 ─ 优先验证 <em>"高频 · 刚需 · 金额大 · 决策人明确"</em> 的留学生家庭场景。
+      </p>
+
+      <div class="phase">
+        <div class="p lead">
+          <span class="when">第一阶段 · 2026–2027</span>
+          <h4>中国大陆留学生家庭</h4>
+          <span class="scope" style="color:var(--kraft-light);">P0 主线 · 已锁定</span>
+          <ul>
+            <li>海外在读 90–105 万 + 家长 1:1–1:2 联动</li>
+            <li>高频：每学期 / 每月稳定外汇支出</li>
+            <li>刚需：5 万额度合规 + 学费节奏</li>
+            <li>决策人明确：家长付费 · 学生使用</li>
+          </ul>
+        </div>
+        <div class="p">
+          <span class="when">第二阶段 · 2028 起</span>
+          <h4>跨境订阅 · 出境旅游</h4>
+          <span class="scope">视主线 LTV 数据评估启动</span>
+          <ul>
+            <li>高消费出境活跃池 ~500 万</li>
+            <li>数字订阅、海淘按月稳定支出</li>
+            <li>信用卡费率库直接复用</li>
+          </ul>
+        </div>
+        <div class="p">
+          <span class="when">第三阶段 · 2028 H2 起</span>
+          <h4>跨境工作者 · 数字游民</h4>
+          <span class="scope">B2B 渠道协同</span>
+          <ul>
+            <li>近 5 年赴港 / 海外活跃池 ~40 万</li>
+            <li>跨境自由职业 ~30 万</li>
+            <li>B2B 跨境财务顾问 / 留学机构同步对接</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="note">
+        <div class="lbl">竞品差异<br>POSITIONING</div>
+        <div class="txt">
+          FXplanner <b style="color:var(--ink);">不执行资金，只做中立规划层</b> ─ 与银行 App / 记账 App / Wise · Revolut 形成上下游互补，而非正面竞争。
+        </div>
+      </div>
+
+      <div class="fineprint"></div>
+    </div>
+    <div class="foot"><span>FXPLANNER 2026</span><span class="pg">PG 05</span></div>
+  </div>
+</section>
+
+<!-- ============ 06 BUSINESS MODEL ============ -->
+<section>
+  <span class="bignum" style="right:80px;top:-40px;">06</span>
+  <div class="frame">
+    <div class="head">
+      <span class="brand">FXPLANNER</span>
+      <span class="meta">06 / 09 &nbsp;»&nbsp; BUSINESS MODEL</span>
+    </div>
+    <div class="body">
+      <div class="numhead" style="padding:0 0 32px;">
+        <div class="num">06</div>
+        <div class="title-block">
+          <div class="kicker">商业模式 · BUSINESS MODEL</div>
+          <h2>低成本验证订阅与报告付费 ─ OPC 低成本验证模型。</h2>
+        </div>
+      </div>
+
+      <p class="lede">分阶段验证商业化逻辑 ─ 不一次性押注。</p>
+
+      <table class="ed">
+        <thead>
+          <tr>
+            <th style="width:18%;">阶段</th>
+            <th style="width:32%;">验证目标</th>
+            <th>收入方式</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="k">2026 H2</td>
+            <td>验证用户需求与留存</td>
+            <td>免费 + 单次报告 <span class="gnum">¥5–10</span> 测试</td>
+          </tr>
+          <tr>
+            <td class="k">2027 H1</td>
+            <td>验证付费意愿</td>
+            <td>月度订阅 <span class="gnum">¥19.9</span> · 季度订阅 <span class="gnum">¥49.9</span></td>
+          </tr>
+          <tr>
+            <td class="k">2027 H2</td>
+            <td>验证渠道合作</td>
+            <td>留学机构、跨境财务顾问 B2B 试点</td>
+          </tr>
+          <tr>
+            <td class="k">2028</td>
+            <td>扩大收入结构</td>
+            <td>B2C 订阅 + B2B 服务</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="note">
+        <div class="lbl">市场投入<br>OPC 节制</div>
+        <div class="txt">
+          以创始人内容、社群冷启动、孵化器活动曝光为主；<b style="color:var(--ink);">2026 全年 0 KOL 投放</b>；<br>
+          三年累计市场进入费 <span class="gnum" style="font-size:18px;">¥4–12 万</span> ─ 与一人公司体量匹配。
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>FXPLANNER 2026</span><span class="pg">PG 06</span></div>
+  </div>
+</section>
+
+<!-- ============ 07 ROADMAP ============ -->
+<section>
+  <span class="bignum" style="right:80px;top:-40px;">07</span>
+  <div class="frame">
+    <div class="head">
+      <span class="brand">FXPLANNER</span>
+      <span class="meta">07 / 09 &nbsp;»&nbsp; ROADMAP</span>
+    </div>
+    <div class="body">
+      <div class="numhead" style="padding:0 0 32px;">
+        <div class="num">07</div>
+        <div class="title-block">
+          <div class="kicker">三年规划 · ROADMAP</div>
+          <h2>从一人公司 MVP 到轻量化经营主体。</h2>
+        </div>
+      </div>
+
+      <p class="lede">产品 × 经营 × OPC 能力建设 <em>三轨并进</em>。</p>
+
+      <table class="ed">
+        <thead>
+          <tr>
+            <th style="width:14%;">阶段</th>
+            <th style="width:30%;">产品目标</th>
+            <th style="width:28%;">经营目标</th>
+            <th>OPC 能力建设</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="k">2026 H2</td>
+            <td></td>
+            <td>累计注册 <span class="gnum">4,500</span>（验证性流水）</td>
+            <td>公司设立 · 合规制度建立 · 入驻临港</td>
+          </tr>
+          <tr>
+            <td class="k">2027</td>
+            <td>付费墙 + 报告系统 + 微信支付接入</td>
+            <td>营收 <span class="gnum">¥8 万</span><span style="color:var(--ink-mute);"> · 区间 ¥3–19 万</span></td>
+            <td>引入兼职运营 / 法务 / 内容外包</td>
+          </tr>
+          <tr>
+            <td class="k">2028</td>
+            <td>B2B 机构版 + 港澳台场景灰度研究</td>
+            <td>营收 <span class="gnum">¥26 万</span><span style="color:var(--ink-mute);"> · 区间 ¥7–68 万</span></td>
+            <td>小型协作网络，保持轻资产</td>
+          </tr>
+          <tr>
+            <td class="k">2029</td>
+            <td>现金流回正 · 自我造血确认</td>
+            <td>年化收入 <span class="gnum">~100 万</span> 潜力</td>
+            <td>视情况转为小团队公司</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="note">
+        <div class="lbl">关键节点<br>CASH &amp; OPC</div>
+        <div class="txt">
+          <b style="color:var(--ink);">2027 Q3</b> 累计现金需求峰值 <span class="gnum">-¥10.31 万</span> &nbsp;»&nbsp;
+          <b style="color:var(--ink);">2028 Q2</b> 起持续单季正现金流 &nbsp;»&nbsp;
+          <b style="color:var(--ink);">2029 Q1</b> 累计现金流回正<br>
+          OPC 演进：2026–2027 一人公司 + AI 工具栈承载 → 2027 H2 起兼职 / 外包按需扩展 → 2029 起视营收转为小团队
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>FXPLANNER 2026</span><span class="pg">PG 07</span></div>
+  </div>
+</section>
+
+<!-- ============ 08 FINANCIALS & RISK ============ -->
+<section>
+  <span class="bignum" style="right:80px;top:-40px;">08</span>
+  <div class="frame">
+    <div class="head">
+      <span class="brand">FXPLANNER</span>
+      <span class="meta">08 / 09 &nbsp;»&nbsp; FINANCIALS &amp; RISK</span>
+    </div>
+    <div class="body">
+      <div class="numhead" style="padding:0 0 32px;">
+        <div class="num">08</div>
+        <div class="title-block">
+          <div class="kicker">财务与风险 · FINANCIALS &amp; RISK</div>
+          <h2>低现金消耗 · 政策扶持高杠杆 · 七类风险已结构化处理。</h2>
+        </div>
+      </div>
+
+      <div class="feat4">
+        <div class="f">
+          <div class="num">01</div>
+          <div class="label">SELF-FUNDED</div>
+          <h4>创始人自筹覆盖基础研发</h4>
+          <p>三年自筹 <span class="gnum">¥8–15 万</span>，覆盖 2025 H2 – 2026 Q2 上线开发。</p>
+        </div>
+        <div class="f">
+          <div class="num">02</div>
+          <div class="label">INCUBATOR</div>
+          <h4>孵化器资源降低现金压力</h4>
+          <p>非现金资源等值化 <span class="gnum">¥5–10 万</span> · 工位 / 辅导 / 算力券。</p>
+        </div>
+        <div class="f">
+          <div class="num">03</div>
+          <div class="label">SUBSIDY</div>
+          <h4>政策补贴提升研发效率</h4>
+          <p>补贴 ¥1–3 万 · 创新券 ¥1–3 万</p>
+        </div>
+        <div class="f">
+          <div class="num">04</div>
+          <div class="label">SELF-SUSTAIN</div>
+          <h4>2029 Q1 具备自我造血</h4>
+          <p>现金需求峰值 <span class="gnum">-¥10.31 万</span> · 2028 Q2 持续正现金流。</p>
+        </div>
+      </div>
+
+      <div style="margin-top:8px;">
+        <div class="ix" style="font-family:'Montserrat',sans-serif;font-weight:800;font-size:13px;letter-spacing:.4em;color:var(--ink);">风险矩阵<small style="display:block;font-weight:400;color:var(--ink-mute);letter-spacing:.3em;margin-top:6px;">4 个核心风险 </small></div>
+        <div class="risks">
+          <div class="risk">
+            <div class="id">R1</div>
+            <div>
+              <span class="tag">P0 第一风险</span>
+              <div class="t">合规边界</div>
+              <div class="body-r">触发：商业化前 ICP 经营许可适用性。<br>缓解：架构性 <b>不碰资金流</b> ─ 不参与支付 / 清算 / 换汇执行；三路径决策树（申办 / 替代交付 / 维持非经营性）兜底。</div>
+            </div>
+          </div>
+          <div class="risk">
+            <div class="id">R2</div>
+            <div>
+              <span class="tag">市场假设</span>
+              <div class="t">活跃订阅率 &lt; 1%</div>
+              <div class="body-r">缓解：退路 A+B+C ─ 削减 P3 → 推迟商业化 → <b>创始人自筹兜底 ¥5–15 万</b>，全程不依赖股权融资。</div>
+            </div>
+          </div>
+          <div class="risk">
+            <div class="id">R3</div>
+            <div>
+              <span class="tag">数据安全</span>
+              <div class="t">OCR / 账单导入隐私</div>
+              <div class="body-r">缓解：<b>用户主动确认</b> + <b>数据本地化</b>（阿里云华东）+ 不存原始账单 / 卡号；PIPL 单独同意机制。</div>
+            </div>
+          </div>
+          <div class="risk">
+            <div class="id">R4</div>
+            <div>
+              <span class="tag">用户认知</span>
+              <div class="t">用户换汇成本管理缺少意识需要持续教育</div>
+              <div class="body-r">缓解：持续运营 + 小红书 + 产品官网内容教育。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="fineprint">其他风险（已结构化处理）：R5 监管政策 — 严守不参与购汇执行 + 数据本地化 · R6 B2B 中立性 — 工具费 / API 费定价；算法权重对所有合作方一致。</div>
+    </div>
+    <div class="foot"><span>FXPLANNER 2026</span><span class="pg">PG 08</span></div>
+  </div>
+</section>
+
+<!-- ============ 09 FOUNDER & ASK ============ -->
+<section data-deck-last-visible="">
+  <span class="bignum" style="right:80px;top:-40px;">09</span>
+  <div class="frame">
+    <div class="head">
+      <span class="brand">FXPLANNER</span>
+      <span class="meta">09 / 09 &nbsp;»&nbsp; FOUNDER &amp; ASK</span>
+    </div>
+    <div class="body" style="grid-template-rows:auto auto 1fr auto;">
+      <div class="numhead" style="padding:0 0 32px;">
+        <div class="num">09</div>
+        <div class="title-block">
+          <div class="kicker">创始人能力与入驻诉求 · FOUNDER &amp; ASK</div>
+          <h2>创始人即核心资产 ─ <em style="font-style:normal;border-bottom:2px solid var(--ink);">用户洞察 × 产品能力 × AI 工程 × 金融合规</em></h2>
+        </div>
+      </div>
+
+      <div class="founder-grid">
+        <div class="photo"><img src="founder-photo.jpg" alt="陆凯铭"></div>
+        <div>
+          <div class="founder-name">陆凯铭<small>FOUNDER · 100% SHAREHOLDER</small></div>
+          <p style="font-family: &quot;Noto Sans SC&quot;; font-size: 15px; color: var(--ink-soft); line-height: 1.8; margin-top: 18px;">上海户籍 · UBC 数学本科 + 5年产品项目经验 + 人工智能训练师三级
+全职投入 ≥ 50h / 周</p>
+        </div>
+      </div>
+
+      <div class="feat4" style="margin-top:8px;">
+        <div class="f">
+          <div class="num">01</div>
+          <div class="label">USER INSIGHT</div>
+          <h4>用户洞察</h4>
+          <p>UBC 留学 6 年（2015–2021），亲历跨币种支付痛点 ─ 创始人本人即 FXplanner 的目标用户画像。</p>
+        </div>
+        <div class="f">
+          <div class="num">02</div>
+          <div class="label">PRODUCT</div>
+          <h4>产品能力</h4>
+          <p>雨虹 DDD 中台产品 + 涟元 AI SaaS 产品；3+ 年甲方产品经理，能从 0 到 1 定义产品。</p>
+        </div>
+        <div class="f">
+          <div class="num">03</div>
+          <div class="label">ENGINEERING</div>
+          <h4>工程能力</h4>
+          <p>单人完成 v0.51 上线、257 项测试通过、ICP 备案、阿里云部署 ─ Vue3 + FastAPI 全栈交付证据齐备。</p>
+        </div>
+        <div class="f">
+          <div class="num">04</div>
+          <div class="label">COMPLIANCE</div>
+          <h4>合规意识</h4>
+          <p>万维科技跨境支付风控 + 归藏大宗商品风控；FRM L2 候选人 + AI 训练师三级 ─ 零资金触达架构源于职业积累。</p>
+        </div>
+      </div>
+
+      <div class="ask-box">
+        <div class="label">入驻<br>诉求</div>
+        <div class="items">
+          <span>工位</span>
+          <span>政策辅导</span>
+          <span>法务合规资源</span>
+          <span>算力 / 模型券</span>
+          <span>留学生态与创业导师资源</span>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>FXPLANNER 2026 · 申请 OPC 一人公司创业项目入驻支持</span><span class="pg">PG 09</span></div>
+  </div>
+</section>
+
+</deck-stage>
+
+
+
+</body></html>

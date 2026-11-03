@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
-import { config as dotenvConfig } from "dotenv";
 import path from "path";
+import { readEnvFile } from "./e2e/helpers/env-local";
 
 /**
  * Playwright E2E 测试配置
@@ -16,17 +16,18 @@ import path from "path";
  *   - Docker Compose: cd infra/compose && docker compose up
  *   - 或手动启动: bun run dev（根目录）
  *
- * 端口与地址：优先读已设置的环境变量；未设置时加载根 .env.local
+ * 端口与地址：优先读已设置的环境变量；未设置时读根 .env.local
  * （与 `bun run dev` 的 dotenv -e 同源），最后才回落历史默认值
  * 前端 3001 / 后端 4001。spec 内的 process.env.API_URL / CORS_ORIGIN
- * 默认值均由这里注入，勿在各 spec 重复解析 .env.local。
+ * 由 run-e2e-tests.sh 注入，勿在各 spec 重复解析 .env.local。
  */
-dotenvConfig({ path: path.resolve(__dirname, ".env.local") });
+/** 根 .env.local 读取（无依赖方案，原因见 e2e/helpers/env-local.ts 注释）。 */
+const rootEnv = readEnvFile(path.resolve(__dirname, ".env.local"));
 
 // 造数/断言直连后端地址：spec 默认值兜底为 4001，这里从 API_PORT 对齐真实服务
-process.env.API_URL ??= `http://localhost:${process.env.API_PORT ?? 4001}`;
+process.env.API_URL ??= `http://localhost:${process.env.API_PORT ?? rootEnv.API_PORT ?? "4001"}`;
 
-const WEB_PORT = Number(process.env.WEB_PORT ?? 3001);
+const WEB_PORT = Number(process.env.WEB_PORT ?? rootEnv.WEB_PORT ?? 3001);
 
 export default defineConfig({
 	testDir: "./e2e",

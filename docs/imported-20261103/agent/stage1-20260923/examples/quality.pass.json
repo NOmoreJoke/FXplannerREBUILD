@@ -1,0 +1,8 @@
+{
+  "schema_version": "fxplanner.phase-a.quality.output.v1",
+  "request_id": "fixture_request_001",
+  "snapshot_id": "fixture_snapshot_001",
+  "draft_hash": "8a92d1a123b0e1a53994d781f48cb7a9ef63c8bb18b182579d4c3c26cf8dcbc6",
+  "decision": "pass",
+  "issues": []
+}

@@ -1,0 +1,8 @@
+erDiagram
+    User ||--o{ Goal : "目标"
+    Goal ||--o{ Plan : "当前与历史"
+    Plan ||--|{ PlanVersion : "版本"
+    PlanVersion ||--o| PreparationSchedule : "准备安排"
+    Plan ||--o{ Allocation : "分配"
+    FXAccount ||--o{ Allocation : "同币种"
+    Plan ||--o{ Reminder : "原计划提醒"

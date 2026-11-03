@@ -1,0 +1,18 @@
+{
+  "schema_version": "fxplanner.phase-a.main.output.v1",
+  "request_id": "fixture_request_001",
+  "route": "generate_report",
+  "reason_code": "REPORT_REQUEST_VALID",
+  "focus": [
+    "holdings",
+    "schedule",
+    "reference_comparison"
+  ],
+  "task_order": [
+    "data",
+    "strategy",
+    "report",
+    "quality"
+  ],
+  "message": "根据已保存的目标与计划生成报告。"
+}

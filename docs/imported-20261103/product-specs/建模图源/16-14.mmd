@@ -1,0 +1,21 @@
+sequenceDiagram
+    actor U as 用户
+    participant UI as 账号与数据
+    participant C as 请求协调
+    participant W as 清理处理
+    U->>UI: 选择清空范围并验证邮箱
+    C-->>UI: 展示删除数量与保留内容
+    U->>UI: 最后确认清空
+    UI->>C: 校验验证范围及请求互斥
+    C->>C: 保存请求并锁定业务写入
+    C-->>UI: 请求进度及可撤回条件
+    alt 开始清理前成功撤回
+        C-->>UI: 恢复原记录与操作
+    else 开始清理
+        C--)W: 执行全部业务清理
+        alt 全部清理完成
+            W-->>UI: 空账本或首次设置入口
+        else 处理中断
+            W-->>UI: 异常进度并继续处理
+        end
+    end

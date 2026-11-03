@@ -1,0 +1,16 @@
+{
+  "schema_version": "fxplanner.report.request.v0.2",
+  "resource": {
+    "kind": "preview",
+    "id": "fixture_preview_001",
+    "expected_version": "1"
+  },
+  "report_kind": "PLANNING",
+  "locale": "zh-CN",
+  "focus": [
+    "holdings",
+    "schedule",
+    "reference_comparison"
+  ],
+  "user_request": "解释目前持仓、均衡分批安排和盘面参考差额。"
+}

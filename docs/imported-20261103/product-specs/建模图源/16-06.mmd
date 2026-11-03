@@ -1,0 +1,18 @@
+sequenceDiagram
+    actor U as 用户
+    participant UI as 实际使用
+    participant C as 使用协调
+    participant L as 账本与成本
+    U->>UI: 填写已经发生的使用
+    UI->>C: 核对日期金额和原计划
+    C->>L: 校验当时资金与当前分配
+    L-->>UI: 返回扣减和成本影响
+    U->>UI: 确认使用
+    UI->>C: 提交并重新校验
+    C->>L: 重验资金并计算FIFO来源消耗
+    alt 权限或资金校验未通过
+        C-->>UI: 返回同计划修正
+    else 全部通过
+        C->>L: 原子保存使用扣减及消耗成本
+        L-->>UI: 更新使用进度和分项成本
+    end

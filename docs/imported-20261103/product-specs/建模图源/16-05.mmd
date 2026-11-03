@@ -1,0 +1,17 @@
+sequenceDiagram
+    actor U as 用户
+    participant UI as 管理分配
+    participant C as 规划协调
+    participant L as 外币账本
+    U->>UI: 输入新增额或新的分配总额
+    UI->>C: 查看影响
+    C->>L: 读取账户和本计划分配
+    L-->>UI: 显示上限与变更结果
+    U->>UI: 确认分配
+    UI->>C: 重新校验余额和需求
+    alt 超限或依据已变化
+        C-->>UI: 保留输入重新核对
+    else 合法
+        C->>L: 保存分配变动
+        L-->>UI: 返回同计划最新分配
+    end

@@ -1,0 +1,755 @@
+{
+  "schema_version": "fxplanner.agent.input.v0.2",
+  "request_id": "fixture_request_001",
+  "snapshot_id": "fixture_snapshot_001",
+  "as_of": "2026-09-18T10:00:00+08:00",
+  "timezone": "Asia/Shanghai",
+  "locale": "zh-CN",
+  "data_mode": "fixture",
+  "report_kind": "PLANNING",
+  "plan": {
+    "plan_id": "fixture_plan_001",
+    "version": "1",
+    "goal_id": "fixture_goal_001",
+    "lifecycle": "draft",
+    "source_currency": "USD",
+    "target_currency": "EUR",
+    "preparation_start_date": "2026-10-05",
+    "latest_safe_date": "2026-11-02",
+    "use_date": "2026-11-05",
+    "selected_pace": "balanced"
+  },
+  "policy": {
+    "rule_version": "mvp_batch_v0.1",
+    "calculation_version": "reference_math_v0.1",
+    "calendar_version": "fixture_calendar_only",
+    "market_quality_policy_version": "fixture_quality_only",
+    "eligibility": "DEGRADED",
+    "allowed_actions": [
+      "REVIEW_PLAN",
+      "PROVIDE_CHANNEL_COSTS"
+    ],
+    "selection": {
+      "candidate_id": "candidate_balanced",
+      "reason": "USER_SELECTED_PACE"
+    },
+    "required_notice_codes": [
+      "CURVE_NOT_FORECAST",
+      "FEES_UNKNOWN",
+      "INITIAL_COST_IS_VALUATION",
+      "TIME_VALUE_EXCLUDED",
+      "REFERENCE_NOT_EXECUTABLE",
+      "FIXTURE_DATA",
+      "PARTIAL_DATA"
+    ]
+  },
+  "metrics": [
+    {
+      "id": "goal.target",
+      "label": "目标总额",
+      "value": "10000.00",
+      "unit": "EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "goal",
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "value_type": "quantity"
+    },
+    {
+      "id": "goal.used",
+      "label": "目标历史有效使用",
+      "value": "0.00",
+      "unit": "EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "goal",
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "value_type": "quantity"
+    },
+    {
+      "id": "plan.allocated",
+      "label": "本计划拟分配",
+      "value": "2000.00",
+      "unit": "EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "plan",
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "value_type": "quantity"
+    },
+    {
+      "id": "account.balance",
+      "label": "账户剩余目标币",
+      "value": "3000.00",
+      "unit": "EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "account",
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "value_type": "quantity"
+    },
+    {
+      "id": "account.unallocated",
+      "label": "拟分配后的未分配余额",
+      "value": "1000.00",
+      "unit": "EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "account",
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "value_type": "quantity"
+    },
+    {
+      "id": "account.opening.quantity",
+      "label": "初始来源剩余数量",
+      "value": "2000.00",
+      "unit": "EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "account",
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "value_type": "quantity"
+    },
+    {
+      "id": "account.opening.cost",
+      "label": "初始来源已记录成本",
+      "value": "2200.00",
+      "unit": "USD",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "account",
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "value_type": "amount"
+    },
+    {
+      "id": "account.purchase.quantity",
+      "label": "真实买入来源剩余数量",
+      "value": "1000.00",
+      "unit": "EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "account",
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "value_type": "quantity"
+    },
+    {
+      "id": "account.purchase.cost",
+      "label": "真实买入来源已记录成本",
+      "value": "1120.00",
+      "unit": "USD",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "account",
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "value_type": "amount"
+    },
+    {
+      "id": "account.recorded_cost",
+      "label": "同成本币已记录成本合计",
+      "value": "3320.00",
+      "unit": "USD",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "account",
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "value_type": "amount"
+    },
+    {
+      "id": "plan.used_average",
+      "label": "计划使用均价",
+      "value": null,
+      "unit": "USD/EUR",
+      "status": "not_applicable",
+      "reason_code": "NO_USAGE",
+      "scope_id": "plan",
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "value_type": "rate"
+    },
+    {
+      "id": "plan.gap",
+      "label": "待准备缺口",
+      "value": "8000.00",
+      "unit": "EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "remaining_gap_v1",
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "value_type": "quantity"
+    },
+    {
+      "id": "node.1.quantity",
+      "label": "第一批数量",
+      "value": "2666.66",
+      "unit": "EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "remaining_gap_v1",
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "value_type": "quantity"
+    },
+    {
+      "id": "node.2.quantity",
+      "label": "第二批数量",
+      "value": "2666.66",
+      "unit": "EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "remaining_gap_v1",
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "value_type": "quantity"
+    },
+    {
+      "id": "node.3.quantity",
+      "label": "第三批数量",
+      "value": "2666.68",
+      "unit": "EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "remaining_gap_v1",
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "value_type": "quantity"
+    },
+    {
+      "id": "baseline.principal",
+      "label": "最晚准备日一次性本金参考折算",
+      "value": "8960.00",
+      "unit": "USD",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "remaining_gap_v1",
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "value_type": "amount"
+    },
+    {
+      "id": "balanced.principal",
+      "label": "均衡候选本金参考折算",
+      "value": "8880.00",
+      "unit": "USD",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "remaining_gap_v1",
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "value_type": "amount"
+    },
+    {
+      "id": "curve.diff",
+      "label": "不含渠道成本曲线折算差额",
+      "value": "80.00",
+      "unit": "USD",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "remaining_gap_v1",
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "value_type": "amount"
+    },
+    {
+      "id": "curve.pct",
+      "label": "不含渠道成本曲线差额比例",
+      "value": "0.89",
+      "unit": "percent",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "remaining_gap_v1",
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "value_type": "percentage"
+    },
+    {
+      "id": "total.diff",
+      "label": "含费总差额",
+      "value": null,
+      "unit": "USD",
+      "status": "unavailable",
+      "reason_code": "CHANNEL_COSTS_UNKNOWN",
+      "scope_id": "remaining_gap_v1",
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "value_type": "amount"
+    },
+    {
+      "id": "total.pct",
+      "label": "含费总差额比例",
+      "value": null,
+      "unit": "percent",
+      "status": "unavailable",
+      "reason_code": "CHANNEL_COSTS_UNKNOWN",
+      "scope_id": "remaining_gap_v1",
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "value_type": "percentage"
+    },
+    {
+      "id": "account.purchase.principal",
+      "label": "真实买入本金",
+      "value": "1100.00",
+      "unit": "USD",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "account",
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "value_type": "amount"
+    },
+    {
+      "id": "account.purchase.fee",
+      "label": "真实买入费用",
+      "value": "20.00",
+      "unit": "USD",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "account",
+      "evidence_ids": [
+        "ledger_fixture"
+      ],
+      "value_type": "amount"
+    },
+    {
+      "id": "baseline.total",
+      "label": "一次性含费参考总额",
+      "value": null,
+      "unit": "USD",
+      "status": "unavailable",
+      "reason_code": "CHANNEL_COSTS_UNKNOWN",
+      "scope_id": "remaining_gap_v1",
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "value_type": "amount"
+    },
+    {
+      "id": "balanced.total",
+      "label": "均衡安排含费参考总额",
+      "value": null,
+      "unit": "USD",
+      "status": "unavailable",
+      "reason_code": "CHANNEL_COSTS_UNKNOWN",
+      "scope_id": "remaining_gap_v1",
+      "evidence_ids": [
+        "calc_fixture"
+      ],
+      "value_type": "amount"
+    },
+    {
+      "id": "goal.remaining",
+      "label": "目标剩余需求",
+      "value_type": "quantity",
+      "value": "10000.00",
+      "unit": "EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "goal",
+      "evidence_ids": [
+        "ledger_fixture",
+        "calc_fixture"
+      ]
+    },
+    {
+      "id": "account.other_allocated",
+      "label": "其他计划占用",
+      "value_type": "quantity",
+      "value": "0.00",
+      "unit": "EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "account",
+      "evidence_ids": [
+        "ledger_fixture"
+      ]
+    },
+    {
+      "id": "batch1.rate",
+      "label": "该批盘面参考汇率",
+      "value_type": "rate",
+      "value": "1.10000000",
+      "unit": "USD/EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "gap_only",
+      "evidence_ids": [
+        "curve_fixture"
+      ]
+    },
+    {
+      "id": "batch1.principal",
+      "label": "该批不含费参考折算",
+      "value_type": "amount",
+      "value": "2933.33",
+      "unit": "USD",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "gap_only",
+      "evidence_ids": [
+        "calc_fixture",
+        "curve_fixture"
+      ]
+    },
+    {
+      "id": "batch2.rate",
+      "label": "该批盘面参考汇率",
+      "value_type": "rate",
+      "value": "1.11000000",
+      "unit": "USD/EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "gap_only",
+      "evidence_ids": [
+        "curve_fixture"
+      ]
+    },
+    {
+      "id": "batch2.principal",
+      "label": "该批不含费参考折算",
+      "value_type": "amount",
+      "value": "2959.99",
+      "unit": "USD",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "gap_only",
+      "evidence_ids": [
+        "calc_fixture",
+        "curve_fixture"
+      ]
+    },
+    {
+      "id": "batch3.rate",
+      "label": "该批盘面参考汇率",
+      "value_type": "rate",
+      "value": "1.12000000",
+      "unit": "USD/EUR",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "gap_only",
+      "evidence_ids": [
+        "curve_fixture"
+      ]
+    },
+    {
+      "id": "batch3.principal",
+      "label": "该批不含费参考折算",
+      "value_type": "amount",
+      "value": "2986.68",
+      "unit": "USD",
+      "status": "available",
+      "reason_code": null,
+      "scope_id": "gap_only",
+      "evidence_ids": [
+        "calc_fixture",
+        "curve_fixture"
+      ]
+    }
+  ],
+  "cost_buckets": [
+    {
+      "id": "opening_remaining",
+      "scope": "account_remaining",
+      "source_kind": "opening_valuation",
+      "quantity_metric_id": "account.opening.quantity",
+      "cost_metric_id": "account.opening.cost",
+      "fee_state": "not_applicable",
+      "cost_basis": "opening_valuation",
+      "principal_metric_id": null,
+      "fee_metric_id": null
+    },
+    {
+      "id": "purchase_remaining",
+      "scope": "account_remaining",
+      "source_kind": "actual_purchase",
+      "quantity_metric_id": "account.purchase.quantity",
+      "cost_metric_id": "account.purchase.cost",
+      "fee_state": "known",
+      "cost_basis": "inclusive_known_channel_costs",
+      "principal_metric_id": "account.purchase.principal",
+      "fee_metric_id": "account.purchase.fee"
+    }
+  ],
+  "candidates": [
+    {
+      "id": "candidate_balanced",
+      "plan_version": "1",
+      "valid_for_snapshot_id": "fixture_snapshot_001",
+      "pace": "balanced",
+      "eligible": true,
+      "reason_codes": [
+        "USER_SELECTED_PACE"
+      ],
+      "cash_feasibility": "not_assessed",
+      "nodes": [
+        {
+          "id": "node1",
+          "preparation_date": "2026-10-05",
+          "quantity_metric_id": "node.1.quantity",
+          "reference_rate_metric_id": "batch1.rate",
+          "reference_principal_metric_id": "batch1.principal",
+          "market_point_id": "point1"
+        },
+        {
+          "id": "node2",
+          "preparation_date": "2026-10-19",
+          "quantity_metric_id": "node.2.quantity",
+          "reference_rate_metric_id": "batch2.rate",
+          "reference_principal_metric_id": "batch2.principal",
+          "market_point_id": "point2"
+        },
+        {
+          "id": "node3",
+          "preparation_date": "2026-11-02",
+          "quantity_metric_id": "node.3.quantity",
+          "reference_rate_metric_id": "batch3.rate",
+          "reference_principal_metric_id": "batch3.principal",
+          "market_point_id": "point3"
+        }
+      ],
+      "total_quantity_metric_id": "plan.gap",
+      "reference_cost_metric_id": "balanced.principal"
+    }
+  ],
+  "baselines": [
+    {
+      "id": "current_fixture_baseline",
+      "type": "current_futures_reference",
+      "as_of": "2026-09-17T16:00:00+08:00",
+      "snapshot_id": "fixture_snapshot_001",
+      "plan_version": "1",
+      "reference_date": "2026-11-02",
+      "scope_id": "remaining_gap_v1",
+      "quantity_metric_id": "plan.gap",
+      "cost_metric_id": "baseline.principal",
+      "source_quality": "market_reference",
+      "evidence_ids": [
+        "curve_fixture"
+      ],
+      "cost_basis": "principal_only",
+      "derived_from_baseline_id": null,
+      "source_budget_metric_id": null
+    }
+  ],
+  "comparisons": [
+    {
+      "id": "comparison_fixture",
+      "scope_id": "remaining_gap_v1",
+      "candidate_id": "candidate_balanced",
+      "baseline_id": "current_fixture_baseline",
+      "mode": "fixed_target_amount",
+      "nature": "curve_scenario",
+      "status": "available",
+      "reason_code": null,
+      "principal_difference_metric_id": "curve.diff",
+      "principal_difference_pct_metric_id": "curve.pct",
+      "total_difference_metric_id": "total.diff",
+      "total_difference_pct_metric_id": "total.pct",
+      "fee_scope": "principal_only",
+      "initial_holdings_excluded": true,
+      "time_value_included": false,
+      "baseline_side": {
+        "quantity_metric_id": "plan.gap",
+        "principal_metric_id": "baseline.principal",
+        "total_cost_metric_id": "baseline.total",
+        "comparison_cost_basis": "principal_only",
+        "source_breakdown": [
+          {
+            "source_kind": "counterfactual_purchase",
+            "quantity_metric_id": "plan.gap",
+            "evidence_ids": [
+              "calc_fixture"
+            ]
+          }
+        ],
+        "source_budget_metric_id": null
+      },
+      "subject_side": {
+        "quantity_metric_id": "plan.gap",
+        "principal_metric_id": "balanced.principal",
+        "total_cost_metric_id": "balanced.total",
+        "comparison_cost_basis": "principal_only",
+        "source_breakdown": [
+          {
+            "source_kind": "planned_purchase",
+            "quantity_metric_id": "plan.gap",
+            "evidence_ids": [
+              "calc_fixture"
+            ]
+          }
+        ],
+        "source_budget_metric_id": null
+      },
+      "target_quantity_difference_metric_id": null,
+      "target_quantity_difference_pct_metric_id": null,
+      "budget_fee_treatment": "not_applicable"
+    }
+  ],
+  "market_points": [
+    {
+      "id": "point1",
+      "source_currency": "USD",
+      "target_currency": "EUR",
+      "reference_date": "2026-10-05",
+      "normalized_rate": "1.10000000",
+      "normalized_unit": "USD/EUR",
+      "as_of": "2026-09-17T16:00:00+08:00",
+      "price_type": "daily_settlement",
+      "publication_state": "final",
+      "match": "exact",
+      "derivation": "direct",
+      "method_version": null,
+      "quality": "eligible",
+      "reason_codes": [],
+      "evidence_ids": [
+        "curve_fixture"
+      ]
+    },
+    {
+      "id": "point2",
+      "source_currency": "USD",
+      "target_currency": "EUR",
+      "reference_date": "2026-10-19",
+      "normalized_rate": "1.11000000",
+      "normalized_unit": "USD/EUR",
+      "as_of": "2026-09-17T16:00:00+08:00",
+      "price_type": "daily_settlement",
+      "publication_state": "final",
+      "match": "interpolated",
+      "derivation": "direct",
+      "method_version": "fixture_linear_interpolation_v1",
+      "quality": "eligible",
+      "reason_codes": [],
+      "evidence_ids": [
+        "curve_fixture"
+      ]
+    },
+    {
+      "id": "point3",
+      "source_currency": "USD",
+      "target_currency": "EUR",
+      "reference_date": "2026-11-02",
+      "normalized_rate": "1.12000000",
+      "normalized_unit": "USD/EUR",
+      "as_of": "2026-09-17T16:00:00+08:00",
+      "price_type": "daily_settlement",
+      "publication_state": "final",
+      "match": "exact",
+      "derivation": "direct",
+      "method_version": null,
+      "quality": "eligible",
+      "reason_codes": [],
+      "evidence_ids": [
+        "curve_fixture"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "ledger_fixture",
+      "kind": "fixture",
+      "title": "虚构账本夹具",
+      "source_url": null,
+      "version": "1",
+      "observed_at": "2026-09-18T10:00:00+08:00",
+      "approved_excerpt": "账户余额3000 EUR，其中初始来源2000 EUR折算2200 USD，真实买入来源1000 EUR，本金1100 USD、已知费用20 USD、含费成本1120 USD。初始来源费用状态not_applicable，仅说明系统期初估值不对应一笔本次实际购汇，不声明历史费用为零。没有本计划使用；草稿拟分配2000 EUR，尚未产生正式占用。",
+      "source_hash": "1c685f02aefab0f4329d50115166dbb8c339bdf25b58df04efb9bd0c18f68ec5",
+      "confidence_state": "verified"
+    },
+    {
+      "id": "curve_fixture",
+      "kind": "fixture",
+      "title": "虚构期限曲线夹具",
+      "source_url": null,
+      "version": "1",
+      "observed_at": "2026-09-17T16:00:00+08:00",
+      "approved_excerpt": "仅供验算：虚构节点FIXTURE-1价值日2026-10-05、USD/EUR=1.10，FIXTURE-2价值日2026-11-02、USD/EUR=1.12；2026-10-19采用两端各0.5线性权重得1.11。这不是实际挂牌合约或生产插值方法，fixture质量状态不得作为生产证据。",
+      "source_hash": "b913422f8936439197321196a3aeb20a54bd258dc6b91a2691d138ebba2e9c62",
+      "confidence_state": "verified"
+    },
+    {
+      "id": "calc_fixture",
+      "kind": "fixture",
+      "title": "十进制参考成本验算",
+      "source_url": null,
+      "version": "reference_math_v0.1",
+      "observed_at": "2026-09-18T10:00:00+08:00",
+      "approved_excerpt": "缺口10000-0-2000=8000 EUR；三批2666.66/2666.66/2666.68，曲线折算合计8880.00 USD，一次性8960.00 USD，本金差额80.00 USD及0.89%。渠道成本未知；时间价值未计。",
+      "source_hash": "57e569baab2b0abfae493caf885e3d6af11ecd6a98f1cdfeded36d3522ddbd5b",
+      "confidence_state": "verified"
+    },
+    {
+      "id": "knowledge_carry",
+      "kind": "knowledge",
+      "title": "期货与即期价格解释",
+      "source_url": "https://www.cmegroup.com/education/whitepapers/reconciling-fx-spot-futures-prices",
+      "version": "reviewed_20260918",
+      "observed_at": "2026-09-18T10:00:00+08:00",
+      "approved_excerpt": "期现价差包含报价惯例和资金持有成本。产品解释规则：不同期限曲线不能直接当作未来即期汇率路径，不能据此承诺分批节省。",
+      "source_hash": "f2a0c1e0460fe3536bd0d7530c3adb3a356eb91aee47d94e3d5b62c196c887aa",
+      "confidence_state": "verified"
+    }
+  ],
+  "issues": [
+    {
+      "code": "CHANNEL_COSTS_UNKNOWN",
+      "severity": "warning",
+      "affected_ids": [
+        "total.diff",
+        "total.pct",
+        "baseline.total",
+        "balanced.total"
+      ],
+      "message": "未来一次和分批换汇渠道费用及点差尚未明确。"
+    },
+    {
+      "code": "SOURCE_CASH_NOT_ASSESSED",
+      "severity": "info",
+      "affected_ids": [
+        "candidate_balanced"
+      ],
+      "message": "只校验目标币准备排期，尚未核验未来来源币现金购买力。"
+    }
+  ],
+  "user_request": "解释目前持仓、均衡分批安排和盘面参考差额。",
+  "confirmed_schedule": null,
+  "execution_records": [],
+  "stop_context": null,
+  "focus": [
+    "holdings",
+    "schedule",
+    "reference_comparison"
+  ]
+}

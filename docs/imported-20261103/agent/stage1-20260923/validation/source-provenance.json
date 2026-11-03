@@ -1,0 +1,16 @@
+{
+  "artifact_status": "design_only",
+  "base_source": "../../../FXplanner_MVP_Agent_PRD_V0.2.md",
+  "base_source_sha256": "b07ff67db86477d1a2ca455038a9d1af3ae5f9b6a5800b465e0e25baba9432e2",
+  "base_schema_section": "10",
+  "report_prompt_section": "8.1",
+  "base_schema_extraction": "JSON formatting only; no semantic changes",
+  "fixture_sources": [
+    "7.1",
+    "7.3",
+    "7.4"
+  ],
+  "fixture_note": "historical fictional fixtures, not current market data or model output",
+  "new_contract": "stage-a.v1",
+  "runtime_implemented": false
+}

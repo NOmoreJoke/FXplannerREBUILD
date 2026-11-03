@@ -1,0 +1,6398 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>FXplanner 商业计划书 v1.5（路演评审版）</title>
+  
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+         max-width: 980px; margin: 2rem auto; padding: 0 1.5rem; color: #222; line-height: 1.65; }
+  h1 { color: #0b3d91; border-bottom: 3px solid #0b3d91; padding-bottom: .4rem; font-size: 1.8rem; }
+  h2 { color: #0b3d91; border-bottom: 1px solid #d0d7e2; padding-bottom: .3rem; margin-top: 2.2rem; font-size: 1.4rem; }
+  h3 { color: #1d4f8f; margin-top: 1.6rem; font-size: 1.15rem; }
+  h4 { color: #2a5a99; margin-top: 1.2rem; font-size: 1.02rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.92rem; }
+  th, td { border: 1px solid #cdd5e0; padding: 0.5rem 0.7rem; vertical-align: top; }
+  th { background: #eef2f8; font-weight: 600; }
+  tr:nth-child(even) td { background: #fafbfd; }
+  blockquote { border-left: 4px solid #0b3d91; background: #f3f6fb; margin: 1rem 0; padding: 0.7rem 1rem;
+                color: #2c3e50; }
+  code { background: #f1f3f7; padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.92em; }
+  ul, ol { padding-left: 1.5rem; }
+  strong { color: #0b3d91; }
+  hr { border: none; border-top: 1px solid #d0d7e2; margin: 2rem 0; }
+  .pitch-banner { background: #0b3d91; color: white; padding: 0.8rem 1.2rem; margin-bottom: 1.5rem;
+                  border-radius: 6px; font-size: 0.95rem; }
+</style>
+
+</head>
+<body>
+  <div class="pitch-banner">FXplanner 商业计划书 · v1.5（路演评审版） · 2026-05-07</div>
+  <h1 id="fxplanner">FXplanner 跨币种现金流规划与外汇成本优化工具</h1>
+<p><strong>商业计划书</strong></p>
+<hr />
+<h2 id="_1">文档元信息</h2>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>项目标准中文名称</td>
+<td>FXplanner 跨币种现金流规划与外汇成本优化工具</td>
+</tr>
+<tr>
+<td>项目英文名称</td>
+<td>FX Planner</td>
+</tr>
+<tr>
+<td>公网访问域名</td>
+<td><code>https://app.fxplanner.cn</code>（HTTPS+HSTS）</td>
+</tr>
+<tr>
+<td>当前产品版本</td>
+<td>v3.51（2026-04-15）</td>
+</tr>
+<tr>
+<td><strong>BP 文档版本</strong></td>
+<td><strong>v1.5（路演评审瘦身版，对外提交版）</strong></td>
+</tr>
+<tr>
+<td>ICP 备案</td>
+<td>2026-04-09 通过；备案号 <code>沪ICP备2026012540号-1</code></td>
+</tr>
+<tr>
+<td>写作日期</td>
+<td>2026-05-07（v1.5 路演评审实战版）</td>
+</tr>
+<tr>
+<td>写作口径</td>
+<td>孵化器 / 创业大赛 / 创业补贴申报口径；自然增长版申报主线</td>
+</tr>
+<tr>
+<td>申报承诺正文主线收入</td>
+<td>自然增长版主线 ¥7-68 万（2028 三档区间，基准 ¥26 万）——为对外申报与申请表"经济效益"字段的唯一收入口径</td>
+</tr>
+<tr>
+<td>主体形态</td>
+<td><strong>一人有限责任公司</strong>（已锁定）</td>
+</tr>
+<tr>
+<td>申报地</td>
+<td><strong>上海</strong>（含临港新片区 / 零界魔方孵化体系，已锁定）</td>
+</tr>
+<tr>
+<td>创始人户籍</td>
+<td><strong>上海</strong></td>
+</tr>
+<tr>
+<td>单人创业</td>
+<td>创始人陆凯铭独立持股 100%</td>
+</tr>
+<tr>
+<td>文档状态</td>
+<td>对外提交版（关键硬信息已锁定；剩余真实账单类材料以支撑材料 S.1-S.13 形式独立交付）</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_2">目录</h2>
+<ul>
+<li>
+<ol>
+<li>评审摘要：当前真实进展与入驻价值</li>
+</ol>
+</li>
+<li>前言：项目概述</li>
+<li>一、技术可行性分析</li>
+<li>1.1 项目名称与定位</li>
+<li>1.2 技术内容与基础原理</li>
+<li>1.3 创新点与技术水平（含 1.3.5 用户主动确认型数据资产）</li>
+<li>1.4 技术指标与应用范围</li>
+<li>1.5 国内外技术现状与趋势</li>
+<li>1.6 小规模试运行情况</li>
+<li>1.7 实际使用条件下的可靠性、耐久性、安全性考核</li>
+<li>1.8 知识产权权属与申报计划</li>
+<li>二、市场可行性分析</li>
+<li>2.1 市场调查</li>
+<li>2.2 市场预测</li>
+<li>三、实施方案和发展规划</li>
+<li>3.1 产品开发与上线计划</li>
+<li>3.2 线上服务架构与运维</li>
+<li>3.3 设备设施与第三方 API 清单</li>
+<li>3.4 营销计划（含 3.4.8 B2B 合作中立性算法防护）</li>
+<li>3.5 特殊行业许可证与合规边界（含 3.5.5 ICP 三路径决策树、3.5.6 OCR 本地推理优先）</li>
+<li>3.6 三年发展规划（多维量化里程碑）</li>
+<li>四、投资估算与资金筹措</li>
+<li>4.1 总体口径与目标</li>
+<li>4.2 三年投资估算总表</li>
+<li>4.3 资金筹措方式</li>
+<li>4.4 资金使用计划</li>
+<li>4.5 关键预算假设</li>
+<li>4.6 现金流前瞻与盈亏平衡（初算）</li>
+<li>五、经济、社会效益分析</li>
+<li>5.1 总体口径与基线引用</li>
+<li>5.2 收入估算</li>
+<li>5.3 成本估算</li>
+<li>5.4 财务分析</li>
+<li>5.5 盈亏平衡分析（含 5.5.6 保守退守版三段退路）</li>
+<li>5.6 社会效益分析</li>
+<li>5.7 风险与不确定性分析</li>
+<li>六、创业团队介绍</li>
+<li>6.1 总体口径</li>
+<li>6.2 创始人简介与履历（含 6.2.5 时间投入承诺与转换记录）</li>
+<li>6.3 创始人在 FXplanner 项目中的角色</li>
+<li>6.4 股东 / 权益结构与融资口径</li>
+<li>6.5 三年人员成长路径</li>
+<li>6.6 单人 + AI 工具放大叙事</li>
+<li>6.7 应急接管协议</li>
+<li>6.8 拟合作方向</li>
+<li><strong>6.9 园区匹配与入驻诉求</strong>（含 6/12 个月承诺交付物）</li>
+<li>附录</li>
+<li>A. 系统架构与数据流图说明</li>
+<li>B. 数据基线 v1.2 口径</li>
+<li>C. 原型事实清单</li>
+<li>D. 知识产权材料清单</li>
+<li>E. MVP 测试与质量指标</li>
+</ul>
+<blockquote>
+<p>评审版交付：路演正文 25-35 页 + 支撑材料独立包 S.zip（S.1-S.13）独立交付。</p>
+</blockquote>
+<hr />
+<h2 id="0">0. 评审摘要：当前真实进展与入驻价值</h2>
+<blockquote>
+<p>路演评审 5 分钟读完版；详细论证见正文与附录；配套证据见支撑材料 S.1-S.13。</p>
+</blockquote>
+<h3 id="01-ppt">0.1 已上线事实（不是 PPT 公司）</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>维度</th>
+<th>事实</th>
+<th>可核验来源</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>公网产品</td>
+<td><code>https://app.fxplanner.cn</code>（HTTPS + HSTS）</td>
+<td>浏览器直接访问</td>
+</tr>
+<tr>
+<td>2</td>
+<td>ICP 备案</td>
+<td><code>沪ICP备2026012540号-1</code>（2026-04-09 通过）</td>
+<td>工信部 ICP 备案查询</td>
+</tr>
+<tr>
+<td>3</td>
+<td>测试质量</td>
+<td>单元 + 集成 + E2E 共 257 passed, 0 failed</td>
+<td>S.4</td>
+</tr>
+<tr>
+<td>4</td>
+<td>部署链路</td>
+<td>阿里云华东 + Docker Compose + GitHub Actions 双门禁</td>
+<td>S.4</td>
+</tr>
+<tr>
+<td>5</td>
+<td>真实账单</td>
+<td>2026-03 / 04 阿里云月费 ¥1,789.20</td>
+<td>S.1</td>
+</tr>
+<tr>
+<td>6</td>
+<td>创始人状态</td>
+<td><strong>2026-04-15 已离职，全职投入</strong>（FRM Level II 候选人 + 人工智能训练师三级 + UBC 数学本科 + 跨境支付合规背景）</td>
+<td>S.7</td>
+</tr>
+<tr>
+<td>7</td>
+<td>主体形态</td>
+<td>一人有限责任公司（创始人 100% 持股）+ 三年内不引入股权融资</td>
+<td>已锁定</td>
+</tr>
+<tr>
+<td>8</td>
+<td>用户访谈</td>
+<td>累计 ≥ 10 个留学生 + 家长访谈（路演前 2 周完成首批）</td>
+<td>S.13</td>
+</tr>
+</tbody>
+</table>
+<h3 id="02">0.2 评审关注风险（已结构化处理）</h3>
+<table>
+<thead>
+<tr>
+<th>风险点</th>
+<th>处置位置</th>
+<th>一句话答辩</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>活跃订阅率不达预期</td>
+<td>§5.5.6 / §5.7 R1</td>
+<td>三段退路 A + B + C，全程不依赖股权融资</td>
+</tr>
+<tr>
+<td>AI Provider 单一依赖（GLM）</td>
+<td>§1.2.2 / §5.7 R2</td>
+<td>Sprint H1 起 Harness 多 Provider 路由（Qwen / DeepSeek / Kimi 备选）+ fail-soft 退手动表单已上线</td>
+</tr>
+<tr>
+<td>OCR 隐私</td>
+<td>§3.5.6</td>
+<td>上线前默认客户端本地推理 + 云端兜底需 PIPL 第 13 条单独同意</td>
+</tr>
+<tr>
+<td>ICP 经营许可适用性</td>
+<td>§3.5.5 / §5.7 R3</td>
+<td>三路径决策树 A / B / C，任一路径都不构成商业化阻塞</td>
+</tr>
+<tr>
+<td>B2B 中立性</td>
+<td>§3.4.8 / §5.7 R7</td>
+<td>工具费 / API 费定价（非广告费 / CPS）；算法权重对 B2B 与个人用户一致</td>
+</tr>
+<tr>
+<td>创始人健康事件</td>
+<td>§6.7 / §5.7 R6</td>
+<td>双层接管协议（技术接管 + IP 法理接管）+ 路演前 1 周首次第三方演练</td>
+</tr>
+</tbody>
+</table>
+<h3 id="03-12">0.3 园区入驻后 12 个月承诺交付物</h3>
+<blockquote>
+<p>详见 §6.9.4；下表为路演首屏摘要。</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>12 个月目标</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>累计注册</td>
+<td>8,000-10,000</td>
+</tr>
+<tr>
+<td>知识产权</td>
+<td>软著 2-3 件获证 + 商标 1-2 件公告</td>
+</tr>
+<tr>
+<td>商业化闸门</td>
+<td>ICP 法务评估 + 微信支付商户接入 + 隐私政策 + 试用→付费首批样本</td>
+</tr>
+<tr>
+<td>Demo Day / 路演</td>
+<td>≥ 2 场（园区主办 + 创业大赛）</td>
+</tr>
+<tr>
+<td>团队扩展</td>
+<td>兼职 / 外包首批 1-2 名到岗</td>
+</tr>
+<tr>
+<td>B2B 验证</td>
+<td>签约 / 试点 1-2 家留学机构 / 跨境财务顾问</td>
+</tr>
+<tr>
+<td>园区资源使用记录</td>
+<td>法务 / 模型券 / 政策辅导 / 路演资源使用披露</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_3">前言：项目概述</h2>
+<h3 id="_4">项目一句话定义</h3>
+<p>面向中国大陆用户的外币支出管理工具——记账 + 汇率信息助手；不触碰支付清算与投资建议，定位于"规划层"的中立信息服务。</p>
+<h3 id="_5">申报承诺段（标准措辞）</h3>
+<p>FXplanner 跨币种现金流规划与外汇成本优化工具，已上线 <code>app.fxplanner.cn</code>（HTTPS+HSTS，ICP 已于 2026-04-09 备案）。已完成 Sprint 0~13D（截至 2026-04-15 v3.51）、上线 18 项核心能力、257 项自动化测试通过。自然增长版申报主线：2026 累计注册 4,500、2027 ¥8 万营收（付费 563）、2028 ¥26 万营收（付费 1,563），2028 当年净利 <strong>+¥7.26 万</strong>，三年累计 <strong>-¥1.41 万</strong>（接近持平），累计现金需求峰值 <strong>-¥10.31 万（2027 Q3 末）</strong>，2029 Q1 累计现金流回正。三年累计投入 ~25-46 万元（孵化器口径，不含股权融资）；三年累计带动数字技术岗位 9-14 人次（含创始人 + 兼职 / 外包 + 实习，意向规划）；拟累计软著+商标 8-10 件。陆凯铭为唯一经营 / 持股主体；UBC 数学本科 + FRM L2 候选人 + AI 训练师三级。</p>
+<h3 id="_6">核心问题与解决方案</h3>
+<p><strong>核心问题</strong>：中国大陆居民在留学、跨境工作、跨境自由职业、出境消费等场景下，每年人均存在 ¥2,590-6,335 的可避免外汇成本损失（来源：数据基线 v1.2 表 E）。损失的根本原因不是缺资金，而是缺一个"在花钱之前"做<strong>费用情景比较与预算提醒</strong>的工具。</p>
+<p><strong>解决方案</strong>：FXplanner 提供三件能力——</p>
+<ol>
+<li>多源银行汇率与信用卡费率聚合；</li>
+<li>AI 自然语言交易事件录入与置信度标注；</li>
+<li>跨币种现金流建模与提醒引擎。</li>
+</ol>
+<p>通过 Web 端（已上线）与未来桌面 / 移动端（Tauri 2.0 规划中）覆盖用户全场景。</p>
+<h3 id="_7">商业模式摘要</h3>
+<ul>
+<li><strong>用户层</strong>：<strong>主线客群——中国大陆留学生 + 留学生家长（双联动）</strong>，留学生 90-105 万 + 家长 1:1-1:2 比例；扩展客群（跨境工作者 / 跨境自由职业 / 高消费出境旅行者，合计 ~570 万活跃池）2028 视主线 LTV/CAC 数据评估再启动；SOM 用户基数约 675 万（商业假设）。</li>
+<li><strong>价格策略</strong>：月度订阅 ¥19.9 / 月、季度订阅 ¥49.9 / 季、单次报告 ¥5-10 / 份。</li>
+<li><strong>变现路径</strong>：试用→付费墙 + 报告增值 + 未来 B2B（留学机构 / 跨境财务顾问）合作。</li>
+<li><strong>合规边界</strong>：信息服务与规划工具，不参与支付 / 清算 / 换汇执行 / 资金托管 / 便利化额度规避；当前已具备 ICP 备案 + 境内云资源 + PIPL 边界。</li>
+</ul>
+<h3 id="_8">当前状态总览</h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>原型</td>
+<td>✅ 已上线 <code>app.fxplanner.cn</code>（v3.51，2026-04-15）</td>
+</tr>
+<tr>
+<td>合规</td>
+<td>✅ ICP 备案（2026-04-09 通过）+ HTTPS + HSTS + PIPL 边界</td>
+</tr>
+<tr>
+<td>测试</td>
+<td>✅ 257 passed, 0 failed（单元 + 集成 + E2E）</td>
+</tr>
+<tr>
+<td>部署</td>
+<td>✅ Docker Compose 5 容器 + GitHub Actions 双门禁 + 1Panel OpenResty + Let's Encrypt SSL 自动续期</td>
+</tr>
+<tr>
+<td>上线核心能力</td>
+<td>✅ 18 项（详见 1.6.2）</td>
+</tr>
+<tr>
+<td>已完成 Sprint</td>
+<td>✅ Sprint 0~13D</td>
+</tr>
+<tr>
+<td>计划中 Sprint</td>
+<td>⏳ Harness（H1）/ Agent API（H2）/ MCP（H3）/ 商业化 / 运营后台 / Tauri 移动端</td>
+</tr>
+<tr>
+<td>团队</td>
+<td>单人创业（陆凯铭，2026-04-15 已离职全职投入，详见 §6.2.5）；2027 H2 起 +1-2 兼职 / 外包；2028 视营收扩展</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_9">一、技术可行性分析</h2>
+<h3 id="11">1.1 项目名称与定位</h3>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>项目标准中文名称</td>
+<td>FXplanner 跨币种现金流规划与外汇成本优化工具</td>
+</tr>
+<tr>
+<td>项目英文名称</td>
+<td>FX Planner（曾用名 FX Sub Saver）</td>
+</tr>
+<tr>
+<td>项目简称</td>
+<td>FXplanner</td>
+</tr>
+<tr>
+<td>公网访问域名</td>
+<td><code>https://app.fxplanner.cn</code>（HTTPS + HSTS 已启用）</td>
+</tr>
+<tr>
+<td>API 域名</td>
+<td><code>https://api.fxplanner.cn</code></td>
+</tr>
+<tr>
+<td>当前版本</td>
+<td>v3.51（2026-04-15）</td>
+</tr>
+<tr>
+<td>服务节点</td>
+<td>阿里云 ECS <code>fxplanner-prod</code>（华东 1 杭州）</td>
+</tr>
+<tr>
+<td>ICP 备案</td>
+<td>2026-04-09 通过；备案号 <code>沪ICP备2026012540号-1</code></td>
+</tr>
+<tr>
+<td>SSL 证书</td>
+<td>Let's Encrypt（DNS 验证），有效期至 2026-07-08，自动续期</td>
+</tr>
+</tbody>
+</table>
+<p><strong>一句话定义</strong>：面向中国大陆用户的外币支出管理工具——记账 + 汇率信息助手；不触碰支付清算与投资建议，定位于"规划层"的中立信息服务。</p>
+<h3 id="12">1.2 技术内容与基础原理</h3>
+<h4 id="121">1.2.1 总体架构</h4>
+<p>FXplanner 采用 <strong>前后端分离 + 后端 DDD 六大上下文 + 数据库/缓存分离 + 反向代理 + 容器编排</strong> 的现代化 Web 服务架构，部署于阿里云华东节点的境内环境，遵循数据本地化要求。</p>
+<h4 id="122">1.2.2 系统架构与数据流图</h4>
+<p><strong>当前架构（已上线）</strong>：</p>
+<p>终端用户 → Web 前端（Vue3 + TypeScript + Vite + Tailwind / Pinia / vue-i18n / ECharts）→ 1Panel OpenResty 反向代理（HTTPS + HSTS / Let's Encrypt） → FastAPI 后端容器（Python 3.11 / JWT + 邮箱 OTP / WebSocket 通知）→ {PostgreSQL 16（Alembic 001→005） + Redis 7（连接超时 1.0/2.0s）} → 外部依赖：GLM 智谱 AI（glm-5-turbo）、k780 汇率聚合（中行 / 建行 / 交行）、银行直连（农行 / 工行 / 招行）、邮件 SMTP（OTP 发送）。</p>
+<p><strong>规划扩展架构（Sprint H1-H3 + 移动端规划，2026 Q3 起）</strong>：</p>
+<ul>
+<li><strong>Harness AI 编排层</strong>（多 Provider LLM 路由）：当前主用智谱 AI（GLM glm-5-turbo）；<strong>已规划接入阿里通义 Qwen + DeepSeek + 月之暗面 Kimi 作为同等级备选 Provider</strong>；</li>
+<li><strong>切换 SLA</strong>：Sprint H1 编排层落地后，<strong>目标 ≤ 4 小时内切换至备选 Provider</strong>——<strong>该 SLA 在首次第三方切换演练完成后由"目标"升级为"承诺"</strong>（与 §6.7.4 接管 SLA 三档化思路一致）；</li>
+<li><strong>当前阶段（Sprint H1 之前）的过渡预案</strong>：GLM 服务中断或长时间不可用时，FXplanner AI 自然语言录入自动 fail-soft 至手动表单录入（已上线，§1.2.5）；功能可用性不依赖单一 LLM Provider；</li>
+<li><strong>Agent API</strong>（开放给第三方智能体调用）；</li>
+<li><strong>MCP Server</strong>（Model Context Protocol，Sprint H3 2026 Q4）；</li>
+<li><strong>前端 Tauri 2.0 桌面 + 移动 + 本地 Whisper 离线 STT</strong>（Sprint H2-H3）。</li>
+</ul>
+<p><strong>单一 LLM Provider 占比红线定义</strong>：单一 Provider 月度生产环境调用量（次数）或月度生产环境调用费用，<strong>任一指标占总量 ≤ 70%</strong>——以两个指标的较高值为准（保守口径）；不含开发环境 / 测试环境 / 评估基准跑分等非生产场景调用。红线触发动作：自动通过 Harness 路由层将剩余 ≥ 30% 流量分配至备选 Provider；超过 70% 持续两个月即触发供应商重新评估。</p>
+<blockquote>
+<p>上述两层架构的可视化图示见<strong>附录 A</strong>。</p>
+</blockquote>
+<h4 id="123">1.2.3 数据流（典型业务场景）</h4>
+<p>以"用户文字 / 语音录入"为例：</p>
+<ol>
+<li>用户输入"我每月给孩子打 1500 美元生活费"；</li>
+<li>前端调用 <code>POST /api/ai/parse {text}</code>；</li>
+<li>后端调用 GLM 自然语言解析，返回结构化结果 + 置信度标签；</li>
+<li>后端查询汇率域，stale-while-revalidate 缓存命中或回源银行直连 / k780 降级聚合；</li>
+<li>后端写入"待确认订阅"，前端展示"待确认卡片"；</li>
+<li>用户确认 / 修改后入库，后端更新额度 / 预算；</li>
+<li>若触发阈值（80% / 90% / 100%），后端推送 WebSocket 事件，前端更新渐变环 + Toast。</li>
+</ol>
+<h4 id="124-ddd">1.2.4 后端 DDD 六大上下文</h4>
+<pre><code>backend/
+├── shared/            共享内核（crypto、依赖注入）
+├── identity/          认证与用户（JWT + 邮箱 OTP + 微信 OAuth）
+├── subscription/      订阅域（CRUD、状态机、成本链路 A→B→C 最多 3 步）
+├── quota/             额度与预算（年度便利化 5 万美元 + 月度预算 + 三档阈值告警）
+├── exchange_rate/     汇率域（多源聚合 + 银行牌价 + 信用卡费率）
+├── ai_interaction/    AI 交互（LLM 解析 + 置信度标签 + 待确认流）
+└── notification/      实时通知（WebSocket + 票据认证 + 5 类事件 + 指数退避重连）
+</code></pre>
+<h4 id="125">1.2.5 关键技术原理</h4>
+<table>
+<thead>
+<tr>
+<th>模块</th>
+<th>原理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>多源汇率聚合</strong></td>
+<td>直连层（农行无认证 / 工行 POST+Referer / 招行 Origin+Referer）+ 聚合降级层（k780 双参数认证 appkey + sign，覆盖中行 / 建行 / 交行）；前端 localStorage stale-while-revalidate（15 min TTL），后端 Redis 缓存 + 并发化请求；首次响应 ~1.7s，二次访问 0ms</td>
+</tr>
+<tr>
+<td><strong>AI 自然语言录入</strong></td>
+<td>LLM Provider 通过 OpenAI 兼容协议接入；<strong>当前主 Provider 智谱 GLM glm-5-turbo，已规划备选 Provider 通义 Qwen / DeepSeek / Kimi</strong>（Sprint H1 Harness 编排层落地后启用同等级路由）；结构化字段抽取 → 置信度标签 → 待确认流 → 用户确认入库；<strong>LLM 不可用时自动退回手动表单</strong>（fail-soft）；<strong>单一 Provider 月度生产调用量或费用占比 ≤ 70% 红线</strong>（Sprint H1 后）</td>
+</tr>
+<tr>
+<td><strong>跨币种支出建模</strong></td>
+<td>在 ≤ 3 步货币转换链路（A→B→C）中，对<strong>已知费率</strong>做费用估算；输出"不同支付方式费用差异 X.XX% 提示"，<strong>不构成投资 / 交易建议</strong></td>
+</tr>
+<tr>
+<td><strong>已知费率路径比较</strong></td>
+<td>将"币种 × 银行牌价 × 信用卡外汇费率"建模为有向加权图，对<strong>用户主动选定的若干候选路径</strong>进行<strong>费用较低路径提示</strong>；仅基于<strong>已公开的费率信息</strong>做确定性比较，不预测汇率走势，不推荐特定换汇渠道（图论方法实现细节详见附录 A）</td>
+</tr>
+<tr>
+<td><strong>多源汇率统计聚合</strong></td>
+<td>对 6 行牌价（农行 / 工行 / 招行直连 + 中行 / 建行 / 交行 k780 聚合）做加权中位数 + IQR 异常值剔除，输出"基准汇率 + 行间偏离度"，用于成本测算的鲁棒性背书</td>
+</tr>
+<tr>
+<td><strong>用户预算分布建模</strong></td>
+<td>基于 30 / 90 日历史录入的指数加权移动均值 + 月度季节性成分，对年度便利化 5 万美元额度余量与月度预算做前瞻性预估；建模对象为<strong>用户支出节奏</strong>而非汇率走势，严守合规边界</td>
+</tr>
+<tr>
+<td><strong>额度与预算引擎</strong></td>
+<td>年度购汇额度（5 万美元法规额度）+ 前瞻性预估（已用 / 含下笔 / 预估年底）；月度预算自然语言配置；三档阈值告警（80% 信息 / 90% 警告 / 100% 柜台办理告知）</td>
+</tr>
+<tr>
+<td><strong>实时通知</strong></td>
+<td>WebSocket + 票据认证 + WS URL 自动推导 + 严格 fail-closed + 指数退避重连；5 类事件（额度告警 / 预算告警 / 费用差异提示 / 主动提示卡片 / 系统通知）</td>
+</tr>
+<tr>
+<td><strong>中立信息层</strong></td>
+<td>业务边界严格限定为"信息服务与规划工具"；不参与支付、清算、换汇执行、资金托管。<strong>当前零资金触达边界下不涉及支付、清算、外汇经营牌照；商业化收费上线前完成 ICP 经营许可适用性法务评估</strong>（详见 §3.5 / §5.7 R3）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="13">1.3 创新点与技术水平</h3>
+<h4 id="131">1.3.1 三类创新点</h4>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>描述</th>
+<th>申报支撑</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>应用创新</strong></td>
+<td>较早聚焦中国大陆外币支出"规划层"场景的工具——区别于资金执行型产品（不参与支付与执行），专注于"在花钱之前帮用户做费用情景比较与预算提醒"</td>
+<td>国内现有同类产品多为"事后记账"（如 MoneyWiz、随手记）或"换汇执行"（如银行 App、Wise）；FXplanner 在"花钱之前"环节切入，与上述类别形成场景互补</td>
+</tr>
+<tr>
+<td><strong>技术创新</strong></td>
+<td>LLM 解析 + 置信度待确认流 + 实时 WebSocket 通知三件套；银行直连 + k780 聚合双层降级架构；图论已知费率路径比较 + 鲁棒统计聚合 + 用户支出节奏建模三组方法论由数学本科训练直接支撑</td>
+<td>LLM 输出不直接入库，必经"用户确认"环节，规避 AI 幻觉对账务数据的污染；汇率层双层降级保障"任一银行 / 聚合商失效不影响整体服务"；已知费率路径比较仅基于已公开费率做确定性比较，不涉及汇率预测，与合规边界一致</td>
+</tr>
+<tr>
+<td><strong>合规创新</strong></td>
+<td><strong>架构性零资金触达</strong>：信息服务层与执行层解耦的产品边界设计，不参与支付 / 代付 / 账单关联 / 汇率预测 / 自动购汇 / 外汇便利化额度规避建议；这是面向中国大陆跨境支出场景的<strong>架构选择</strong>，使工具天然与外管局便利化额度、PIPL 数据本地化等监管口径兼容</td>
+<td>该架构作为<strong>资产轻量化优势</strong>而非合规妥协：免去支付 / 清算牌照（千万元级合规栈成本）、备付金沉淀、KYC / AML 系统建设、跨区域分支机构监管；当前已具备 ICP 备案与境内云资源；数据存储边界遵循 PIPL（不存银行卡号 / 身份证 / 真实交易流水 / 任何支付凭证）</td>
+</tr>
+</tbody>
+</table>
+<h4 id="132">1.3.2 技术水平判断</h4>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>水平判断</th>
+<th>依据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>架构现代化程度</strong></td>
+<td>达到同类工具较高工程化水平</td>
+<td>DDD 六大上下文 + Vue3 Composition API + FastAPI + Alembic 迁移 + Docker Compose + GitHub Actions 双门禁 + 1Panel OpenResty 反代，全栈采用 2024-2026 主流技术选型</td>
+</tr>
+<tr>
+<td><strong>AI 能力深度</strong></td>
+<td>在个人外汇规划场景已形成完整闭环</td>
+<td>LLM 解析 + 置信度待确认流 + 离线降级三层兜底；AI 承担数据录入主路径，非贴标签式应用</td>
+</tr>
+<tr>
+<td><strong>数据可靠性</strong></td>
+<td>已通过 257 项测试验证</td>
+<td>单元 + 集成 + E2E（Playwright）共 257 passed, 0 failed；CI/CD 双门禁拦截不合规提交</td>
+</tr>
+<tr>
+<td><strong>运维成熟度</strong></td>
+<td>已实现自动化生产部署</td>
+<td>Docker Compose 5 容器编排 + GitHub Actions（pytest + vite build → SSH 部署 → Alembic 迁移 → 健康检查）+ 1Panel OpenResty 反代 + Let's Encrypt SSL 自动续期</td>
+</tr>
+<tr>
+<td><strong>国际化覆盖</strong></td>
+<td>三语已上线</td>
+<td>中文 / English / 日本語；登录后自动恢复语言；Settings 重置即时生效</td>
+</tr>
+</tbody>
+</table>
+<h4 id="133">1.3.3 竞品技术能力对照</h4>
+<table>
+<thead>
+<tr>
+<th>能力维度</th>
+<th>FXplanner</th>
+<th>国内事后记账类</th>
+<th>国内换汇执行类</th>
+<th>海外多币种钱包</th>
+<th>海外 AI 财务助手</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>多源银行牌价聚合</td>
+<td>✅ 直连 3 行 + 聚合降级 3 行</td>
+<td>❌ 无</td>
+<td>⚠️ 仅自家牌价</td>
+<td>⚠️ 仅自家中间价</td>
+<td>❌ 无</td>
+</tr>
+<tr>
+<td>信用卡外汇费率库</td>
+<td>✅ 七行标准 + 零费率代表卡</td>
+<td>❌ 无</td>
+<td>❌ 无</td>
+<td>❌ 无</td>
+<td>❌ 无</td>
+</tr>
+<tr>
+<td>AI 自然语言录入 + 置信度待确认流</td>
+<td>✅ 已上线</td>
+<td>⚠️ 部分有 AI 标签</td>
+<td>❌ 无</td>
+<td>❌ 无</td>
+<td>⚠️ 仅分类提示</td>
+</tr>
+<tr>
+<td>跨币种成本链路（A→B→C）</td>
+<td>✅ 最多 3 步</td>
+<td>❌ 无</td>
+<td>❌ 无</td>
+<td>⚠️ 单步换汇</td>
+<td>❌ 无</td>
+</tr>
+<tr>
+<td>WebSocket 实时阈值告警</td>
+<td>✅ 5 类事件 + 票据认证</td>
+<td>❌ 无</td>
+<td>⚠️ 推送通知</td>
+<td>⚠️ 推送通知</td>
+<td>⚠️ 推送通知</td>
+</tr>
+<tr>
+<td>年度便利化 5 万美元额度追踪</td>
+<td>✅ 含前瞻性预估</td>
+<td>❌ 无</td>
+<td>⚠️ 仅本行额度</td>
+<td>❌ 无</td>
+<td>❌ 无</td>
+</tr>
+<tr>
+<td>资金触达 / 是否需金融牌照</td>
+<td>❌ 不触达 / 无需牌照</td>
+<td>❌ 不触达</td>
+<td>✅ 触达 / 需牌照</td>
+<td>✅ 触达 / 需外资牌照</td>
+<td>❌ 不触达</td>
+</tr>
+<tr>
+<td>大陆数据本地化</td>
+<td>✅ 阿里云华东 + ICP 备案</td>
+<td>✅</td>
+<td>✅</td>
+<td>❌ 通常境外节点</td>
+<td>❌ 通常境外节点</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>数据来源为各产品公开资料与项目方实测，非第三方权威评测；用于支撑 1.3.2 的"较高工程化水平"判断。</p>
+</blockquote>
+<p><strong>结论</strong>：在"规划层 + 多源汇率聚合 + AI 录入 + 大陆合规"四个维度的组合上，本项目相对国内外同类工具具备明显差异化；单项工程化水平达到同类工具较高水准。</p>
+<h4 id="134">1.3.4 合规架构作为战略护城河</h4>
+<p>零资金触达边界并非"绕监管"的妥协，而是 FXplanner 主动选择的产品架构。该架构在三个维度同时构成竞争壁垒：</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>战略价值</th>
+<th>量化对照</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>资产轻量化</strong></td>
+<td>免去支付 / 清算牌照、备付金沉淀、KYC / AML 系统建设、跨区域分支机构监管栈，单年合规与资金成本相对执行型同业可低一个量级</td>
+<td>跨境支付牌照获取与运营年化成本通常千万元级，而 FXplanner 当前合规栈仅 ICP 备案 + HTTPS / HSTS + PIPL 边界（年化 &lt; 2 万元）</td>
+</tr>
+<tr>
+<td><strong>跨区域快速扩张</strong></td>
+<td>港澳台 / 东南亚国际版（已规划 2028 H2）只需信息服务合规与本地化适配，相对执行型工具进入新市场需重新申请支付 / 收单牌照，<strong>进入时滞差距 18-36 个月</strong></td>
+<td>同期 Wise / Revolut 进入新市场的牌照审批周期普遍在 1-3 年；FXplanner 国际版灰度路径以信息服务 + 数据本地化为主</td>
+</tr>
+<tr>
+<td><strong>生态互补而非红海竞争</strong></td>
+<td>信息服务层与执行层解耦的边界，使 FXplanner 与 Wise / 银行 App 等执行型工具形成<strong>上下游互补</strong>而非正面竞争；B2B 渠道（留学机构 / 跨境财务顾问 API）天然不存在牌照冲突</td>
+<td>Sprint H2 Agent API 与 B2B 套餐已规划于 2027 H2 - 2028 H1 上线</td>
+</tr>
+</tbody>
+</table>
+<p><strong>结论</strong>：合规架构是 FXplanner 在三年规划期内<strong>保持低成本结构 + 高扩张速度</strong>的核心制度性能力，而非被动避险措施。<strong>§1.3.5 用户主动确认型数据资产</strong>作为动态层补充，<strong>随用户主动确认录入的累积逐步形成中立规划数据层</strong>——两者共同构成 FXplanner 三年期内的复合壁垒（结构性 + 累积性，非绝对性）。</p>
+<h4 id="135">1.3.5 用户主动确认型数据资产（动态护城河）</h4>
+<p>合规架构（§1.3.4）是结构性静态护城河；除此之外，FXplanner 在数据层正在累积一类<strong>动态数据资产</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>数据维度</th>
+<th>数据来源</th>
+<th>公开 / 银行 App / 第三方是否易得？</th>
+<th>FXplanner 累积路径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>银行公开牌价</td>
+<td>银行官网公开 API + k780 聚合</td>
+<td>✅ 公开</td>
+<td>数据本身不构成壁垒</td>
+</tr>
+<tr>
+<td>信用卡明面手续费率</td>
+<td>各发卡行公开条款</td>
+<td>✅ 公开</td>
+<td>已纳入费率库，不构成壁垒</td>
+</tr>
+<tr>
+<td><strong>用户主动确认后的真实生效费率与场景标签</strong></td>
+<td>用户主动录入 + 主动确认的真实账单</td>
+<td>⚠️ 银行 App 仅展示自家发卡牌价 + 自家通道；第三方聚合数据多为名义费率</td>
+<td>随用户基数增长，可逐步形成执行型同业不易直接获得的中立规划数据资产</td>
+</tr>
+<tr>
+<td><strong>用户支付节奏分布与家庭场景标签</strong></td>
+<td>用户授权后的匿名化录入</td>
+<td>⚠️ 不公开</td>
+<td>用于 §1.2.5 用户支出节奏建模；构成产品功能改进数据闭环</td>
+</tr>
+</tbody>
+</table>
+<p><strong>壁垒形成机制（措辞软化版）</strong>：</p>
+<blockquote>
+<p>用户主动确认后的跨行费率、预算节点、家庭场景标签与费用复盘数据，<strong>可逐步形成执行型银行 App 不易直接获得的中立规划数据资产</strong>——并非"无法复制"的绝对壁垒，而是<strong>结构性不易获取的中立信息层</strong>。</p>
+</blockquote>
+<ul>
+<li><strong>冷启动期（2026-2027）</strong>：以创始人时间 + 自营内容 + 社群冷启动获得首批用户的真实录入；</li>
+<li><strong>复利期（2028 起）</strong>：每条用户主动确认的真实费率录入 → 提升对其他用户的费率比较准确度 → 提升留存与口碑 → 拉高新用户主动录入意愿；</li>
+<li><strong>结构性原因</strong>：执行型工具（银行 App / 跨境支付）以服务自家通道为目标，缺少"中立比较 + 用户主动确认"的产品逻辑；第三方聚合工具缺少"用户主动确认"环节，无法分辨名义费率 vs 真实费率。</li>
+</ul>
+<blockquote>
+<p><strong>关键约束</strong>：所有数据必须来源于用户主动录入与主动确认；<strong>FXplanner 不存原始账单 / 流水 / 卡号</strong>；数据库中保留的只是脱敏后的费率事实（币种 + 通道 + 卡组织 + 实测费率），符合 §3.5.6 OCR / 账单导入数据处理原则。</p>
+</blockquote>
+<h3 id="14">1.4 技术指标与应用范围</h3>
+<h4 id="141">1.4.1 技术指标表</h4>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>指标</th>
+<th>当前值</th>
+<th>目标值（2027 末）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>测试质量</td>
+<td>单元 + 集成 + E2E 通过数</td>
+<td>257 passed, 0 failed</td>
+<td>400+ passed</td>
+</tr>
+<tr>
+<td>测试质量</td>
+<td>E2E 框架</td>
+<td>Playwright（127.0.0.1:4173 strictPort）</td>
+<td>维持</td>
+</tr>
+<tr>
+<td>数据库</td>
+<td>迁移版本</td>
+<td>Alembic 001→005 全部生产执行</td>
+<td>Alembic 001→015+</td>
+</tr>
+<tr>
+<td>可用性</td>
+<td>HTTPS + HSTS</td>
+<td>✅ 已启用</td>
+<td>维持</td>
+</tr>
+<tr>
+<td>可用性</td>
+<td>SSL 证书</td>
+<td>Let's Encrypt 至 2026-07-08，自动续期</td>
+<td>自动续期不间断</td>
+</tr>
+<tr>
+<td>认证安全</td>
+<td>邮箱 OTP 登录</td>
+<td>✅ 已上线（两步式：请求 → 验证）</td>
+<td>维持 + 接入企业邮件通道</td>
+</tr>
+<tr>
+<td>认证安全</td>
+<td>JWT + Refresh Token</td>
+<td>✅ HttpOnly Cookie</td>
+<td>维持</td>
+</tr>
+<tr>
+<td>认证安全</td>
+<td>微信 OAuth</td>
+<td>Mock/Sandbox 已可用，生产待企业资质</td>
+<td>生产化</td>
+</tr>
+<tr>
+<td>数据保护</td>
+<td>生产 SECRET_KEY 强校验</td>
+<td>✅ 启动时校验</td>
+<td>维持</td>
+</tr>
+<tr>
+<td>数据保护</td>
+<td>错误信息不外泄</td>
+<td>✅ 生产模式屏蔽 traceback</td>
+<td>维持</td>
+</tr>
+<tr>
+<td>数据保护</td>
+<td>N+1 防护</td>
+<td>✅ ORM 层 eager loading</td>
+<td>维持</td>
+</tr>
+<tr>
+<td>数据存储边界</td>
+<td>不存银行卡号 / 身份证 / 真实交易流水 / 任何支付凭证</td>
+<td>✅ 严格遵守</td>
+<td>维持</td>
+</tr>
+<tr>
+<td>缓存</td>
+<td>Redis 连接超时 / 读超时</td>
+<td>1.0s / 2.0s</td>
+<td>维持</td>
+</tr>
+<tr>
+<td>汇率性能</td>
+<td>银行牌价首次响应</td>
+<td>~1.7s</td>
+<td>&lt; 1.5s</td>
+</tr>
+<tr>
+<td>汇率性能</td>
+<td>银行牌价二次响应</td>
+<td>0ms（localStorage 命中）</td>
+<td>维持</td>
+</tr>
+<tr>
+<td>汇率覆盖</td>
+<td>银行牌价直连</td>
+<td>农行 / 工行 / 招行</td>
+<td>扩至 5 行直连</td>
+</tr>
+<tr>
+<td>汇率覆盖</td>
+<td>银行牌价降级聚合</td>
+<td>k780（中行 / 建行 / 交行）</td>
+<td>维持</td>
+</tr>
+<tr>
+<td>汇率覆盖</td>
+<td>信用卡外汇费率库</td>
+<td>七行标准手续费 + 零费率代表卡</td>
+<td>扩至 12 行</td>
+</tr>
+<tr>
+<td>AI 能力</td>
+<td>LLM Provider</td>
+<td>GLM glm-5-turbo（OpenAI 兼容）</td>
+<td>维持 + Harness 多 Provider 编排</td>
+</tr>
+<tr>
+<td>AI 能力</td>
+<td>离线降级</td>
+<td>LLM 不可用自动退回手动表单</td>
+<td>维持</td>
+</tr>
+<tr>
+<td>国际化</td>
+<td>语言数</td>
+<td>3（中 / 英 / 日）</td>
+<td>维持</td>
+</tr>
+<tr>
+<td>响应式</td>
+<td>设备适配</td>
+<td>桌面 Popover / 移动 Bottom Sheet</td>
+<td>维持 + Tauri 移动端原生</td>
+</tr>
+<tr>
+<td>CI/CD</td>
+<td>双门禁</td>
+<td>pytest + vite build</td>
+<td>维持 + 加 e2e 门禁</td>
+</tr>
+<tr>
+<td>CI/CD</td>
+<td>部署链路</td>
+<td>SSH 部署 → Alembic 迁移 → 健康检查</td>
+<td>维持</td>
+</tr>
+</tbody>
+</table>
+<h4 id="142">1.4.2 应用范围</h4>
+<table>
+<thead>
+<tr>
+<th>客群定位</th>
+<th>客群</th>
+<th>用户基数</th>
+<th>FXplanner 价值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>主线（2026-2027 唯一获客主线）</strong></td>
+<td>中国留学生 + 留学生家长（双联动）</td>
+<td>留学生 90-105 万 + 家长 1:1-1:2 比例</td>
+<td>学费 / 生活费 / 5 万美元额度规划 + 家长共享视图 + 月度预算告警 + 付款节点提醒</td>
+</tr>
+<tr>
+<td><strong>扩展市场</strong>（2028 起视主线 LTV/CAC 数据评估再启动）</td>
+<td>跨境工作者（赴港 / 海外）+ 跨境自由职业 / 独立开发者 + 高消费出境旅行者</td>
+<td>合计 ~570 万活跃池（含 500 万旅行者活跃池）</td>
+<td>视主线验证后按渠道成熟度逐步触达，<strong>不进入 2026-2027 申报承诺收入</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>数据来源：数据基线 v1.2 表 B；留学生在读存量为跨国官方统计支撑（置信度中），其余为可比数据折算估算（置信度低）。
+<strong>客群口径声明</strong>：本 BP 收入预测的获客对象只有一类——中国留学生 + 家长。SOM 与渗透率全部按这一类客群计算；扩展市场是 2028 之后视主线验证决定是否启动的扩展机会，不进入申报承诺。</p>
+</blockquote>
+<h3 id="15">1.5 国内外技术现状与趋势</h3>
+<h4 id="151">1.5.1 国内外现状</h4>
+<table>
+<thead>
+<tr>
+<th>区域</th>
+<th>主流类型</th>
+<th>代表产品</th>
+<th>与 FXplanner 差异</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>国内</td>
+<td>事后记账类</td>
+<td>随手记、Money Pro 国内版</td>
+<td>仅记账，无外汇规划层；无 AI 自然语言录入</td>
+</tr>
+<tr>
+<td>国内</td>
+<td>银行 / 换汇执行 App</td>
+<td>各大行手机银行、支付宝跨境汇款</td>
+<td>仅服务于"执行"环节，无"花钱之前"决策辅助</td>
+</tr>
+<tr>
+<td>国内</td>
+<td>跨境支付</td>
+<td>微信跨境钱包、银联 UnionPay</td>
+<td>资金触达型，受牌照监管；不提供成本对比与规划</td>
+</tr>
+<tr>
+<td>国外</td>
+<td>多币种钱包</td>
+<td>Wise（前 TransferWise）、Revolut</td>
+<td>资金触达型，外资身份难合规进入大陆；无中文化深度适配</td>
+</tr>
+<tr>
+<td>国外</td>
+<td>个人记账 SaaS</td>
+<td>YNAB、MoneyWiz</td>
+<td>通用记账，不专注外汇；无国内汇率源、无信用卡费率库</td>
+</tr>
+<tr>
+<td>国外</td>
+<td>AI 财务助手</td>
+<td>Cleo、Copilot Money</td>
+<td>AI 仅做分类与提醒，未深入外汇规划领域</td>
+</tr>
+</tbody>
+</table>
+<h4 id="152">1.5.2 技术趋势</h4>
+<table>
+<thead>
+<tr>
+<th>趋势</th>
+<th>FXplanner 的定位</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LLM 进入个人财务工具主流路径</td>
+<td>已落地：自然语言录入 + 置信度待确认流；下一步通过 Sprint H1 Harness 实现多 Provider 编排（不绑定单一 LLM 厂商）</td>
+</tr>
+<tr>
+<td>跨平台桌面/移动端框架成熟（Tauri 2.0）</td>
+<td>Sprint H2-H3 规划：基于 Tauri 2.0 推出 Windows/macOS/iOS/Android 客户端；离线 STT 路径用本地 Whisper 替代浏览器 STT</td>
+</tr>
+<tr>
+<td>MCP（Model Context Protocol）成为 AI 工具互操作标准</td>
+<td>Sprint H3 规划（2026 Q4）：开放 MCP Server，允许第三方智能体（Claude / GPT / 本地 LLM）调用 FXplanner 能力</td>
+</tr>
+<tr>
+<td>数据本地化与隐私合规收紧</td>
+<td>已落地：境内阿里云华东节点、PIPL 边界（不存身份证 / 卡号 / 流水）；为后续 GDPR / 港澳台合规扩展预留架构</td>
+</tr>
+<tr>
+<td>开放 API + 智能体生态</td>
+<td>Sprint H2 规划：外部 Agent API（开放给第三方智能体调用）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="16">1.6 小规模试运行情况</h3>
+<p>按附件 2 "小批量小规模试生产" 要求，数字产品适配为"小规模线上灰度运行 + Sprint 渐进式发布"。</p>
+<h4 id="161">1.6.1 试运行总体状态</h4>
+<ul>
+<li><strong>试运行模式</strong>：小规模线上灰度运行</li>
+<li><strong>公网入口</strong>：<code>https://app.fxplanner.cn</code>（HTTPS + HSTS）</li>
+<li><strong>试运行起始</strong>：Sprint 0 项目初始化以来持续迭代，2026 年完成 Sprint 8B 生产部署后正式对外运行</li>
+<li><strong>当前版本</strong>：v3.51（2026-04-15）</li>
+<li><strong>运行节点</strong>：阿里云华东 1（杭州）ECS <code>fxplanner-prod</code></li>
+<li><strong>合规资质</strong>：ICP 备案 <code>沪ICP备2026012540号-1</code>（2026-04-09 通过）</li>
+</ul>
+<h4 id="162">1.6.2 试运行已交付的核心能力（"已上线"事实集）</h4>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>能力</th>
+<th>实现状态</th>
+<th>测试覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>邮箱 OTP 登录（生产环境承担登录主路径；开发/测试环境另设独立测试通道）</td>
+<td>✅ 已上线</td>
+<td>✅ 覆盖（Sprint 10 全链路）</td>
+</tr>
+<tr>
+<td>2</td>
+<td>微信 OAuth Mock/Sandbox（生产待企业资质）</td>
+<td>✅ 已上线</td>
+<td>✅ 覆盖（Sprint 4 集成）</td>
+</tr>
+<tr>
+<td>3</td>
+<td>AI 自然语言录入（文字/语音 → STT → LLM → 置信度 → 待确认 → 入库）</td>
+<td>✅ 已上线</td>
+<td>✅ 覆盖（Sprint 5 完整交付）</td>
+</tr>
+<tr>
+<td>4</td>
+<td>批量录入（一段话解析多个订阅）</td>
+<td>✅ 已上线</td>
+<td>⚠️ 部分覆盖（基础路径已覆盖）</td>
+</tr>
+<tr>
+<td>5</td>
+<td>离线降级（LLM 不可用退回手动表单）</td>
+<td>✅ 已上线</td>
+<td>✅ 覆盖（Sprint 5 fail-soft）</td>
+</tr>
+<tr>
+<td>6</td>
+<td>年度购汇额度追踪（5 万美元 + 前瞻性预估）</td>
+<td>✅ 已上线</td>
+<td>✅ 覆盖（Sprint 6）</td>
+</tr>
+<tr>
+<td>7</td>
+<td>月度预算（自然语言配置 + 三档阈值告警 80%/90%/100%）</td>
+<td>✅ 已上线</td>
+<td>✅ 覆盖（Sprint 6）</td>
+</tr>
+<tr>
+<td>8</td>
+<td>头像渐变环（外环年度 + 内环月度）</td>
+<td>✅ 已上线</td>
+<td>⚠️ 部分覆盖</td>
+</tr>
+<tr>
+<td>9</td>
+<td>WebSocket 实时通知（5 类事件 + 票据认证 + 严格 fail-closed + 指数退避重连）</td>
+<td>✅ 已上线</td>
+<td>✅ 覆盖（Sprint 7）</td>
+</tr>
+<tr>
+<td>10</td>
+<td>闲置自动登出（30 分钟 + 提前 2 分钟倒计时警告）</td>
+<td>✅ 已上线</td>
+<td>✅ 覆盖（Sprint 8A E2E）</td>
+</tr>
+<tr>
+<td>11</td>
+<td>银行牌价直连 3 行 + 聚合降级 3 行</td>
+<td>✅ 已上线</td>
+<td>✅ 覆盖（Sprint 9A/9B/9C）</td>
+</tr>
+<tr>
+<td>12</td>
+<td>银行牌价性能（首次 ~1.7s，二次 0ms）</td>
+<td>✅ 已上线</td>
+<td>⚠️ 部分覆盖（Sprint 13D 实测）</td>
+</tr>
+<tr>
+<td>13</td>
+<td>信用卡外汇费率库（七行标准 + 零费率代表卡）</td>
+<td>✅ 已上线</td>
+<td>✅ 覆盖（数据层用例）</td>
+</tr>
+<tr>
+<td>14</td>
+<td>Toast 通知系统（success/error/info）</td>
+<td>✅ 已上线</td>
+<td>⚠️ 部分覆盖（Sprint 8C E2E 10 passed）</td>
+</tr>
+<tr>
+<td>15</td>
+<td>微交互（Focus Ring / Hover Lift / Press Active / Value Flash / Header 滚动毛玻璃）</td>
+<td>✅ 已上线</td>
+<td>👁 人工验证</td>
+</tr>
+<tr>
+<td>16</td>
+<td>三语国际化（中 / 英 / 日）</td>
+<td>✅ 已上线</td>
+<td>✅ 覆盖（Sprint 8A）</td>
+</tr>
+<tr>
+<td>17</td>
+<td>主动提示卡片（距下笔扣款 ≤ 7 天且超阈值）</td>
+<td>✅ 已上线</td>
+<td>⚠️ 部分覆盖</td>
+</tr>
+<tr>
+<td>18</td>
+<td>已知费率路径比较 + 跨币种支出链路（A→B→C 最多 3 步）</td>
+<td>✅ 已上线</td>
+<td>✅ 覆盖（单元 + 路径用例）</td>
+</tr>
+</tbody>
+</table>
+<h4 id="163-sprint-0-sprint-13d">1.6.3 试运行迭代节奏（已完成 Sprint 0 → Sprint 13D）</h4>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>主题</th>
+<th>测试通过数累积</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sprint 0~3</td>
+<td>项目初始化、设计令牌、Dashboard 重构、订阅管理</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Sprint 4</td>
+<td>DDD 后端重构 + 微信登录基础 + 自动化测试体系</td>
+<td>149 passed</td>
+</tr>
+<tr>
+<td>Sprint 5</td>
+<td>AI 自然语言录入完整交付</td>
+<td>163 passed</td>
+</tr>
+<tr>
+<td>Sprint 6</td>
+<td>额度环 + 月度预算 + 阈值告警</td>
+<td>192 passed</td>
+</tr>
+<tr>
+<td>Sprint 7</td>
+<td>WebSocket 实时通知 + 安全加固</td>
+<td>217 → 223 passed</td>
+</tr>
+<tr>
+<td>Sprint 8A / 8A-2</td>
+<td>闲置自动登出 + i18n 三语 + Settings 重构</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Sprint 8B</td>
+<td><strong>生产部署：Docker / GitHub Actions / GLM / Alembic 005 / 1Panel OpenResty / SSL</strong></td>
+<td>上线 ✅</td>
+</tr>
+<tr>
+<td>Sprint 8C</td>
+<td>Toast / Focus Ring / Value Flash / Header blur / 深色横幅修复</td>
+<td>E2E 10 passed</td>
+</tr>
+<tr>
+<td>Sprint 9A/9B/9C</td>
+<td>六行银行牌价全栈</td>
+<td>254 passed</td>
+</tr>
+<tr>
+<td>Sprint 10</td>
+<td>邮箱 OTP 两步式登录 + 全量文档更新</td>
+<td><strong>257 passed</strong></td>
+</tr>
+<tr>
+<td>Sprint 12A</td>
+<td>UX 流程重塑</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Sprint 13A</td>
+<td>官网 Landing Page 暗色视觉</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Sprint 13B</td>
+<td>汇率趋势图（ECharts）+ 全局品牌色蓝→Emerald</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Sprint 13C</td>
+<td>全站深色模式修复 + SettingsView 重设计</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Sprint 13D</td>
+<td>银行牌价性能修复（首次 ~1.7s / 二次 0ms）</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>结论</strong>：原型已完成 14+ 个 Sprint 的渐进式迭代，2026-04-09 ICP 备案通过后正式对外灰度开放，处于小规模试运行阶段；具备进一步扩大用户规模的技术与合规基础。</p>
+<h3 id="17">1.7 实际使用条件下的可靠性、耐久性、安全性考核</h3>
+<h4 id="171">1.7.1 测试与质量考核</h4>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>指标</th>
+<th>当前实测值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>测试总数</td>
+<td>单元 + 集成 + E2E</td>
+<td><strong>257 passed, 0 failed</strong></td>
+</tr>
+<tr>
+<td>E2E 框架</td>
+<td>Playwright</td>
+<td>固定 <code>127.0.0.1:4173 strictPort</code> 避免端口占用</td>
+</tr>
+<tr>
+<td>历史轨迹</td>
+<td>Sprint 7 → Sprint 10</td>
+<td>223 → 227 → 250 → 254 → <strong>257</strong>（持续上升）</td>
+</tr>
+<tr>
+<td>数据库迁移</td>
+<td>Alembic</td>
+<td>001 → 005 全部生产执行成功</td>
+</tr>
+<tr>
+<td>CI/CD 门禁</td>
+<td>pytest + vite build 双门禁</td>
+<td>任一失败即拒绝合并与部署</td>
+</tr>
+<tr>
+<td>部署链路</td>
+<td>SSH 部署 → Alembic 迁移 → 健康检查</td>
+<td>已自动化，单次部署回滚时间 &lt; 5 分钟</td>
+</tr>
+</tbody>
+</table>
+<h4 id="172">1.7.2 安全性考核</h4>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>实施措施</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>传输安全</td>
+<td>HTTPS + HSTS 强制；Let's Encrypt SSL（DNS 验证），自动续期</td>
+</tr>
+<tr>
+<td>认证安全</td>
+<td>邮箱 OTP 两步式登录（请求 OTP → 验证码登录）；JWT + Refresh Token HttpOnly Cookie；微信 OAuth 走 Mock/Sandbox（生产待资质）</td>
+</tr>
+<tr>
+<td>会话安全</td>
+<td>闲置 30 分钟自动登出；提前 2 分钟弹出倒计时警告 + "立即退出"次级按钮</td>
+</tr>
+<tr>
+<td>生产配置安全</td>
+<td>启动时强校验 <code>SECRET_KEY</code> 非默认值；生产模式屏蔽 traceback 与详细错误信息</td>
+</tr>
+<tr>
+<td>数据库安全</td>
+<td>N+1 查询防护（ORM 层 eager loading）；Alembic 严格迁移；连接池配置</td>
+</tr>
+<tr>
+<td>缓存安全</td>
+<td>Redis 连接超时 1.0s / 读超时 2.0s，避免 Redis 故障拖垮整体服务</td>
+</tr>
+<tr>
+<td>WebSocket 安全</td>
+<td>票据认证 + 严格 fail-closed + 指数退避重连</td>
+</tr>
+<tr>
+<td>数据存储边界</td>
+<td>不存银行卡号 / 身份证 / 真实交易流水 / 任何支付凭证；遵循 PIPL</td>
+</tr>
+<tr>
+<td>节点合规</td>
+<td>阿里云华东 1（杭州），境内数据本地化</td>
+</tr>
+</tbody>
+</table>
+<h4 id="173">1.7.3 可靠性与耐久性考核</h4>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>实施措施</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>服务降级</td>
+<td>LLM 不可用 → 退回手动表单（fail-soft）；银行直连失败 → k780 聚合降级；缓存失效 → 数据库直查</td>
+</tr>
+<tr>
+<td>性能优化</td>
+<td>银行牌价首次 ~1.7s，二次 0ms（localStorage stale-while-revalidate 15min TTL + k780 并发化 + Redis 超时控制）</td>
+</tr>
+<tr>
+<td>运维监控</td>
+<td>健康检查端点（部署后自动校验）；CI/CD 双门禁（pytest + vite build）拒绝不合规提交</td>
+</tr>
+<tr>
+<td>容器化</td>
+<td>Docker Compose 5 容器编排（前端 / 后端 / PostgreSQL / Redis / 反代）</td>
+</tr>
+<tr>
+<td>反向代理</td>
+<td>1Panel OpenResty 替代 Docker Nginx 容器，统一 SSL 卸载与路由</td>
+</tr>
+</tbody>
+</table>
+<h4 id="174">1.7.4 试运行考核结论</h4>
+<ul>
+<li><strong>可靠性</strong>：已具备稳定运行基础——14+ 个 Sprint 持续迭代；257 项自动化测试当前全部通过；CI/CD 双门禁拦截不合规提交；汇率/AI/缓存三层降级路径在测试环境已验证。可用率、累计运行天数、部署次数、健康检查记录、已知故障与修复记录待补充至运维监控小节（见 1.7.5）。</li>
+<li><strong>耐久性</strong>：2026-04-09 ICP 备案通过后已对外运行；Let's Encrypt SSL 自动续期；阿里云华东节点提供基础设施长期可用性。</li>
+<li><strong>安全性</strong>：HTTPS + HSTS、JWT + OTP、生产 SECRET_KEY 校验、N+1 防护、严格 fail-closed、PIPL 数据边界——七层安全措施已落地。</li>
+</ul>
+<h4 id="175">1.7.5 运维与监控数据交付计划</h4>
+<p>下列数据以"待补"承接，避免引用未审计的可用率结论；以支撑材料形式独立交付（详见 S.4 / S.5）：</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>来源</th>
+<th>交付窗口</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>试运行起算日</td>
+<td>2026-04-09 ICP 备案通过日</td>
+<td>✅ 已确定</td>
+</tr>
+<tr>
+<td>累计运行天数</td>
+<td>实测</td>
+<td>路演前 1 周（S.4）</td>
+</tr>
+<tr>
+<td>已部署次数</td>
+<td>GitHub Actions 部署历史</td>
+<td>路演前 1 周（S.4）</td>
+</tr>
+<tr>
+<td>健康检查通过率</td>
+<td>CI/CD 健康检查日志（最近 30 天）</td>
+<td>路演前 1 周（S.4）</td>
+</tr>
+<tr>
+<td>已知故障与修复记录</td>
+<td>CHANGELOG.md / Issue 记录</td>
+<td>路演前 1 周（S.4）</td>
+</tr>
+<tr>
+<td>服务可用率（月度）</td>
+<td>待接入 Uptime 监控后补充</td>
+<td>2026 H2</td>
+</tr>
+</tbody>
+</table>
+<h3 id="18">1.8 知识产权权属与申报计划</h3>
+<h4 id="181">1.8.1 已具备的数字资产与基础资质（不计入知识产权承诺件数）</h4>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>状态</th>
+<th>详情</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>域名</td>
+<td>✅ 已注册</td>
+<td><code>fxplanner.cn</code> 主域，多年续费策略，权属归项目方</td>
+</tr>
+<tr>
+<td>ICP 备案</td>
+<td>✅ 2026-04-09 通过</td>
+<td>备案号 <code>沪ICP备2026012540号-1</code></td>
+</tr>
+<tr>
+<td>SSL 证书</td>
+<td>✅ 已部署</td>
+<td>Let's Encrypt（DNS 验证），有效期至 2026-07-08，自动续期</td>
+</tr>
+<tr>
+<td>核心规则库与 LLM 提示词</td>
+<td>🔒 商业秘密</td>
+<td>权属归项目方；以"商业秘密"形式保护，不公开发布</td>
+</tr>
+<tr>
+<td>完整源码</td>
+<td>🔒 私有仓库</td>
+<td>项目方独立持有；不开源</td>
+</tr>
+<tr>
+<td>完整文档资产</td>
+<td>✅ 已沉淀</td>
+<td>SPEC.md / PRD.md / TECH_ARCHITECTURE.md / DEPLOYMENT_GUIDE.md / TEST_REPORT.md / CHANGELOG.md 等 11+ 份</td>
+</tr>
+<tr>
+<td>原型设计稿</td>
+<td>✅ 已沉淀</td>
+<td><code>design/web-design.pen</code>（36+ 画板单一原型文件）</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>上述 3 项基础资质（域名 + ICP 备案 + SSL）作为支撑材料附件，<strong>不计入知识产权字段正文</strong>，避免被误读为已拥有 3 件 IP。</p>
+</blockquote>
+<h4 id="182-2026-h2-2028">1.8.2 知识产权申报计划（2026 H2 - 2028）</h4>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>提交时间</th>
+<th>提交内容</th>
+<th>预算（含官费 + 代理费）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>计算机软件著作权（首批）</td>
+<td>2026 H2（计划 2026 年 7-12 月）</td>
+<td>FXplanner 主程序（前端 + 后端整体登记）</td>
+<td>0.05-0.2 万元</td>
+</tr>
+<tr>
+<td>商标（首批）</td>
+<td>2026 H2（计划 2026 年 7-12 月）</td>
+<td>"FXplanner"（英文）+ "凯衍磁缘"（中文），核心类目 9 / 35 / 42</td>
+<td>0.3-0.6 万元</td>
+</tr>
+<tr>
+<td>计算机软件著作权（增项）</td>
+<td>2027 H1</td>
+<td>Harness AI 编排子系统、Agent API 子系统等模块化登记</td>
+<td>0.05-0.2 万元/件</td>
+</tr>
+<tr>
+<td>商标（增项）</td>
+<td>2027 视需要</td>
+<td>扩展类目（如出版、教育、广告等）</td>
+<td>0.1-0.3 万元/类</td>
+</tr>
+<tr>
+<td>发明专利</td>
+<td>⏳ 暂无明确计划</td>
+<td>视核心算法（已知费率路径比较、置信度待确认流编排）独创性再评估</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>三年累计目标</strong>：拟累计软著+商标 <strong>8-10 件</strong>（2026 H2 首批 3 件 / 2027 累计 4-6 件 / 2028 累计 8-10 件）。</p>
+<h4 id="183-2-6">1.8.3 专利、测试、鉴定、获奖状态表（按附件 2 第 6 项要求显式交代）</h4>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>状态</th>
+<th>说明 / 计划</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>发明专利</td>
+<td>⏳ 暂无</td>
+<td>视核心算法独创性再评估；当前不作为申报硬指标</td>
+</tr>
+<tr>
+<td>实用新型专利</td>
+<td>⏳ 暂无</td>
+<td>数字 SaaS 产品形态不适用</td>
+</tr>
+<tr>
+<td>外观设计专利</td>
+<td>⏳ 暂无</td>
+<td>不适用（Web/移动 UI 通过著作权与商标保护）</td>
+</tr>
+<tr>
+<td>计算机软件著作权</td>
+<td>⏳ 计划 2026 H2 提交首批</td>
+<td>详见 1.8.2</td>
+</tr>
+<tr>
+<td>商标</td>
+<td>⏳ 计划 2026 H2 提交首批</td>
+<td>详见 1.8.2</td>
+</tr>
+<tr>
+<td>第三方测试报告 / 软件测评</td>
+<td>⏳ 暂无</td>
+<td>当前以项目内 257 项自动化测试 + CI/CD 双门禁为主；如评审需要，可委托具备 CMA/CNAS 资质的机构（预算 1-3 万元，工期 4-8 周）</td>
+</tr>
+<tr>
+<td>第三方科技成果鉴定</td>
+<td>⏳ 暂无</td>
+<td>当前阶段不申请；视项目获评省/市级孵化器或重点项目后再评估</td>
+</tr>
+<tr>
+<td>创业大赛 / 行业奖项</td>
+<td>⏳ 待参赛</td>
+<td>计划 2026 H2 - 2027 H1 参加省/市级创业大赛（与第 4 章资金筹措的"大赛奖金"联动）</td>
+</tr>
+<tr>
+<td>行业认证（如 ISO 27001 / 等保 2.0）</td>
+<td>⏳ 暂无</td>
+<td>当前用户体量与数据敏感性未触发硬性要求；2027 年视 B2B 合作需要再评估</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>本表的"暂无"项并非缺项，而是按当前项目阶段（小规模灰度试运行 + 单人创业 + 孵化器申报口径）合理选择的结果；后续随业务扩展会同步补齐。</p>
+</blockquote>
+<h4 id="184">1.8.4 知识产权策略要点</h4>
+<ul>
+<li><strong>软著优先</strong>：作为申报型项目，软著件数是评审硬指标之一，2026 H2 提交首批，2027 持续增项；</li>
+<li><strong>商标早注册</strong>：避免后期被抢注，核心类目（9 类计算机软件 / 35 类广告销售 / 42 类设计研发）首批必入；</li>
+<li><strong>商业秘密 + 内部合规</strong>：核心规则库与 LLM 提示词以商业秘密形式保护，配合内部信息安全制度（保密协议、访问控制）；</li>
+<li><strong>开源依赖合规</strong>：计划进行依赖许可证审计（输出依赖清单 + SBOM），优先采用 MIT / Apache 2.0 / BSD 等宽松许可证，避免 GPL 类强 copyleft 污染；首次审计计划 2026 H2 完成；</li>
+<li><strong>数据合规先行</strong>：先满足 PIPL 数据本地化（已落实），再视业务扩展评估 GDPR / 港澳台合规需要。</li>
+</ul>
+<hr />
+<h2 id="_10">二、市场可行性分析</h2>
+<h3 id="21">2.1 市场调查</h3>
+<h4 id="211-tam-sam-som">2.1.1 市场容量（TAM-SAM-SOM 三层）</h4>
+<blockquote>
+<p><strong>客群口径前置声明</strong>：本 BP 收入预测的获客对象只有一类——<strong>中国留学生 + 留学生家长</strong>。SOM 与渗透率全部按这一类客群计算；其他人群（跨境工作者 / 自由职业 / 旅行者）是 2028 之后视主线验证决定是否启动的扩展机会，<strong>不进入申报承诺</strong>（详见 §1.4.2 / §3.4.1）。</p>
+</blockquote>
+<p>按附件 2 "市场容量" 要求，以"用户基数 + 钱包流量"双口径展开（来源：数据基线 v1.2 表 A）：</p>
+<table>
+<thead>
+<tr>
+<th>层级</th>
+<th>用户基数</th>
+<th>用户钱包流量（年）</th>
+<th>FXplanner 可获取年收入</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TAM</td>
+<td>约 20 亿人次</td>
+<td>$2.7-2.8 万亿</td>
+<td>—</td>
+</tr>
+<tr>
+<td>SAM</td>
+<td>约 5,000-8,000 万人（商业假设）</td>
+<td>$5,000-7,000 亿（商业假设）</td>
+<td>—</td>
+</tr>
+<tr>
+<td><strong>SOM</strong></td>
+<td><strong>约 675 万人（商业假设）</strong></td>
+<td><strong>约 6,250 亿 RMB（商业假设）</strong></td>
+<td><strong>申报正文主线：¥7-68 万</strong>（2028 三档区间，基准 ¥26 万）</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>强制声明</strong>：SOM 675 万 / 6,250 亿为本 BP 采用的商业假设组合；其中仅"留学生在读存量 90-105 万"有跨国官方统计支撑（置信度中），其余群体为基于可比数据的折算估算（置信度低）。</p>
+<p><strong>收入栏读法约束</strong>：申报正文（孵化器 / 创业大赛 / 创业补贴口径）<strong>仅承诺自然增长版区间 ¥7-68 万、基准 ¥26 万</strong>；申报版正文、PPT 首页、入驻申请表"经济效益"字段统一以本表为唯一对外口径。</p>
+</blockquote>
+<h4 id="212-som">2.1.2 SOM 用户构成（含置信度）</h4>
+<table>
+<thead>
+<tr>
+<th>群体</th>
+<th>人数</th>
+<th>人均年跨境支付</th>
+<th>钱包流量（亿 RMB）</th>
+<th>置信度</th>
+<th>客群定位</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>中国留学生（海外在读存量）</td>
+<td>90-105 万（基准 105）</td>
+<td>30 万</td>
+<td>2,700-3,200（基准 3,200）</td>
+<td><strong>中</strong>（IIE Open Doors 等跨国官方统计支撑）</td>
+<td><strong>主线</strong></td>
+</tr>
+<tr>
+<td>留学生家长（与留学生 1:1-1:2 联动）</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td><strong>主线</strong>（与留学生联动获客）</td>
+</tr>
+<tr>
+<td>近 5 年赴港 / 海外工作活跃池</td>
+<td>40 万（商业假设）</td>
+<td>40 万</td>
+<td>1,600</td>
+<td>低</td>
+<td>扩展（2028 评估）</td>
+</tr>
+<tr>
+<td>跨境自由职业 / 独立开发者</td>
+<td>30 万（商业假设）</td>
+<td>15 万</td>
+<td>450</td>
+<td>低</td>
+<td>扩展（2028 评估）</td>
+</tr>
+<tr>
+<td>高消费出境旅行者（活跃池）</td>
+<td>500 万（商业假设）</td>
+<td>2 万</td>
+<td>1,000</td>
+<td>低</td>
+<td>扩展（2028 评估）</td>
+</tr>
+<tr>
+<td><strong>合计</strong></td>
+<td><strong>675 万</strong></td>
+<td>—</td>
+<td><strong>6,250</strong></td>
+<td>—</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>上表"扩展"客群仅作市场容量分母呈现；本 BP 收入预测分子按"主线（留学生 + 家长）"计算，不依赖扩展客群的渗透率假设（详见 §3.4.2 占有率口径）。</p>
+</blockquote>
+<h4 id="213">2.1.3 现有市场供应能力（同类产品水平）</h4>
+<p>按附件 2 "供应能力 / 同类产品水平" 要求：</p>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>代表产品</th>
+<th>当前供应能力</th>
+<th>FXplanner 差异</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>国内事后记账</td>
+<td>随手记、Money Pro 国内版</td>
+<td>仅记账，不提供未来交易节点规划与多路径成本比较</td>
+<td>增加"花钱之前"决策辅助层</td>
+</tr>
+<tr>
+<td>国内换汇执行</td>
+<td>各大行手机银行、支付宝跨境汇款</td>
+<td>仅服务于"执行"环节，无横向中立比较</td>
+<td>中立信息层，不绑定单一银行</td>
+</tr>
+<tr>
+<td>国内跨境支付</td>
+<td>微信跨境钱包、银联 UnionPay</td>
+<td>资金触达型，受牌照监管</td>
+<td>零资金触达边界下不涉及支付/清算/外汇经营牌照（商业化前完成 ICP 经营许可适用性法务评估）</td>
+</tr>
+<tr>
+<td>海外多币种钱包</td>
+<td>Wise（FY2025 1,560 万活跃用户、跨境量 £1,452 亿）、Revolut</td>
+<td>资金触达型，外资身份难合规进入大陆，无中文化深度适配</td>
+<td>大陆合规、中文化、规划层</td>
+</tr>
+<tr>
+<td>海外个人记账</td>
+<td>YNAB、MoneyWiz</td>
+<td>通用记账，不专注外汇；无国内汇率源、无信用卡费率库</td>
+<td>国内汇率源 + 信用卡费率库</td>
+</tr>
+<tr>
+<td>海外 AI 财务助手</td>
+<td>Cleo、Copilot Money</td>
+<td>AI 仅做分类与提醒，未深入外汇规划领域</td>
+<td>AI 自然语言录入 + 置信度待确认流深入规划</td>
+</tr>
+</tbody>
+</table>
+<p><strong>供应能力缺口</strong>：现有工具覆盖单点能力（Wise 汇率提醒 / 自动换汇、Revolut 限价订单），但缺少面向留学生 / 家庭预算的"多节点现金流规划闭环"——交易节点录入、分批换汇建议、多路径成本比较、按预算分批规划、成本复盘。FXplanner 不替代现有工具，而是在其上构建"决策层"。</p>
+<h4 id="214">2.1.4 同类产品价格与竞争</h4>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>国内代表</th>
+<th>国外代表</th>
+<th>FXplanner 定位</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>月度订阅价</td>
+<td>通用记账类 ¥10-20 / 月</td>
+<td>YNAB $14.99 / 月</td>
+<td>¥19.9 / 月（处于国内付费工具 ¥10-30 集中度区间下沿）</td>
+</tr>
+<tr>
+<td>跨境支付费率</td>
+<td>银行 0.3%-1.5% + 电汇 ¥150-200</td>
+<td>Wise 0.4%-1% / 笔</td>
+<td>不与执行工具竞争费率，竞争"路径选择"</td>
+</tr>
+<tr>
+<td>单次报告</td>
+<td>暂无</td>
+<td>暂无</td>
+<td>¥5-10 / 份（轻付费门槛）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>竞争判断</strong>：FXplanner ¥19.9 / 月的订阅价定位于"工具类订阅"区间下沿；定价不会被执行工具的费率下行所侵蚀，因为购买的是"可解释、中立、面向未来的规划服务"而非"更便宜的换汇"。</p>
+<h3 id="22">2.2 市场预测</h3>
+<h4 id="221-2026-2030">2.2.1 未来市场容量预测（2026-2030）</h4>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>趋势判断</th>
+<th>影响</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>留学生总量</strong></td>
+<td>中国留学生总量近三年呈"稳中有结构性变化"——欧亚目的地占比上升、北美单一国家依赖度下降</td>
+<td>对地域多样化的工具支持需求增强；FXplanner 三语 + 多币种已对接</td>
+</tr>
+<tr>
+<td><strong>跨境工作活跃池</strong></td>
+<td>港澳人才计划、海外人才回流、跨境远程办公推升跨境工资 / 多账户管理需求</td>
+<td>P1 客群基数将稳步扩大</td>
+</tr>
+<tr>
+<td><strong>跨境自由职业</strong></td>
+<td>中国独立开发者、设计师、内容创作者跨境收款规模年均增速约 15-20%（行业估计）</td>
+<td>P1 客群进入加速期</td>
+</tr>
+<tr>
+<td><strong>数据本地化收紧</strong></td>
+<td>PIPL / 数据出境规则趋严，外资多币种钱包大陆合规门槛进一步抬升</td>
+<td>大陆合规优势放大</td>
+</tr>
+<tr>
+<td><strong>AI 工具普及</strong></td>
+<td>LLM 进入个人财务工具主流路径，自然语言录入成为标配</td>
+<td>FXplanner 已落地此路径，先发优势具备</td>
+</tr>
+</tbody>
+</table>
+<h4 id="222">2.2.2 未来供应能力趋势</h4>
+<table>
+<thead>
+<tr>
+<th>现有玩家</th>
+<th>演进方向</th>
+<th>是否进入"规划层"</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>跨境支付执行工具（Wise / Revolut / 银行）</td>
+<td>持续费率透明化、加深执行层服务深度</td>
+<td>短期内不主动进入"规划层"——其商业模型与"中立比较"天然冲突</td>
+</tr>
+<tr>
+<td>国内事后记账工具</td>
+<td>AI 分类与提醒升级</td>
+<td>部分会进入"事后复盘 + 简单提醒"，但难突破到"未来节点规划"</td>
+</tr>
+<tr>
+<td>海外 AI 财务助手</td>
+<td>加深 AI 分析深度</td>
+<td>通用财务方向，未触及外汇规划专业深度</td>
+</tr>
+<tr>
+<td>留学 / 出海 B2B 生态</td>
+<td>留学机构、移民服务、跨境电商对"用户成本规划"工具的 API 化需求上升</td>
+<td>FXplanner 通过 Sprint H2 Agent API + B2B 渠道承接</td>
+</tr>
+</tbody>
+</table>
+<h4 id="223">2.2.3 三年收入预测（自然增长版申报主线）</h4>
+<p>来源：<code>Step0_数据基线锁定_v1.2.md</code> 表 C 自然增长版。<strong>申报正文严格以本表为基准</strong>。</p>
+<table>
+<thead>
+<tr>
+<th>年份</th>
+<th>阶段</th>
+<th>累计注册</th>
+<th>活跃订阅率</th>
+<th>付费用户</th>
+<th>ARPU</th>
+<th>年收入（基准）</th>
+<th>三档区间</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026</td>
+<td>测试验证</td>
+<td>4,500</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>验证性流水</td>
+<td>—</td>
+</tr>
+<tr>
+<td>2027</td>
+<td>商业化首年</td>
+<td>22,500</td>
+<td>2.5%</td>
+<td>563</td>
+<td>¥150</td>
+<td><strong>¥8 万</strong></td>
+<td>¥3-19 万</td>
+</tr>
+<tr>
+<td>2028</td>
+<td>增长期</td>
+<td>62,500</td>
+<td>2.5%</td>
+<td>1,563</td>
+<td>¥165</td>
+<td><strong>¥26 万</strong></td>
+<td>¥7-68 万</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>本表为对外申报承诺的唯一收入口径；下游 §5.2 / §5.5 / §G.3 全部继承本表。三档区间为关键参数（活跃订阅率、ARPU、市场进入费）±扰动后的合理波动范围，不引入额外情景。</p>
+</blockquote>
+<p><strong>关键假设强制声明</strong>（按数据基线 v1.2 表 G）：</p>
+<blockquote>
+<p>活跃订阅率 1.5%-4% 为类比假设，非公开审计基准。本 BP 收入预测对该假设最敏感（敏感度系数 1.0）。MVP 第 6 个月将用真实激活率、试用转付费率、月流失率替换该假设。<strong>若实测 &lt; 1%，将触发产品定价 / 付费墙策略的重大调整</strong>。</p>
+</blockquote>
+<h4 id="224">2.2.4 价格趋势</h4>
+<table>
+<thead>
+<tr>
+<th>趋势</th>
+<th>判断</th>
+<th>FXplanner 定位</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>跨境支付费率透明化（Wise 推动）</td>
+<td>单纯靠"更便宜汇款"建立壁垒越来越难</td>
+<td>不与执行工具竞争费率，把"路径选择"作为价值</td>
+</tr>
+<tr>
+<td>中国市场工具类订阅付费意愿抬升（雪球 / 得到 / 知识付费 APP 验证）</td>
+<td>单笔月付主流区间 ¥10-30 集中度最高</td>
+<td>¥19.9 / 月处于该区间下沿，留出未来升级空间</td>
+</tr>
+<tr>
+<td>增值服务（报告、家庭账簿、B2B 套餐）加权付费</td>
+<td>一次性 + 订阅 + B2B 混合定价成为主流</td>
+<td>已规划月度 + 季度 + 单次报告三档；B2B 团体套餐 2027 H2 - 2028 上线</td>
+</tr>
+</tbody>
+</table>
+<h4 id="225">2.2.5 三年累计注册占有率（自然增长版主线）</h4>
+<table>
+<thead>
+<tr>
+<th>年份</th>
+<th>累计注册</th>
+<th>SOM 占有率</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026</td>
+<td>4,500</td>
+<td>~0.07%</td>
+</tr>
+<tr>
+<td>2027</td>
+<td>22,500</td>
+<td>~0.33%</td>
+</tr>
+<tr>
+<td>2028</td>
+<td>62,500</td>
+<td>~0.93%</td>
+</tr>
+</tbody>
+</table>
+<p><strong>结论</strong>：占有率目标按自然增长版申报主线测算，2028 年 SOM 占有率 &lt; 1%，体量保守、可达性可控；不引入更高占有率的乐观情景作为申报承诺。</p>
+<hr />
+<h2 id="_11">三、实施方案和发展规划</h2>
+<h3 id="31">3.1 产品开发与上线计划</h3>
+<p>按附件 2 "生产计划（技术开发 / 试验生产 / 生产计划）" 要求，数字 SaaS 形态适配为"开发 + 上线 + 灰度运营 + 商业化"四段式：</p>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>时间窗</th>
+<th>主题</th>
+<th>交付状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>开发期</td>
+<td>2025 H2 - 2026 Q1</td>
+<td>Sprint 0 → Sprint 7：从项目初始化到 WebSocket 实时通知 + 安全加固</td>
+<td>✅ 已完成</td>
+</tr>
+<tr>
+<td>上线期</td>
+<td>2026 Q1 - 2026 Q2</td>
+<td>Sprint 8B 生产部署、ICP 备案、Sprint 8C - 13D UX 与性能打磨</td>
+<td>✅ 已完成</td>
+</tr>
+<tr>
+<td>灰度运营期</td>
+<td>2026 Q2 - 2027 Q1</td>
+<td>Sprint H1-H3：Harness 编排 / Agent API / MCP Server；同步开展用户验证</td>
+<td>⏳ 进行中 / 计划中</td>
+</tr>
+<tr>
+<td>商业化期</td>
+<td>2027 Q1 - 2028 Q4</td>
+<td>微信支付 + 付费墙 + 试用转付费 + 运营后台 + Tauri 桌面/移动端 + B2B 合作</td>
+<td>⏳ 计划中</td>
+</tr>
+</tbody>
+</table>
+<h4 id="311-sprint">3.1.1 已完成 Sprint 累计交付</h4>
+<p>14+ 个 Sprint、18 项核心能力、<strong>257 项自动化测试通过</strong>、6 行银行牌价聚合、3 语国际化、1 套实时通知。详细 Sprint 清单见附录 C。</p>
+<h4 id="312-sprint2026-q3-2028-q4">3.1.2 计划中 Sprint（2026 Q3 - 2028 Q4）</h4>
+<table>
+<thead>
+<tr>
+<th>编号</th>
+<th>主题</th>
+<th>时间窗</th>
+<th>关键交付物</th>
+<th>依赖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sprint H1</td>
+<td>Harness AI 基础设施（统一 LLM 编排）</td>
+<td>2026 Q3</td>
+<td>多 Provider LLM 路由、调用追踪、Token 计量</td>
+<td>现有 ai_interaction 上下文</td>
+</tr>
+<tr>
+<td>Sprint H2</td>
+<td>外部 Agent API（开放给第三方智能体调用）</td>
+<td>2026 Q3-Q4</td>
+<td>RESTful API、API Key 管理、配额限流</td>
+<td>Sprint H1</td>
+</tr>
+<tr>
+<td>Sprint H3</td>
+<td>MCP Server（Model Context Protocol）</td>
+<td>2026 Q4</td>
+<td>MCP 协议适配、可被 Claude/GPT/本地 LLM 调用</td>
+<td>Sprint H2</td>
+</tr>
+<tr>
+<td>商业化 M1</td>
+<td>微信支付 + 付费墙</td>
+<td>2027 Q1</td>
+<td>微信商户号对接、订阅订单流、付费墙拦截</td>
+<td>微信支付端到端依赖（详见 §3.6.2）</td>
+</tr>
+<tr>
+<td>商业化 M2</td>
+<td>试用转付费 + 留存优化</td>
+<td>2027 Q1-Q2</td>
+<td>7 天试用、付费提醒、留存埋点、流失挽回</td>
+<td>M1</td>
+</tr>
+<tr>
+<td>运营后台</td>
+<td>用户/订阅/汇率/通知后台管理</td>
+<td>2027 Q1-Q2</td>
+<td>内部运营工作台、客服工单、对账中心</td>
+<td>M1</td>
+</tr>
+<tr>
+<td>移动端 T1</td>
+<td>Tauri 2.0 桌面端（Windows/macOS）</td>
+<td>2027 Q2</td>
+<td>本地 Whisper STT、桌面通知、托盘菜单</td>
+<td>Sprint H1</td>
+</tr>
+<tr>
+<td>移动端 T2</td>
+<td>Tauri 2.0 移动端（iOS/Android）</td>
+<td>2027 Q2-Q3</td>
+<td>应用商店上架、推送、相机扫码</td>
+<td>T1</td>
+</tr>
+<tr>
+<td>B2B</td>
+<td>留学机构 / 财务顾问 B2B 接入</td>
+<td>2027 Q3 - 2028 Q1</td>
+<td>多租户、子账户、对账报告</td>
+<td>运营后台</td>
+</tr>
+<tr>
+<td>自动化</td>
+<td>账单导入 / OCR / 银行流水识别</td>
+<td>2028 Q1-Q2</td>
+<td>银行账单 OCR、CSV 导入、规则引擎</td>
+<td>M2</td>
+</tr>
+<tr>
+<td>国际版</td>
+<td>港澳台 + 东南亚版本</td>
+<td>2028 H2</td>
+<td>多区域部署、本地汇率源、本地化合规</td>
+<td>国际版可用性评估</td>
+</tr>
+</tbody>
+</table>
+<h3 id="32">3.2 线上服务架构与运维</h3>
+<p>按附件 2 "生产线布局" 要求，数字 SaaS 适配为"线上服务架构 + 运维流程"。</p>
+<h4 id="321">3.2.1 容器编排与宿主侧反向代理</h4>
+<p><strong>Docker Compose 应用容器</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>容器</th>
+<th>镜像 / 服务</th>
+<th>角色</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>frontend</td>
+<td>Vite 构建后的静态资源容器</td>
+<td>前端静态资源托管（仅承载静态文件分发，不在容器内自建反代）</td>
+</tr>
+<tr>
+<td>backend</td>
+<td>FastAPI + Python 3.11</td>
+<td>业务后端</td>
+</tr>
+<tr>
+<td>postgres</td>
+<td>PostgreSQL 16</td>
+<td>主数据库</td>
+</tr>
+<tr>
+<td>redis</td>
+<td>Redis 7</td>
+<td>缓存 + WebSocket pub/sub</td>
+</tr>
+</tbody>
+</table>
+<p><strong>宿主侧反向代理</strong>：1Panel OpenResty 部署于宿主机（不纳入 Docker Compose 编排），承担反向代理与 SSL 卸载，替代了早期方案中的 Docker Nginx 容器；<code>app.fxplanner.cn</code> / <code>api.fxplanner.cn</code> 路由分发由 OpenResty 完成。</p>
+<h4 id="322">3.2.2 运维流程</h4>
+<table>
+<thead>
+<tr>
+<th>环节</th>
+<th>工具 / 方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>代码托管</td>
+<td>GitHub 私有仓库（双分支：main / production）</td>
+</tr>
+<tr>
+<td>持续集成</td>
+<td>GitHub Actions：pytest（后端）+ vite build（前端）双门禁</td>
+</tr>
+<tr>
+<td>持续部署</td>
+<td>GitHub Actions → SSH → Docker Compose pull &amp; up → Alembic 迁移 → 健康检查</td>
+</tr>
+<tr>
+<td>数据库迁移</td>
+<td>Alembic 严格版本化（当前 001 → 005 全部生产执行）</td>
+</tr>
+<tr>
+<td>证书管理</td>
+<td>Let's Encrypt（DNS 验证），自动续期</td>
+</tr>
+<tr>
+<td>反向代理配置</td>
+<td>1Panel OpenResty 可视化管理</td>
+</tr>
+<tr>
+<td>故障回滚</td>
+<td>Docker 镜像版本切换 + Alembic downgrade，单次回滚时间 &lt; 5 分钟</td>
+</tr>
+<tr>
+<td>健康检查</td>
+<td><code>/health</code> 端点 + 部署后自动校验</td>
+</tr>
+<tr>
+<td>备份策略</td>
+<td>PostgreSQL 每日逻辑备份 + 异地保存（计划接入阿里云 OSS）</td>
+</tr>
+<tr>
+<td>日志与监控</td>
+<td>容器日志 + 计划接入 Uptime 监控（详见 1.7.5）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="33-api">3.3 设备设施与第三方 API 清单</h3>
+<p>按附件 2 "设备设施需求" 要求，本项目作为线上 SaaS 无生产线设施需求。</p>
+<h4 id="331">3.3.1 设备清单</h4>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>项目</th>
+<th>数量 / 规格</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>开发设备</td>
+<td>笔记本电脑（创始人主力机）</td>
+<td>1 台</td>
+<td>已自有，开发 + 部署 + 客服</td>
+</tr>
+<tr>
+<td>测试设备</td>
+<td>测试手机（iOS / Android）</td>
+<td>2 台（计划 2027 H1 配齐）</td>
+<td>移动端 Sprint T1/T2 启动前补齐</td>
+</tr>
+<tr>
+<td>测试设备</td>
+<td>外接显示器</td>
+<td>1 台（计划 2026 H2 视需要）</td>
+<td>提升多文档撰写效率</td>
+</tr>
+<tr>
+<td>办公场所</td>
+<td>孵化器工位</td>
+<td>1 个工位（拟入驻零界魔方）</td>
+<td>入驻申请表已对接</td>
+</tr>
+</tbody>
+</table>
+<h4 id="332-1">3.3.2 云服务清单（阿里云华东 1 杭州）</h4>
+<table>
+<thead>
+<tr>
+<th>服务</th>
+<th>规格</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ECS 弹性计算</td>
+<td><code>fxplanner-prod</code>（2C4G 起步；月均预算 ¥0.04-0.08 万元；2026-03 / 2026-04 已实测 ¥1,789.20 / 双月，真实账单作为附件提交）</td>
+<td>后端 + 反代容器宿主</td>
+</tr>
+<tr>
+<td>RDS PostgreSQL</td>
+<td>PostgreSQL 16（小规格起步）</td>
+<td>主数据库；待 2027 商业化期后视用户量升配</td>
+</tr>
+<tr>
+<td>Redis</td>
+<td>Redis 7（小规格）</td>
+<td>缓存 + WebSocket pub/sub</td>
+</tr>
+<tr>
+<td>对象存储 OSS</td>
+<td>标准存储</td>
+<td>后续接入：用户头像 / 备份归档</td>
+</tr>
+<tr>
+<td>域名</td>
+<td><code>fxplanner.cn</code>（已注册）</td>
+<td>主域 + <code>app.</code> / <code>api.</code> 子域</td>
+</tr>
+<tr>
+<td>ICP 备案</td>
+<td><code>沪ICP备2026012540号-1</code>（2026-04-09 通过）</td>
+<td>已落实</td>
+</tr>
+<tr>
+<td>SSL 证书</td>
+<td>Let's Encrypt（DNS 验证）</td>
+<td>有效期至 2026-07-08，自动续期</td>
+</tr>
+</tbody>
+</table>
+<h4 id="333-api">3.3.3 第三方 API / 数据源清单</h4>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>选型</th>
+<th>用途</th>
+<th>资费口径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LLM</td>
+<td>GLM（智谱 AI）glm-5-turbo（OpenAI 兼容）</td>
+<td>AI 自然语言录入解析</td>
+<td>按 Token 计费；月均预算约 ¥0.05-0.15 万元（含 AI 编码工具订阅 + GLM API 用量），真实账单作为附件提交</td>
+</tr>
+<tr>
+<td>汇率聚合（生产必配）</td>
+<td>k780（双参数认证 appkey + sign）</td>
+<td>中行 / 建行 / 交行牌价聚合</td>
+<td>按调用计费，已接入</td>
+</tr>
+<tr>
+<td>汇率直连（无密钥）</td>
+<td>ExchangeRate-API、Frankfurter ECB</td>
+<td>国际汇率参考</td>
+<td>免费层</td>
+</tr>
+<tr>
+<td>银行汇率直连</td>
+<td>农行 / 工行 / 招行</td>
+<td>牌价直连</td>
+<td>免费</td>
+</tr>
+<tr>
+<td>邮件 SMTP</td>
+<td>阿里云邮件推送或第三方 SMTP</td>
+<td>OTP 验证码发送</td>
+<td>按发送量计费</td>
+</tr>
+<tr>
+<td>短信通道</td>
+<td>拟接入（视用户增长）</td>
+<td>备用 OTP 通道</td>
+<td>按发送量计费</td>
+</tr>
+<tr>
+<td>浏览器 STT</td>
+<td>Web Speech API</td>
+<td>Web 端语音录入</td>
+<td>免费（浏览器原生）</td>
+</tr>
+<tr>
+<td>本地 Whisper</td>
+<td>计划随 Tauri 桌面端落地</td>
+<td>离线 STT 路径</td>
+<td>免费（开源）</td>
+</tr>
+</tbody>
+</table>
+<h4 id="334">3.3.4 协作与生产力工具</h4>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>选型</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>代码编辑 / AI 辅助</td>
+<td>Claude Code / Cursor 等</td>
+<td>AI 辅助编程，单人覆盖全栈关键支撑</td>
+</tr>
+<tr>
+<td>代码托管</td>
+<td>GitHub</td>
+<td>私有仓库</td>
+</tr>
+<tr>
+<td>设计</td>
+<td><code>design/web-design.pen</code>（36+ 画板单一原型文件）</td>
+<td>唯一原型源</td>
+</tr>
+<tr>
+<td>文档</td>
+<td>Markdown + 仓库内 docs/</td>
+<td>SPEC / PRD / TECH_ARCHITECTURE 等 11+ 份</td>
+</tr>
+<tr>
+<td>项目管理</td>
+<td>CHANGELOG.md + ITERATION_PLAN.md</td>
+<td>轻量化排期，与 Sprint 对齐</td>
+</tr>
+</tbody>
+</table>
+<h3 id="34">3.4 营销计划</h3>
+<h4 id="341">3.4.1 目标市场与主要客户</h4>
+<table>
+<thead>
+<tr>
+<th>客户分层</th>
+<th>用户基数</th>
+<th>优先级</th>
+<th>备注</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>中国留学生 + 留学生家长（双联动）</strong></td>
+<td>留学生 90-105 万 + 家长比例 1:1-1:2</td>
+<td><strong>P0</strong>（2026-2027 唯一获客主线）</td>
+<td>§3.4.1.1 复利机制 + §3.4.6 灰度漏斗已验证</td>
+</tr>
+<tr>
+<td>扩展客群（跨境工作者 + 自由职业 + 旅行者，合并）</td>
+<td>合计 ~570 万活跃池</td>
+<td>P1（2028 视数据评估）</td>
+<td>不进入 2026-2027 申报承诺收入；不影响 SOM 占有率口径</td>
+</tr>
+</tbody>
+</table>
+<p><strong>优先级解释</strong>：本 BP 2026-2027 获客主线<strong>只打留学生 + 家长一支队伍</strong>——双联动客群高粘性、强付费意愿、强口碑传播；扩展客群作为 2028 视主线 LTV/CAC 验证后再启动的可选机会，不构成本期申报承诺。</p>
+<h5 id="3411">3.4.1.1 留学生 + 家长双联动 → 获客复利机制</h5>
+<p>留学生 + 家长是 FXplanner 的 <strong>P0 双联动客群</strong>，两者构成互相驱动的获客复利循环：</p>
+<table>
+<thead>
+<tr>
+<th>复利机制</th>
+<th>描述</th>
+<th>已锁定的支撑数字</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>强粘性</strong></td>
+<td>留学生用户从入学到毕业 4-6 年持续使用；家长在子女毕业后转入跨境支付 / 出境游 / 其他子女的留学规划场景，留存生命周期延长</td>
+<td>LTV / CAC 2027 6-20× / 2028 8-23×（§5.4 精算）—— <strong>低现金获客假设下的目标区间，需由 2026 Q4 真实渠道数据验证</strong></td>
+</tr>
+<tr>
+<td><strong>高转介绍率</strong></td>
+<td>1 个留学生用户与 1-2 个家长用户高度绑定（§1.4.2 / §2.1.2 比例口径）；家长口碑与微信家长群构成<strong>天然零成本传播渠道</strong></td>
+<td>渠道预算 §3.4.4 自营内容 + 社群冷启动占主导，KOL 仅在 LTV/CAC 验证后小额试投</td>
+</tr>
+<tr>
+<td><strong>付费意愿</strong></td>
+<td>留学家庭对子女跨境财务规划的支付意愿与教育消费同位（家长决策 + 家长付费），契合中国教育消费的家长主导特征</td>
+<td>¥19.9 / 月年订阅相当于年节省价值 ¥2,590-6,335 的 3.8%-9.2%，ROI 透明可解释</td>
+</tr>
+</tbody>
+</table>
+<h5 id="3412-unit-economics">3.4.1.2 单位经济模型（Unit Economics）极致化路径</h5>
+<p>FXplanner 的获客逻辑<strong>并非规模优先，而是单人 UE 极致化</strong>。LTV/CAC 6-23× 是<strong>低现金获客假设下的目标区间</strong>（高于行业 ≥ 3× 健康线，但需由 2026 Q4 真实渠道数据校准与验证）——这一结构性优势的来源有三层：</p>
+<ol>
+<li><strong>CAC 端</strong>：合规架构（§1.3.4 战略护城河）使获客侧无需依赖大额预算买量，自营内容 + 社群冷启动 + 家长口碑构成主获客路径，三年累计市场进入费仅 ¥4-12 万；</li>
+<li><strong>LTV 端</strong>：留学生 + 家长双联动客群天然粘性（§3.4.1.1）使留存生命周期延长至 4-6 年；</li>
+<li><strong>结构端</strong>：执行型同业（持有牌照的跨境支付 / 多币种钱包）需在牌照成本、备付金沉淀、KYC / AML 运营、强监管合规等环节持续投入，<strong>单位经济模型天然受其重资产结构约束</strong>；FXplanner 的轻资产架构在 UE 公式中即拥有结构性成本优势。</li>
+</ol>
+<p><strong>结论</strong>：在低现金获客假设下，当 LTV/CAC 长期保持在 ≥ 8× 时，项目在 SOM &lt; 1% 占有率下盈利质量目标定位优于以规模买量驱动的重资产同业——SOM &lt; 1% 是质量护栏，不是增长瓶颈。<strong>该目标区间需由 2026 Q4 真实渠道数据验证</strong>。</p>
+<h5 id="3413">3.4.1.3 自我造血路径与潜在加速增长</h5>
+<p>在 §5.4 财务测算下，2028 Q2 起持续单季正现金流、2029 Q1 累计现金流回正——构成项目的<strong>自我造血</strong>能力，与孵化器口径"非股权融资 / 后资助"扶持模式完全契合。<strong>自我造血确认后</strong>，复利机制（强粘性 + 高转介绍率 + 高 LTV/CAC）才是潜在加速增长的真正驱动力——但这一加速路径在本 BP <strong>不作为申报承诺数字</strong>，而是项目自我造血确认后再行评估的潜在路径。</p>
+<h4 id="342">3.4.2 三年累计注册与付费占有率目标（自然增长版申报主线）</h4>
+<p><strong>口径分离声明</strong>：本节及收入预测严格采用"获客模型预算 ≈ ¥0"——指无付费投放、无 KOL 付费推广、无买量投放，纯创始人时间 + 自营内容 + 社群冷启动驱动。§3.4.4 列示的"市场进入与经营落地费用"<strong>不进入获客模型，不构成累计注册数字的驱动因子</strong>。</p>
+<p><strong>占有率结构性定位</strong>：本表 2028 SOM 占有率 &lt; 1% <strong>不是增长天花板，而是质量护栏锁定基线</strong>——通过 §3.4.1.1 / §3.4.1.2 描述的强粘性 + 高 LTV/CAC 复利机制，确保每个获取的用户都满足 LTV/CAC ≥ 6× 的高质量阈值，避免烧钱买量稀释用户质量。</p>
+<table>
+<thead>
+<tr>
+<th>年份</th>
+<th>阶段</th>
+<th>累计注册</th>
+<th>活跃订阅率</th>
+<th>付费用户</th>
+<th>ARPU</th>
+<th>年收入（A 基准）</th>
+<th>三档区间</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026</td>
+<td>测试验证</td>
+<td>4,500</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>验证性流水</td>
+<td>—</td>
+</tr>
+<tr>
+<td>2027</td>
+<td>商业化首年</td>
+<td>22,500</td>
+<td>2.5%</td>
+<td>563</td>
+<td>¥150</td>
+<td><strong>¥8 万</strong></td>
+<td>¥3-19 万</td>
+</tr>
+<tr>
+<td>2028</td>
+<td>增长期</td>
+<td>62,500</td>
+<td>2.5%</td>
+<td>1,563</td>
+<td>¥165</td>
+<td><strong>¥26 万</strong></td>
+<td>¥7-68 万</td>
+</tr>
+</tbody>
+</table>
+<h4 id="343">3.4.3 销售渠道与年度计划</h4>
+<table>
+<thead>
+<tr>
+<th>渠道</th>
+<th>2026</th>
+<th>2027</th>
+<th>2028</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>自营内容（小红书 / 知乎 / B 站 / SEO）</td>
+<td>创始人每周 1-2 条种子内容</td>
+<td>内容外包 1-2 兼职，频率提升至每周 3-5 条</td>
+<td>内容矩阵化（含视频、留学/换汇专题）</td>
+</tr>
+<tr>
+<td>社群冷启动</td>
+<td>留学微信群 / 知乎话题 / 小红书评论区精准触达</td>
+<td>拓展家长群、自由职业者群</td>
+<td>社群运营 SOP 化，配合 B2B</td>
+</tr>
+<tr>
+<td>KOL 合作</td>
+<td>0</td>
+<td>小额试投 3-5 位中腰部留学博主</td>
+<td>视 LTV/CAC 数据扩量；优先复用 ROI &gt; 3 的合作</td>
+</tr>
+<tr>
+<td>应用商店 / 官网</td>
+<td>官网 Landing（已上线 v3.51）</td>
+<td>增加移动端应用商店页（Tauri T2）</td>
+<td>应用商店 SEO 优化</td>
+</tr>
+<tr>
+<td>B2B 合作</td>
+<td>拟接触 1-2 家留学机构（提案级）</td>
+<td>签约 2-3 家留学机构 / 留学财务顾问</td>
+<td>拓展至 5-10 家，含港澳台机构试点</td>
+</tr>
+<tr>
+<td>赛事 / 孵化器活动</td>
+<td>参加 1-2 个省 / 市级创业大赛</td>
+<td>参加 2-3 个赛事（含全国级）</td>
+<td>视团队规模与营收选择</td>
+</tr>
+</tbody>
+</table>
+<h4 id="344">3.4.4 渠道预算分配（孵化器口径，单位：万元）</h4>
+<p>本表为"市场进入与经营落地费用"——支撑创始人开展自营内容、社群、赛事、B2B 拓展、合规咨询等动作的辅助支出，<strong>不进入申报主线获客模型、不作为收入预测的驱动因子</strong>。</p>
+<table>
+<thead>
+<tr>
+<th>渠道类别</th>
+<th style="text-align: right;">2026</th>
+<th style="text-align: right;">2027</th>
+<th style="text-align: right;">2028</th>
+<th>用途说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>自营内容（含工具订阅、设计素材、外包文案）</td>
+<td style="text-align: right;">0-0.3</td>
+<td style="text-align: right;">0.5-1.5</td>
+<td style="text-align: right;">1.5-3</td>
+<td>小红书 / 知乎 / B 站持续投放</td>
+</tr>
+<tr>
+<td>社群冷启动（含活动小礼品）</td>
+<td style="text-align: right;">0-0.2</td>
+<td style="text-align: right;">0.2-0.5</td>
+<td style="text-align: right;">0.3-0.8</td>
+<td>微信群 / Discord 运营物料</td>
+</tr>
+<tr>
+<td>KOL 合作</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0.3-1</td>
+<td style="text-align: right;">1-3</td>
+<td>中腰部博主小额试投，按 ROI 扩量</td>
+</tr>
+<tr>
+<td>应用商店 / SEO</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0-0.5</td>
+<td style="text-align: right;">0.5-1</td>
+<td>移动端上架与 ASO</td>
+</tr>
+<tr>
+<td>B2B 拓展（差旅 / 提案 / 合规咨询）</td>
+<td style="text-align: right;">0-0.3</td>
+<td style="text-align: right;">0.3-1</td>
+<td style="text-align: right;">0.5-1.5</td>
+<td>留学机构 / 财务顾问拓展</td>
+</tr>
+<tr>
+<td>赛事报名与材料</td>
+<td style="text-align: right;">0-0.2</td>
+<td style="text-align: right;">0.2-0.5</td>
+<td style="text-align: right;">0.2-0.5</td>
+<td>创业大赛报名与路演材料</td>
+</tr>
+<tr>
+<td><strong>小计</strong></td>
+<td style="text-align: right;"><strong>0-1</strong></td>
+<td style="text-align: right;"><strong>1-3</strong></td>
+<td style="text-align: right;"><strong>3-8</strong></td>
+<td>与第四章投资估算"市场进入与经营落地费用"口径一致</td>
+</tr>
+</tbody>
+</table>
+<h4 id="345">3.4.5 价格策略</h4>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>定价</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>月度订阅</td>
+<td>¥19.9 / 月</td>
+</tr>
+<tr>
+<td>季度订阅</td>
+<td>¥49.9 / 季（约 ¥16.6 / 月，季付 17% 优惠）</td>
+</tr>
+<tr>
+<td>单次报告</td>
+<td>¥5-10 / 份（按报告复杂度）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>定价逻辑</strong>：以"用户加权年节省价值 ¥2,590-6,335 / 人"为锚点，年订阅价（按月度 ¥19.9 × 12 ≈ ¥239）相当于年节省价值的 3.8%-9.2%，留出明显的 ROI 空间作为付费转化驱动力。</p>
+<h4 id="346-2026-0-4500">3.4.6 2026 灰度验证计划（回应"凭什么 0 买量能到 4,500 注册"追问）</h4>
+<p>2026 年累计注册目标 4,500 = 2026 年 5 月起 8 个月（2026-05 至 2026-12）的月度递增执行节奏：</p>
+<p><strong>月度注册目标</strong>（合计 4,500）：</p>
+<table>
+<thead>
+<tr>
+<th>月份</th>
+<th>阶段</th>
+<th style="text-align: right;">月度目标</th>
+<th style="text-align: right;">累计</th>
+<th>主渠道</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026-05</td>
+<td>种子启动</td>
+<td style="text-align: right;">100</td>
+<td style="text-align: right;">100</td>
+<td>创始人手动种子触达 + 留学微信群 / 知乎留学话题精准回答</td>
+</tr>
+<tr>
+<td>2026-06</td>
+<td>种子积累</td>
+<td style="text-align: right;">250</td>
+<td style="text-align: right;">350</td>
+<td>同上 + 自营内容首批发布（小红书 / 知乎）</td>
+</tr>
+<tr>
+<td>2026-07</td>
+<td>增长起步</td>
+<td style="text-align: right;">450</td>
+<td style="text-align: right;">800</td>
+<td>自营内容矩阵化 + 5 万美元额度科普 SEO 长尾收割</td>
+</tr>
+<tr>
+<td>2026-08</td>
+<td>增长期</td>
+<td style="text-align: right;">550</td>
+<td style="text-align: right;">1,350</td>
+<td>内容稳态发布 + 社群答疑式触达</td>
+</tr>
+<tr>
+<td>2026-09</td>
+<td>增长期</td>
+<td style="text-align: right;">650</td>
+<td style="text-align: right;">2,000</td>
+<td>开学季流量峰值 + 留学家长群口碑</td>
+</tr>
+<tr>
+<td>2026-10</td>
+<td>增长期</td>
+<td style="text-align: right;">750</td>
+<td style="text-align: right;">2,750</td>
+<td>信用卡费率库内容复投 + 长尾 SEO</td>
+</tr>
+<tr>
+<td>2026-11</td>
+<td>稳态期</td>
+<td style="text-align: right;">850</td>
+<td style="text-align: right;">3,600</td>
+<td><strong>孵化器活动曝光 + 自营内容复投</strong>（创业大赛路演 + 孵化器媒体曝光）</td>
+</tr>
+<tr>
+<td>2026-12</td>
+<td>稳态期</td>
+<td style="text-align: right;">900</td>
+<td style="text-align: right;"><strong>4,500</strong></td>
+<td>内容矩阵稳态 + 家长口碑 + 早期 B2B 提案接洽</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>2026 年<strong>无 KOL 付费投放</strong>——KOL 小额试投策略推迟至 2027 H1，待 LTV/CAC 真实数据验证后启动；2026 年获客全部通过创始人时间 + 自营内容 + 社群冷启动 + 孵化器活动曝光实现。</p>
+</blockquote>
+<p><strong>激活与留存指标（验证目标）</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>验证目标</th>
+<th>失败阈值（触发产品 / 渠道重审）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>30 日活跃率</td>
+<td>≥ 20%</td>
+<td>&lt; 12%</td>
+</tr>
+<tr>
+<td>7 日次留</td>
+<td>≥ 40%</td>
+<td>&lt; 25%</td>
+</tr>
+<tr>
+<td>试用→付费转化率（2027 Q2 起验证）</td>
+<td>≥ 30%</td>
+<td>&lt; 15%</td>
+</tr>
+<tr>
+<td>月流失率（2027 起验证）</td>
+<td>≤ 8%</td>
+<td>&gt; 15%</td>
+</tr>
+<tr>
+<td>用户访谈样本</td>
+<td>每季度 ≥ 10 个</td>
+<td>累计 &lt; 30 个</td>
+</tr>
+</tbody>
+</table>
+<p><strong>关键失败阈值（触发动作）</strong>：</p>
+<ul>
+<li><strong>2026 年 6 月末累计注册 &lt; 250</strong>（实际目标 350，触发线 ~70%）：触发渠道重审 + 创始人种子触达加倍；</li>
+<li><strong>2026 年 9 月末累计注册 &lt; 1,400</strong>（实际目标 2,000，触发线 ~70%）：触发产品 / 定价 / 付费墙策略评估（联动 §5.7 R1）；</li>
+<li><strong>2026 年 12 月末累计注册 &lt; 3,000</strong>（实际目标 4,500，触发线 ~67%）：商业化 Sprint M2 推迟一季度，回归种子触达 + 内容投入。</li>
+</ul>
+<p><strong>承诺边界声明</strong>：本计划为对内执行节奏与对外验证锚点，月度数字为目标性指引而非合同性承诺；月度埋点数据将在 2026 Q4 灰度反馈复盘时公开复核（与 §5.7 R1 风险段强制声明衔接）。</p>
+<h5 id="3464-2026">3.4.6.4 2026 获客漏斗与种子清单</h5>
+<p><strong>漏斗结构与渠道分布</strong>（成熟月均注册约 560；全年按 5 月 100 → 12 月 900 的爬坡节奏累计 4,500）：</p>
+<table>
+<thead>
+<tr>
+<th>渠道</th>
+<th>内容形式</th>
+<th style="text-align: right;">成熟期月均曝光</th>
+<th style="text-align: right;">注册转化率</th>
+<th style="text-align: right;">成熟期月均注册</th>
+<th style="text-align: right;">占比</th>
+<th>内容差异化标签</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>自营内容（小红书 / 知乎 / B 站 / SEO）</td>
+<td>创始人每周 1-5 条种子内容</td>
+<td style="text-align: right;">50K-100K</td>
+<td style="text-align: right;">0.5-1%</td>
+<td style="text-align: right;">~250</td>
+<td style="text-align: right;">~45%</td>
+<td><strong>「产品经理笔记」「UBC 校友创业实录」</strong>（创始人 IP 化背书：UBC 数学本科 + 3+ 年甲方产品经理经验）</td>
+</tr>
+<tr>
+<td>社群冷启动（微信留学群 / 知乎留学话题 / 小红书评论区）</td>
+<td>创始人潜伏 + 答疑式精准触达</td>
+<td style="text-align: right;">5K-15K</td>
+<td style="text-align: right;">2-5%</td>
+<td style="text-align: right;">~140</td>
+<td style="text-align: right;">~25%</td>
+<td>不带广告标签的"专业用户"参与</td>
+</tr>
+<tr>
+<td>孵化器活动曝光（创业大赛路演 / 临港 / 零界魔方媒体）</td>
+<td>每季 1-2 次</td>
+<td style="text-align: right;">10K-20K（脉冲）</td>
+<td style="text-align: right;">1-3%</td>
+<td style="text-align: right;">~85</td>
+<td style="text-align: right;">~15%</td>
+<td>创业大赛 / 路演 / 孵化器媒体生态</td>
+</tr>
+<tr>
+<td>B2B 早期对接（留学机构 / 跨境财务顾问）</td>
+<td>1-2 家提案级合作</td>
+<td style="text-align: right;">1K-3K</td>
+<td style="text-align: right;">10-15%</td>
+<td style="text-align: right;">~55</td>
+<td style="text-align: right;">~10%</td>
+<td>机构带入学员作为种子用户</td>
+</tr>
+<tr>
+<td>自然访问 / 口碑（域名 SEO + 家长群转介绍）</td>
+<td>持续累积</td>
+<td style="text-align: right;">500-1.5K</td>
+<td style="text-align: right;">5-10%</td>
+<td style="text-align: right;">~30</td>
+<td style="text-align: right;">~5%</td>
+<td>不主动推送，依赖产品体验自传播</td>
+</tr>
+<tr>
+<td><strong>合计</strong>（成熟月均）</td>
+<td></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"><strong>~560</strong></td>
+<td style="text-align: right;"><strong>100%</strong></td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>B 站合作澄清</strong>：B 站 UP 主合作采用<strong>非付费内容联动 / 朋友转发 / 访谈合作</strong>形式，不计入付费 KOL；2026 年全年无付费 KOL 投放，自营内容渠道与 B 站合作均依赖创始人时间投入。</p>
+</blockquote>
+<p><strong>漏斗各层最低样本验证目标</strong>（自营内容渠道，作为主渠道样本）：</p>
+<table>
+<thead>
+<tr>
+<th>漏斗层</th>
+<th style="text-align: right;">月度最低验证目标</th>
+<th>失败动作</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>内容曝光</td>
+<td style="text-align: right;">≥ 50K</td>
+<td>补内容主题 + 跨平台分发</td>
+</tr>
+<tr>
+<td>链接点击（CTR ≥ 5%）</td>
+<td style="text-align: right;">≥ 5K</td>
+<td>调整 SEO 标题与封面</td>
+</tr>
+<tr>
+<td>落地页访问（落地保留 ≥ 80%）</td>
+<td style="text-align: right;">≥ 4K</td>
+<td>优化 Landing</td>
+</tr>
+<tr>
+<td>注册（注册转化 ≥ 8%）</td>
+<td style="text-align: right;">≥ 350</td>
+<td>调整注册流程与价值主张</td>
+</tr>
+<tr>
+<td>30 日活跃（激活率 ≥ 20%）</td>
+<td style="text-align: right;">≥ 70</td>
+<td>触发产品 / 引导重审（联动 §5.7 R1）</td>
+</tr>
+<tr>
+<td>转介绍（转介绍率 ≥ 1-2%）</td>
+<td style="text-align: right;">≥ 7</td>
+<td>增加家长共享视图入口</td>
+</tr>
+</tbody>
+</table>
+<p><strong>首批种子用户 / 社群清单（路演前 1 周由项目方提供截图作为支撑材料 S.12）</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>种子来源类别</th>
+<th>触达方式</th>
+<th style="text-align: right;">估算可达数量</th>
+<th>启动时间</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>UBC 同学 / 校友群</td>
+<td>创始人个人触达</td>
+<td style="text-align: right;">~30-50</td>
+<td>2026-05</td>
+</tr>
+<tr>
+<td>留学微信群（数量待项目方提供）</td>
+<td>创始人潜伏 + 答疑式触达</td>
+<td style="text-align: right;">~200-400</td>
+<td>2026-05</td>
+</tr>
+<tr>
+<td>知乎留学话题（数量待项目方提供）</td>
+<td>创始人专业回答</td>
+<td style="text-align: right;">月均阅读 ~5K</td>
+<td>2026-05</td>
+</tr>
+<tr>
+<td>小红书留学 / 跨境标签</td>
+<td>创始人内容发布</td>
+<td style="text-align: right;">月均阅读 ~10K</td>
+<td>2026-06</td>
+</tr>
+<tr>
+<td>B 站跨境 / 财务 UP 主非付费内容联动</td>
+<td>内容互推 / 访谈合作</td>
+<td style="text-align: right;">单视频 ~5-15K</td>
+<td>2026-07</td>
+</tr>
+<tr>
+<td>临港 / 零界魔方孵化器活动</td>
+<td>路演 / Demo Day / 媒体曝光</td>
+<td style="text-align: right;">季度 ~2-5K</td>
+<td>2026 H2 起</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>支撑材料 S.12 内容</strong>：种子来源具体清单（微信群名 / 知乎话题 ID / UP 主联系方式）由项目方在路演前 1 周提供脱敏截图，确保数字真实可核验。</p>
+</blockquote>
+<h4 id="347-2026-2027-2028-b2c-b2b">3.4.7 经营落地闭环（2026 灰度反馈 → 2027 试用付费 → 2028 B2C 延 B2B）</h4>
+<p><strong>2026：灰度反馈年（目标累计注册 4,500）</strong></p>
+<p>4,500 累计注册轻量拆解（孵化器口径，按渠道贡献占比估算）：</p>
+<table>
+<thead>
+<tr>
+<th>渠道</th>
+<th style="text-align: right;">贡献占比</th>
+<th style="text-align: right;">注册量</th>
+<th>落地动作</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>自营内容（小红书 / 知乎 / B 站 / SEO）</td>
+<td style="text-align: right;">~45%</td>
+<td style="text-align: right;">~2,000</td>
+<td>创始人每周 1-2 条种子内容；留学换汇、5 万美元额度科普、信用卡费率库等长尾 SEO 选题</td>
+</tr>
+<tr>
+<td>社群冷启动</td>
+<td style="text-align: right;">~25%</td>
+<td style="text-align: right;">~1,100</td>
+<td>创始人手工潜伏 + 答疑式触达</td>
+</tr>
+<tr>
+<td>赛事 / 孵化器活动曝光</td>
+<td style="text-align: right;">~15%</td>
+<td style="text-align: right;">~700</td>
+<td>1-2 个省 / 市级创业大赛路演、孵化器入驻媒体曝光、产品 Demo 日</td>
+</tr>
+<tr>
+<td>B2B 早期对接</td>
+<td style="text-align: right;">~10%</td>
+<td style="text-align: right;">~450</td>
+<td>1-2 家留学机构提案级合作，带入其学员作为种子用户</td>
+</tr>
+<tr>
+<td>自然访问 / 口碑</td>
+<td style="text-align: right;">~5%</td>
+<td style="text-align: right;">~250</td>
+<td>域名 SEO、官网 Landing 自然流入</td>
+</tr>
+</tbody>
+</table>
+<p>2026 Q4 复盘要回答三个问题：(a) 真实激活率是否 ≥ 1%；(b) 30 日留存率是否 ≥ 20%；(c) 是否出现自然口碑（推荐分享 / 私信咨询）信号。任一指标低于阈值则在 2027 Q1 商业化前触发 §3.6.2 风险联动。</p>
+<p><strong>2027：试用→付费年（目标累计注册 22,500、付费用户 563）</strong></p>
+<p>跑通"免费灰度 → 7 天试用 → 月 / 季订阅"付费转化漏斗：</p>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>动作</th>
+<th>量化指标</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>拉新</td>
+<td>自营内容外包扩量、移动端 T2 应用商店上架（ASO）、KOL 小额试投 3-5 位</td>
+<td>累计注册 22,500；新增 18,000</td>
+</tr>
+<tr>
+<td>激活</td>
+<td>ConfigWizard 3 步向导、AI 自然语言录入降低首次录入摩擦</td>
+<td>首日激活率 ≥ 30%</td>
+</tr>
+<tr>
+<td>试用</td>
+<td>7 天免费试用（无需绑卡）+ 第 5 天试用结束提醒</td>
+<td>注册→试用启用率 ≥ 8%</td>
+</tr>
+<tr>
+<td>付费</td>
+<td>试用结束后付费墙 + 月 / 季订阅二选一 + 单次报告小额转化路径</td>
+<td>试用→付费转化率 ≥ 30%；活跃订阅率 2.5%（基准）</td>
+</tr>
+<tr>
+<td>留存</td>
+<td>月度账单摘要邮件、阈值告警 WebSocket 推送、流失挽回触发器</td>
+<td>月流失率 ≤ 8%</td>
+</tr>
+</tbody>
+</table>
+<p><strong>2028：B2C 延展 B2B 年（目标累计注册 62,500、付费用户 1,563）</strong></p>
+<p>B2C → B2B 延展逻辑：能力外溢 + 多租户支撑 + 客户清单（留学机构 / 海外财务顾问 / 港澳台中介 / 企业 EAP 福利）+ B2B 价格按机构席位数定价（拟定 ¥99-299 / 席位 / 年）。</p>
+<p><strong>B2C → B2B 节奏护栏</strong>：B2B 拓展不挤占 B2C 资源——2028 全年 B2B 营收占比目标 ≤ 30%，超过该比例触发产品定位评估，避免被单一 B2B 客户绑定形成"非中立信息层"风险。</p>
+<h4 id="348-b2b">3.4.8 B2B 合作中立性算法防护</h4>
+<p>针对评审可能追问的"留学机构合作是否会让 FXplanner 失去中立信息层定位"，本节明确三层防护机制：</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>防护机制</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>算法层 / 数据来源可追溯性</strong></td>
+<td>所有汇率数据均取自<strong>公开 API 与公开渠道</strong>——招行 / 中行 / 工行官网公开牌价、k780 聚合接口（覆盖中行 / 建行 / 交行公开价）等；项目仅做<strong>"数学搬运"</strong>（多源加权中位数 + IQR 异常值剔除 + 已知费率路径比较），<strong>不做"价格生成"</strong>，不存在"为合作方调整汇率显示"的技术可能性</td>
+</tr>
+<tr>
+<td><strong>算法层 / 排序中立性</strong></td>
+<td>多源汇率聚合、信用卡费率比较、已知费率路径比较的排序逻辑严格基于<strong>已知费率与用户预算</strong>，<strong>不接受第三方付费排序参数 / 推荐位竞价 / 渠道倾斜参数</strong>；<strong>B2B 客户与个人付费用户在算法权重上完全一致</strong>——B2B 客户支付的是工具使用费 / API 调用费，<strong>不是广告推荐费 / 排序费 / 流量费</strong>；算法逻辑留痕（决策日志可追溯），<strong>可向孵化器 / 合规顾问 / 合作方在 NDA 下提供审计材料</strong></td>
+</tr>
+<tr>
+<td><strong>商业层 / 收入结构脱钩</strong></td>
+<td>B2B 套餐为按席位 / API 调用量计费（拟定 ¥99-299 / 席位 / 年 + ¥X / 万次 API 调用），<strong>不存在"换汇渠道分润 / CPS / 推荐位佣金"商业模式</strong>；B2B 客户内容（如机构定制报告、专属客服）在用户界面<strong>显式标记为"机构合作内容"</strong>，与中立比较结果物理分区；任一合作方提出违反中立性的需求即终止合作</td>
+</tr>
+<tr>
+<td><strong>风控层 / 占比红线</strong></td>
+<td>B2B 营收 / 全年总营收 ≤ 30% 护栏；超过该比例触发"产品定位评估"，避免被单一 B2B 客户绑定形成"非中立信息层"风险（详见 §5.7 R7）</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>配套风险登记</strong>：详见 §5.7 R7 B2B 合作中立性风险及缓解措施。</p>
+</blockquote>
+<h3 id="35">3.5 特殊行业许可证与合规边界</h3>
+<h4 id="351">3.5.1 业务边界声明</h4>
+<p>FXplanner 当前定位为"信息服务与规划工具"，<strong>不提供以下任何业务</strong>：</p>
+<ul>
+<li>❌ 外汇买卖 / 兑换执行</li>
+<li>❌ 资金划转 / 支付清算</li>
+<li>❌ 理财 / 投资建议（不含汇率预测语句）</li>
+<li>❌ 资金托管</li>
+<li>❌ 帮助用户规避外汇便利化额度</li>
+</ul>
+<p><strong>因此本项目当前阶段不涉及以下牌照 / 许可证</strong>：支付业务许可证、外汇业务经营许可、银行业 / 证券 / 基金 / 保险类金融牌照、互联网金融信息中介相关备案。<strong>ICP 经营许可适用性</strong>根据《互联网信息服务管理办法》对有偿信息服务的判断要求，将在商业化收费上线前完成专业法务评估（详见 §3.5.5 ICP 三路径决策树与 §5.7 R3）；<strong>PIPL 对金融账户类敏感个人信息的更高要求</strong>通过现有数据存储边界（不存银行卡号 / 身份证 / 真实交易流水 / 任何支付凭证）<strong>系统性降低敏感个人信息处理范围</strong>（最小化处理 + 前置控制：仅处理邮箱 OTP 登录信息与用户主动录入的非敏感交易事件描述，不接触金融账户类敏感数据）。</p>
+<h4 id="355-icp">3.5.5 ICP 经营许可三路径决策树</h4>
+<p><strong>决策时点</strong>：商业化收费上线前 ≥ 3 个月触发专业法务评估，评估结果落入以下三路径之一，每条路径都有可执行落地方案：</p>
+<table>
+<thead>
+<tr>
+<th>路径</th>
+<th>触发条件</th>
+<th>处置动作</th>
+<th>时间窗</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>路径 A：申办 ICP 经营许可</strong></td>
+<td>法务评估认定<strong>构成经营性互联网信息服务</strong> + 申办窗口 ≤ 6 个月</td>
+<td>先申请经营性 ICP 许可，许可批准后才上线收费；商业化时间推迟至许可获批；过渡期持续做免费灰度 + 用户访谈 + 内容输出</td>
+<td>申办周期通常 3-6 个月</td>
+</tr>
+<tr>
+<td><strong>路径 B：推迟收费 + 替代交付</strong></td>
+<td>法务评估认定<strong>需要许可但申办窗口 &gt; 6 个月</strong>（或申办存在不确定性）</td>
+<td>网站继续保持免费灰度运行；如有付费需求，<strong>仅通过线下咨询合同、单次报告人工交付或第三方独立服务平台承接</strong>，并由法务确认不构成"网站内有偿信息服务"；不采用"网站跳转第三方支付"作为规避手段——根据《互联网信息服务管理办法》，经营性 ICP 判断核心是是否"通过互联网向上网用户有偿提供信息或服务"，仅靠跳转支付通道不能规避此判断</td>
+<td>视申办进度滚动调整；过渡期可持续多季度</td>
+</tr>
+<tr>
+<td><strong>路径 C：维持非经营性</strong></td>
+<td>法务评估认定<strong>不构成经营性互联网信息服务</strong>（如以独立合同的报告 / 咨询 / 线下交付为主，不在网站内直接有偿提供信息服务）</td>
+<td>维持现有非经营性 ICP 备案；商业化通过单次报告（线下交付独立合同）或一对一咨询（独立合同）实现，不在网站直接收费；网站本身保持非经营性免费内容定位</td>
+<td>不依赖 ICP 经营许可申办</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>法律依据</strong>：《互联网信息服务管理办法》（工信部）规定经营性互联网信息服务实行许可制度、非经营性实行备案制度；判断核心为"是否通过互联网向上网用户有偿提供信息或服务"。本三路径基于该判断框架设计，<strong>任一路径都不构成商业化阻塞</strong>。</p>
+</blockquote>
+<h4 id="356-ocr-pipl">3.5.6 OCR 账单导入数据处理原则（PIPL 即时性 + 无状态性 + 本地推理优先）</h4>
+<blockquote>
+<p><strong>状态说明</strong>：OCR 账单导入功能<strong>当前未上线</strong>，列入 Sprint H1-H2 规划。<strong>未来 OCR / 账单导入功能上线前，将采用以下数据处理原则</strong>（架构性预先设计，避免后续重构）：</p>
+</blockquote>
+<ul>
+<li><strong>本地推理优先</strong>：OCR 解析<strong>优先采用客户端本地推理</strong>——Tauri 桌面 / 移动客户端使用 Transformers.js 或同等开源轻量 OCR 模型在用户本地设备完成解析；<strong>原始账单图片不离开用户设备</strong>；</li>
+<li><strong>云端解析为兜底路径</strong>（仅在用户主动选择 + 单独同意后启用）：若用户主动选择云端解析（如设备性能不足），则采用以下严格约束：</li>
+<li><strong>即时性</strong>：账单图片仅在请求处理周期内驻留服务端内存，<strong>处理完成后即时从内存销毁，不写入磁盘、不持久化存储</strong>；</li>
+<li><strong>无状态性</strong>：OCR 解析结果仅保留<strong>用户主动确认后的结构化字段</strong>（金额 / 币种 / 日期），原始图片与未确认字段<strong>不进入数据库</strong>；</li>
+<li><strong>敏感字段隔离</strong>：识别到的银行卡号 / 身份证 / 真实交易流水号等敏感字段，自动脱敏（仅保留尾 4 位 / 不入库），不出现在用户确认界面或后端日志；</li>
+<li><strong>加密传输</strong>：用户上传图片全程 HTTPS + HSTS；OCR 处理位于境内阿里云华东节点，符合 PIPL 数据本地化要求；</li>
+<li><strong>PIPL 单独同意机制</strong>：上线前完成 OCR 隐私协议法律文本——OCR 处理告知 + <strong>独立于注册登录的单独勾选同意</strong>——符合 PIPL 第 13 条对敏感个人信息处理的"单独同意"要求；用户可随时撤回同意，撤回后云端 OCR 通道立即关闭；</li>
+<li><strong>路径选择记忆</strong>：用户首次使用 OCR 时强制选择"本地优先"或"云端兜底"，选择记忆于本地设备，可随时在 Settings 重置。</li>
+</ul>
+<h4 id="352">3.5.2 已具备的资质与数据边界</h4>
+<table>
+<thead>
+<tr>
+<th>资质</th>
+<th>状态</th>
+<th>详情</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ICP 备案</td>
+<td>✅ 2026-04-09 通过</td>
+<td>备案号 <code>沪ICP备2026012540号-1</code></td>
+</tr>
+<tr>
+<td>HTTPS + HSTS</td>
+<td>✅ 已启用</td>
+<td>Let's Encrypt SSL，DNS 验证</td>
+</tr>
+<tr>
+<td>数据本地化</td>
+<td>✅ 已落实</td>
+<td>阿里云华东 1（杭州）境内节点</td>
+</tr>
+<tr>
+<td>PIPL 数据存储边界</td>
+<td>✅ 严格遵守</td>
+<td>不存银行卡号 / 身份证 / 真实交易流水 / 任何支付凭证</td>
+</tr>
+<tr>
+<td>域名注册</td>
+<td>✅ 已注册</td>
+<td><code>fxplanner.cn</code> 多年续费</td>
+</tr>
+</tbody>
+</table>
+<p><strong>未来 OCR / 账单导入功能预设数据边界</strong>（前置声明）：解析时机<strong>默认客户端本地推理</strong>（Tauri 桌面端 / 移动端 + Transformers.js）；用户主动选择云端兜底时，云端<strong>仅做无状态内存解析</strong>（处理完成即时从内存销毁，不写入磁盘 / 数据库）；仅保留用户人工确认后的订阅 / 预算摘要字段，不保留原始账单图像 / 流水 / 余额 / 卡号 / 身份证 / 任何支付凭证；<strong>云端通道启用前必须经用户单独同意</strong>（PIPL 第 13 条）+ 可撤回开关。</p>
+<h4 id="353">3.5.3 商业化前必审合规事项</h4>
+<table>
+<thead>
+<tr>
+<th>必审事项</th>
+<th>法规依据</th>
+<th>处置时点</th>
+<th>处置方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>ICP 经营许可适用性法务评估</strong></td>
+<td>《互联网信息服务管理办法》经营性 / 非经营性分类与许可制度</td>
+<td><strong>2027 Q1 商业化收费上线前</strong>（不晚于付费墙、订阅、单次报告任一项收费动作上线日）</td>
+<td>委托具备资质的法务 / 合规机构出具书面评估意见；如评估结论构成经营性互联网信息服务，则在收费功能上线前先取得相应许可，或调整收费路径</td>
+</tr>
+<tr>
+<td>微信支付支付域名 / 回调配置 / 退款对账合规</td>
+<td>微信支付商户号开通规则 + 资金合规要求</td>
+<td>2027 Q1 商业化前</td>
+<td>与微信支付合规通道对齐</td>
+</tr>
+<tr>
+<td>PIPL 用户同意与隐私条款</td>
+<td>《个人信息保护法》</td>
+<td>2026 H2（先于商业化）</td>
+<td>上线隐私政策、用户协议、Cookie 同意</td>
+</tr>
+</tbody>
+</table>
+<h4 id="354">3.5.4 与外汇便利化政策的边界对接</h4>
+<p>国家外汇管理局《个人外汇管理办法》设定每年 5 万美元等值便利化额度，FXplanner 仅做"前瞻性预估 + 阈值告警"，<strong>不参与购汇执行、不提供"规避额度"的任何建议</strong>。已实现：年度购汇额度追踪 + 三档阈值告警（80% 信息 / 90% 警告 / 100% 柜台办理告知）。<strong>严格不做</strong>：拆单建议、化整为零、第三方代购汇、跨年度调度等任何规避便利化额度的提示。</p>
+<h3 id="36">3.6 三年发展规划（多维量化里程碑）</h3>
+<p>按附件 2 "三年发展规划" 要求，从产品功能、用户规模、付费与营收、团队、当年 / 累计投入、知识产权多个维度量化展开。</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>2026（验证年）</th>
+<th>2027（商业化首年）</th>
+<th>2028（增长年）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>产品功能</strong></td>
+<td>Sprint 0~13D 已上线 18+ 项核心能力；Sprint H1-H3 完成；257+ 测试通过</td>
+<td>商业化 M1/M2 + 运营后台 + Tauri T1</td>
+<td>移动端 T2 + B2B + 自动账单 OCR + 港澳台 / 东南亚国际版</td>
+</tr>
+<tr>
+<td><strong>用户规模（累计注册）</strong></td>
+<td>4,500</td>
+<td>22,500</td>
+<td>62,500</td>
+</tr>
+<tr>
+<td><strong>付费用户 / 活跃订阅率 / ARPU</strong></td>
+<td>测试验证，免费为主</td>
+<td>563 / 2.5% / ¥150</td>
+<td>1,563 / 2.5% / ¥165</td>
+</tr>
+<tr>
+<td><strong>年营收（自然增长版申报主线）</strong></td>
+<td>验证性流水</td>
+<td>¥8 万（区间 ¥3-19 万）</td>
+<td><strong>¥26 万</strong>（区间 ¥7-68 万）</td>
+</tr>
+<tr>
+<td><strong>团队</strong></td>
+<td>创始人 1 人独任（持股 100%）</td>
+<td>+1-2 名兼职 / 外包</td>
+<td>视营收扩展至 2-3 名全职或继续外包</td>
+</tr>
+<tr>
+<td><strong>当年全口径投入</strong></td>
+<td><strong>~5-8 万元</strong></td>
+<td><strong>~7-13 万元</strong></td>
+<td><strong>~13-25 万元</strong></td>
+</tr>
+<tr>
+<td><strong>累计投入</strong></td>
+<td>~5-8 万</td>
+<td>~12-21 万</td>
+<td>~25-46 万</td>
+</tr>
+<tr>
+<td><strong>知识产权（累计件数）</strong></td>
+<td>软著 1 件 + 商标 2 件（"FXplanner" + "凯衍磁缘"）2026 H2 提交</td>
+<td>累计 4-6 件（增项：Harness / Agent API）</td>
+<td>累计 8-10 件（增项：移动端 / 自动账单引擎）</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>"当年全口径投入"含创始人薪酬（上海最低工资 ¥2,740 / 月 × 12，基线 ~3.29 万 / 年；三年累计 ~9.87 万；切换差额 0.87 万由预备费吸收，三年总成本 35.41 万口径不变）+ 阿里云 + AI 工具 / LLM API + IP 申报 + 市场进入费 + 兼职 / 外包 + 预备费；详细分项见第四章 §4.2 薪酬切换说明与 §4.5.1。</p>
+</blockquote>
+<h4 id="361">3.6.1 关键里程碑节点（按季度）</h4>
+<table>
+<thead>
+<tr>
+<th>季度</th>
+<th>关键节点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026 Q2（已实现）</td>
+<td>Sprint 8B 生产部署、ICP 备案、Sprint 13D 银行牌价性能修复</td>
+</tr>
+<tr>
+<td>2026 Q3</td>
+<td>Sprint H1 Harness 上线、首批软著 + 商标提交、参加 1-2 个省 / 市级创业大赛</td>
+</tr>
+<tr>
+<td>2026 Q4</td>
+<td>Sprint H2 Agent API + Sprint H3 MCP Server 上线、累计注册 4,500、入驻孵化器、灰度反馈复盘</td>
+</tr>
+<tr>
+<td>2027 Q1</td>
+<td><strong>双闸门</strong>：ICP 经营许可法务评估 + 微信支付端到端要素配齐；通过后上线微信支付 + 付费墙</td>
+</tr>
+<tr>
+<td>2027 Q2</td>
+<td>Tauri 桌面端 T1 上线、运营后台上线、首位兼职 / 外包到岗</td>
+</tr>
+<tr>
+<td>2027 Q3</td>
+<td>Tauri 移动端 T2 上架、B2B 首签 2-3 家留学机构</td>
+</tr>
+<tr>
+<td>2027 Q4</td>
+<td>累计注册 22,500、年付费用户 563、年收入 ¥8 万</td>
+</tr>
+<tr>
+<td>2028 Q1-Q2</td>
+<td>自动账单 OCR / CSV 导入上线、B2B 扩展至 5-10 家</td>
+</tr>
+<tr>
+<td>2028 H2</td>
+<td>港澳台 / 东南亚国际版灰度、累计注册 62,500、年收入 ¥26 万</td>
+</tr>
+</tbody>
+</table>
+<h4 id="362">3.6.2 三年规划的关键假设与风险联动</h4>
+<table>
+<thead>
+<tr>
+<th>假设 / 触发条件</th>
+<th>对应规划修订</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>活跃订阅率实测 &lt; 1%</td>
+<td>商业化 Sprint M2 触发产品定价 / 付费墙策略重大调整</td>
+</tr>
+<tr>
+<td>微信支付端到端任一要素未在 2027 Q1 配齐</td>
+<td>商业化 Sprint M1 推迟；启用过渡通道：支付宝商家版 + 银联开放平台 + 国际信用卡（Stripe）三选一</td>
+</tr>
+<tr>
+<td>2026 灰度反馈复盘指标不达阈值（激活率 &lt; 1% / 30 日留存 &lt; 20% / NPS 显著为负）</td>
+<td>推迟 2027 Q1 商业化上线，回到反馈采集动作扩量；产品 / 定价二次评估</td>
+</tr>
+<tr>
+<td>ICP 经营许可法务评估结论为"构成经营性互联网信息服务"</td>
+<td>在收费功能上线前先取得增值电信业务经营许可证；如时间窗冲突，调整收费路径或推迟商业化时点</td>
+</tr>
+<tr>
+<td>LTV/CAC &lt; 3（长期跌破阈值）</td>
+<td>暂停 KOL 试投，回归自营内容 + 社群冷启动；推迟 B2B 拓展</td>
+</tr>
+<tr>
+<td>ICP 备案号变更 / 监管口径调整</td>
+<td>触发合规边界重审，由 §3.5.1 回溯调整</td>
+</tr>
+<tr>
+<td>B2B 营收占比超过 30%</td>
+<td>触发产品定位与中立性评估，调整 B2B 客户结构或暂停新增 B2B 接入</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_12">四、投资估算与资金筹措</h2>
+<h3 id="41">4.1 总体口径与目标</h3>
+<p><strong>申报口径声明</strong>：本章按"孵化器入驻 / 创业大赛 / 创业补贴"三类申报口径写作，与对外融资 BP 严格区分。</p>
+<table>
+<thead>
+<tr>
+<th>口径维度</th>
+<th>本 BP 选择（孵化器口径）</th>
+<th>对外融资口径（不采用）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>总投资规模</td>
+<td>三年累计<strong>几十万元量级</strong></td>
+<td>数百万至千万</td>
+</tr>
+<tr>
+<td>资金来源</td>
+<td>自筹 + 补贴 + 孵化器 + 大赛 + 创新券</td>
+<td>天使 / Pre-A / A 轮等股权融资</td>
+</tr>
+<tr>
+<td>创始人薪酬</td>
+<td>按申报地<strong>最低工资 × 12 月</strong>入账</td>
+<td>按市场价（行业中位数）</td>
+</tr>
+<tr>
+<td>营销预算</td>
+<td>低成本自营内容 + 社群冷启动</td>
+<td>大额买量 / KOL 矩阵 / 媒体投放</td>
+</tr>
+<tr>
+<td>收入目标</td>
+<td>自然增长版 A 基准（2028 ¥26 万）</td>
+<td>加速版 / 乐观版</td>
+</tr>
+<tr>
+<td>财务目标</td>
+<td>2027 接近打平、2028 自我造血</td>
+<td>快速放量、追求估值倍数</td>
+</tr>
+</tbody>
+</table>
+<p><strong>资金需求总目标</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>年份</th>
+<th>主题</th>
+<th style="text-align: right;">当年全口径投入区间</th>
+<th style="text-align: right;">当年收入（申报基准）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026</td>
+<td>验证年</td>
+<td style="text-align: right;"><strong>~5-8 万</strong></td>
+<td style="text-align: right;">验证性流水</td>
+</tr>
+<tr>
+<td>2027</td>
+<td>商业化首年</td>
+<td style="text-align: right;"><strong>~7-13 万</strong></td>
+<td style="text-align: right;"><strong>¥8 万</strong>（区间 ¥3-19 万）</td>
+</tr>
+<tr>
+<td>2028</td>
+<td>增长年</td>
+<td style="text-align: right;"><strong>~13-25 万</strong></td>
+<td style="text-align: right;"><strong>¥26 万</strong>（区间 ¥7-68 万）</td>
+</tr>
+<tr>
+<td><strong>三年累计</strong></td>
+<td></td>
+<td style="text-align: right;"><strong>~25-46 万</strong></td>
+<td style="text-align: right;"><strong>~¥34 万</strong>（A 基准）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="42">4.2 三年投资估算总表（按预算类别 × 年度，单位：万元）</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>预算类别</th>
+<th style="text-align: right;">2026</th>
+<th style="text-align: right;">2027</th>
+<th style="text-align: right;">2028</th>
+<th style="text-align: right;">三年累计</th>
+<th>来源依据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>创始人薪酬（上海最低工资 ¥2,740 / 月 × 12）</td>
+<td style="text-align: right;">~3.29</td>
+<td style="text-align: right;">~3.29</td>
+<td style="text-align: right;">~3.29</td>
+<td style="text-align: right;">~9.87</td>
+<td>上海 2025-07-01 调整后一档 ¥2,740 / 月（已锁定申报地）；不含社保、公积金</td>
+</tr>
+<tr>
+<td>2</td>
+<td>阿里云（域名 + ECS + RDS + Redis + OSS + SSL）</td>
+<td style="text-align: right;">0.5-1.0</td>
+<td style="text-align: right;">1.0-2.0</td>
+<td style="text-align: right;">2.0-4.0</td>
+<td style="text-align: right;">3.5-7.0</td>
+<td>2026-03 / 2026-04 可开票合计 ¥1,789.20 已补录</td>
+</tr>
+<tr>
+<td>3</td>
+<td>AI 工具订阅与 LLM API</td>
+<td style="text-align: right;">0.3-0.8</td>
+<td style="text-align: right;">0.5-1.0</td>
+<td style="text-align: right;">1.0-2.0</td>
+<td style="text-align: right;">1.8-3.8</td>
+<td>AI 编码工具订阅 + GLM API 用量推算；真实账单作为附件</td>
+</tr>
+<tr>
+<td>4</td>
+<td>第三方数据 API（k780 + 邮件 SMTP + 短信）</td>
+<td style="text-align: right;">0.1-0.3</td>
+<td style="text-align: right;">0.2-0.5</td>
+<td style="text-align: right;">0.5-1.0</td>
+<td style="text-align: right;">0.8-1.8</td>
+<td>按调用计费</td>
+</tr>
+<tr>
+<td>5</td>
+<td>知识产权申报（软著 / 商标 / 续费 / 创新券自付差额）</td>
+<td style="text-align: right;">0.5-1.0</td>
+<td style="text-align: right;">0.3-0.5</td>
+<td style="text-align: right;">0.3-0.5</td>
+<td style="text-align: right;">1.1-2.0</td>
+<td>软著首批 + 商标 2 类 2026 H2</td>
+</tr>
+<tr>
+<td>6</td>
+<td>市场进入与经营落地（含工具 / 素材 / 外包 / 差旅 / 赛事 / 合规咨询）</td>
+<td style="text-align: right;">0-1.0</td>
+<td style="text-align: right;">1.0-3.0</td>
+<td style="text-align: right;">3.0-8.0</td>
+<td style="text-align: right;">4.0-12.0</td>
+<td>与三章 §3.4.4 一致</td>
+</tr>
+<tr>
+<td>7</td>
+<td>兼职 / 外包人力（设计 / 内容 / 客服）</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0-2.0</td>
+<td style="text-align: right;">2.0-5.0</td>
+<td style="text-align: right;">2.0-7.0</td>
+<td>2027 H2 起</td>
+</tr>
+<tr>
+<td>8</td>
+<td>预备费（不可预见支出，5-10%）</td>
+<td style="text-align: right;">0.5-1.0</td>
+<td style="text-align: right;">0.5-1.0</td>
+<td style="text-align: right;">1.0-2.0</td>
+<td style="text-align: right;">2.0-4.0</td>
+<td>孵化器申报惯例</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>当年小计（区间）</strong></td>
+<td style="text-align: right;"><strong>~5-8</strong></td>
+<td style="text-align: right;"><strong>~7-13</strong></td>
+<td style="text-align: right;"><strong>~13-25</strong></td>
+<td style="text-align: right;"><strong>~25-46</strong></td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td><strong>当年小计（中位）</strong></td>
+<td style="text-align: right;">~6.53</td>
+<td style="text-align: right;">~10.14</td>
+<td style="text-align: right;">~18.74</td>
+<td style="text-align: right;"><strong>~35.41</strong></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>薪酬切换说明</strong>：申报地锁定上海后，创始人薪酬采用<strong>上海 2025-07-01 调整后最新口径 ¥2,740 / 月</strong>（年化 ¥32,880 ≈ ~3.29 万），三年累计 9.87 万。相对原杭州 ¥2,490 / 月骨架（年化 ~3.0 万、三年累计 9.0 万）差额 ~0.87 万由预备费（三年累计 2.27 万精算池）吸收，剩余预备费 ~1.40 万仍可覆盖意外支出。下游精算总成本 35.41 万、净额 -1.41 万、累计现金需求峰值 -10.31 万 / 2027 Q3 末、2028 当年净利 +7.26 万、(自筹+外部)/峰值 154%-318% <strong>保持不变</strong>。<strong>最低工资基线不含社保、公积金；若 2027 年起转入实际发薪（非折算入账）模式，社保公积金成本另行纳入或由预备费吸收</strong>。</p>
+</blockquote>
+<p><strong>预算红线</strong>：营销 / 当年小计 ≤ 35%（孵化器申报偏好）；任一第三方供应商 ≤ 30% 总支出；超限触发供应商替代评估或费用削减。</p>
+<h4 id="421-vs-2026">4.2.1 已发生 vs 计划中（2026 拆分）</h4>
+<table>
+<thead>
+<tr>
+<th>子科目</th>
+<th>已发生（2025 H2 - 2026 Q2 上线开发期）</th>
+<th>计划中（2026 Q3 - Q4）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>创始人薪酬</td>
+<td>未实际领取，按"折算入账"计入 ~1.5 万</td>
+<td>折算入账 ~1.5 万</td>
+</tr>
+<tr>
+<td>阿里云</td>
+<td>域名注册 + ICP 备案 + ECS+RDS+Redis 上线月份月费 + SSL（免费）；2026-03 ¥1,753.85 + 2026-04 ¥35.35 = <strong>¥1,789.20</strong></td>
+<td>续费 + 后续月费</td>
+</tr>
+<tr>
+<td>AI 工具 / LLM API</td>
+<td>创始人 AI 编码工具订阅 + GLM API 调用费（年度预算 0.3-0.8 / 0.5-1.0 / 1.0-2.0 万元，真实账单作为附件）</td>
+<td>后续月订阅 + GLM API 持续用量</td>
+</tr>
+<tr>
+<td>第三方 API</td>
+<td>k780 生产配置 + 邮件 SMTP（OTP 已用）</td>
+<td>持续按调用结算</td>
+</tr>
+<tr>
+<td>IP 申报</td>
+<td>0</td>
+<td>软著 1 件 + 商标 2 类（≈ 0.5-1.0 万）</td>
+</tr>
+<tr>
+<td>市场进入</td>
+<td>~0</td>
+<td>0-1 万（赛事报名、自营内容轻量物料）</td>
+</tr>
+<tr>
+<td>兼职 / 外包</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>预备费</td>
+<td>—</td>
+<td>0.5-1.0 万</td>
+</tr>
+</tbody>
+</table>
+<h3 id="43">4.3 资金筹措方式</h3>
+<h4 id="431-70-95">4.3.1 五大资金来源结构（外部覆盖三年累计 70%-95%，无股权稀释）</h4>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>来源</th>
+<th style="text-align: right;">三年合计目标（万元）</th>
+<th style="text-align: right;">占总投入比</th>
+<th>性质</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>创始人自筹</td>
+<td style="text-align: right;">8-15</td>
+<td style="text-align: right;">~30%</td>
+<td>个人储蓄 / 家庭支持</td>
+<td>✅ 已发生（覆盖 2025 H2 - 2026 Q2 上线开发支出）</td>
+</tr>
+<tr>
+<td>2</td>
+<td>大学生 / 创业补贴</td>
+<td style="text-align: right;">1-3</td>
+<td style="text-align: right;">~5%-10%</td>
+<td>一次性补贴（地方政策）</td>
+<td>⏳ 拟申报（2026 H2 起）</td>
+</tr>
+<tr>
+<td>3</td>
+<td>孵化器扶持</td>
+<td style="text-align: right;">5-10</td>
+<td style="text-align: right;">~15%-25%</td>
+<td>减免 / 代金券 / 公共服务</td>
+<td>⏳ 拟入驻零界魔方</td>
+</tr>
+<tr>
+<td>4</td>
+<td>创业大赛奖金</td>
+<td style="text-align: right;">3-10</td>
+<td style="text-align: right;">~10%-25%</td>
+<td>名次奖金（省 / 市 / 全国级）</td>
+<td>⏳ 拟参赛（2026 Q3 起）</td>
+</tr>
+<tr>
+<td>5</td>
+<td>创新券 / IP 资助</td>
+<td style="text-align: right;">1-3</td>
+<td style="text-align: right;">~3%-7%</td>
+<td>知识产权专项补贴</td>
+<td>⏳ 拟申报（首批软著 / 商标提交后）</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>合计目标（区间）</strong></td>
+<td style="text-align: right;"><strong>18-41</strong></td>
+<td style="text-align: right;">~70%-95%</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td><strong>创始人自筹兜底（差额）</strong></td>
+<td style="text-align: right;">5-15</td>
+<td style="text-align: right;">~5%-30%</td>
+<td>个人储蓄 / 家庭支持</td>
+<td>按当年缺口动态补足</td>
+</tr>
+</tbody>
+</table>
+<p><strong>资金覆盖度</strong>：(自筹 + 外部) / 累计现金需求峰值 = <strong>154%-318%</strong>（按峰值 -10.31 万计算）。</p>
+<h4 id="432">4.3.2 孵化器扶持（零界魔方 / 临港）等值化资源池</h4>
+<p>按 <code>服务手册.pdf</code> 八类政策方向（展业有资助、融资有托底、落户有路径、推介有平台、流量有加持、网络有保障、物流有优惠、出海有通道）分项展开，<strong>以"非现金 + 后资助"形式为主</strong>，等值化纳入资金筹措：</p>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>典型形式</th>
+<th style="text-align: right;">三年合计估值（万元）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>工位 / 办公空间</td>
+<td>入驻申请表已列工位 / 办公室 / 公租房需求字段</td>
+<td style="text-align: right;">1.5-3.0</td>
+</tr>
+<tr>
+<td>创业大赛落地资助</td>
+<td>国家、省市、新片区 / 临港集团赛事获奖项目落地后资助</td>
+<td style="text-align: right;">1.0-5.0</td>
+</tr>
+<tr>
+<td>网络 / 算力 / AI 模型支持</td>
+<td>网络租赁、算力租赁、模型服务、API 调用等凭证型后资助</td>
+<td style="text-align: right;">1.0-3.0</td>
+</tr>
+<tr>
+<td>政策与申报辅导</td>
+<td>创业补贴、担保贷款、创新券、IP、资质申报等材料辅导</td>
+<td style="text-align: right;">0.5-1.0</td>
+</tr>
+<tr>
+<td>推介 / 流量 / 展会支持</td>
+<td>参展、平台活动、路演、内容推广等后资助或资源对接</td>
+<td style="text-align: right;">0.5-1.0</td>
+</tr>
+<tr>
+<td>出海与合规公共服务</td>
+<td>数据跨境、跨境金融、涉外保险、法律、财税、境外投资备案咨询</td>
+<td style="text-align: right;">0.5-1.0</td>
+</tr>
+<tr>
+<td><strong>合计（保守口径）</strong></td>
+<td></td>
+<td style="text-align: right;"><strong>5.0-10.0</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>避免重复计入</strong>：若同一创业大赛奖项同时满足"临港赛事落地资助"与"创业大赛奖金"，资金筹措表只按可确认路径择高计入一次。</p>
+</blockquote>
+<h3 id="44">4.4 资金使用计划</h3>
+<h4 id="441">4.4.1 按年度 × 主题</h4>
+<table>
+<thead>
+<tr>
+<th>年份</th>
+<th>资金使用主题</th>
+<th>关键支出项</th>
+<th style="text-align: right;">当年小计</th>
+<th>与 Sprint 节奏对照</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026</td>
+<td>灰度运营 + IP 落地 + 入驻</td>
+<td>阿里云续费 + AI 工具 + 首批软著商标 + 入驻 / 赛事 + 创始人薪酬</td>
+<td style="text-align: right;">~5-8 万</td>
+<td>Sprint H1-H3（Harness / Agent API / MCP）</td>
+</tr>
+<tr>
+<td>2027</td>
+<td>商业化合规 + 付费跑通 + 桌面端</td>
+<td>商业化前合规咨询 + 微信支付对接 + 付费墙 + Tauri T1 + 首位兼职 + 软著 / 商标增项 + 创始人薪酬</td>
+<td style="text-align: right;">~7-13 万</td>
+<td>M1 / M2 / T1 / 运营后台</td>
+</tr>
+<tr>
+<td>2028</td>
+<td>B2B 拓展 + 移动端 + 国际版灰度</td>
+<td>Tauri T2 上架 + B2B 多租户 + 自动账单 OCR + 港澳台 / 东南亚国际版 + 兼职扩量 + 创始人薪酬</td>
+<td style="text-align: right;">~13-25 万</td>
+<td>T2 / B2B / 自动化 / 国际版</td>
+</tr>
+</tbody>
+</table>
+<h4 id="442">4.4.2 按用途结构（三年累计中位数视图）</h4>
+<table>
+<thead>
+<tr>
+<th>用途分类</th>
+<th style="text-align: right;">占累计投入比</th>
+<th style="text-align: right;">中位金额（~35.41 万）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>研发与运维（创始人薪酬 + 阿里云 + AI/LLM + 第三方 API + 兼职/外包）</td>
+<td style="text-align: right;">~70%</td>
+<td style="text-align: right;">~24.4 万</td>
+</tr>
+<tr>
+<td>知识产权与合规（IP 申报 + 商业化前合规咨询）</td>
+<td style="text-align: right;">~5%</td>
+<td style="text-align: right;">~1.7 万</td>
+</tr>
+<tr>
+<td>市场进入与经营落地</td>
+<td style="text-align: right;">~17%</td>
+<td style="text-align: right;">~5.9 万</td>
+</tr>
+<tr>
+<td>预备费</td>
+<td style="text-align: right;">~8%</td>
+<td style="text-align: right;">~2.8 万</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>研发占 ~70%</strong> 是孵化器口径的核心导向：把绝大多数资金投入"创新产出"，避免大额营销与人员前置消耗。</p>
+</blockquote>
+<h4 id="443">4.4.3 商业化前合规闸门预算</h4>
+<table>
+<thead>
+<tr>
+<th>闸门事项</th>
+<th>时点</th>
+<th style="text-align: right;">资金口径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ICP 经营许可适用性法务评估</td>
+<td>2027 Q1 商业化前</td>
+<td style="text-align: right;">0.3-0.8 万（书面评估意见委托费）</td>
+</tr>
+<tr>
+<td>微信支付端到端要素配齐</td>
+<td>2027 Q1 商业化前</td>
+<td style="text-align: right;">0.2-0.5 万</td>
+</tr>
+<tr>
+<td>PIPL 用户同意与隐私条款</td>
+<td>2026 H2</td>
+<td style="text-align: right;">0.1-0.3 万</td>
+</tr>
+<tr>
+<td>OCR / 账单导入数据边界审查</td>
+<td>2028 Q1</td>
+<td style="text-align: right;">0.2-0.5 万</td>
+</tr>
+</tbody>
+</table>
+<h4 id="444">4.4.4 资金使用优先级与压力情景</h4>
+<table>
+<thead>
+<tr>
+<th>优先级</th>
+<th>资金科目</th>
+<th>触发逻辑</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0（不可削减）</td>
+<td>创始人薪酬 + 阿里云 + AI 工具 / LLM API + 第三方 API + 商业化前合规闸门</td>
+<td>维持产品在线运行的最小现金消耗，任一缺失即触发服务中断或合规底线突破</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>IP 申报（首批软著 + 商标）+ 入驻孵化器申请 + 自营内容基线</td>
+<td>孵化器申报版核心资产沉淀；可通过创新券回补部分自付</td>
+</tr>
+<tr>
+<td>P2</td>
+<td>KOL 小额试投 + B2B 差旅 + 兼职 / 外包</td>
+<td>视 LTV/CAC、商业化进度按需投入；ROI &lt; 3 时削减或暂停</td>
+</tr>
+<tr>
+<td>P3</td>
+<td>国际版灰度 + 自动账单 OCR</td>
+<td>2028 H2 启动；视前两年现金流情况延期或缩减</td>
+</tr>
+</tbody>
+</table>
+<p><strong>压力情景</strong>：</p>
+<ul>
+<li><strong>保守情景</strong>（外部资金 ≤ 50% 目标 + 收入达成 ≤ 50%）：先削减 P3，再削减 P2，最坏情况下保留 P0 + P1 + 自营内容基线，三年累计可压缩至 ~20-25 万。</li>
+<li><strong>基准情景</strong>（外部资金 70%-95% + 收入按 A 基准达成）：按节奏正常执行。</li>
+<li><strong>乐观情景</strong>（外部资金 ≥ 95% + 收入超 A 基准 50%）：可提前启动 2028 项目；<strong>但不更改孵化器口径</strong>（不拉高营销至对外融资水位）。</li>
+</ul>
+<h3 id="45">4.5 关键预算假设</h3>
+<h4 id="451-12">4.5.1 创始人薪酬：按申报地最低工资 × 12 入账</h4>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>锁定值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>申报地</td>
+<td><strong>上海</strong>（含临港新片区 / 零界魔方孵化体系，已锁定）</td>
+</tr>
+<tr>
+<td>参考标准</td>
+<td><strong>上海最低工资 2025-07-01 调整后一档 ¥2,740 / 月</strong>（按当年人社部门发布标准动态校准）</td>
+</tr>
+<tr>
+<td>年化基线</td>
+<td>¥2,740 × 12 = ¥32,880 ≈ <strong>~3.29 万元 / 年</strong>；不含社保、公积金</td>
+</tr>
+<tr>
+<td>三年累计</td>
+<td>~9.87 万元（2026 / 2027 / 2028 各 ~3.29 万）</td>
+</tr>
+<tr>
+<td>实际是否领取</td>
+<td>按"折算入账，不实际领取"或"领取最低工资"两种处理（建议折算入账以体现自我牺牲与现金压力，符合孵化器口径）</td>
+</tr>
+<tr>
+<td>历史口径切换</td>
+<td>草稿期暂按杭州 ¥2,490 测算（年化 ~3.0 万）；申报地锁定上海后切换为 ¥2,740 / 月（2025-07-01 调整后口径）；差额 ~0.29 万 / 年 × 3 年 = 0.87 万由预备费吸收，下游精算总成本 / 净额 / 现金需求峰值口径不变（详见 §4.2 薪酬切换说明）</td>
+</tr>
+<tr>
+<td>社保 / 公积金</td>
+<td>最低工资基线不含社保 / 公积金；折算入账模式下不涉及实际缴纳；若未来转入实际发薪模式，社保公积金成本另行纳入或由预备费吸收</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>强制声明</strong>：本 BP 不按市场价（同岗位行业中位数）入账。如评审 / 资助方要求按市场价测算，须出具对外融资版 BP，本章不并存两套口径。</p>
+</blockquote>
+<h4 id="452-ai">4.5.2 单人创业 + AI 工具放大假设</h4>
+<ul>
+<li><strong>单人覆盖范围</strong>：创始人 1 人覆盖前后端 + AI + 运维 + 产品 + 客服全栈；通过 AI 编码工具（Claude Code / Cursor）+ LLM API（GLM）放大产能；当前已支撑 14+ Sprint、18 项核心能力、257 测试通过的事实证据。</li>
+<li><strong>AI 工具不可替代性</strong>：列为 P0 不可削减；若工具供应商调价 ≥ 50%，启用替代方案（开源模型 / 自建推理）。</li>
+<li><strong>单人精力极限</strong>：单人模式在 2027 H2 前可持续；商业化期客服 + 内容压力上升后启用兼职 / 外包。</li>
+</ul>
+<h4 id="453-api">4.5.3 阿里云与第三方 API 规模假设</h4>
+<ul>
+<li>ECS：2C4G 起步（2026），用户增长后视压测结果升配（2027 H2 4C8G / 2028 8C16G 或多机）；</li>
+<li>GLM API：月均 1-3 千次（2026）→ 5-15 千次（2027）→ 20-50 千次（2028）；</li>
+<li>k780：与 GLM 同量级；</li>
+<li>邮件 SMTP / 短信：按发送量计费，2026 不启用短信，2027 启用 OTP 备用通道。</li>
+</ul>
+<h4 id="454-ip">4.5.4 IP 申报成本与创新券口径</h4>
+<table>
+<thead>
+<tr>
+<th>IP 类别</th>
+<th>数量 / 时间</th>
+<th style="text-align: right;">自付前单价（万元）</th>
+<th style="text-align: right;">创新券资助比例</th>
+<th style="text-align: right;">自付差额</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>计算机软件著作权（首批主程序）</td>
+<td>1 件 / 2026 H2</td>
+<td style="text-align: right;">0.1-0.3</td>
+<td style="text-align: right;">50%-100%</td>
+<td style="text-align: right;">0-0.15</td>
+</tr>
+<tr>
+<td>商标"FXplanner"</td>
+<td>1 类 / 2026 H2</td>
+<td style="text-align: right;">0.4-0.6</td>
+<td style="text-align: right;">30%-50%</td>
+<td style="text-align: right;">0.2-0.4</td>
+</tr>
+<tr>
+<td>商标"凯衍磁缘"</td>
+<td>1 类 / 2026 H2</td>
+<td style="text-align: right;">0.4-0.6</td>
+<td style="text-align: right;">30%-50%</td>
+<td style="text-align: right;">0.2-0.4</td>
+</tr>
+<tr>
+<td>软著增项（Harness / Agent API / 子系统）</td>
+<td>1-2 件 / 2027</td>
+<td style="text-align: right;">0.1-0.3</td>
+<td style="text-align: right;">50%-100%</td>
+<td style="text-align: right;">0-0.15 / 件</td>
+</tr>
+</tbody>
+</table>
+<h3 id="46">4.6 现金流前瞻与盈亏平衡（初算，详见五章精算）</h3>
+<h4 id="461-vs">4.6.1 三年投入 vs 收入对照（自然增长版申报主线）</h4>
+<table>
+<thead>
+<tr>
+<th>年份</th>
+<th style="text-align: right;">当年投入（中位）</th>
+<th style="text-align: right;">当年收入（A 基准）</th>
+<th style="text-align: right;">当年净额</th>
+<th style="text-align: right;">累计净额</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026</td>
+<td style="text-align: right;">-6.53 万</td>
+<td style="text-align: right;">0（验证性流水）</td>
+<td style="text-align: right;"><strong>-6.53 万</strong></td>
+<td style="text-align: right;">-6.53 万</td>
+</tr>
+<tr>
+<td>2027</td>
+<td style="text-align: right;">-10.14 万</td>
+<td style="text-align: right;">+8.00 万</td>
+<td style="text-align: right;"><strong>-2.14 万</strong></td>
+<td style="text-align: right;">-8.67 万</td>
+</tr>
+<tr>
+<td>2028</td>
+<td style="text-align: right;">-18.74 万</td>
+<td style="text-align: right;">+26.00 万</td>
+<td style="text-align: right;"><strong>+7.26 万</strong></td>
+<td style="text-align: right;"><strong>-1.41 万</strong></td>
+</tr>
+<tr>
+<td><strong>三年累计</strong></td>
+<td style="text-align: right;"><strong>-35.41 万</strong></td>
+<td style="text-align: right;"><strong>+34.00 万</strong></td>
+<td style="text-align: right;"><strong>-1.41 万</strong></td>
+<td style="text-align: right;">—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>累计现金需求峰值</strong>：<strong>-10.31 万（2027 Q3 末）</strong>，是孵化器申报口径下需准备的最大现金占用。<strong>2029 Q1 累计现金流回正</strong>。</p>
+<h4 id="462-551">4.6.2 盈亏平衡付费用户（精算口径，详见五章 §5.5.1）</h4>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>锁定值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>月毛利（按 ARPU/12，假设近 100% 数字毛利）</td>
+<td>2027 ¥150/12 ≈ ¥12.5 / 付费用户 / 月；2028 ¥165/12 ≈ ¥13.75</td>
+</tr>
+<tr>
+<td>盈亏平衡付费用户数（月）</td>
+<td><strong>2027 ~693；2028 ~1,106</strong></td>
+</tr>
+<tr>
+<td>实际付费用户（A 基准）</td>
+<td>2027 563；2028 1,563</td>
+</tr>
+<tr>
+<td>缺口 / 盈余</td>
+<td>2027 缺 ~130 → -2.14 万元 / 2028 盈余 ~457 → +7.26 万元</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_13">五、经济、社会效益分析</h2>
+<h3 id="51">5.1 总体口径与基线引用</h3>
+<p>按四章孵化器口径继承，本章财务部分严格以<strong>自然增长版主线</strong>展开；§5.5 敏感性分析在自然增长版基准上做关键参数（活跃订阅率、ARPU、市场进入费）±扰动，作为对该主线的稳健性测试。</p>
+<p><strong>双口径锁定原则</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>口径</th>
+<th>含义</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>损益口径</strong>（PnL）</td>
+<td>按全年收支按权责发生制配比，不考虑月度时序</td>
+<td>申报承诺段、申请表"经济效益"、敏感性分析基准</td>
+</tr>
+<tr>
+<td><strong>现金流口径</strong>（Cash Flow）</td>
+<td>按实际收付时点累加；同年内一次性集中支出可拉低季度净额</td>
+<td>盈亏平衡时点、最低现金点、外部资金筹措节奏</td>
+</tr>
+</tbody>
+</table>
+<h3 id="52">5.2 收入估算（自然增长版申报主线）</h3>
+<h4 id="521">5.2.1 三年收入总表</h4>
+<table>
+<thead>
+<tr>
+<th>年份</th>
+<th>阶段</th>
+<th style="text-align: right;">累计注册</th>
+<th style="text-align: right;">付费用户</th>
+<th style="text-align: right;">ARPU</th>
+<th style="text-align: right;"><strong>年收入（A 基准）</strong></th>
+<th>三档区间</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026</td>
+<td>验证年</td>
+<td style="text-align: right;">4,500</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;"><strong>0</strong>（验证性流水）</td>
+<td>—</td>
+</tr>
+<tr>
+<td>2027</td>
+<td>商业化首年</td>
+<td style="text-align: right;">22,500</td>
+<td style="text-align: right;">563</td>
+<td style="text-align: right;">¥150</td>
+<td style="text-align: right;"><strong>¥8 万</strong></td>
+<td>¥3 / ¥8 / ¥19 万</td>
+</tr>
+<tr>
+<td>2028</td>
+<td>增长年</td>
+<td style="text-align: right;">62,500</td>
+<td style="text-align: right;">1,563</td>
+<td style="text-align: right;">¥165</td>
+<td style="text-align: right;"><strong>¥26 万</strong></td>
+<td>¥7 / ¥26 / ¥68 万</td>
+</tr>
+<tr>
+<td><strong>三年累计</strong></td>
+<td></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"><strong>¥34 万</strong></td>
+<td>¥10 / ¥34 / ¥87 万</td>
+</tr>
+</tbody>
+</table>
+<h4 id="522-a">5.2.2 月度收入爬坡建模（A 基准）</h4>
+<p><strong>2027 月度收入分布</strong>（A 基准 ¥8 万）：</p>
+<table>
+<thead>
+<tr>
+<th>季度</th>
+<th>阶段</th>
+<th style="text-align: right;">月均收入</th>
+<th style="text-align: right;">季度收入</th>
+<th style="text-align: right;">累计</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Q1</td>
+<td>商业化合规闸门期，无收费</td>
+<td style="text-align: right;">¥0</td>
+<td style="text-align: right;">¥0 万</td>
+<td style="text-align: right;">¥0 万</td>
+</tr>
+<tr>
+<td>Q2</td>
+<td>付费墙 + 试用上线</td>
+<td style="text-align: right;">¥0.5 万</td>
+<td style="text-align: right;">¥1.5 万</td>
+<td style="text-align: right;">¥1.5 万</td>
+</tr>
+<tr>
+<td>Q3</td>
+<td>试用→付费跑通</td>
+<td style="text-align: right;">¥0.8 万</td>
+<td style="text-align: right;">¥2.4 万</td>
+<td style="text-align: right;">¥3.9 万</td>
+</tr>
+<tr>
+<td>Q4</td>
+<td>桌面端 + 运营后台</td>
+<td style="text-align: right;">¥1.4 万</td>
+<td style="text-align: right;">¥4.1 万</td>
+<td style="text-align: right;"><strong>¥8.0 万</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>2028 月度收入分布</strong>（A 基准 ¥26 万）：</p>
+<table>
+<thead>
+<tr>
+<th>季度</th>
+<th>阶段</th>
+<th style="text-align: right;">月均收入</th>
+<th style="text-align: right;">季度收入</th>
+<th style="text-align: right;">累计</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Q1</td>
+<td>自动账单 OCR / B2B 启动</td>
+<td style="text-align: right;">¥1.5 万</td>
+<td style="text-align: right;">¥4.5 万</td>
+<td style="text-align: right;">¥4.5 万</td>
+</tr>
+<tr>
+<td>Q2</td>
+<td>移动端 T2 上架 + B2B 扩展</td>
+<td style="text-align: right;">¥2.0 万</td>
+<td style="text-align: right;">¥6.0 万</td>
+<td style="text-align: right;">¥10.5 万</td>
+</tr>
+<tr>
+<td>Q3</td>
+<td>B2B 续签 + 国际版灰度</td>
+<td style="text-align: right;">¥2.5 万</td>
+<td style="text-align: right;">¥7.5 万</td>
+<td style="text-align: right;">¥18.0 万</td>
+</tr>
+<tr>
+<td>Q4</td>
+<td>增长稳态</td>
+<td style="text-align: right;">¥2.7 万</td>
+<td style="text-align: right;">¥8.0 万</td>
+<td style="text-align: right;"><strong>¥26.0 万</strong></td>
+</tr>
+</tbody>
+</table>
+<h4 id="523">5.2.3 收入构成与质量分析</h4>
+<p><strong>收入产品线分布</strong>（A 基准三年合计 ¥34 万）：</p>
+<table>
+<thead>
+<tr>
+<th>产品线</th>
+<th>单价</th>
+<th style="text-align: right;">三年累计占比</th>
+<th style="text-align: right;">三年累计金额</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>月订阅</td>
+<td>¥19.9 / 月</td>
+<td style="text-align: right;">~55%</td>
+<td style="text-align: right;">~¥18.7 万</td>
+</tr>
+<tr>
+<td>季订阅</td>
+<td>¥49.9 / 季（约 ¥16.6 / 月）</td>
+<td style="text-align: right;">~30%</td>
+<td style="text-align: right;">~¥10.2 万</td>
+</tr>
+<tr>
+<td>单次报告</td>
+<td>¥5-10 / 份</td>
+<td style="text-align: right;">~10%</td>
+<td style="text-align: right;">~¥3.4 万</td>
+</tr>
+<tr>
+<td>B2B 席位（2028 H2 起）</td>
+<td>¥99-299 / 席位 / 年</td>
+<td style="text-align: right;">~5%</td>
+<td style="text-align: right;">~¥1.7 万</td>
+</tr>
+</tbody>
+</table>
+<p><strong>收入质量评估</strong>：可重复性（订阅型 ~85%）、集中度（最大单一渠道 ≤ 5%）、季节性（开学季 + 春节峰值）、货币（全部 RMB，无外汇敞口）、退款率假设 3%-5%。</p>
+<h4 id="524">5.2.4 收入预测的关键假设与失效阈值</h4>
+<table>
+<thead>
+<tr>
+<th>关键假设</th>
+<th>假设值</th>
+<th>失效阈值</th>
+<th>触发动作</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026 累计注册</td>
+<td>4,500</td>
+<td>&lt; 2,500</td>
+<td>触发商业化推迟</td>
+</tr>
+<tr>
+<td>活跃订阅率</td>
+<td>2.5%（基准）</td>
+<td>&lt; 1%</td>
+<td>重大调整产品 / 定价（详见 §5.7 R1）</td>
+</tr>
+<tr>
+<td>试用→付费转化率</td>
+<td>≥ 30%</td>
+<td>&lt; 15%</td>
+<td>推迟 KOL 试投；回归自营内容</td>
+</tr>
+<tr>
+<td>月流失率</td>
+<td>≤ 8%</td>
+<td>&gt; 15%</td>
+<td>触发产品留存机制重审</td>
+</tr>
+<tr>
+<td>微信支付双闸门 2027 Q1 通过</td>
+<td>是</td>
+<td>任一未通过</td>
+<td>启用过渡通道；2027 收入推迟 1-2 季度</td>
+</tr>
+</tbody>
+</table>
+<h3 id="53">5.3 成本估算</h3>
+<h4 id="531-vs">5.3.1 成本科目结构（固定 vs 变动）</h4>
+<table>
+<thead>
+<tr>
+<th>成本类型</th>
+<th>科目</th>
+<th style="text-align: right;">三年累计中位（万元）</th>
+<th style="text-align: right;">占比</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>固定成本</td>
+<td>创始人薪酬（最低工资×12）</td>
+<td style="text-align: right;">9.0</td>
+<td style="text-align: right;">~26%</td>
+</tr>
+<tr>
+<td>固定成本</td>
+<td>阿里云基础月费</td>
+<td style="text-align: right;">~3.5</td>
+<td style="text-align: right;">~10%</td>
+</tr>
+<tr>
+<td>固定成本</td>
+<td>AI 工具订阅（Claude / Cursor）</td>
+<td style="text-align: right;">~2.0</td>
+<td style="text-align: right;">~6%</td>
+</tr>
+<tr>
+<td>变动成本</td>
+<td>LLM API（GLM）调用费</td>
+<td style="text-align: right;">~0.8</td>
+<td style="text-align: right;">~2%</td>
+</tr>
+<tr>
+<td>变动成本</td>
+<td>第三方数据 API（k780 + SMTP + 短信）</td>
+<td style="text-align: right;">~1.3</td>
+<td style="text-align: right;">~4%</td>
+</tr>
+<tr>
+<td>变动成本</td>
+<td>微信支付费率（0.6%）</td>
+<td style="text-align: right;">~0.2</td>
+<td style="text-align: right;">~1%</td>
+</tr>
+<tr>
+<td>变动成本</td>
+<td>退款 / 流失冲销（3%-5%）</td>
+<td style="text-align: right;">~1.4</td>
+<td style="text-align: right;">~4%</td>
+</tr>
+<tr>
+<td>一次性投入</td>
+<td>IP 申报（首批软著 + 商标 + 增项）</td>
+<td style="text-align: right;">~1.6</td>
+<td style="text-align: right;">~5%</td>
+</tr>
+<tr>
+<td>一次性投入</td>
+<td>商业化前合规咨询</td>
+<td style="text-align: right;">~1.0</td>
+<td style="text-align: right;">~3%</td>
+</tr>
+<tr>
+<td>半固定</td>
+<td>市场进入与经营落地</td>
+<td style="text-align: right;">~5.9</td>
+<td style="text-align: right;">~17%</td>
+</tr>
+<tr>
+<td>半固定</td>
+<td>兼职 / 外包人力</td>
+<td style="text-align: right;">~3.5</td>
+<td style="text-align: right;">~10%</td>
+</tr>
+<tr>
+<td>预备</td>
+<td>预备费</td>
+<td style="text-align: right;">~2.8</td>
+<td style="text-align: right;">~8%</td>
+</tr>
+</tbody>
+</table>
+<h4 id="532-3">5.3.2 月度成本展开（季度小计 = 月度经常 × 3 + 季度一次性）</h4>
+<p><strong>2026</strong>（年合计 6.53 万）：Q1 1.32 / Q2 1.42 / Q3 1.62 / Q4 2.17 万；月度经常 0.44 万 = 创始人 0.25 + 阿里云 0.06 + AI 工具 0.05 + 月度变动 0.02 + 半固定/预备摊销 0.06。</p>
+<p><strong>2027</strong>（年合计 10.14 万）：Q1 2.96（含 ICP 经营许可法务评估 + 微信支付要素 0.80 一次性）/ Q2 2.26 / Q3 2.46 / Q4 2.46 万；月度经常 0.72 万。</p>
+<p><strong>2028</strong>（年合计 18.74 万）：Q1 4.50 / Q2 4.60 / Q3 4.60 / Q4 5.04 万；月度经常 1.40 万。</p>
+<h4 id="533">5.3.3 单位成本与边际分析</h4>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th style="text-align: right;">2027</th>
+<th style="text-align: right;">2028</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>年度付费用户数</td>
+<td style="text-align: right;">563</td>
+<td style="text-align: right;">1,563</td>
+</tr>
+<tr>
+<td>年度营收</td>
+<td style="text-align: right;">¥8.00 万</td>
+<td style="text-align: right;">¥26.00 万</td>
+</tr>
+<tr>
+<td>年度总成本</td>
+<td style="text-align: right;">¥10.14 万</td>
+<td style="text-align: right;">¥18.74 万</td>
+</tr>
+<tr>
+<td>单付费用户分摊总成本</td>
+<td style="text-align: right;">~¥180 / 用户</td>
+<td style="text-align: right;">~¥120 / 用户</td>
+</tr>
+<tr>
+<td>单付费用户 ARPU</td>
+<td style="text-align: right;">¥150</td>
+<td style="text-align: right;">¥165</td>
+</tr>
+<tr>
+<td>单付费用户年度毛贡献</td>
+<td style="text-align: right;">~¥130.5</td>
+<td style="text-align: right;">~¥154.1</td>
+</tr>
+<tr>
+<td>边际利润（每新增 100 付费用户）</td>
+<td style="text-align: right;">¥1.30 万 / <strong>ROI ≈ 7.7×</strong></td>
+<td style="text-align: right;">¥1.54 万 / <strong>ROI ≈ 15.1×</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="54">5.4 财务分析</h3>
+<h4 id="541-pnl">5.4.1 三年损益表（PnL）</h4>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th style="text-align: right;">2026</th>
+<th style="text-align: right;">2027</th>
+<th style="text-align: right;">2028</th>
+<th style="text-align: right;">三年累计</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>营业收入</strong></td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">8.00 万</td>
+<td style="text-align: right;">26.00 万</td>
+<td style="text-align: right;">34.00 万</td>
+</tr>
+<tr>
+<td>减：变动成本</td>
+<td style="text-align: right;">0.20 万</td>
+<td style="text-align: right;">1.10 万</td>
+<td style="text-align: right;">1.70 万</td>
+<td style="text-align: right;">3.00 万</td>
+</tr>
+<tr>
+<td><strong>毛利润</strong></td>
+<td style="text-align: right;">-0.20 万</td>
+<td style="text-align: right;">6.90 万</td>
+<td style="text-align: right;">24.30 万</td>
+<td style="text-align: right;">31.00 万</td>
+</tr>
+<tr>
+<td><strong>毛利率</strong></td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">86.3%</td>
+<td style="text-align: right;">93.5%</td>
+<td style="text-align: right;">91.2%</td>
+</tr>
+<tr>
+<td>减：固定成本</td>
+<td style="text-align: right;">4.30 万</td>
+<td style="text-align: right;">5.25 万</td>
+<td style="text-align: right;">7.50 万</td>
+<td style="text-align: right;">17.05 万</td>
+</tr>
+<tr>
+<td>减：半固定</td>
+<td style="text-align: right;">0.50 万</td>
+<td style="text-align: right;">2.40 万</td>
+<td style="text-align: right;">7.50 万</td>
+<td style="text-align: right;">10.40 万</td>
+</tr>
+<tr>
+<td>减：一次性</td>
+<td style="text-align: right;">0.75 万</td>
+<td style="text-align: right;">0.90 万</td>
+<td style="text-align: right;">1.04 万</td>
+<td style="text-align: right;">2.69 万</td>
+</tr>
+<tr>
+<td>减：预备费</td>
+<td style="text-align: right;">0.78 万</td>
+<td style="text-align: right;">0.49 万</td>
+<td style="text-align: right;">1.00 万</td>
+<td style="text-align: right;">2.27 万</td>
+</tr>
+<tr>
+<td><strong>总成本</strong></td>
+<td style="text-align: right;">6.53 万</td>
+<td style="text-align: right;">10.14 万</td>
+<td style="text-align: right;">18.74 万</td>
+<td style="text-align: right;">35.41 万</td>
+</tr>
+<tr>
+<td><strong>营业利润 / 净额（损益口径）</strong></td>
+<td style="text-align: right;"><strong>-6.53 万</strong></td>
+<td style="text-align: right;"><strong>-2.14 万</strong></td>
+<td style="text-align: right;"><strong>+7.26 万</strong></td>
+<td style="text-align: right;"><strong>-1.41 万</strong></td>
+</tr>
+<tr>
+<td><strong>净利率</strong></td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">-26.8%</td>
+<td style="text-align: right;">+27.9%</td>
+<td style="text-align: right;">-4.1%</td>
+</tr>
+<tr>
+<td><strong>累计净额</strong></td>
+<td style="text-align: right;">-6.53 万</td>
+<td style="text-align: right;">-8.67 万</td>
+<td style="text-align: right;"><strong>-1.41 万</strong></td>
+<td style="text-align: right;">—</td>
+</tr>
+</tbody>
+</table>
+<h4 id="542">5.4.2 月度净现金流简表</h4>
+<p><strong>2027 跨年顺延</strong>：Q1 -2.96 / Q2 -0.76 / Q3 -0.06 / Q4 +1.64 万；累计自 2026 末 -6.53 万顺延，<strong>2027 Q3 末累计最低 -10.31 万</strong>（三年现金流最低点），<strong>2027 Q4 单季首次现金流转正</strong>。</p>
+<p><strong>2028 跨年顺延</strong>：Q1 持平 / Q2 +1.40 / Q3 +2.90 / Q4 +2.96 万；2028 Q1 持平、Q2 起持续单季正现金流；<strong>2028 末累计 -1.41 万</strong>。</p>
+<p><strong>双口径偏离 0%</strong>（损益与现金流在跨年累计上完全一致；季度内时序差异主要来自一次性集中支出与收入爬坡的错峰）。</p>
+<h4 id="543">5.4.3 关键财务比率</h4>
+<table>
+<thead>
+<tr>
+<th>比率</th>
+<th style="text-align: right;">2027</th>
+<th style="text-align: right;">2028</th>
+<th>行业参照</th>
+<th>评价</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>毛利率</td>
+<td style="text-align: right;">86.3%</td>
+<td style="text-align: right;">93.5%</td>
+<td>70%-85%</td>
+<td><strong>优于行业</strong></td>
+</tr>
+<tr>
+<td>净利率</td>
+<td style="text-align: right;">-26.8%</td>
+<td style="text-align: right;">+27.9%</td>
+<td>-50% ~ +20%（早期）</td>
+<td>2028 已超行业上限</td>
+</tr>
+<tr>
+<td>市场进入费 / 当年成本小计</td>
+<td style="text-align: right;">19.7%</td>
+<td style="text-align: right;">29.4%</td>
+<td>≤ 35% 红线</td>
+<td><strong>均在红线内</strong></td>
+</tr>
+<tr>
+<td>创始人薪酬 / 当年营收</td>
+<td style="text-align: right;">37.5%</td>
+<td style="text-align: right;">11.5%</td>
+<td>—</td>
+<td>早期高、规模化后摊薄</td>
+</tr>
+<tr>
+<td>复合年增长率（CAGR，2027→2028）</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">225%</td>
+<td>早期 100%-300%</td>
+<td>在区间内</td>
+</tr>
+<tr>
+<td>LTV / CAC（自然增长版基准）</td>
+<td style="text-align: right;">6-20×</td>
+<td style="text-align: right;">8-23×</td>
+<td>≥ 3× 健康</td>
+<td>低现金获客假设下的目标区间，需 2026 Q4 真实渠道数据验证</td>
+</tr>
+</tbody>
+</table>
+<h4 id="544">5.4.4 现金流缺口与外部资金衔接</h4>
+<p><strong>资金覆盖度</strong>（三类分母分别披露）：</p>
+<table>
+<thead>
+<tr>
+<th>覆盖度口径</th>
+<th style="text-align: right;">分母</th>
+<th>分子</th>
+<th style="text-align: right;">覆盖度</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>外部 / 当年现金需求合计</td>
+<td style="text-align: right;">8.67 万</td>
+<td>9.4-24.3 万</td>
+<td style="text-align: right;">108%-280%</td>
+</tr>
+<tr>
+<td>外部 / 累计现金需求峰值</td>
+<td style="text-align: right;"><strong>10.31 万</strong></td>
+<td>9.4-24.3 万</td>
+<td style="text-align: right;"><strong>91%-236%</strong></td>
+</tr>
+<tr>
+<td><strong>(自筹 + 外部) / 累计现金需求峰值</strong></td>
+<td style="text-align: right;"><strong>10.31 万</strong></td>
+<td>15.9-32.8 万</td>
+<td style="text-align: right;"><strong>154%-318%</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>优先口径</strong>：申报承诺段、申请表"资金需求"字段使用 <strong>(自筹 + 外部) / 累计现金需求峰值 = 154%-318%</strong>。</p>
+</blockquote>
+<p><strong>关键判断</strong>：</p>
+<ol>
+<li>现金需求峰值在 <strong>2027 Q3 = 10.31 万</strong>：累计现金占用最大点位；</li>
+<li>2026 是最关键的现金压力年（缺口 6.53 万主要靠创始人自筹覆盖）；</li>
+<li>2027 进入外部资金集中兑现期（创业大赛奖金 + 孵化器后资助偏向 2027 集中到账）；</li>
+<li>2028 自我造血（Q2 起持续单季正现金流）；</li>
+<li>保守压力测试（外部到位率 ≤ 30% + 大赛奖金 = 0）：累计现金需求峰值约 12-13 万元，需创始人自筹追加 3-5 万元兜底。</li>
+</ol>
+<h3 id="55">5.5 盈亏平衡分析（精算版）</h3>
+<h4 id="551">5.5.1 月度盈亏平衡付费用户测算</h4>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th style="text-align: right;">2027</th>
+<th style="text-align: right;">2028</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>月度固定基线（除以 12）</td>
+<td style="text-align: right;">~0.75 万 / 月</td>
+<td style="text-align: right;">~1.42 万 / 月</td>
+</tr>
+<tr>
+<td>月毛贡献 / 付费用户</td>
+<td style="text-align: right;">¥10.87</td>
+<td style="text-align: right;">¥12.84</td>
+</tr>
+<tr>
+<td><strong>盈亏平衡付费用户数（精算）</strong></td>
+<td style="text-align: right;"><strong>~693 / 月</strong></td>
+<td style="text-align: right;"><strong>~1,106 / 月</strong></td>
+</tr>
+<tr>
+<td>实际付费用户（A 基准年末）</td>
+<td style="text-align: right;">563</td>
+<td style="text-align: right;">1,563</td>
+</tr>
+<tr>
+<td>缺口 / 盈余</td>
+<td style="text-align: right;">-130 缺口</td>
+<td style="text-align: right;">+457 盈余</td>
+</tr>
+</tbody>
+</table>
+<h4 id="552">5.5.2 盈亏平衡时点判断</h4>
+<table>
+<thead>
+<tr>
+<th>时点</th>
+<th>状态</th>
+<th style="text-align: right;">累计净额</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026 全年</td>
+<td>全年负现金流</td>
+<td style="text-align: right;">-6.53 万</td>
+</tr>
+<tr>
+<td><strong>2027 Q3 末</strong></td>
+<td><strong>三年现金流最低点</strong></td>
+<td style="text-align: right;"><strong>-10.31 万</strong></td>
+</tr>
+<tr>
+<td><strong>2027 Q4 末</strong></td>
+<td><strong>首次单季现金流转正</strong>（+1.64 万）</td>
+<td style="text-align: right;">-8.67 万</td>
+</tr>
+<tr>
+<td><strong>2028 Q2 末</strong></td>
+<td><strong>持续单季正现金流起点</strong></td>
+<td style="text-align: right;">-7.27 万</td>
+</tr>
+<tr>
+<td><strong>2028 Q4 末</strong></td>
+<td>年度净盈余 +7.26 万</td>
+<td style="text-align: right;"><strong>-1.41 万</strong></td>
+</tr>
+<tr>
+<td><strong>2029 Q1（预测）</strong></td>
+<td></td>
+<td style="text-align: right;"><strong>~+1 至 +1.5 万（累计现金流回正）</strong></td>
+</tr>
+</tbody>
+</table>
+<h4 id="553">5.5.3 三参数敏感性分析</h4>
+<p><strong>敏感性 1：活跃订阅率（基准 2.5%，敏感度系数 1.0）</strong></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">活跃订阅率</th>
+<th style="text-align: right;">2027 净利</th>
+<th style="text-align: right;">2028 净利</th>
+<th style="text-align: right;">三年累计净额</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1.0%（红线下）</td>
+<td style="text-align: right;">-6.12 万</td>
+<td style="text-align: right;">-7.40 万</td>
+<td style="text-align: right;"><strong>-20.05 万</strong></td>
+</tr>
+<tr>
+<td style="text-align: right;">1.5%（保守）</td>
+<td style="text-align: right;">-4.67 万</td>
+<td style="text-align: right;">-2.57 万</td>
+<td style="text-align: right;"><strong>-13.77 万</strong></td>
+</tr>
+<tr>
+<td style="text-align: right;"><strong>2.5%（基准）</strong></td>
+<td style="text-align: right;">-2.14 万</td>
+<td style="text-align: right;"><strong>+7.26 万</strong></td>
+<td style="text-align: right;"><strong>-1.41 万</strong></td>
+</tr>
+<tr>
+<td style="text-align: right;">4.0%（乐观）</td>
+<td style="text-align: right;">+2.60 万</td>
+<td style="text-align: right;">+21.51 万</td>
+<td style="text-align: right;"><strong>+17.58 万</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>敏感性 2：ARPU（基准 ¥150 / ¥165，± 20%）</strong></p>
+<table>
+<thead>
+<tr>
+<th>ARPU 调整</th>
+<th style="text-align: right;">2027 净利</th>
+<th style="text-align: right;">2028 净利</th>
+<th style="text-align: right;">三年累计净额</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>-20%</td>
+<td style="text-align: right;">-3.52 万</td>
+<td style="text-align: right;">+2.40 万</td>
+<td style="text-align: right;"><strong>-7.65 万</strong></td>
+</tr>
+<tr>
+<td>基准</td>
+<td style="text-align: right;">-2.14 万</td>
+<td style="text-align: right;">+7.26 万</td>
+<td style="text-align: right;">-1.41 万</td>
+</tr>
+<tr>
+<td>+20%</td>
+<td style="text-align: right;">-0.76 万</td>
+<td style="text-align: right;">+12.12 万</td>
+<td style="text-align: right;"><strong>+4.83 万</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>敏感性 3：市场进入费（基准三年累计 ¥8 万，± 50%）</strong></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">市场进入费</th>
+<th style="text-align: right;">三年累计成本</th>
+<th style="text-align: right;">2028 净利</th>
+<th style="text-align: right;">三年累计净额</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">-50%</td>
+<td style="text-align: right;">~¥31.41 万</td>
+<td style="text-align: right;">+10.01 万</td>
+<td style="text-align: right;"><strong>+2.59 万</strong></td>
+</tr>
+<tr>
+<td style="text-align: right;">基准</td>
+<td style="text-align: right;">~¥35.41 万</td>
+<td style="text-align: right;">+7.26 万</td>
+<td style="text-align: right;">-1.41 万</td>
+</tr>
+<tr>
+<td style="text-align: right;">+50%</td>
+<td style="text-align: right;">~¥39.41 万</td>
+<td style="text-align: right;">+4.51 万</td>
+<td style="text-align: right;">-5.41 万</td>
+</tr>
+</tbody>
+</table>
+<p><strong>敏感性结论</strong>：</p>
+<ol>
+<li><strong>活跃订阅率最敏感</strong>（系数 1.0）：1.5% 保守版三年累计 -13.77 万；1.0% 红线触发重大调整 + 累计 -20.05 万；</li>
+<li><strong>ARPU 中度敏感</strong>：±20% 对三年累计净额影响约 ±6-7 万；</li>
+<li><strong>市场进入费弹性最大</strong>：紧缩 50% 可使三年累计转正 +2.59 万。</li>
+</ol>
+<h4 id="554">5.5.4 创始人薪酬模式压力情景</h4>
+<p>创始人薪酬当前采用<strong>财务模型折算成本</strong>（按上海最低工资 ¥2,740 / 月折算计入成本，<strong>不实际发薪、不缴纳社保 / 公积金、不作为实际工资发放或税前列支承诺</strong>）。若未来项目自筹资金充足后转入<strong>实际发薪模式</strong>，单位缴费成本（社保 + 公积金 + 工伤等单位缴费部分）将另行纳入。</p>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th style="text-align: right;">年化薪酬</th>
+<th style="text-align: right;">单位缴费（年）</th>
+<th style="text-align: right;">年度合计</th>
+<th style="text-align: right;">三年累计</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>财务模型折算成本（当前申报口径）</strong></td>
+<td style="text-align: right;">3.29 万</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">3.29 万</td>
+<td style="text-align: right;"><strong>9.87 万</strong></td>
+</tr>
+<tr>
+<td>实发工资 + 单位缴费（潜在升级，压力情景）</td>
+<td style="text-align: right;">3.29 万</td>
+<td style="text-align: right;">~0.82-1.15 万</td>
+<td style="text-align: right;">~4.11-4.44 万</td>
+<td style="text-align: right;">~12.3-13.3 万</td>
+</tr>
+<tr>
+<td><strong>差额</strong></td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">+0.82-1.15 万</td>
+<td style="text-align: right;">+0.82-1.15 万</td>
+<td style="text-align: right;"><strong>+2.5-3.5 万</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>单位缴费区间说明</strong>：上海一人有限公司单位缴费比例（养老 + 医疗 + 失业 + 工伤 + 生育 + 公积金）合计约 <strong>25%-35%</strong>（基准取 27%，实际比例随政策与缴费基数最低档动态调整）。</p>
+</blockquote>
+<p><strong>决策规则</strong>：</p>
+<ul>
+<li>当三年累计自筹资金 ≤ 8 万元时，<strong>保持财务模型折算成本模式</strong>（与当前申报口径一致，下游精算口径不变）；</li>
+<li>当三年累计自筹资金 &gt; 8 万元 + 营收进入稳态（≥ ¥10 万 / 季）时，<strong>评估转入实发工资模式</strong>；超出预备费 2.09 万的差额（约 0.41-1.41 万）由额外自筹覆盖，不进入孵化器申报承诺口径。</li>
+</ul>
+<p><strong>结论</strong>：实发工资模式不在 2026-2028 申报承诺口径内；本压力情景为对路演评审"未来若实际发薪如何"追问的预案性应答。</p>
+<h4 id="555-cac">5.5.5 CAC 敏感性分析（假设性预判，不进入申报承诺）</h4>
+<blockquote>
+<p><strong>重要边界声明</strong>：本节为<strong>假设性压力测试</strong>——回应路演评审关于"未来若需要规模化买量获客的财务影响"的潜在追问。<strong>当前申报口径严格采用自然增长版（CAC ≈ 0）作为唯一对外承诺</strong>；本表的所有买量场景均为<strong>未来可能性预判</strong>，<strong>不构成三年累计申报承诺的一部分</strong>。</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>CAC 情景</th>
+<th style="text-align: right;">CAC / 用户</th>
+<th style="text-align: right;">2027 注册 22,500 假设买量预算</th>
+<th style="text-align: right;">2028 注册 62,500 假设买量预算</th>
+<th>备注</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>当前申报口径</strong>（0 买量）</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td>自然增长版主线，自营内容 + 社群 + 孵化器活动；<strong>唯一对外承诺口径</strong></td>
+</tr>
+<tr>
+<td>低 CAC 情景（垂直留学场景）</td>
+<td style="text-align: right;">¥30-50</td>
+<td style="text-align: right;">¥67.5-112.5 万</td>
+<td style="text-align: right;">¥187.5-312.5 万</td>
+<td>不在三年累计申报承诺内；仅作未来路径预判</td>
+</tr>
+<tr>
+<td>中 CAC 情景（行业 SaaS 中位）</td>
+<td style="text-align: right;">¥50-100</td>
+<td style="text-align: right;">¥112.5-225 万</td>
+<td style="text-align: right;">¥312.5-625 万</td>
+<td>不在三年累计申报承诺内；仅作未来路径预判</td>
+</tr>
+<tr>
+<td>高 CAC 情景（信息流 / 大规模买量）</td>
+<td style="text-align: right;">¥100-200</td>
+<td style="text-align: right;">¥225-450 万</td>
+<td style="text-align: right;">¥625-1,250 万</td>
+<td>仅在自筹 &gt; 100 万 + 营收稳态 + 自我造血确认后启动；<strong>远超孵化器申报口径，本 BP 不承诺</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>结构性结论</strong>：FXplanner 在 LTV/CAC 6-23× 的目标区间下（详见 §3.4.1.2），即使未来转入低 CAC 买量情景，<strong>单位经济模型仍可保持健康</strong>；但买量本身不在三年规划期内的承诺路径中——<strong>孵化器申报口径严格限定为 CAC ≈ 0 的自然增长版</strong>。</p>
+<blockquote>
+<p><strong>配套防护</strong>：CAC 假设性预判与 §3.4.1.3 自我造血路径一致——任何买量加速路径需在自我造血确认（2029 Q1 累计现金流回正）后再行评估，不构成 BP 三年期承诺。</p>
+</blockquote>
+<h4 id="556">5.5.6 保守退守版组合压力测试（三段退路）</h4>
+<blockquote>
+<p><strong>边界声明</strong>：保守退守版仅为压力测试，<strong>不进入申报承诺 / 主线收入口径</strong>——回应路演评审关于"三个变量同时坏怎么办"的潜在追问。退路 A/B/C 是失败阈值触发后的应对，不是基线规划。</p>
+</blockquote>
+<p><strong>前提假设（三因素同时坏）</strong>：
+- 活跃订阅率 = 1.0%（低于 §5.7 R1 红线）；
+- 商业化收费上线推迟 6 个月（2027 Q1 → 2027 Q3）；
+- 外部资金到位率 = 30%。</p>
+<p><strong>保守退守版财务重算（不退路情景）</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th style="text-align: right;">自然增长版（基准）</th>
+<th style="text-align: right;">保守退守版（不退路）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2027 营收</td>
+<td style="text-align: right;">8.00 万</td>
+<td style="text-align: right;">~0.7 万</td>
+</tr>
+<tr>
+<td>2028 营收</td>
+<td style="text-align: right;">26.00 万</td>
+<td style="text-align: right;">~6.5 万</td>
+</tr>
+<tr>
+<td>三年累计净额</td>
+<td style="text-align: right;">-1.41 万</td>
+<td style="text-align: right;">-23 ~ -26 万</td>
+</tr>
+<tr>
+<td>累计现金需求峰值</td>
+<td style="text-align: right;">-10.31 万（2027 Q3 末）</td>
+<td style="text-align: right;">-23 ~ -26 万（2028 Q3-Q4）</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>问题</strong>：仅靠创始人自筹兜底将出现 22-25 万元资金缺口；而 §4.3 创始人自筹基线为 8-15 万元——直接缺口 7-17 万元。<strong>因此保守退守版采用三段退路 A → B → C，按触发顺序优先消耗"低代价路径"，自筹追加为最后兜底</strong>。</p>
+</blockquote>
+<h5 id="5561-a-p2-p3-20-25">5.5.6.1 退路 A：削减 P2 / P3 支出，三年累计成本压缩至 20-25 万元</h5>
+<table>
+<thead>
+<tr>
+<th>削减科目</th>
+<th style="text-align: right;">自然增长版三年累计</th>
+<th style="text-align: right;">退路 A 削减后</th>
+<th style="text-align: right;">削减幅度</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>兼职 / 外包（2027-2028）</td>
+<td style="text-align: right;">8.0 万</td>
+<td style="text-align: right;">0-2 万</td>
+<td style="text-align: right;">-75% ~ -100%（创始人继续单人运转）</td>
+</tr>
+<tr>
+<td>市场推广（自营内容外，含 KOL / 应用商店 / B2B 拓展）</td>
+<td style="text-align: right;">5.0 万</td>
+<td style="text-align: right;">1-2 万</td>
+<td style="text-align: right;">-60% ~ -80%（仅留种子内容 + 社群冷启动）</td>
+</tr>
+<tr>
+<td>一次性合规支出（IP 申报后续件、合规咨询）</td>
+<td style="text-align: right;">2.7 万</td>
+<td style="text-align: right;">1-1.5 万</td>
+<td style="text-align: right;">-45% ~ -60%（首批 IP 完成；商业化合规推迟）</td>
+</tr>
+<tr>
+<td>预备费</td>
+<td style="text-align: right;">2.27 万</td>
+<td style="text-align: right;">0.8-1.5 万</td>
+<td style="text-align: right;">-35% ~ -65%</td>
+</tr>
+<tr>
+<td>半固定成本（云服务向上爬坡）</td>
+<td style="text-align: right;">10.4 万</td>
+<td style="text-align: right;">7-8 万</td>
+<td style="text-align: right;">-25%（暂缓 OSS / 监控等增项）</td>
+</tr>
+<tr>
+<td><strong>三年累计成本（退路 A）</strong></td>
+<td style="text-align: right;"><strong>35.41 万</strong></td>
+<td style="text-align: right;"><strong>~20-25 万</strong></td>
+<td style="text-align: right;"><strong>-30% ~ -45%</strong></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>触发条件</strong>：2026 Q4 灰度数据印证活跃订阅率 &lt; 1%；</li>
+<li><strong>退路 A 后净额</strong>：累计净额 ≈ -19 ~ -23 万；累计现金需求峰值 ≈ -19 ~ -22 万（2028 H2）。</li>
+</ul>
+<h5 id="5562-b">5.5.6.2 退路 B：推迟商业化 + 招聘冻结 + 免费灰度 + 单次人工报告</h5>
+<table>
+<thead>
+<tr>
+<th>调整项</th>
+<th>动作</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>商业化</td>
+<td>推迟至 2028 Q1 后再评估；2027 全年保持免费灰度</td>
+</tr>
+<tr>
+<td>招聘</td>
+<td>兼职 / 外包冻结至 2028 Q2 后；2026-2027 维持创始人单人</td>
+</tr>
+<tr>
+<td>收入路径</td>
+<td>单次人工报告（线下合同模式，§3.5.5 ICP 路径 C / B）+ B2B 试点（席位计费），目标 ≤ 3-5 万元 / 年级别现金流入</td>
+</tr>
+<tr>
+<td>内容 / 运营</td>
+<td>仅维持每周 1-2 条种子内容 + 社群答疑；停掉所有付费投放与 KOL 试投</td>
+</tr>
+</tbody>
+</table>
+<p><strong>退路 B 叠加退路 A 后</strong>：
+- 三年累计成本 ≈ 17-20 万元（再削 ~3-5 万）；
+- 三年累计净额 ≈ -14 ~ -18 万元；
+- <strong>累计现金需求峰值 ≈ -14 ~ -18 万元（2028 H2）</strong>——进入创始人原自筹 8-15 万的可承受边界附近。</p>
+<h5 id="5563-c">5.5.6.3 退路 C：创始人追加自筹（最后兜底）</h5>
+<p>仅在退路 A + B 落实后仍存在缺口时启用：
+- <strong>追加自筹规模</strong>：≤ 5-7 万元（以填补退路 A + B 后剩余缺口为限，不主动扩张）；
+- <strong>资金能力证明</strong>：创始人个人储蓄账户余额证明（脱敏）+ 家庭可调度资金证明（家长签字声明，仅用于孵化器尽调）+ FRM 持证职业的可重新就业能力评估（理论现金流回退选项，不构成承诺）；
+- <strong>触发顺序</strong>：退路 A 先行（产品 / 团队侧削减）→ 退路 B 同步（商业化推迟 + 收入替代路径）→ 退路 C 最后（自筹追加）；<strong>三段顺序不可跳级</strong>。</p>
+<h5 id="5564">5.5.6.4 三段退路总览</h5>
+<table>
+<thead>
+<tr>
+<th>情景</th>
+<th style="text-align: right;">累计现金需求峰值</th>
+<th style="text-align: right;">创始人自筹缺口</th>
+<th>是否需股权融资</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>自然增长版基准</td>
+<td style="text-align: right;">-10.31 万（2027 Q3）</td>
+<td style="text-align: right;">0-2 万（与自筹基线匹配）</td>
+<td>❌ 不需要</td>
+</tr>
+<tr>
+<td>保守退守版（不退路）</td>
+<td style="text-align: right;">-23 ~ -26 万</td>
+<td style="text-align: right;"><strong>缺口 7-17 万</strong></td>
+<td>❌ 仍不需要（但需自筹追加）</td>
+</tr>
+<tr>
+<td>保守退守版 + 退路 A</td>
+<td style="text-align: right;">-19 ~ -22 万</td>
+<td style="text-align: right;">缺口 3-13 万</td>
+<td>❌ 不需要</td>
+</tr>
+<tr>
+<td>保守退守版 + 退路 A + B</td>
+<td style="text-align: right;"><strong>-14 ~ -18 万</strong></td>
+<td style="text-align: right;">缺口 0-9 万（自筹基线 8-15 万的可承受边界附近）</td>
+<td>❌ 不需要</td>
+</tr>
+<tr>
+<td>保守退守版 + 退路 A + B + C</td>
+<td style="text-align: right;"><strong>-14 ~ -18 万</strong></td>
+<td style="text-align: right;">缺口 0（C 兜底 ≤ 5-7 万）</td>
+<td>❌ 不需要</td>
+</tr>
+</tbody>
+</table>
+<h5 id="5565">5.5.6.5 关键决策点</h5>
+<ul>
+<li><strong>2026 Q4 灰度复盘</strong> = 退路 A 启动决策点；</li>
+<li><strong>2027 Q1 末累计注册 + 试用→付费转化率验证</strong> = 退路 B 启动决策点；</li>
+<li><strong>退路 C 仅作为孵化器尽调环节"我有最后兜底"的证明项，不主动启用</strong>——退路 A + B 在数据上已使现金需求峰值回到自筹基线可承受边界。</li>
+</ul>
+<blockquote>
+<p><strong>结论</strong>：保守退守版下项目仍可活下来——靠的是低固定成本结构 + 三段退路按序削减 + 创始人自筹仅作最后兜底；<strong>不形成"原先 8-15 万自筹突然变 22-25 万"的反噬主线</strong>；全程不依赖股权融资。</p>
+</blockquote>
+<h3 id="56">5.6 社会效益分析</h3>
+<h4 id="561-user-year">5.6.1 潜在用户经济价值溢出（user-year 价值口径）</h4>
+<p>按数据基线 v1.2 表 E 用户加权年节省价值 <strong>¥2,590-6,335 / 人</strong>，按当年活跃用户（累计注册 × 30 日留存 ~20%）展开：</p>
+<table>
+<thead>
+<tr>
+<th>年份</th>
+<th style="text-align: right;">当年累计注册</th>
+<th style="text-align: right;">当年活跃用户</th>
+<th><strong>当年潜在用户经济价值溢出（区间）</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026</td>
+<td style="text-align: right;">4,500</td>
+<td style="text-align: right;">~900</td>
+<td><strong>¥233-570 万</strong></td>
+</tr>
+<tr>
+<td>2027</td>
+<td style="text-align: right;">22,500</td>
+<td style="text-align: right;">~4,500</td>
+<td><strong>¥1,166-2,851 万</strong></td>
+</tr>
+<tr>
+<td>2028</td>
+<td style="text-align: right;">62,500</td>
+<td style="text-align: right;">~12,500</td>
+<td><strong>¥3,238-7,919 万</strong></td>
+</tr>
+<tr>
+<td><strong>三年累计 user-year 价值（17,900 user-years）</strong></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td><strong>¥4,637-11,340 万</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>潜在杠杆效应</strong>：项目通过帮助用户识别可避免外汇成本，相对自身投入有<strong>百倍量级潜在影响</strong>[^130x]。</p>
+<p>[^130x]: 量级参照：项目自身三年累计投入 ~35 万，按 user-year 口径下限 ¥4,637 万计算约 130 倍量级。该倍数仅作量级参照，<strong>不作为路演主叙事数字</strong>。</p>
+<p><strong>归因边界声明（核心定位）</strong>：FXplanner 的社会价值定位为"<strong>帮助用户识别可避免外汇成本，具体节省以用户实际执行为准</strong>"。上述数值为<strong>用户可避免成本的潜在影响估算</strong>（基于数据基线 v1.2 表 E 用户加权年节省与活跃用户口径推算），<strong>不等同于项目实际收入或已实现节省</strong>——实际节省取决于用户在工具辅助下的决策与执行行为，FXplanner 仅提供信息服务与规划工具，不参与执行环节。</p>
+<p><strong>跨境资金流规划名义覆盖（双口径）</strong>：除 user-year 节省价值外，FXplanner 在"花钱之前"环节服务的用户跨境支出本身构成行业级量级的资金流规划体量。本指标<strong>仅作行业体量参照，不属于资产管理 / 资金托管口径</strong>——FXplanner 严守 §1.3.1 零资金触达边界，不持有、不托管、不代付用户任何资金。</p>
+<table>
+<thead>
+<tr>
+<th>口径</th>
+<th>测算方法</th>
+<th style="text-align: right;">三年累计（17,900 user-years）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>保守主叙事</strong>：人均年跨境支出推算</td>
+<td>按数据基线 v1.2 表 E 用户加权年节省 ¥2,590-6,335 ÷ 5%-10% 行业典型外汇成本损失率反推人均年跨境支出 USD 5,000-15,000；user-years × 人均区间</td>
+<td style="text-align: right;"><strong>≈ ¥6.4 亿-19.3 亿（USD 0.9 亿-2.7 亿）</strong></td>
+</tr>
+<tr>
+<td><strong>量级参照</strong>：年度便利化额度上限</td>
+<td>累计注册 62,500 × USD 50,000 名义额度</td>
+<td style="text-align: right;">USD 31.25 亿（≈ ¥224 亿）— <strong>仅作覆盖额度池量级参照，不代表实际触达</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>行业对照：本指标在外汇规划工具赛道国内尚无直接可比标尺。海外执行型工具 Wise FY2025 跨境量 £1,452 亿，但其口径为"实际触达资金"且依赖支付牌照；FXplanner 名义覆盖是"信息层规划体量"，与执行口径<strong>不可直接比较</strong>，但量级足以说明工具的<strong>潜在影响力</strong>。</p>
+</blockquote>
+<p><strong>跨境合规认知普及</strong>：通过年度便利化额度追踪 + 三档阈值告警 + 信用卡费率库，普及"年度便利化额度（5 万美元等值）及超额凭真实合规材料办理"的认知；按 2027 累计注册 22,500 测算，每年覆盖 ~2.25 万人次合规认知教育。</p>
+<h4 id="562">5.6.2 创造数字技术岗位（含实习与外包）</h4>
+<table>
+<thead>
+<tr>
+<th>年份</th>
+<th style="text-align: right;">全职</th>
+<th style="text-align: right;">兼职 / 外包（折合 FTE）</th>
+<th style="text-align: right;">实习（按学期折合）</th>
+<th style="text-align: right;"><strong>当年带动就业（人次）</strong></th>
+<th style="text-align: right;">累计</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026</td>
+<td style="text-align: right;">1（创始人）</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;"><strong>1</strong></td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr>
+<td>2027</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">1-2</td>
+<td style="text-align: right;">1-2</td>
+<td style="text-align: right;"><strong>3-5</strong></td>
+<td style="text-align: right;">4-6</td>
+</tr>
+<tr>
+<td>2028</td>
+<td style="text-align: right;">1-3</td>
+<td style="text-align: right;">1-2</td>
+<td style="text-align: right;">2-3</td>
+<td style="text-align: right;"><strong>5-8</strong></td>
+<td style="text-align: right;"><strong>9-14</strong></td>
+</tr>
+<tr>
+<td><strong>三年累计带动就业</strong></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"><strong>9-14 人次</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>意向规划，非承诺</strong>；实际岗位人次将按 2027 / 2028 商业化进度与外部资金到位情况动态校准。</p>
+</blockquote>
+<h4 id="563">5.6.3 知识产权产出</h4>
+<p><strong>5.6.3.1 已落实数字资产 / 资质（不计入"知识产权件数"承诺）</strong>：域名 1 + ICP 备案 1 + SSL 1 = <strong>3 件基础资质</strong>，作为支撑材料附件。</p>
+<p><strong>5.6.3.2 拟申报知识产权（申报承诺规模）</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>年份</th>
+<th style="text-align: right;">拟累计软著</th>
+<th style="text-align: right;">拟累计商标</th>
+<th style="text-align: right;"><strong>拟累计 IP 件数</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026 H2</td>
+<td style="text-align: right;">1（首批主程序）</td>
+<td style="text-align: right;">2（"FXplanner" + "凯衍磁缘"）</td>
+<td style="text-align: right;"><strong>3</strong></td>
+</tr>
+<tr>
+<td>2027</td>
+<td style="text-align: right;">2-3</td>
+<td style="text-align: right;">2-3</td>
+<td style="text-align: right;"><strong>4-6</strong></td>
+</tr>
+<tr>
+<td>2028</td>
+<td style="text-align: right;">4-6</td>
+<td style="text-align: right;">≥ 4 类</td>
+<td style="text-align: right;"><strong>8-10</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>申报承诺口径</strong>：申报承诺段、申请表"知识产权"字段仅引用 §5.6.3.2 拟累计 IP 件数 8-10 件；已落实数字资产 / 资质 3 项作为支撑证据列在材料附件，不与拟申报 IP 合并计数。</p>
+</blockquote>
+<h4 id="564">5.6.4 跨境财务素养教育与公共服务延伸</h4>
+<table>
+<thead>
+<tr>
+<th>形式</th>
+<th>频率</th>
+<th style="text-align: right;">覆盖人次（年）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>自营内容（小红书 / 知乎 / B 站 / SEO 长尾）</td>
+<td>每周 1-5 条</td>
+<td style="text-align: right;">阅读量 ~10-50 万 / 年</td>
+</tr>
+<tr>
+<td>社群答疑</td>
+<td>持续</td>
+<td style="text-align: right;">~3-5 千人次答疑 / 年</td>
+</tr>
+<tr>
+<td>用户访谈与报告（季度发布）</td>
+<td>4 次 / 年</td>
+<td style="text-align: right;">行业关注 ~1-2 万人次</td>
+</tr>
+<tr>
+<td>高校 / 留学机构合作讲座</td>
+<td>1-3 次 / 年</td>
+<td style="text-align: right;">~500-2,000 人次</td>
+</tr>
+</tbody>
+</table>
+<p><strong>间接公共服务延伸</strong>：信用卡费率库公共化、银行牌价聚合科普、OTP / 邮箱登录推广 PIPL 友好实践。</p>
+<h4 id="565">5.6.5 社会效益四类汇总</h4>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>三年累计指标</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>潜在用户经济价值溢出（user-year 口径）</td>
+<td><strong>¥4,637-11,340 万</strong>（百倍量级潜在影响）— 估算口径，归因边界详见 §5.6.1 脚注</td>
+</tr>
+<tr>
+<td>跨境资金流规划名义覆盖（保守主叙事）</td>
+<td><strong>¥6.4-19.3 亿（USD 0.9-2.7 亿）</strong>；额度上限量级参照 USD 31.25 亿</td>
+</tr>
+<tr>
+<td>数字技术岗位带动</td>
+<td><strong>9-14 人次</strong>（含创始人 + 兼职 + 实习；意向规划，非承诺）</td>
+</tr>
+<tr>
+<td>知识产权产出</td>
+<td><strong>拟申报 8-10 件软著 + 商标</strong> + 已落实基础资质 3 项（附件）</td>
+</tr>
+<tr>
+<td>跨境财务素养教育</td>
+<td>自营内容 ~30 万 / 年 + 社群 ~5 千 / 年 + 讲座 ~2 千 / 年</td>
+</tr>
+</tbody>
+</table>
+<h3 id="57">5.7 风险与不确定性分析</h3>
+<h4 id="571">5.7.1 六类风险矩阵</h4>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>风险类别</th>
+<th>具体风险</th>
+<th>影响</th>
+<th>概率</th>
+<th>影响×概率</th>
+<th>缓解措施</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>R1</strong></td>
+<td>市场假设风险</td>
+<td>活跃订阅率实测 &lt; 1%</td>
+<td>高</td>
+<td>中</td>
+<td><strong>高</strong></td>
+<td>商业化 Sprint M2 触发产品 / 定价重大调整；推迟 KOL 试投</td>
+</tr>
+<tr>
+<td>R2</td>
+<td>技术依赖风险</td>
+<td>第三方 API（k780 / GLM）调价 ≥ 50% 或服务中断</td>
+<td>中</td>
+<td>中</td>
+<td>中</td>
+<td><strong>LLM</strong>：Sprint H1 Harness 编排层接入 Qwen / DeepSeek / Kimi 同等级备选；<strong>2026 Q3 起目标 ≤ 4 小时切换 SLA（首次演练完成后升级为承诺）</strong>；fail-soft 至手动表单已上线；<strong>单一 Provider 月度生产调用量或费用占比 ≤ 70% 红线</strong>（Sprint H1 后）。<strong>汇率 API</strong>：银行直连 3 行 + k780 聚合 3 行双层降级架构已上线；任一源失效不影响整体服务。<strong>红线</strong>：单一汇率源 ≤ 30%</td>
+</tr>
+<tr>
+<td><strong>R3</strong></td>
+<td>合规边界风险</td>
+<td>ICP 经营许可法务评估结论为"构成经营性互联网信息服务"且申办窗口拉长</td>
+<td>高</td>
+<td>中</td>
+<td><strong>高</strong></td>
+<td>商业化前申办；过渡期下沉为非经营性内容 + 第三方支付独立结算</td>
+</tr>
+<tr>
+<td>R4</td>
+<td>数据安全风险</td>
+<td>PII 泄露 / OCR 解析后端持久化违规</td>
+<td>高</td>
+<td>低</td>
+<td>中</td>
+<td>OCR 数据边界前置约束；HTTPS+HSTS+JWT+OTP 已实现；季度安全审计</td>
+</tr>
+<tr>
+<td>R5</td>
+<td>监管政策风险</td>
+<td>外汇便利化政策调整 / 跨境数据出境合规要求加严</td>
+<td>中</td>
+<td>中</td>
+<td>中</td>
+<td>严守不参与购汇执行的边界；2028 H2 国际版灰度前完成跨境数据合规评估</td>
+</tr>
+<tr>
+<td>R6</td>
+<td>人员 / 现金流风险</td>
+<td>创始人健康事件 / 长期缺勤 ≥ 1 周 + 外部资金到位 ≤ 30%</td>
+<td>高</td>
+<td>低</td>
+<td>中</td>
+<td>关键操作 SOP 化（详见 §6.7 应急接管协议：资产物理可接管 + 文档先行 + 第三方热切换目标 ≤ 5 人天 + IP 法理锁定）；2027 兼职到岗后形成最小冗余；自筹兜底 5-15 万</td>
+</tr>
+<tr>
+<td><strong>R7</strong></td>
+<td><strong>B2B 合作中立性风险</strong></td>
+<td>留学机构 / 跨境财务顾问等 B2B 合作方要求工具内"推荐特定换汇渠道"或"调整费率显示"</td>
+<td>高</td>
+<td>低</td>
+<td>中</td>
+<td><strong>算法层不接受第三方付费排序参数 + 数据来源可追溯（公开 API 数据搬运，无价格生成）</strong>；商业层 B2B 收入结构与渠道推荐脱钩（席位计费而非 CPS）；任一合作方提出违反中立性的需求即终止合作；2028 全年 B2B 营收占比 ≤ 30% 护栏；详见 §3.4.8</td>
+</tr>
+</tbody>
+</table>
+<h4 id="572">5.7.2 风险段强制声明</h4>
+<blockquote>
+<p>本 BP 收入预测对"活跃订阅率 1.5%-4%"类比假设最敏感（敏感度系数 1.0）。MVP 第 6 个月（2026 Q4 灰度反馈复盘）将用真实激活率、试用转付费率、月流失率替换该假设。<strong>若实测 &lt; 1%，将触发产品 / 定价 / 付费墙策略的重大调整</strong>，对应财务测算下调至保守情景。本 BP <strong>不承诺任何乐观情景作为主线收入</strong>——申报承诺段、PPT 首页、申请表"经济效益"字段统一以自然增长版基准 ¥26 万 / 区间 ¥7-68 万为唯一对外口径。</p>
+</blockquote>
+<hr />
+<h2 id="_14">六、创业团队介绍</h2>
+<h3 id="61">6.1 总体口径</h3>
+<p>按非市场计划〇章决策 4（团队形态：单人创业）与决策 5（创始人薪酬按当地最低工资计算）。<strong>强制声明</strong>：本章不引入任何"团队 X 人 / 联创 Y 人 / 合伙人 Z 人"的虚拟头数；当前真实状态为创始人 1 人独任，所有其他角色按"按需外包 + 公共服务"实现。</p>
+<h3 id="62">6.2 创始人简介与履历</h3>
+<h4 id="621">6.2.1 基本信息表</h4>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>姓名</td>
+<td>陆凯铭</td>
+</tr>
+<tr>
+<td>联系方式</td>
+<td>邮箱 hzlukaimin@126.com / 电话 +86 13331042419 / 微信 Kylelu511</td>
+</tr>
+<tr>
+<td>户籍</td>
+<td><strong>上海</strong></td>
+</tr>
+<tr>
+<td>教育背景</td>
+<td>英属哥伦比亚大学（UBC）理学士，主修数学，辅修经济学，2015-09 至 2021-06，加拿大温哥华（简历口径：QS Top 50）</td>
+</tr>
+<tr>
+<td>当前职业状态</td>
+<td><strong>2026-04-15 已自上海涟元科技正式离职，全职投入 FXplanner 创业</strong>（详见 §6.2.5 时间投入承诺与转换记录；配套证据见支撑材料 S.7）</td>
+</tr>
+<tr>
+<td>累计相关经验</td>
+<td>3+ 年甲方企业内部数字化产品经理 + 1+ 年大宗商品风控 + 0.5 年跨境支付合规</td>
+</tr>
+<tr>
+<td>资格证书</td>
+<td><strong>FRM Level II 候选人</strong>（金融风险管理师二级，全球认证）+ <strong>人工智能训练师三级</strong>（人社部 OSTA 国家职业技能等级）</td>
+</tr>
+<tr>
+<td>语言</td>
+<td>英语（流利，可作为工作语言）+ 普通话（母语）</td>
+</tr>
+</tbody>
+</table>
+<h4 id="622">6.2.2 教育背景叙事</h4>
+<blockquote>
+<p>创始人陆凯铭于 2015 年 9 月赴加拿大温哥华，进入英属哥伦比亚大学（UBC）攻读数学专业，辅修经济学，并于 2021 年 6 月以理学士学位毕业。数学专业训练奠定了 FXplanner 三类核心能力的方法论基础：(1) 跨币种现金流建模（线性 / 指数模型、随机游走、置信区间估计）；(2) 信用卡外汇费率库的费用拆解与规则化；(3) 多源银行汇率数据的统计聚合与异常检测。经济学辅修为 5 万美元额度合规边界、跨境支付政策研判、用户经济行为建模提供了直接学科支持。</p>
+<p>2015-2021 年加拿大温哥华学习与生活经历，同时形成了对"中国留学生跨境换汇与年度支出管理"这一产品核心场景的<strong>第一手用户体验</strong>——创始人本人即是 FXplanner 的目标用户群体的典型画像。</p>
+</blockquote>
+<h4 id="623">6.2.3 工作经历摘要（按倒序）</h4>
+<p><strong>上海涟元科技发展有限公司</strong>（AI 税务 SaaS, ToG / ToB），2025-04 至 2026-04-15：数据工程师 / 内部产品。主导内部协同门户系统需求调研与 PRD 设计；主导飞书平台部署；参与 AI 大模型税务产品需求拆解与训练数据标注工作流优化——LLM 工程化经验直接复用至 FXplanner AI 自然语言录入流水线。</p>
+<p><strong>北京东方雨虹防水技术股份有限公司</strong>（A 股上市，年营收 200 亿+），2023-09 至 2025-04：合同 &amp; 客商域产品经理（DDD 方法论）+ 需求分析工程师。主导零售平台中台 1 期按期上线；输出完整 PRD 文档体系；负责上下游系统接口集成；主导外包供应商管理；需求五星好评率与工单好评率均为 99%。</p>
+<p><strong>上海归藏投资有限公司</strong>（大宗商品供应链服务商），2022-02 至 2023-09：信用专员 + 内部数字化项目负责人。<strong>独立主导风控数据系统从 0 到 1 自研上线</strong>——这是创始人首次独立完成"从 0 到 1 系统"的实战经验，与 FXplanner 当前已上线事实在能力序列上完全连贯；负责上下游客户授信审核及业务合同风控条款审核。</p>
+<p><strong>万维科技</strong>（跨境支付，上海），2020-11 至 2021-06：风控合规实习生。协助审核跨境商户合规风险（日审 40+ 网站，银行通过率 100%）；参与欧洲收单行商务会议（KYC 材料整理）——<strong>直接覆盖跨境支付 + KYC + 合规审核三个核心领域</strong>，是 FXplanner 合规边界声明的职业积累背书。</p>
+<h4 id="624">6.2.4 资格证书</h4>
+<table>
+<thead>
+<tr>
+<th>证书</th>
+<th>颁发方 / 等级</th>
+<th>与项目相关性</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>FRM Level II 候选人</strong></td>
+<td>美国 GARP（全球风险专业人协会，国际认证）</td>
+<td>直接对应合规边界（不接触资金、不提供理财建议）的风险识别能力；FRM 体系覆盖市场风险、信用风险、操作风险、流动性风险</td>
+</tr>
+<tr>
+<td><strong>人工智能训练师三级</strong></td>
+<td>人社部 OSTA</td>
+<td>直接对应 LLM 解析 + AI 自然语言录入 + 置信度标注流水线；国家职业技能等级证书是 AI 工程化能力的政府认证</td>
+</tr>
+</tbody>
+</table>
+<p><strong>双证书叙事</strong>：形成"金融合规 + AI 工程"二维背书，分别支撑合规创新（零资金触达边界）与技术创新（LLM 解析 + 置信度待确认流）。市场上同类规划工具创始人鲜有同时持有金融风险与 AI 工程双方向资质者。</p>
+<h4 id="625">6.2.5 时间投入承诺与转换记录</h4>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>承诺值</th>
+<th>触发 / 校准条件与配套证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>正式离职日期</strong></td>
+<td>2026-04-15</td>
+<td><strong>配套证据（S.7 三件套，至少二选一以上必交）</strong>：(a) 上海涟元科技发展有限公司离职证明（公章原件 / 扫描件）；(b) 社保系统中"上海涟元科技"账户停缴月份截图 + 当前社保账户状态截图（个人参保 / 灵活就业 / 暂未参保）；(c) 劳动关系状态截图（"随申办" 个人页面 - 劳动关系 - 当前无在职记录）；(d) 创始人本人书面声明（已签字 + 日期），承担因虚假声明导致的孵化器扶持取消责任</td>
+</tr>
+<tr>
+<td><strong>全职创业起点</strong></td>
+<td>2026-04-16（已生效）</td>
+<td>由本日起所有产品迭代 + 公网运营均由创始人全职完成；GitHub commit 历史 + 阿里云访问日志可作客观证据</td>
+</tr>
+<tr>
+<td><strong>时间投入承诺</strong></td>
+<td><strong>每周 ≥ 50 小时</strong>（全职口径，含产品 + 开发 + 运营 + 内容 + 客服）</td>
+<td>GitHub commits 时间分布 + 项目管理工具记录 + 飞书 / 阿里云访问日志</td>
+</tr>
+<tr>
+<td><strong>不重新就业承诺期</strong></td>
+<td>至 2028-12-31</td>
+<td>期间不签订与第三方雇主的全职劳动合同；如必须为现金流签短期外包，仅限 ≤ 8 小时 / 周 + 不影响 FXplanner 路线图</td>
+</tr>
+<tr>
+<td><strong>薪酬模式</strong></td>
+<td>上海最低工资 ¥2,740 / 月折算入账（不实发）</td>
+<td>§4.5.1 / §5.5.4 已锁定；不构成实际工资发放或税前列支承诺</td>
+</tr>
+<tr>
+<td><strong>触发回退条件</strong></td>
+<td>(a) §5.5.6 保守退守版红线触发 + (b) 创始人健康事件 ≥ 1 周缺勤</td>
+<td>触发后启动 §6.7 应急接管协议 + §6.5 兼职 / 外包接管</td>
+</tr>
+<tr>
+<td><strong>顾问 / 接管人选意向</strong></td>
+<td>留学机构合作顾问 1 名（拟）+ 跨境合规法务顾问 1 名（拟）+ 全栈外包接管 1 名（拟，UBC 校友 / Vue + FastAPI 经验）</td>
+<td>S.8 路演前 1 周提交意向函脱敏件</td>
+</tr>
+<tr>
+<td><strong>首次第三方接管演练</strong></td>
+<td>路演前 1 周完成首次模拟演练</td>
+<td>S.11 演练记录</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>证据交付强制项</strong>：S.7 (a) + (b) 或 (a) + (c) 二选一以上必交；(d) 个人声明作为兜底；任一证据缺失则路演自陈"在职状态待补"，不主动声称全职。</p>
+</blockquote>
+<h3 id="63-fxplanner">6.3 创始人在 FXplanner 项目中的角色</h3>
+<h4 id="631-8">6.3.1 角色覆盖矩阵（8 角色端到端）</h4>
+<table>
+<thead>
+<tr>
+<th>角色</th>
+<th>覆盖范围</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>项目发起人 / CEO</td>
+<td>项目愿景、商业模式、合规边界、孵化器申报、对外联系</td>
+</tr>
+<tr>
+<td>全栈开发</td>
+<td>前端（Vue 3 + TS + Vite + Tailwind）+ 后端（FastAPI + Python 3.11 + PG + Redis）+ DevOps（Docker + 1Panel OpenResty + GitHub Actions）</td>
+</tr>
+<tr>
+<td>产品负责人</td>
+<td>6 大上下文领域建模、PRD 撰写、用户故事设计、灰度反馈复盘</td>
+</tr>
+<tr>
+<td>AI 工程</td>
+<td>LLM 解析提示词工程、置信度阈值校准、AI 自然语言录入流水线</td>
+</tr>
+<tr>
+<td>数据 / 接口集成</td>
+<td>多源银行汇率 API + 信用卡费率库 + 邮件 SMTP + LLM API</td>
+</tr>
+<tr>
+<td>合规 / 风控</td>
+<td>5 万美元额度合规边界、不接触资金声明、ICP 备案与经营许可研判、PII 数据安全</td>
+</tr>
+<tr>
+<td>内容运营 / 自营增长</td>
+<td>小红书 / 知乎 / B 站每周 1-2 条种子内容、SEO 长尾选题、社群冷启动</td>
+</tr>
+<tr>
+<td>客服 / 工单响应</td>
+<td>上线后用户答疑、灰度反馈收集、工单处理</td>
+</tr>
+</tbody>
+</table>
+<h4 id="632-3-5">6.3.2 与传统 3-5 人团队的能力当量映射</h4>
+<table>
+<thead>
+<tr>
+<th>传统团队角色</th>
+<th style="text-align: right;">传统配置</th>
+<th style="text-align: right;">创始人 + AI 工具实际投入</th>
+<th>当量比</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>前端工程师</td>
+<td style="text-align: right;">8 人月</td>
+<td style="text-align: right;">~3 人月</td>
+<td>~2.7×</td>
+</tr>
+<tr>
+<td>后端工程师</td>
+<td style="text-align: right;">8 人月</td>
+<td style="text-align: right;">~3 人月</td>
+<td>~2.7×</td>
+</tr>
+<tr>
+<td>AI / LLM 工程师</td>
+<td style="text-align: right;">4 人月</td>
+<td style="text-align: right;">~1.5 人月</td>
+<td>~2.7×</td>
+</tr>
+<tr>
+<td>DevOps / 运维</td>
+<td style="text-align: right;">4 人月</td>
+<td style="text-align: right;">~0.5 人月</td>
+<td>~8×</td>
+</tr>
+<tr>
+<td>产品经理</td>
+<td style="text-align: right;">8 人月</td>
+<td style="text-align: right;">~2 人月</td>
+<td>~4×</td>
+</tr>
+<tr>
+<td><strong>小计</strong></td>
+<td style="text-align: right;"><strong>~32 人月</strong></td>
+<td style="text-align: right;"><strong>~10 人月</strong></td>
+<td><strong>~3.2×</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>当量比为创始人基于 FXplanner 实际交付节奏的工程化估算，<strong>不构成对外正式承诺</strong>；用于支撑申报评审对单人 + AI 工具放大模式可行性的能力判断。</p>
+</blockquote>
+<h3 id="64">6.4 股东 / 权益结构与融资口径</h3>
+<h4 id="641">6.4.1 当前股东 / 权益结构</h4>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>主体形态</td>
+<td><strong>一人有限责任公司</strong>（已锁定）——申报地上海，由创始人陆凯铭独资设立；与临港 / 零界魔方"非股权 + 后资助"扶持模式契合</td>
+</tr>
+<tr>
+<td>权益结构</td>
+<td><strong>陆凯铭（创始人）持股 100%</strong>——一人有限责任公司唯一股东；不存在其他合伙人 / 权益安排 / 隐名股东</td>
+</tr>
+<tr>
+<td>股权代持</td>
+<td><strong>无</strong></td>
+</tr>
+<tr>
+<td>期权池</td>
+<td><strong>无</strong>（单人创业 + 孵化器口径下不预留期权池；2027-2028 兼职 / 外包扩展时如需引入分红激励，将通过"项目奖金 + 分润分成"形式实现，不稀释创始人权益）</td>
+</tr>
+<tr>
+<td>投资协议</td>
+<td><strong>无</strong>（外部资金全部以"无股权 / 经营权稀释"为前提）</td>
+</tr>
+</tbody>
+</table>
+<h4 id="642">6.4.2 权益稀释承诺</h4>
+<ol>
+<li><strong>三年内不引入股权融资</strong>；外部资金来源严格限定为"非股权 + 后资助"形式；</li>
+<li><strong>创始人权益不变</strong>：2026-2028 三年内创始人保持唯一经营 / 持股主体地位；</li>
+<li><strong>兼职 / 外包不持股 / 不享有经营权</strong>；</li>
+<li><strong>顾问不持股 / 不享有经营权</strong>；</li>
+<li><strong>任一拟合作方向落地不影响创始人唯一经营 / 持股主体地位</strong>。</li>
+</ol>
+<h4 id="643">6.4.3 主体形态与申报地（已锁定）</h4>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>锁定值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>申报地</strong></td>
+<td><strong>上海</strong>（含临港新片区 / 零界魔方孵化体系）</td>
+</tr>
+<tr>
+<td><strong>主体形态</strong></td>
+<td><strong>一人有限责任公司</strong>（创始人陆凯铭独资 100% 持股）</td>
+</tr>
+<tr>
+<td><strong>创始人户籍</strong></td>
+<td><strong>上海</strong></td>
+</tr>
+<tr>
+<td><strong>最低工资标准</strong></td>
+<td>上海 2025-07-01 调整后一档 ¥2,740 / 月（按当年人社部门发布动态校准）；不含社保、公积金</td>
+</tr>
+<tr>
+<td><strong>创业补贴方向</strong></td>
+<td>上海创业带动就业一次性补贴 + 临港八项配套（详见 <code>服务手册.pdf</code> 与 §4.3.4）</td>
+</tr>
+<tr>
+<td><strong>税务方向</strong></td>
+<td>小微企业普惠性税收减免 + 临港税收返还 + 上海人才计划落地</td>
+</tr>
+</tbody>
+</table>
+<p><strong>锁定影响</strong>：</p>
+<ul>
+<li>创始人薪酬基线由暂按杭州 ¥2,490 / 月（年化 ~3.0 万）切换至上海 ¥2,740 / 月（年化 ~3.29 万，采用 2025-07-01 调整后最新口径）；差额由预备费吸收，下游精算总成本 / 净额 / 现金需求峰值口径不变（详见 §4.2 薪酬切换说明）；最低工资基线不含社保、公积金；</li>
+<li>申请表"项目联系人 / 团队成员 / 股东 / 权益结构 / 是否含港澳台 / 海外背景"字段全部以本节为唯一来源；</li>
+<li>临港 / 零界魔方"非股权 + 后资助"扶持模式与一人有限责任公司主体形态完全契合（创始人 100% 持股不变）。</li>
+</ul>
+<h4 id="644">6.4.4 三年融资计划保守版口径（契合临港 / 零界魔方"非股权 + 后资助"扶持模式）</h4>
+<p><strong>五类资金来源</strong>：(a) 创始人自筹；(b) 临港 / 零界魔方孵化体系政策资助（核心）；(c) 创业大赛奖金；(d) 创新券与公共服务后资助；(e) 创始人薪酬最低工资入账。</p>
+<blockquote>
+<p><strong>不写、不预设、不暗示任何股权融资</strong>——契合临港 / 零界魔方孵化体系扶持导向，强化"无需稀释股权即可活下来"的能力叙事。</p>
+</blockquote>
+<h3 id="65">6.5 三年人员成长路径</h3>
+<h4 id="651">6.5.1 三年人员主表</h4>
+<table>
+<thead>
+<tr>
+<th>年份</th>
+<th>阶段</th>
+<th>团队规模</th>
+<th>职能覆盖</th>
+<th>当年人员预算</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>2026</strong></td>
+<td>验证年</td>
+<td><strong>创始人 1 人独任</strong></td>
+<td>8 角色端到端</td>
+<td>创始人薪酬 ~3.0 万 + 兼职 / 外包 ¥0</td>
+</tr>
+<tr>
+<td><strong>2027</strong></td>
+<td>商业化首年</td>
+<td><strong>创始人 1 人 + 1-2 名兼职 / 外包</strong>（设计 / 内容 / 客服）</td>
+<td>创始人主导核心；兼职 / 外包承接自营内容扩量、客服工单分流、设计素材产出</td>
+<td>创始人薪酬 ~3.0 万 + 兼职 / 外包 0-2 万 = ~3-5 万</td>
+</tr>
+<tr>
+<td><strong>2028</strong></td>
+<td>增长年</td>
+<td><strong>创始人 1 人 + 2-3 名兼职 / 外包或全职</strong>（视营收）</td>
+<td>视 2027 商业化进度与现金流转正情况扩展</td>
+<td>创始人薪酬 ~3.0 万 + 兼职 / 外包 / 全职 2-5 万 = ~5-8 万</td>
+</tr>
+</tbody>
+</table>
+<p><strong>三年累计</strong>：创始人薪酬 ~9 万 + 兼职 / 外包 2-7 万 = <strong>~11-16 万</strong>。</p>
+<h4 id="652">6.5.2 兼职 / 外包岗位拆解（按优先级）</h4>
+<table>
+<thead>
+<tr>
+<th>优先级</th>
+<th>岗位 / 类型</th>
+<th>启动条件</th>
+<th>预算口径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>P0</strong></td>
+<td>知识产权代理（专业服务采购）</td>
+<td>2026 H2 启动</td>
+<td>含在 IP 预算（0.3-1.0 万 / 年）</td>
+</tr>
+<tr>
+<td><strong>P0</strong></td>
+<td>法务 / 合规咨询（专业服务采购）</td>
+<td>2027 Q1 启动</td>
+<td>0.3-0.8 万 / 次</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>内容运营外包</td>
+<td>2027 Q2 试点，H2 视商业化扩量</td>
+<td>月均 0-0.3 万 / 月</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>设计外包</td>
+<td>2027 Q3 启动</td>
+<td>月均 0-0.3 万 / 月</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>客服外包</td>
+<td>2027 Q4 启动（月工单 ≥ 100）</td>
+<td>月均 0.1-0.5 万 / 月</td>
+</tr>
+<tr>
+<td>P2</td>
+<td>兼职开发（前端 / 移动端 Tauri T2）</td>
+<td>2028 Q2 启动</td>
+<td>月均 0.5-1.5 万 / 月</td>
+</tr>
+<tr>
+<td>P2</td>
+<td>B2B 客户对接 BD</td>
+<td>2028 H2 启动</td>
+<td>月均 0.5-1.0 万 / 月 + 签约提成</td>
+</tr>
+</tbody>
+</table>
+<h4 id="653">6.5.3 招聘节奏控制承诺</h4>
+<ol>
+<li><strong>2026 全年</strong>：创始人独任，0 兼职 / 外包预算；</li>
+<li><strong>2027 H1</strong>：以单篇 / 单项目方式开展内容运营低预算试点；P0 专业服务采购按 IP / 法务节点启动；</li>
+<li><strong>2027 H2 起</strong>：仅在两条件<strong>任一满足</strong>时扩量启动 P1 兼职 / 外包：(a) 商业化通过双闸门且付费墙正式上线满 1 个月；(b) 月活跃订阅 ≥ 200 或月工单 ≥ 100 条；</li>
+<li><strong>2028 H1 起</strong>：仅在 2028 Q1 财务复盘<strong>确认营收覆盖兼职 / 外包成本</strong>后，再启动 P2 岗位；</li>
+<li><strong>不前置招聘</strong>：严禁在商业化未跑通前预付任何全职岗位的前置成本。</li>
+</ol>
+<h4 id="654">6.5.4 三年带动数字技术岗位累计</h4>
+<table>
+<thead>
+<tr>
+<th>年份</th>
+<th style="text-align: right;">全职 / 核心团队（含创始人）</th>
+<th style="text-align: right;">兼职 / 外包（折合 FTE）</th>
+<th style="text-align: right;">实习（按学期折合）</th>
+<th style="text-align: right;"><strong>当年带动</strong>（人次）</th>
+<th style="text-align: right;">累计</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;"><strong>1</strong></td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr>
+<td>2027</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">1-2</td>
+<td style="text-align: right;">1-2</td>
+<td style="text-align: right;"><strong>3-5</strong></td>
+<td style="text-align: right;">4-6</td>
+</tr>
+<tr>
+<td>2028</td>
+<td style="text-align: right;">1-3</td>
+<td style="text-align: right;">1-2</td>
+<td style="text-align: right;">2-3</td>
+<td style="text-align: right;"><strong>5-8</strong></td>
+<td style="text-align: right;"><strong>9-14</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>口径声明</strong>：本表数字为<strong>意向规划，非承诺</strong>；申请表"社会效益—就业带动"字段仅引用 9-14 累计数字。专业服务采购合作（IP 代理 / 法务咨询 2-4 人次）作为补充叙事不计入此承诺。</p>
+<h3 id="66-ai">6.6 单人 + AI 工具放大叙事</h3>
+<p><strong>核心命题</strong>：FXplanner 的"单人创业 + AI 工具放大"不是孵化器申报的弱点，而是项目的<strong>核心差异化能力</strong>——通过现代化全栈技术 + AI 编码工具（Claude Code / Cursor）+ LLM API（GLM）的工具栈组合，由 1 名复合背景创始人承担传统小团队中的核心职责。</p>
+<p><strong>事实证据清单</strong>（截至 2026-05-06）：</p>
+<table>
+<thead>
+<tr>
+<th>证据</th>
+<th style="text-align: right;">数值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>累计完成 Sprint 数</td>
+<td style="text-align: right;">14+（Sprint 0 至 Sprint 13D）</td>
+</tr>
+<tr>
+<td>已上线核心能力数</td>
+<td style="text-align: right;">18+ 项</td>
+</tr>
+<tr>
+<td>测试通过数（单元 + 集成 + E2E）</td>
+<td style="text-align: right;">257+ passed</td>
+</tr>
+<tr>
+<td>后端上下文数</td>
+<td style="text-align: right;">6（identity / subscription / quota / exchange_rate / ai_interaction / notification）</td>
+</tr>
+<tr>
+<td>已对接外部 API 数</td>
+<td style="text-align: right;">10+</td>
+</tr>
+<tr>
+<td>公网部署</td>
+<td style="text-align: right;">✅ <code>app.fxplanner.cn</code>（HTTPS + HSTS）</td>
+</tr>
+<tr>
+<td>ICP 备案</td>
+<td style="text-align: right;">✅ 2026-04-09 通过</td>
+</tr>
+<tr>
+<td>i18n</td>
+<td style="text-align: right;">中 / 英 / 日三语</td>
+</tr>
+<tr>
+<td>全周期投入</td>
+<td style="text-align: right;">~10 人月（创始人独任，2025 H2 - 2026 Q2）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>单人模式局限性与缓解措施</strong>：创始人单点依赖（→ <strong>详见 §6.7 应急接管协议</strong>：双层接管 + 第三方接管 ≤ 5 人天 SLA 含前提条件 + IP 法理锁定）；能力广度边界（→ 法务 / IP / B2B BD 按需外包）；客服响应天花板（→ 2027 Q4 客服外包）；B2B 销售能力（→ 2028 H2 才启动大规模拓展）；AI 工具依赖（→ 多工具组合 + 提示词文档化）。</p>
+<h3 id="67-business-continuity-plan">6.7 应急接管协议（Business Continuity Plan）</h3>
+<p><strong>核心命题</strong>：单人创业的"个人风险"通过<strong>双层接管机制</strong>系统化缓解——<strong>技术接管</strong>（资产物理可接管性 + 文档支撑下的独立运营）+ <strong>法理接管</strong>（IP / 主体 / 股权权属锁定于公司主体）。两者共同保证：项目作为商业实体的可持续性，<strong>不依赖创始人个人身份的延续</strong>。</p>
+<h4 id="671">6.7.1 资产物理可接管性</h4>
+<table>
+<thead>
+<tr>
+<th>资产类别</th>
+<th>当前状态</th>
+<th>接管方可执行性</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>代码资产</td>
+<td>GitHub 私有仓库（双分支 main / production）+ 本地 git 副本</td>
+<td>任何具备 Python / Vue 工程能力的开发者克隆即可重建环境</td>
+</tr>
+<tr>
+<td>基础设施资产</td>
+<td>阿里云 ECS / RDS / OSS 账号绑定项目方主体（一人有限责任公司）</td>
+<td>主体延续即可继承访问权</td>
+</tr>
+<tr>
+<td>数据资产</td>
+<td>PostgreSQL 每日逻辑备份 + 阿里云 OSS 异地副本（计划接入）；Alembic 001→005 全量迁移可重放</td>
+<td>接管方按 SOP 即可恢复全量历史数据</td>
+</tr>
+<tr>
+<td>域名与备案</td>
+<td><code>fxplanner.cn</code> 注册商账号 + ICP 备案号 <code>沪ICP备2026012540号-1</code> 由项目方主体持有</td>
+<td>可随主体延续，无需重新备案</td>
+</tr>
+<tr>
+<td>密钥与运维凭证</td>
+<td>统一管理 SOP（生产环境密钥与第三方 API 凭证集中托管，接管时按 SOP 移交）</td>
+<td>凭 SOP 文档完成密钥轮换与权限交接</td>
+</tr>
+</tbody>
+</table>
+<h4 id="672-sop-sprint">6.7.2 SOP 文档清单（文档先行 + Sprint 迭代驱动）</h4>
+<p>FXplanner 自 Sprint 0 起采用 <strong>文档先行（Documentation-first）+ Sprint 迭代驱动</strong>的工程化开发流程：每个 Sprint 启动以设计文档 / DDD 上下文边界声明 / API 规约先行，再进行编码实现；累计 14 个 Sprint 文档、6 个 DDD 上下文边界声明、Alembic 001→005 迁移历史、257 项自动化测试构成系统化的技术资产。<strong>接管材料清单已按仓库文档体系整理，提交版附目录截图</strong>；账号、密钥、云资源权限不在文档中明文展示，仅登记托管位置与接管流程。</p>
+<p><strong>v1.1 起列入交付文档清单</strong>：</p>
+<ul>
+<li>系统架构图（已存在，详见 §A 附录）</li>
+<li>部署运行手册（Docker Compose + 1Panel + GitHub Actions 完整流程）</li>
+<li>数据库 schema + Alembic 迁移历史</li>
+<li>第三方依赖清单（GLM / k780 / 银行直连接口）+ 密钥轮换 SOP</li>
+<li>监控与告警接入手册（运维监控数据见 §1.7.5）</li>
+<li>应急联系人清单 + 接管交接流程</li>
+</ul>
+<h4 id="673">6.7.3 第三方接管路径（热切换能力）</h4>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>实施路径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>技术外包合作</strong></td>
+<td>上海本地具备 FastAPI / Vue 3 / PostgreSQL 全栈外包能力的合作伙伴存量充足，按需对接；接管启动 ≤ 5 人天（<strong>前提：接管方具备 Vue / FastAPI / Docker 基础，并获得 GitHub、云资源、域名、数据库备份访问权限</strong>；含环境搭建 + 部署演练 + 现有代码 walkthrough）</td>
+</tr>
+<tr>
+<td><strong>关键能力替换</strong></td>
+<td>FastAPI / Vue 3 / PostgreSQL 全部为业界主流栈，市场上具备相关能力的工程师存量 ≥ 千人级，<strong>接管不存在不可替代性瓶颈</strong></td>
+</tr>
+<tr>
+<td><strong>业务暂停成本</strong></td>
+<td>产品当前为信息服务工具，<strong>短期暂停不导致用户资金损失</strong>（合规创新边界 §1.3.1 / §1.3.4 的额外好处）；最坏情况下的服务降级成本可控</td>
+</tr>
+</tbody>
+</table>
+<h4 id="674">6.7.4 接管时间承诺</h4>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>接管启动 SLA</th>
+<th>业务恢复 SLA</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>创始人短期缺勤（≤ 1 周）</td>
+<td>0 — 自动化基础设施持续运行</td>
+<td>全功能持续</td>
+</tr>
+<tr>
+<td>创始人长期缺勤（&gt; 1 周 ≤ 1 月）</td>
+<td><strong>目标 ≤ 5 人天 第三方外包接管启动</strong>（前提：接管方具备 Vue / FastAPI / Docker 基础 + 获得仓库 / 云资源 / 域名 / 数据库备份访问权限）；<strong>完成首次第三方演练后由"目标"升级为"承诺"</strong>（详见 §6.7.6 演练计划）</td>
+<td>核心功能目标 ≤ 7 人天</td>
+</tr>
+<tr>
+<td>永久接管</td>
+<td>目标 ≤ 14 人天 完成 walkthrough + 工作交接</td>
+<td>受让方继续运营目标 ≤ 30 人天</td>
+</tr>
+</tbody>
+</table>
+<h4 id="675-ip">6.7.5 知识产权法理可接管性（IP 防火墙）</h4>
+<table>
+<thead>
+<tr>
+<th>资产类别</th>
+<th>权属归属</th>
+<th>法理状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>域名 <code>fxplanner.cn</code></td>
+<td>项目方主体（一人有限责任公司）</td>
+<td>注册商账号绑定主体；不随创始人个人身份变动转移</td>
+</tr>
+<tr>
+<td>ICP 备案 <code>沪ICP备2026012540号-1</code></td>
+<td>项目方主体</td>
+<td>备案主体登记于工信部；主体延续即备案延续</td>
+</tr>
+<tr>
+<td>软件著作权（拟累计 8-10 件）</td>
+<td>项目方主体</td>
+<td>著作权登记申请人填项目方公司</td>
+</tr>
+<tr>
+<td>商标（拟累计 ≥ 4 类）</td>
+<td>项目方主体</td>
+<td>申请人填项目方公司，类目 9 / 35 / 42</td>
+</tr>
+<tr>
+<td>核心源代码</td>
+<td>项目方主体</td>
+<td>GitHub 私有仓库账号绑定项目方主体；以"职务作品 + 商业秘密"双重权属</td>
+</tr>
+<tr>
+<td>公司股权</td>
+<td>创始人 100% 持股于一人有限责任公司</td>
+<td>无股权代持 / 无期权池 / 无投资协议；股权变更需工商登记，受公司法规制</td>
+</tr>
+</tbody>
+</table>
+<p><strong>结论</strong>：FXplanner 的核心资产权属<strong>集中锁定在"一人有限责任公司"主体下，不随创始人个人身份变动而导致权属转移</strong>。即使创始人因任何原因离开，项目方主体作为法人实体可以通过公司治理程序（股权转让、董事变更、清算重组等）将主体连同其全部 IP / 数字资产一并转让给第三方继任者，<strong>保证项目作为商业实体的可继承性</strong>。</p>
+<h4 id="676">6.7.6 证据附件清单与接管验证演练计划</h4>
+<p>应急接管协议的可执行性由以下证据附件支撑（路演前 1 周由项目方提供脱敏截图作为支撑材料 S.4-S.11）：</p>
+<table>
+<thead>
+<tr>
+<th>编号</th>
+<th>证据类别</th>
+<th>附件形式</th>
+<th>提供方</th>
+<th>提交版状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>S.4</td>
+<td>代码仓库 docs/ 目录截图 + GitHub Actions 历史</td>
+<td>GitHub 私有仓库目录树截图 + Actions 部署 / 测试历史（脱敏）</td>
+<td>项目方</td>
+<td>⏳ 路演前 1 周提供</td>
+</tr>
+<tr>
+<td>S.5</td>
+<td>部署手册目录截图</td>
+<td>DEPLOY_RUNBOOK.md 头部 / 章节目录截图</td>
+<td>项目方</td>
+<td>⏳ 同上</td>
+</tr>
+<tr>
+<td>S.6</td>
+<td>数据库备份记录截图</td>
+<td>阿里云 OSS 备份对象列表（最近 30 天）</td>
+<td>项目方</td>
+<td>⏳ 同上</td>
+</tr>
+<tr>
+<td>S.8</td>
+<td>应急联系人 / 外包候选方意向记录</td>
+<td>项目方拟定记录 + 候选方联系方式（脱敏）</td>
+<td>项目方</td>
+<td>⏳ 同上</td>
+</tr>
+<tr>
+<td>S.9</td>
+<td>密钥托管流程截图</td>
+<td>1Password / 阿里云 KMS / 类似工具项目页（脱敏）</td>
+<td>项目方</td>
+<td>⏳ 同上</td>
+</tr>
+<tr>
+<td>S.10</td>
+<td>接管交接 SOP 流程图</td>
+<td>HANDOVER.md 完整流程图</td>
+<td>项目方</td>
+<td>⏳ 同上</td>
+</tr>
+<tr>
+<td><strong>S.11</strong></td>
+<td><strong>接管验证演练记录</strong></td>
+<td><strong>路演前 1 周完成首次模拟演练后产出</strong></td>
+<td>项目方</td>
+<td>⏳ 路演前 1 周完成首次演练</td>
+</tr>
+</tbody>
+</table>
+<p><strong>接管验证演练计划</strong>：路演前 1 周由创始人主导组织<strong>首次模拟演练</strong>——以"全栈外包 / 同学 / 朋友"等模拟接管方角色进入私有仓库，凭 SOP 文档独立完成：</p>
+<ol>
+<li>环境搭建（Docker Compose 一键部署）</li>
+<li>部署演练（GitHub Actions CI/CD 触发）</li>
+<li>数据库备份恢复演练（Alembic 迁移重放）</li>
+<li>第三方 API 密钥轮换演练（GLM / k780 / 银行直连凭证）</li>
+<li>健康检查与监控接入演练</li>
+</ol>
+<p>演练记录（含耗时、问题、改进点）作为支撑材料 S.11 提交。<strong>完成首次演练后，§6.7.4 接管时间承诺中的"≤ 5 人天接管启动"由"目标"升级为"承诺"</strong>。</p>
+<h3 id="68">6.8 拟合作方向（顾问 / 资源对接）</h3>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>拟合作方向</th>
+<th>启动条件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>留学机构</td>
+<td>1-2 家头部留学中介（新东方前途 / 启德 / 金吉列等同体量）</td>
+<td>2027 Q3 商业化跑通后启动接洽</td>
+</tr>
+<tr>
+<td>金融合规顾问</td>
+<td>1-2 名跨境支付 + 外汇合规专业律师 / 顾问</td>
+<td>2027 Q1 商业化前合规咨询闸门启动</td>
+</tr>
+<tr>
+<td>技术导师</td>
+<td>1-2 名 AI / SaaS 行业资深技术专家</td>
+<td>2026 H2 启动</td>
+</tr>
+<tr>
+<td>高校 / 科研合作</td>
+<td>UBC 数学系 / 经济学院 + 国内合作高校（待选）</td>
+<td>2027 H2 起</td>
+</tr>
+<tr>
+<td><strong>园区生态（临港 / 零界魔方孵化体系）</strong></td>
+<td>临港新片区孵化器 + 相关基金 + 园区创新券 + 第三方公共服务采购 + 赛事评审与培训资源 + 园区导师网络</td>
+<td>2026 H2 入驻申请通过后启动</td>
+</tr>
+</tbody>
+</table>
+<p><strong>承诺边界</strong>：上述均<strong>未签约</strong>，按"拟接洽"表述；顾问角色<strong>不持有公司股权 / 经营权或期权</strong>；任一拟合作方向落地不影响创始人唯一经营 / 持股主体地位。</p>
+<h3 id="69">6.9 园区匹配与入驻诉求</h3>
+<h4 id="691">6.9.1 为什么适合临港新片区 / 零界魔方孵化体系</h4>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>项目硬条件</th>
+<th>园区匹配点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>项目状态</strong></td>
+<td>公网产品 <code>app.fxplanner.cn</code> 已上线（HTTPS+HSTS）+ ICP 备案通过（沪ICP备2026012540号-1，2026-04-09）+ 257 项测试通过</td>
+<td>满足"已落地项目可立即入驻"门槛，不是 PPT 公司</td>
+</tr>
+<tr>
+<td><strong>创始人合规</strong></td>
+<td>上海户籍 + 2026-04-15 已离职全职投入（详见 §6.2.5）+ 双证书背书（FRM Level II 候选人 + 人工智能训练师三级）</td>
+<td>申报地与本人户籍一致；全职口径满足创业补贴 / 后资助前提</td>
+</tr>
+<tr>
+<td><strong>主体形态</strong></td>
+<td>一人有限责任公司（创始人 100% 持股，已锁定）+ 三年内不引入股权融资</td>
+<td>与"非股权 + 后资助"扶持模式完全契合，无股权稀释风险</td>
+</tr>
+<tr>
+<td><strong>行业方向</strong></td>
+<td>跨币种支出规划 + AI 自然语言录入 + 多源汇率聚合 + 中立信息层</td>
+<td>契合临港新片区"AI 应用 + 跨境服务 + 国际人才"重点扶持方向</td>
+</tr>
+<tr>
+<td><strong>三年量化承诺</strong></td>
+<td>累计带动数字技术岗位 9-14 人次 + 软著 / 商标 8-10 件 + 投入 25-46 万元</td>
+<td>与孵化器后资助评估口径直接对接，量化可考核</td>
+</tr>
+</tbody>
+</table>
+<h4 id="692">6.9.2 入驻诉求清单（六类资源）</h4>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>诉求类别</th>
+<th>具体内容</th>
+<th>主要解决问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>工位 / 物理空间</strong></td>
+<td>单工位（创始人）+ 视 2027 兼职到岗后扩展至 2-3 工位</td>
+<td>替代外部商务空间月费（节约 ~0.6-1.2 万 / 年）</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>政策申报辅导</strong></td>
+<td>上海一次性创业补贴 + 临港八项配套（落户 / 租房 / 子女教育 / 个税返还等）+ 市 / 区两级科创扶持 + 创新券</td>
+<td>创始人非财税专业，需园区政策窗口辅助申报，避免错过窗口期</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>合规法务资源</strong></td>
+<td>ICP 经营许可适用性法务评估 + PIPL 隐私协议法律文本 + 跨境数据合规评估 + 商标 / 软著代办通道（创新券抵扣）</td>
+<td>§3.5.5 ICP 三路径决策树落地需专业法务出书面意见；§3.5.6 OCR 隐私协议、§3.4.8 B2B 中立性条款均需法律审核</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>创业赛事 / 导师对接</strong></td>
+<td>创业大赛报名通道（市级 / 全国级）+ 跨境支付 / AI / SaaS 行业导师 1-2 名 + 路演 / 中赛 / Demo Day 资源对接</td>
+<td>跨境支付 + AI 双行业资深视角校准产品方向，验证 §5.7 R3 / R7 风险判断</td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong>算力 / 云资源 / 模型券</strong></td>
+<td>智谱 GLM API 模型券（覆盖 2026 年度调用）+ 阿里云代金券（覆盖 2026 ECS / RDS / Redis 月费）+ AI 编码工具采购优惠通道（Claude Code / Cursor / Codex 等）</td>
+<td>直接降低 §4.2 三年成本（云服务 + AI 工具合计三年 ~3-7 万元的 30-50%）</td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>留学 / 出海生态对接</strong></td>
+<td>临港国际人才中心 + 留学服务机构 + 跨境财务顾问机构 + 海外校友会 / UBC 上海校友资源</td>
+<td>直接对接 §3.4.1 留学生 + 家长主线获客的种子社群与 §3.4.3 B2B 留学机构合作渠道</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>资源分层</strong>：1-4 项为入驻必要资源；5 项为期望资源（缺也不阻塞入驻）；6 项为生态延展资源（按园区现有合作网络对接）。</p>
+</blockquote>
+<h4 id="693-6-2026-05-2026-11">6.9.3 入驻后 6 个月交付物（2026-05 → 2026-11）</h4>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>量化目标</th>
+<th>校准依据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>累计注册</td>
+<td>≥ 3,500</td>
+<td>§3.4.6 灰度漏斗 2026-11 月末累计目标 3,600 同步</td>
+</tr>
+<tr>
+<td>用户访谈</td>
+<td>≥ 30 个（留学生 + 家长 + 跨境工作者结构化样本）</td>
+<td>§3.4.6 激活留存指标"每季度 ≥ 10 个"承诺三季度</td>
+</tr>
+<tr>
+<td>软著申报</td>
+<td>首批 1-2 件提交</td>
+<td>§1.8 知识产权申报计划"2026 H2 首批"</td>
+</tr>
+<tr>
+<td>商标申报</td>
+<td>首批 1 件初审</td>
+<td>§1.8 知识产权申报计划"2026 H2 商标 FXplanner / 凯衍磁缘"</td>
+</tr>
+<tr>
+<td>灰度阈值</td>
+<td>2026-09 月末累计注册 ≥ 1,400（失败阈值未触发）</td>
+<td>§3.4.6 关键失败阈值</td>
+</tr>
+<tr>
+<td>创业赛事</td>
+<td>报名 1-2 个市级 / 省级创业大赛</td>
+<td>§3.4.3 销售渠道 2026 列</td>
+</tr>
+<tr>
+<td>财务披露</td>
+<td>6 个月真实账单（云 + AI + LLM API + 第三方）作为后资助评估依据</td>
+<td>§4.2 真实账单滚动校准</td>
+</tr>
+</tbody>
+</table>
+<h4 id="694-12-2026-05-2027-04">6.9.4 入驻后 12 个月承诺交付物（2026-05 → 2027-04）</h4>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>量化目标</th>
+<th>校准依据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>累计注册</td>
+<td>8,000-10,000（区间）</td>
+<td>§3.4.2 三年规划 2027 累计 22,500 的 H1 进度，按月度爬坡 35-45%</td>
+</tr>
+<tr>
+<td>软著</td>
+<td>2-3 件获证</td>
+<td>§1.8</td>
+</tr>
+<tr>
+<td>商标</td>
+<td>1-2 件公告通过</td>
+<td>§1.8</td>
+</tr>
+<tr>
+<td>商业化闸门</td>
+<td>(a) ICP 经营许可适用性法务评估出具书面意见；(b) 微信支付商户接入 + 隐私政策上线；(c) 试用 → 付费转化首批样本</td>
+<td>§3.5.3 商业化前必审合规事项三件套 + §5.7 R3</td>
+</tr>
+<tr>
+<td>Demo Day / 路演</td>
+<td>参加 ≥ 2 场（含园区主办路演 + 1 场全国 / 市级创业大赛）</td>
+<td>配合园区品牌输出</td>
+</tr>
+<tr>
+<td>团队扩展</td>
+<td>兼职 / 外包首批 1-2 名到岗（设计 / 内容 / 客服）</td>
+<td>§6.5.2 兼职 / 外包岗位拆解</td>
+</tr>
+<tr>
+<td>B2B 验证</td>
+<td>签约 / 试点 1-2 家留学机构 / 跨境财务顾问</td>
+<td>§3.4.3 / §3.4.7 B2B 拓展节奏</td>
+</tr>
+<tr>
+<td>财务自我造血路径校准</td>
+<td>12 个月真实数据校准 §5.4 现金流模型；保守退守版触发条件验证（活跃订阅率实测）</td>
+<td>§5.7 R1 + §5.5.6 三段退路触发评估</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>承诺边界</strong>：6 个月与 12 个月交付物作为入驻后双向考核基线，与园区后资助评估口径对齐；任一项未达成将主动书面说明原因与下阶段补救方案，不回避披露。</p>
+</blockquote>
+<hr />
+<h2 id="_15">附录</h2>
+<h3 id="a">附录 A：系统架构与数据流图说明</h3>
+<p><strong>当前架构（已上线）</strong>：</p>
+<pre><code>终端用户（Web 浏览器）
+    ↓ HTTPS
+Web 前端（Vue3 + TypeScript + Vite + Tailwind / Pinia / vue-i18n / ECharts）
+    ↓
+1Panel OpenResty 反向代理（HTTPS+HSTS / Let's Encrypt 自动续期）
+    ↓ app.fxplanner.cn ↘ api.fxplanner.cn
+FastAPI 后端容器（Python 3.11 / JWT + 邮箱 OTP / WebSocket 通知）
+    ↓                          ↘
+PostgreSQL 16              Redis 7（缓存 + WebSocket pub/sub）
+（Alembic 001→005）         （连接超时 1.0/2.0s）
+
+外部依赖：
+- GLM 智谱 AI（glm-5-turbo，OpenAI 兼容协议）：AI 自然语言录入
+- k780 汇率聚合（中行 / 建行 / 交行，双参数 appkey + sign）
+- 银行直连：农行（无认证）/ 工行（POST+Referer）/ 招行（Origin+Referer）
+- 邮件 SMTP：OTP 发送
+
+WebSocket 实时通知：5 类事件 + 票据认证 + 严格 fail-closed + 指数退避重连
+</code></pre>
+<p><strong>典型数据流（用户文字 / 语音录入场景）</strong>：</p>
+<ol>
+<li>用户输入"我每月给孩子打 1500 美元生活费" → 前端 <code>POST /api/ai/parse {text}</code>；</li>
+<li>后端 → GLM 自然语言解析 → 返回结构化结果 + 置信度标签；</li>
+<li>后端 → 汇率域查询（stale-while-revalidate 缓存 → 银行直连优先 / k780 降级）；</li>
+<li>后端写入"待确认订阅" → 前端展示"待确认卡片"；</li>
+<li>用户确认 / 修改后入库 → 后端更新额度 / 预算；</li>
+<li>触发阈值（80%/90%/100%）→ 后端推送 WebSocket → 前端更新渐变环 + Toast。</li>
+</ol>
+<p><strong>规划扩展架构（Sprint H1-H3 + 移动端规划，2026 Q3 起）</strong>：在现有后端基础上新增 Harness AI 编排层（多 Provider LLM 路由）+ Agent API（开放给第三方智能体）+ MCP Server；前端侧新增 Tauri 2.0 桌面 / 移动客户端（Windows / macOS / iOS / Android）+ 本地 Whisper 离线 STT。</p>
+<h3 id="b-v12">附录 B：数据基线 v1.2 口径</h3>
+<p>详见 <code>Step0_数据基线锁定_v1.2.md</code>，核心锁定值：</p>
+<ul>
+<li><strong>SOM</strong>：675 万人 × 6,250 亿 RMB 钱包流量（商业假设）；</li>
+<li><strong>三年累计注册（申报主线）</strong>：4,500 / 22,500 / 62,500；</li>
+<li><strong>付费用户 2027/2028</strong>：563 / 1,563；</li>
+<li><strong>活跃订阅率</strong>：2.5%（基准）；保守 1.5% / 乐观 4%；</li>
+<li><strong>ARPU 2027/2028</strong>：¥150 / ¥165；</li>
+<li><strong>年收入 2027/2028（A 基准）</strong>：¥8 万 / ¥26 万；</li>
+<li><strong>加权年节省</strong>：¥2,590-6,335 / 人；</li>
+<li><strong>价格策略</strong>：¥19.9 / 月、¥49.9 / 季、报告 ¥5-10 / 份。</li>
+</ul>
+<h3 id="csprint-013d">附录 C：原型事实清单（Sprint 0~13D）</h3>
+<p>详见一章 §1.6.3。核心事实：</p>
+<ul>
+<li>累计 14+ Sprint（Sprint 0 至 Sprint 13D）；</li>
+<li>已上线 18+ 项核心能力；</li>
+<li>单元 + 集成 + E2E 测试 <strong>257 passed, 0 failed</strong>；</li>
+<li>后端 DDD 6 大上下文（identity / subscription / quota / exchange_rate / ai_interaction / notification）；</li>
+<li>已对接 10+ 外部 API；</li>
+<li>ICP 备案 2026-04-09 通过；</li>
+<li>HTTPS + HSTS + Let's Encrypt SSL 自动续期；</li>
+<li>中 / 英 / 日三语国际化；</li>
+<li>Docker Compose 5 容器编排 + 1Panel OpenResty 反代 + GitHub Actions 双门禁 CI/CD；</li>
+<li>Alembic 迁移 001 → 005 全部生产执行成功。</li>
+</ul>
+<h3 id="d">附录 D：知识产权材料清单</h3>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th style="text-align: right;">件数</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>域名（<code>fxplanner.cn</code>）</td>
+<td style="text-align: right;">1</td>
+<td>✅ 已注册 + 多年续费</td>
+</tr>
+<tr>
+<td>ICP 备案</td>
+<td style="text-align: right;">1</td>
+<td>✅ 2026-04-09 通过；备案号 <code>沪ICP备2026012540号-1</code></td>
+</tr>
+<tr>
+<td>SSL 证书</td>
+<td style="text-align: right;">1</td>
+<td>✅ Let's Encrypt 自动续期</td>
+</tr>
+<tr>
+<td>计算机软件著作权（拟提交）</td>
+<td style="text-align: right;">首批 1 件（FXplanner 主程序）2026 H2；2027-2028 增项至累计 4-6 件</td>
+<td>⏳ 拟提交</td>
+</tr>
+<tr>
+<td>商标（拟提交）</td>
+<td style="text-align: right;">首批 2 类（"FXplanner" + "凯衍磁缘"）2026 H2；2027-2028 增类</td>
+<td>⏳ 拟提交</td>
+</tr>
+<tr>
+<td>三年累计 IP 申报承诺规模</td>
+<td style="text-align: right;"><strong>8-10 件软著 + 商标</strong></td>
+<td>⏳ 申报承诺</td>
+</tr>
+<tr>
+<td>核心规则库与 LLM 提示词</td>
+<td style="text-align: right;">🔒 商业秘密</td>
+<td>权属归项目方</td>
+</tr>
+<tr>
+<td>完整源码</td>
+<td style="text-align: right;">🔒 私有仓库</td>
+<td>项目方独立持有</td>
+</tr>
+<tr>
+<td>完整文档资产</td>
+<td style="text-align: right;">SPEC.md / PRD.md / TECH_ARCHITECTURE.md / DEPLOYMENT_GUIDE.md / TEST_REPORT.md / CHANGELOG.md / 等 11+ 份</td>
+<td>✅ 已沉淀</td>
+</tr>
+<tr>
+<td>原型设计稿</td>
+<td style="text-align: right;"><code>design/web-design.pen</code>（36+ 画板）</td>
+<td>✅ 已沉淀</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>申报口径</strong>：申请表"知识产权"字段仅引用拟累计 8-10 件软著 + 商标；已落实数字资产 / 资质 3 项作为支撑材料附件，不与拟申报 IP 合并计数。</p>
+</blockquote>
+<h3 id="emvp">附录 E：MVP 测试与质量指标</h3>
+<p>详见一章 §1.4.1 / §1.7.1。核心指标：</p>
+<ul>
+<li>测试总数：<strong>257 passed, 0 failed</strong>；</li>
+<li>E2E 框架：Playwright（127.0.0.1:4173 strictPort）；</li>
+<li>历史轨迹：Sprint 7 → Sprint 10：223 → 227 → 250 → 254 → <strong>257</strong>（持续上升）；</li>
+<li>数据库迁移：Alembic 001 → 005 全部生产执行成功；</li>
+<li>CI/CD 门禁：pytest + vite build 双门禁；</li>
+<li>部署链路：SSH 部署 → Alembic 迁移 → 健康检查；</li>
+<li>单次部署回滚时间：&lt; 5 分钟；</li>
+<li>银行牌价性能：首次 ~1.7s，二次 0ms（localStorage 命中）；</li>
+<li>数据存储边界：不存银行卡号 / 身份证 / 真实交易流水 / 任何支付凭证（PIPL 边界）。</li>
+</ul>
+</body>
+</html>

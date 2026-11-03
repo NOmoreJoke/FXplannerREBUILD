@@ -19,6 +19,7 @@ import {
 	assertUsedAtInRange,
 	allocateLotsFifo,
 	computeFundStatus,
+	utc8DayStart,
 	UsageCalcError,
 	UsageLotShortageError,
 } from "./usage-calculator";
@@ -443,9 +444,10 @@ export class UsageService {
 				`使用日期必须是有效的 ISO 8601 日期，收到：${value}`,
 			);
 		}
-		return new Date(
-			Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
-		);
+		// 取整到 UTC+8 当日 0 点：与 assertUsedAtInRange 的日界同源。
+		// 曾取整到 UTC 0 点，两套日界在 00:00-08:00 +0800 窗口错位一天，
+		// 导致「晚于今天」校验被绕过、账本起点当日被误拒。
+		return utc8DayStart(date);
 	}
 
 	/** 备注解析：trim 后空串归 null；超 200 字 400（§4.1） */

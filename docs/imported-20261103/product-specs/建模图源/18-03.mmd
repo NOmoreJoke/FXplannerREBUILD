@@ -1,0 +1,12 @@
+stateDiagram-v2
+    direction TB
+    state "填写中" as EDITING
+    state "待核对" as REVIEW
+    state "已提交" as SUBMITTED
+    state "已清除" as DISCARDED
+    [*] --> EDITING: T01 开始
+    EDITING --> REVIEW: T02 核对
+    REVIEW --> EDITING: T03 返回修改
+    REVIEW --> SUBMITTED: T04 确认保存
+    EDITING --> DISCARDED: T05 清除
+    REVIEW --> DISCARDED: T05 清除

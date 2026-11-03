@@ -1,0 +1,85 @@
+#!/usr/bin/env node
+/**
+ * 合规文案 lint（Sprint C1，PRD v2.0 §4.1 原则二：合规语言体系）。
+ *
+ * 扫描前端用户可见文案中的封杀词：
+ *   收益 / 盈利 / 赚 / 预测 / 抄底 / 最佳时机 / 投资建议 / 看涨 / 看跌 /
+ *   必涨 / 必跌 / 稳赚 / 保本 / 择时
+ * 以及方向建议句式（购汇有利 / 推迟购汇 等）。
+ *
+ * 豁免：
+ *   - 注释行（// 、<!-- -->、* 开头）——代码注释非用户可见
+ *   - 免责声明句式（"不构成投资建议"、"非投资建议"、"不含投资建议"）
+ *   - 行内标记 compliance-allow（人工 review 后显式豁免）
+ *
+ * CI 用法：node scripts/compliance-lint.mjs   （违规退出码 1）
+ */
+
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { join, relative } from 'node:path'
+
+const ROOT = new URL('..', import.meta.url).pathname
+// 前端全量 + 后端的用户可见文案出口（报告分享 HTML / 通知推送）。
+// 后端其余模块输出均为 message_key（文案在前端 i18n），无需扫描。
+const SCAN_DIRS = ['src', 'backend/report', 'backend/notification']
+const EXTENSIONS = new Set(['.vue', '.ts', '.js', '.html', '.py'])
+
+const BANNED = [
+  '收益', '盈利', '赚', '预测', '抄底', '最佳时机', '投资建议',
+  '看涨', '看跌', '必涨', '必跌', '稳赚', '保本', '择时',
+  // 方向建议句式
+  '购汇相对有利', '推迟购汇', '现在该换', '建议买入', '建议卖出',
+]
+
+const DISCLAIMER_PATTERNS = [/不构成投资建议/, /非投资建议/, /不含投资建议/, /不提供投资建议/]
+const COMMENT_LINE = /^\s*(\/\/|\*|\/\*|<!--|#)/
+
+function* walk(dir) {
+  for (const name of readdirSync(dir)) {
+    const full = join(dir, name)
+    const st = statSync(full)
+    if (st.isDirectory()) {
+      if (name === 'node_modules' || name.startsWith('.')) continue
+      yield* walk(full)
+    } else if ([...EXTENSIONS].some((ext) => name.endsWith(ext))) {
+      yield full
+    }
+  }
+}
+
+const violations = []
+for (const dir of SCAN_DIRS) {
+  for (const file of walk(join(ROOT, dir))) {
+    const lines = readFileSync(file, 'utf8').split('\n')
+    lines.forEach((line, i) => {
+      if (COMMENT_LINE.test(line)) return
+      if (line.includes('compliance-allow')) return
+      // 免责句仅豁免"投资建议"一词本身（终轮复核 P3：整行豁免会被
+      // "不构成投资建议，但建议买入稳赚"式话术洗白），其余封杀词照常命中
+      let scanLine = line
+      if (DISCLAIMER_PATTERNS.some((p) => p.test(line))) {
+        scanLine = line.replace(/不构成投资建议|非投资建议|不含投资建议|不提供投资建议/g, '')
+      }
+      for (const word of BANNED) {
+        if (scanLine.includes(word)) {
+          violations.push({
+            file: relative(ROOT, file),
+            line: i + 1,
+            word,
+            text: line.trim().slice(0, 120),
+          })
+        }
+      }
+    })
+  }
+}
+
+if (violations.length > 0) {
+  console.error(`✗ 合规文案 lint：发现 ${violations.length} 处封杀词违规\n`)
+  for (const v of violations) {
+    console.error(`  ${v.file}:${v.line}  [${v.word}]  ${v.text}`)
+  }
+  console.error('\n封杀词表见 docs/PRD.md §4.1 原则二。确属合规用法请在该行加 compliance-allow 标记并人工复核。')
+  process.exit(1)
+}
+console.log('✓ 合规文案 lint 通过（0 违规）')

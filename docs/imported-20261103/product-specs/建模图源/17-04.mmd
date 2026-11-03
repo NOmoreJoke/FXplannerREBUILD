@@ -1,0 +1,5 @@
+erDiagram
+    Plan ||--o{ ReportSnapshot : "原计划依据"
+    ReportSnapshot ||--o{ ReportTask : "生成"
+    ReportTask ||--o| ReportFile : "成功文件"
+    BaseCurrencyChange o|--o{ ReportSnapshot : "停止依据"

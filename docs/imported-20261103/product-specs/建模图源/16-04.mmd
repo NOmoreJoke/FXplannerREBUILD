@@ -1,0 +1,22 @@
+sequenceDiagram
+    actor U as 用户
+    participant UI as 目标与计划
+    participant C as 规划协调
+    participant L as 外币账本
+    U->>UI: 新建目标并保存
+    UI->>C: 保存目标信息
+    C-->>UI: 目标已创建
+    opt 用户选择制定计划
+        U->>UI: 选择目标和准备参数
+        C->>L: 查询累计使用及可分配余额
+        L-->>C: 目标剩余需求与余额
+        C-->>UI: 展示计划与拟分配预览
+        U->>UI: 确认创建计划
+        UI->>C: 重验唯一进行中计划及金额
+        alt 依据变化或方案无效
+            C-->>UI: 返回修改并重新确认
+        else 全部通过
+            C->>L: 整体保存计划版本及拟分配
+            L-->>UI: 返回新计划详情
+        end
+    end

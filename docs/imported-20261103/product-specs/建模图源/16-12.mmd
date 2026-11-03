@@ -1,0 +1,19 @@
+sequenceDiagram
+    actor U as 用户
+    participant UI as 我的报告
+    participant C as 报告协调
+    participant L as 成本与版本
+    participant R as PDF生成
+    U->>UI: 查看所选计划成本或报告
+    UI->>C: 请求对应计划数据
+    C->>L: 读取原币成本和有效版本
+    L-->>UI: 分项摘要及生成状态
+    opt 需要生成合规报告
+        C->>L: 固定报告快照与任务
+        C--)R: 执行同一任务
+        alt 文件生成成功
+            R-->>UI: 提供该版本下载入口
+        else 文件生成失败
+            R-->>UI: 显示失败及同任务重试
+        end
+    end

@@ -1,0 +1,33 @@
+{
+  "schema_version": "fxplanner.phase-a.response.v1",
+  "result": {
+    "schema_version": "fxplanner.report.response.v0.2",
+    "request_id": "fixture_request_001",
+    "trace_id": "fixture_trace_001",
+    "delivery_status": "rejected",
+    "report": null,
+    "error": {
+      "errorCode": "SNAPSHOT_INCONSISTENT",
+      "messageKey": "report.snapshot_inconsistent",
+      "requestId": "fixture_request_001",
+      "details": []
+    }
+  },
+  "pipeline_audit": {
+    "policy_version": "fxplanner.phase-a.policy.v1",
+    "facts_validation": "failed",
+    "delivered_output_validation": "not_run",
+    "semantic_review": {
+      "status": "not_run",
+      "scope": "none",
+      "narrative_hash": null
+    },
+    "delivered_narrative_hash": null,
+    "model_calls": {
+      "report": 0,
+      "quality": 0,
+      "total": 0
+    },
+    "execution_gate": null
+  }
+}

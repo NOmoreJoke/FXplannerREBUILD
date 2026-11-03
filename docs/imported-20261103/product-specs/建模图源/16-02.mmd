@@ -1,0 +1,21 @@
+sequenceDiagram
+    actor U as 用户
+    participant UI as 首次配置
+    participant C as 配置协调
+    participant Q as 报价职责
+    participant L as 外币账本
+    U->>UI: 选择配置并填写已有外币
+    UI->>C: 保存适用草稿
+    U->>UI: 进入最后核对
+    C->>Q: 查询全部初始报价
+    Q-->>UI: 采用汇率与来源时间
+    U->>UI: 确认保存
+    UI->>C: 提交核对依据
+    C->>C: 重验金额及全部报价
+    alt 报价过期或依据变化
+        C-->>UI: 保留输入并重新核对
+    else 全部有效
+        C->>L: 整体保存配置与初始入账
+        L-->>C: 账户与成本均已保存
+        C-->>UI: 清除草稿并进入首页
+    end

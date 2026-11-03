@@ -1,0 +1,8 @@
+stateDiagram-v2
+    direction TB
+    state "登录有效" as ACTIVE
+    state "登录结束" as ENDED
+    [*] --> ACTIVE: T01 登录验证
+    ACTIVE --> ENDED: T02 退出或到期
+    ACTIVE --> ENDED: T03 提交注销
+    ENDED --> [*]

@@ -1,0 +1,190 @@
+{
+  "schema_version": "fxplanner.agent.blueprint.stage-a.v1",
+  "artifact_type": "design_only",
+  "runtime_implemented": false,
+  "capability": "planning.report.stage-a",
+  "locale": "zh-CN",
+  "contract": "contracts/stage-a.schema.json",
+  "api_design": "contracts/openapi.json",
+  "public_entrypoints": [
+    "plan_detail.generate_report",
+    "report_page.regenerate"
+  ],
+  "supported_report_kinds": [
+    "PLANNING",
+    "PROGRESS"
+  ],
+  "pipeline": [
+    "authorize",
+    "freeze_facts_and_selection",
+    "generate_narrative",
+    "validate_programmatically",
+    "audit_semantics",
+    "fallback_if_required",
+    "validate_delivery",
+    "persist_atomically",
+    "respond"
+  ],
+  "roles": [
+    {
+      "id": "main",
+      "mode": "deterministic_router",
+      "llm_enabled": false,
+      "prompt_file": "prompts/01_main.system.txt",
+      "prompt_version": "fxplanner.phase-a.main.v1",
+      "input_definition": "MainInput",
+      "output_definition": "MainDecision",
+      "allowed_tools": []
+    },
+    {
+      "id": "data",
+      "mode": "tool_only",
+      "llm_enabled": false,
+      "prompt_file": "prompts/02_data.system.txt",
+      "prompt_version": "fxplanner.phase-a.data.v1",
+      "input_definition": null,
+      "output_definition": "DataManifest",
+      "allowed_tools": [
+        "resolve_report_snapshot"
+      ]
+    },
+    {
+      "id": "strategy",
+      "mode": "rule_only",
+      "llm_enabled": false,
+      "prompt_file": "prompts/03_strategy.system.txt",
+      "prompt_version": "fxplanner.phase-a.strategy.v1",
+      "input_definition": "StageProviderInput",
+      "output_definition": "StrategyRationale",
+      "allowed_tools": []
+    },
+    {
+      "id": "report",
+      "mode": "llm_with_template_fallback",
+      "llm_enabled": true,
+      "prompt_file": "prompts/04_report.system.txt",
+      "prompt_version": "fxplanner.report.system.v0.2",
+      "input_definition": "StageProviderInput",
+      "output_definition": "ModelOutput",
+      "allowed_tools": []
+    },
+    {
+      "id": "quality",
+      "mode": "programmatic_and_independent_llm",
+      "llm_enabled": true,
+      "prompt_file": "prompts/05_quality.system.txt",
+      "prompt_version": "fxplanner.phase-a.quality.v1",
+      "input_definition": "SemanticAuditInput",
+      "output_definition": "SemanticAuditOutput",
+      "allowed_tools": []
+    }
+  ],
+  "model_deployments": {
+    "report": {
+      "provider": null,
+      "model": null,
+      "credential_ref": null
+    },
+    "quality": {
+      "provider": null,
+      "model": null,
+      "credential_ref": null
+    }
+  },
+  "tool_bindings": {
+    "resolve_report_snapshot": {
+      "implementation": null,
+      "authority": "server_bound_identity",
+      "mutates_financial_state": false
+    },
+    "select_fixed_candidate": {
+      "implementation": null,
+      "policy": "fixed_mvp_v1",
+      "mutates_financial_state": false,
+      "authority": "snapshot_service_before_freeze_only"
+    },
+    "save_validated_report": {
+      "implementation": null,
+      "authority": "orchestrator_only",
+      "writes": [
+        "report_snapshot",
+        "audit_record",
+        "idempotency_state"
+      ]
+    }
+  },
+  "policies": {
+    "version": "fxplanner.phase-a.policy.v1",
+    "require_current_principal_balance": false,
+    "cash_feasibility": "not_assessed",
+    "batch_amount_basis": "initial_gap",
+    "three_batch_weights": {
+      "front_loaded": [
+        "0.5",
+        "0.3",
+        "0.2"
+      ],
+      "balanced": "equal_split_with_final_remainder",
+      "back_loaded": [
+        "0.2",
+        "0.3",
+        "0.5"
+      ]
+    },
+    "two_batch_weights": {
+      "front_loaded": [
+        "0.6",
+        "0.4"
+      ],
+      "balanced": [
+        "0.5",
+        "0.5"
+      ],
+      "back_loaded": [
+        "0.4",
+        "0.6"
+      ]
+    },
+    "one_batch_weight": "1",
+    "default_pace": "balanced",
+    "calendar_policy_binding": null,
+    "market_quality_policy_binding": null,
+    "missing_calendar": "no_new_candidates",
+    "partial_execution": "explain_existing_only",
+    "unknown_required_fees": "disable_total_cost_comparison",
+    "missing_market": "omit_unsupported_comparison",
+    "severe_snapshot_conflict": "reject",
+    "candidate_generation_gate": "draft_or_server_verified_not_started",
+    "unknown_execution_status": "explain_existing_only"
+  },
+  "generation_budget": {
+    "status": "initial_design_not_measured",
+    "total_model_timeout_ms": 30000,
+    "max_model_calls_total": 3,
+    "max_report_calls": 2,
+    "max_quality_calls": 1,
+    "max_structural_repairs": 1,
+    "provider_sdk_automatic_retries": 0,
+    "max_provider_input_bytes": 131072
+  },
+  "fallback": {
+    "model_disabled": "trusted_factual_template",
+    "invalid_narrative": "trusted_factual_template",
+    "semantic_rejected_or_unavailable": "discard_ai_and_use_trusted_factual_template",
+    "invalid_business_facts": "reject",
+    "persistence_failure": "retryable_error_no_generated",
+    "template_semantic_pass_claim": false
+  },
+  "feature_flags": {
+    "chatbot_entry": false,
+    "main_llm_routing": false,
+    "strategy_llm_explanation": false,
+    "variable_batch_count": false,
+    "remaining_gap_allocation": false,
+    "partial_execution_replanning": false,
+    "market_signal_adjustment": false,
+    "horizon_buckets": false,
+    "automatic_trading": false,
+    "financial_record_writes": false
+  }
+}

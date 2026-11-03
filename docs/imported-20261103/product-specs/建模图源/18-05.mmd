@@ -1,0 +1,13 @@
+stateDiagram-v2
+    direction TB
+    state "选择币种" as EDITING
+    state "核对影响" as REVIEW
+    state "已生效" as COMMITTED
+    state "已取消" as CANCELLED
+    [*] --> EDITING
+    EDITING --> REVIEW: T01 查看影响
+    REVIEW --> EDITING: T02 返回修正
+    REVIEW --> REVIEW: T03 依据变化
+    REVIEW --> COMMITTED: T04 确认
+    EDITING --> CANCELLED: T05 取消
+    REVIEW --> CANCELLED: T05 取消

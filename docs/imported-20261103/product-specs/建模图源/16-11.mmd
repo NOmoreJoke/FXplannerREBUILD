@@ -1,0 +1,18 @@
+sequenceDiagram
+    participant T as 提醒时点
+    participant C as 提醒协调
+    participant L as 计划与使用数据
+    participant UI as 站内提醒
+    T->>C: 检查当前提醒资格
+    C->>L: 读取开关状态安排与缺口
+    L-->>C: 返回当前有效依据
+    alt 关闭提醒或计划已结束
+        C->>C: 不生成后续提醒
+    else 符合当日提醒条件
+        C->>L: 查询该计划当日提醒
+        alt 当日尚无提醒
+            C->>UI: 保存并展示合并提醒
+        else 当日已有提醒
+            C->>UI: 更新内容且不额外推送
+        end
+    end

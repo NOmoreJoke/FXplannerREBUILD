@@ -1,0 +1,8 @@
+stateDiagram-v2
+    direction TB
+    state "可下载" as AVAILABLE
+    state "已失效删除" as REMOVED
+    [*] --> AVAILABLE: T01 交付
+    AVAILABLE --> AVAILABLE: T02 下载
+    AVAILABLE --> REMOVED: T03 到期或删除请求
+    REMOVED --> [*]

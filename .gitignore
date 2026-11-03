@@ -51,6 +51,9 @@ CLAUDE.local.md
 
 .codegraph
 
+# mimosa 安全扫描插件运行状态（hook-state，运行产物）
+.mimosa/
+
 AGENT.md
 
 # .pi 运行时状态不入库（skills/extensions/pi-cast 模板入库）
@@ -62,3 +65,6 @@ AGENT.md
 docs/learning-notes/**
 # 代码地图生成产物
 polygrapher/
+
+# imported historical secrets (structured import 2026-11-03)
+docs/imported-20261103/local-secrets/

@@ -1,0 +1,13 @@
+stateDiagram-v2
+    direction TB
+    state "等待撤回期" as WAITING
+    state "关闭并清理" as PROCESSING
+    state "处理异常" as EXCEPTION
+    state "已完成" as COMPLETED
+    state "已撤回" as WITHDRAWN
+    [*] --> WAITING: T01 提交注销
+    WAITING --> WITHDRAWN: T02 撤回注销
+    WAITING --> PROCESSING: T03 撤回期结束
+    PROCESSING --> EXCEPTION: T04 异常
+    EXCEPTION --> PROCESSING: T05 继续清理
+    PROCESSING --> COMPLETED: T06 全部完成

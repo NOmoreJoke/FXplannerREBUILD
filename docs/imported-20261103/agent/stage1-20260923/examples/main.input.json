@@ -1,0 +1,15 @@
+{
+  "schema_version": "fxplanner.phase-a.main.input.v1",
+  "request_id": "fixture_request_001",
+  "entrypoint": "plan_detail",
+  "resource_present": true,
+  "resource_lifecycle": "draft",
+  "report_kind": "PLANNING",
+  "has_confirmed_schedule": false,
+  "focus": [
+    "holdings",
+    "schedule",
+    "reference_comparison"
+  ],
+  "user_request": ""
+}

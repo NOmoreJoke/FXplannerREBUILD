@@ -1,0 +1,3120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FXplanner Report Agent Contract V0.2",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/GenerateRequest",
+      "description": ""
+    },
+    {
+      "$ref": "#/$defs/HarnessJob",
+      "description": ""
+    },
+    {
+      "$ref": "#/$defs/ProviderInput",
+      "description": ""
+    },
+    {
+      "$ref": "#/$defs/ModelOutput",
+      "description": ""
+    },
+    {
+      "$ref": "#/$defs/ServiceResponse",
+      "description": ""
+    },
+    {
+      "$ref": "#/$defs/AuditRecord",
+      "description": ""
+    }
+  ],
+  "$defs": {
+    "Id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "description": "本次快照内唯一的无个人信息别名",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+    },
+    "Decimal": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 48,
+      "description": "十进制字符串；无千分位、指数或负零",
+      "pattern": "^(?!-0(?:\\.0+)?$)-?(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+    },
+    "Date": {
+      "type": "string",
+      "format": "date",
+      "description": "YYYY-MM-DD，按报告 timezone 解读"
+    },
+    "DateTime": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339，必须带 Z 或时区偏移"
+    },
+    "Hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "小写 SHA-256 十六进制"
+    },
+    "Currency": {
+      "type": "string",
+      "enum": [
+        "HKD",
+        "USD",
+        "GBP",
+        "AUD",
+        "CAD",
+        "CNY",
+        "JPY",
+        "EUR",
+        "SGD",
+        "NZD",
+        "TWD",
+        "CHF",
+        "KRW",
+        "THB",
+        "MYR"
+      ],
+      "description": "MVP 币种；CNH 不是 CNY 的别名"
+    },
+    "Availability": {
+      "type": "string",
+      "enum": [
+        "available",
+        "unavailable",
+        "not_applicable"
+      ],
+      "description": ""
+    },
+    "Status": {
+      "type": "string",
+      "enum": [
+        "READY",
+        "DEGRADED",
+        "BLOCKED"
+      ],
+      "description": ""
+    },
+    "ReportKind": {
+      "type": "string",
+      "enum": [
+        "PLANNING",
+        "PROGRESS",
+        "REVIEW",
+        "STOP_SUMMARY"
+      ],
+      "description": ""
+    },
+    "Pace": {
+      "type": "string",
+      "enum": [
+        "front_loaded",
+        "balanced",
+        "back_loaded"
+      ],
+      "description": ""
+    },
+    "ActionCode": {
+      "type": "string",
+      "enum": [
+        "REVIEW_PLAN",
+        "PROVIDE_CHANNEL_COSTS",
+        "VIEW_RECORDS",
+        "VIEW_DATA_NOTES",
+        "OPEN_ADJUSTMENT_PREVIEW",
+        "VIEW_SUCCESSOR_PLAN"
+      ],
+      "description": "只展示入口，不执行领域操作"
+    },
+    "NoticeCode": {
+      "type": "string",
+      "enum": [
+        "CURVE_NOT_FORECAST",
+        "FEES_UNKNOWN",
+        "INITIAL_COST_IS_VALUATION",
+        "TIME_VALUE_EXCLUDED",
+        "REFERENCE_NOT_EXECUTABLE",
+        "FIXTURE_DATA",
+        "PARTIAL_DATA"
+      ],
+      "description": ""
+    },
+    "SelectionReason": {
+      "type": "string",
+      "enum": [
+        "USER_SELECTED_PACE",
+        "DEFAULT_BALANCED",
+        "USER_REQUESTED_EARLIER_PREPARATION",
+        "NO_ELIGIBLE_CANDIDATE",
+        "NOT_APPLICABLE",
+        "BLOCKED"
+      ],
+      "description": ""
+    },
+    "ResourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "expected_version"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "plan",
+            "preview"
+          ],
+          "description": "已存计划或业务服务保存的未确认预览；都必须归当前用户"
+        },
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": "实际资源 ID；仅留在服务端，不直接发模型"
+        },
+        "expected_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "客户端看到的资源版本；服务端不匹配返回409"
+        }
+      }
+    },
+    "GenerateRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "resource",
+        "report_kind",
+        "locale",
+        "focus",
+        "user_request"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "fxplanner.report.request.v0.2",
+          "description": ""
+        },
+        "resource": {
+          "$ref": "#/$defs/ResourceRef",
+          "description": ""
+        },
+        "report_kind": {
+          "$ref": "#/$defs/ReportKind",
+          "description": ""
+        },
+        "locale": {
+          "const": "zh-CN",
+          "description": "MVP 固定中文"
+        },
+        "focus": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "holdings",
+              "schedule",
+              "reference_comparison",
+              "execution_review",
+              "education"
+            ],
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 5,
+          "description": "仅控制说明侧重，不删固定区块",
+          "uniqueItems": true
+        },
+        "user_request": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "可空字符串；非可信偏好/问题，不是业务事实；脱敏后进入模型"
+        }
+      }
+    },
+    "Plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plan_id",
+        "version",
+        "goal_id",
+        "lifecycle",
+        "source_currency",
+        "target_currency",
+        "preparation_start_date",
+        "latest_safe_date",
+        "use_date",
+        "selected_pace"
+      ],
+      "properties": {
+        "plan_id": {
+          "$ref": "#/$defs/Id",
+          "description": "计划或预览的本次别名"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "不可变版本"
+        },
+        "goal_id": {
+          "$ref": "#/$defs/Id",
+          "description": "目标别名"
+        },
+        "lifecycle": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "active",
+            "completed",
+            "cancelled",
+            "stopped"
+          ],
+          "description": ""
+        },
+        "source_currency": {
+          "$ref": "#/$defs/Currency",
+          "description": "本计划新增准备的成本币，不改写历史来源币"
+        },
+        "target_currency": {
+          "$ref": "#/$defs/Currency",
+          "description": "目标币"
+        },
+        "preparation_start_date": {
+          "$ref": "#/$defs/Date",
+          "description": "准备开始日期"
+        },
+        "latest_safe_date": {
+          "$ref": "#/$defs/Date",
+          "description": "最晚准备日期；非模型推算"
+        },
+        "use_date": {
+          "$ref": "#/$defs/Date",
+          "description": "预计使用日期"
+        },
+        "selected_pace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pace",
+              "description": "用户已经明确的节奏；未知为null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "Selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "reason"
+      ],
+      "properties": {
+        "candidate_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "选定合法候选；无候选或终态为null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/SelectionReason",
+          "description": ""
+        }
+      }
+    },
+    "Policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule_version",
+        "calculation_version",
+        "calendar_version",
+        "market_quality_policy_version",
+        "eligibility",
+        "allowed_actions",
+        "selection",
+        "required_notice_codes"
+      ],
+      "properties": {
+        "rule_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "业务规则版本"
+        },
+        "calculation_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "计算/舍入版本"
+        },
+        "calendar_version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "工作日日历版本；缺失时不得新增排期"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "market_quality_policy_version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "行情质量策略版本；缺失时不得生成合格曲线"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "eligibility": {
+          "$ref": "#/$defs/Status",
+          "description": "业务数据完整性状态，与模型是否故障无关"
+        },
+        "allowed_actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ActionCode",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 6,
+          "description": "授权且符合计划状态的可显示入口",
+          "uniqueItems": true
+        },
+        "selection": {
+          "$ref": "#/$defs/Selection",
+          "description": ""
+        },
+        "required_notice_codes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NoticeCode",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 7,
+          "description": "服务端计算，渲染不可删除",
+          "uniqueItems": true
+        }
+      }
+    },
+    "Metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "value_type",
+        "value",
+        "unit",
+        "status",
+        "reason_code",
+        "scope_id",
+        "evidence_ids"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": "唯一指标 ID，说明中使用 {{m:id}}"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "审核过的展示名称；不是自由备注"
+        },
+        "value_type": {
+          "type": "string",
+          "enum": [
+            "amount",
+            "quantity",
+            "rate",
+            "percentage",
+            "date",
+            "datetime",
+            "count"
+          ],
+          "description": "决定 value 语法及渲染"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "available 时必有；金额/数量/汇率/百分比为十进制字符串；日期按类型，未知null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16,
+          "description": "金额/数量=币种；rate=来源币/目标币；percentage=percent；date=date；datetime=datetime；count=count"
+        },
+        "status": {
+          "$ref": "#/$defs/Availability",
+          "description": ""
+        },
+        "reason_code": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "不可用/不适用时必须有；available必须null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope_id": {
+          "$ref": "#/$defs/Id",
+          "description": "指标范围：goal、plan、account或比较范围别名"
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id",
+            "description": ""
+          },
+          "minItems": 1,
+          "maxItems": 16,
+          "description": "来源证据至少一条",
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "available"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason_code": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "reason_code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "description": "不可用原因"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "amount"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Decimal",
+                    "description": ""
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "unit": {
+                "$ref": "#/$defs/Currency",
+                "description": ""
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "quantity"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Decimal",
+                    "description": ""
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "unit": {
+                "$ref": "#/$defs/Currency",
+                "description": ""
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "rate"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Decimal",
+                    "description": ""
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "unit": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}/[A-Z]{3}$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "percentage"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Decimal",
+                    "description": ""
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "unit": {
+                "const": "percent",
+                "description": ""
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "count"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "unit": {
+                "const": "count",
+                "description": ""
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "date"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Date",
+                    "description": ""
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "unit": {
+                "const": "date",
+                "description": ""
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "datetime"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DateTime",
+                    "description": ""
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "unit": {
+                "const": "datetime",
+                "description": ""
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CostBucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "scope",
+        "source_kind",
+        "quantity_metric_id",
+        "cost_metric_id",
+        "cost_basis",
+        "principal_metric_id",
+        "fee_metric_id",
+        "fee_state"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "account_remaining",
+            "plan_consumed",
+            "exchange_acquisition"
+          ],
+          "description": "剩余持仓、已使用、取得记录不可重复相加"
+        },
+        "source_kind": {
+          "type": "string",
+          "enum": [
+            "opening_valuation",
+            "actual_purchase"
+          ],
+          "description": ""
+        },
+        "quantity_metric_id": {
+          "$ref": "#/$defs/Id",
+          "description": "该来源的目标币数量"
+        },
+        "cost_metric_id": {
+          "$ref": "#/$defs/Id",
+          "description": "该范围已记录成本"
+        },
+        "cost_basis": {
+          "type": "string",
+          "enum": [
+            "opening_valuation",
+            "principal_only",
+            "inclusive_known_channel_costs",
+            "unknown"
+          ],
+          "description": ""
+        },
+        "principal_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "真实本金；无法拆分则null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fee_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "已知费用；缺失不得当零"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fee_state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "confirmed_zero",
+            "unknown",
+            "not_applicable"
+          ],
+          "description": "not_applicable仅期初折算"
+        }
+      }
+    },
+    "ScheduleNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "preparation_date",
+        "quantity_metric_id",
+        "reference_rate_metric_id",
+        "reference_principal_metric_id",
+        "market_point_id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "preparation_date": {
+          "$ref": "#/$defs/Date",
+          "description": ""
+        },
+        "quantity_metric_id": {
+          "$ref": "#/$defs/Id",
+          "description": "该批目标币数量，必须大于零"
+        },
+        "reference_rate_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "该批盘面参考率；缺行情为null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reference_principal_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "该批不含费折算；缺行情为null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "market_point_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "对应曲线节点；不得将原始 rate 自行搬进文案"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ConfirmedNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "preparation_date",
+        "quantity_metric_id",
+        "reference_rate_metric_id",
+        "reference_principal_metric_id",
+        "market_point_id",
+        "execution_match",
+        "executed_quantity_metric_id",
+        "evidence_ids"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "preparation_date": {
+          "$ref": "#/$defs/Date",
+          "description": ""
+        },
+        "quantity_metric_id": {
+          "$ref": "#/$defs/Id",
+          "description": "该批目标币数量，必须大于零"
+        },
+        "reference_rate_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "该批盘面参考率；缺行情为null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reference_principal_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "该批不含费折算；缺行情为null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "market_point_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "对应曲线节点；不得将原始 rate 自行搬进文案"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execution_match": {
+          "type": "string",
+          "enum": [
+            "unmatched",
+            "matched_by_service"
+          ],
+          "description": ""
+        },
+        "executed_quantity_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "仅服务匹配的实际数量；未匹配为null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 16,
+          "description": "安排和执行匹配证据",
+          "uniqueItems": true
+        }
+      }
+    },
+    "ConfirmedSchedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "plan_version",
+        "confirmed_at",
+        "status",
+        "nodes"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "plan_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "已确认时计划版本"
+        },
+        "confirmed_at": {
+          "$ref": "#/$defs/DateTime",
+          "description": ""
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "current",
+            "historical"
+          ],
+          "description": ""
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfirmedNode",
+            "description": ""
+          },
+          "minItems": 1,
+          "maxItems": 3,
+          "description": "没有确认计划则整个对象为null"
+        }
+      }
+    },
+    "ExecutionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "effective_version",
+        "plan_id",
+        "kind",
+        "occurred_on",
+        "quantity_metric_id",
+        "cost_bucket_ids",
+        "evidence_ids"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "effective_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "有效记录版本"
+        },
+        "plan_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "记录归属计划别名；未关联换汇可null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "exchange",
+            "usage"
+          ],
+          "description": ""
+        },
+        "occurred_on": {
+          "$ref": "#/$defs/Date",
+          "description": ""
+        },
+        "quantity_metric_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "cost_bucket_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 30,
+          "description": "该记录成本来源，不能与账户剩余再次相加",
+          "uniqueItems": true
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id",
+            "description": ""
+          },
+          "minItems": 1,
+          "maxItems": 16,
+          "description": "有效来源",
+          "uniqueItems": true
+        }
+      }
+    },
+    "StopContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stopped_at",
+        "reason",
+        "released_quantity_metric_id",
+        "remaining_need_metric_id",
+        "successor_plan_id"
+      ],
+      "properties": {
+        "stopped_at": {
+          "$ref": "#/$defs/DateTime",
+          "description": ""
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "description": "审核过的停止原因，禁止敏感原始备注"
+        },
+        "released_quantity_metric_id": {
+          "$ref": "#/$defs/Id",
+          "description": "仅释放未使用分配"
+        },
+        "remaining_need_metric_id": {
+          "$ref": "#/$defs/Id",
+          "description": "目标剩余需求，不自动分配"
+        },
+        "successor_plan_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "接续计划别名，不迁移旧事实"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "Candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "plan_version",
+        "valid_for_snapshot_id",
+        "pace",
+        "eligible",
+        "reason_codes",
+        "cash_feasibility",
+        "nodes",
+        "total_quantity_metric_id",
+        "reference_cost_metric_id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "plan_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "候选针对的计划版本"
+        },
+        "valid_for_snapshot_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "pace": {
+          "$ref": "#/$defs/Pace",
+          "description": ""
+        },
+        "eligible": {
+          "type": "boolean",
+          "description": "必须通过当前日历、数量、生命周期校验"
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "不可选原因/限制"
+          },
+          "minItems": 0,
+          "maxItems": 10,
+          "description": "",
+          "uniqueItems": true
+        },
+        "cash_feasibility": {
+          "type": "string",
+          "enum": [
+            "verified",
+            "not_assessed"
+          ],
+          "description": "不能从候选合法推断未来现金一定够"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScheduleNode",
+            "description": ""
+          },
+          "minItems": 1,
+          "maxItems": 3,
+          "description": "合法候选一至三批；零可用日期不生成候选"
+        },
+        "total_quantity_metric_id": {
+          "$ref": "#/$defs/Id",
+          "description": "等于各节点数量之和及本次缺口"
+        },
+        "reference_cost_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "候选不含费总参考成本；不可用为null或引用不可用指标"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "Baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "as_of",
+        "snapshot_id",
+        "plan_version",
+        "reference_date",
+        "scope_id",
+        "quantity_metric_id",
+        "source_budget_metric_id",
+        "cost_metric_id",
+        "cost_basis",
+        "derived_from_baseline_id",
+        "source_quality",
+        "evidence_ids"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "inception_futures_reference",
+            "current_futures_reference",
+            "target_date_spot_reference"
+          ],
+          "description": ""
+        },
+        "as_of": {
+          "$ref": "#/$defs/DateTime",
+          "description": "基准观察时间"
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/Id",
+          "description": "原始冻结快照，可早于本次"
+        },
+        "plan_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "原始计划版本"
+        },
+        "reference_date": {
+          "$ref": "#/$defs/Date",
+          "description": "最晚安全日期或其约定比较日期"
+        },
+        "scope_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "quantity_metric_id": {
+          "$ref": "#/$defs/Id",
+          "description": "基准目标币数量"
+        },
+        "source_budget_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "同支出模式基准预算；同目标数量模式null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cost_metric_id": {
+          "$ref": "#/$defs/Id",
+          "description": "成本基准指标；按cost_basis解释"
+        },
+        "cost_basis": {
+          "type": "string",
+          "enum": [
+            "principal_only",
+            "inclusive_known_channel_costs"
+          ],
+          "description": ""
+        },
+        "derived_from_baseline_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "按新数量重新计算的派生基准，保留原始费率规则"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_quality": {
+          "type": "string",
+          "enum": [
+            "market_reference",
+            "channel_quote_reference"
+          ],
+          "description": ""
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id",
+            "description": ""
+          },
+          "minItems": 1,
+          "maxItems": 16,
+          "description": "可追溯冻结规则和来源",
+          "uniqueItems": true
+        }
+      }
+    },
+    "SourceBreakdown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_kind",
+        "quantity_metric_id",
+        "evidence_ids"
+      ],
+      "properties": {
+        "source_kind": {
+          "type": "string",
+          "enum": [
+            "planned_purchase",
+            "actual_purchase",
+            "counterfactual_purchase"
+          ],
+          "description": ""
+        },
+        "quantity_metric_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id",
+            "description": ""
+          },
+          "minItems": 1,
+          "maxItems": 16,
+          "description": "来源",
+          "uniqueItems": true
+        }
+      }
+    },
+    "ComparisonSide": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quantity_metric_id",
+        "source_budget_metric_id",
+        "principal_metric_id",
+        "total_cost_metric_id",
+        "comparison_cost_basis",
+        "source_breakdown"
+      ],
+      "properties": {
+        "quantity_metric_id": {
+          "$ref": "#/$defs/Id",
+          "description": "本侧目标币数量"
+        },
+        "source_budget_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "本侧来源币预算；fixed_source_budget必需"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "principal_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": ""
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total_cost_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": ""
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "comparison_cost_basis": {
+          "type": "string",
+          "enum": [
+            "principal_only",
+            "inclusive_known_channel_costs",
+            "unknown"
+          ],
+          "description": ""
+        },
+        "source_breakdown": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceBreakdown",
+            "description": ""
+          },
+          "minItems": 1,
+          "maxItems": 50,
+          "description": "数量之和须等于本侧quantity"
+        }
+      }
+    },
+    "Comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "scope_id",
+        "candidate_id",
+        "baseline_id",
+        "mode",
+        "nature",
+        "status",
+        "reason_code",
+        "baseline_side",
+        "subject_side",
+        "principal_difference_metric_id",
+        "principal_difference_pct_metric_id",
+        "total_difference_metric_id",
+        "total_difference_pct_metric_id",
+        "target_quantity_difference_metric_id",
+        "target_quantity_difference_pct_metric_id",
+        "fee_scope",
+        "budget_fee_treatment",
+        "initial_holdings_excluded",
+        "time_value_included"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "scope_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "candidate_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "曲线候选比较用，实际复盘null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baseline_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "fixed_target_amount",
+            "fixed_source_budget"
+          ],
+          "description": ""
+        },
+        "nature": {
+          "type": "string",
+          "enum": [
+            "curve_scenario",
+            "actual_vs_frozen_reference",
+            "actual_vs_target_spot"
+          ],
+          "description": ""
+        },
+        "status": {
+          "$ref": "#/$defs/Availability",
+          "description": ""
+        },
+        "reason_code": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "不可用/不适用原因"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baseline_side": {
+          "$ref": "#/$defs/ComparisonSide",
+          "description": ""
+        },
+        "subject_side": {
+          "$ref": "#/$defs/ComparisonSide",
+          "description": ""
+        },
+        "principal_difference_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "同目标数量：基准本金−本方案本金"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "principal_difference_pct_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "上一差额÷基准本金×100"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total_difference_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "同目标数量：基准含费支出−本方案含费支出"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total_difference_pct_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "上一差额÷基准含费支出×100"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_quantity_difference_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "同支出：本方案目标币数量−基准目标币数量"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_quantity_difference_pct_metric_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "上一差额÷基准目标币数量×100；未配置该口径则null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fee_scope": {
+          "type": "string",
+          "enum": [
+            "principal_only",
+            "inclusive_known_channel_costs"
+          ],
+          "description": ""
+        },
+        "budget_fee_treatment": {
+          "type": "string",
+          "enum": [
+            "not_applicable",
+            "inside_budget",
+            "outside_budget"
+          ],
+          "description": "同目标数量用not_applicable；同支出明确费用预算内外"
+        },
+        "initial_holdings_excluded": {
+          "const": true,
+          "description": "两侧数量和成本同时剔除初始来源"
+        },
+        "time_value_included": {
+          "const": false,
+          "description": "MVP不计算资金时间价值"
+        }
+      }
+    },
+    "MarketPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "source_currency",
+        "target_currency",
+        "reference_date",
+        "normalized_rate",
+        "normalized_unit",
+        "as_of",
+        "price_type",
+        "publication_state",
+        "match",
+        "derivation",
+        "method_version",
+        "quality",
+        "reason_codes",
+        "evidence_ids"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "source_currency": {
+          "$ref": "#/$defs/Currency",
+          "description": ""
+        },
+        "target_currency": {
+          "$ref": "#/$defs/Currency",
+          "description": ""
+        },
+        "reference_date": {
+          "$ref": "#/$defs/Date",
+          "description": ""
+        },
+        "normalized_rate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Decimal",
+              "description": "1目标币=此值来源币；eligible必须为正"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "normalized_unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16,
+          "description": "必须等于source_currency/target_currency"
+        },
+        "as_of": {
+          "$ref": "#/$defs/DateTime",
+          "description": "原市场观察时点，不是抓取时点"
+        },
+        "price_type": {
+          "const": "daily_settlement",
+          "description": ""
+        },
+        "publication_state": {
+          "type": "string",
+          "enum": [
+            "preliminary",
+            "final"
+          ],
+          "description": "final指日结算最终发布，不是合约到期"
+        },
+        "match": {
+          "type": "string",
+          "enum": [
+            "exact",
+            "interpolated",
+            "out_of_range"
+          ],
+          "description": ""
+        },
+        "derivation": {
+          "type": "string",
+          "enum": [
+            "direct",
+            "synthetic"
+          ],
+          "description": ""
+        },
+        "method_version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "插值/合成时必填"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quality": {
+          "type": "string",
+          "enum": [
+            "eligible",
+            "ineligible"
+          ],
+          "description": ""
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "质量原因"
+          },
+          "minItems": 0,
+          "maxItems": 10,
+          "description": "",
+          "uniqueItems": true
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id",
+            "description": ""
+          },
+          "minItems": 1,
+          "maxItems": 16,
+          "description": "完整来源及方法的证据",
+          "uniqueItems": true
+        }
+      }
+    },
+    "Evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "source_url",
+        "version",
+        "observed_at",
+        "source_hash",
+        "confidence_state",
+        "approved_excerpt"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "ledger",
+            "calculation",
+            "market",
+            "knowledge",
+            "fixture"
+          ],
+          "description": ""
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "最小化证据标题"
+        },
+        "source_url": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://",
+              "maxLength": 1000,
+              "description": "仅审核过的公开来源URL；私有记录为null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "来源/审核版本"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/DateTime",
+          "description": ""
+        },
+        "source_hash": {
+          "$ref": "#/$defs/Hash",
+          "description": "完整来源档案摘要；不是模型自填"
+        },
+        "confidence_state": {
+          "type": "string",
+          "enum": [
+            "verified",
+            "incomplete",
+            "unverified"
+          ],
+          "description": "来源完整性状态，绝非汇率概率"
+        },
+        "approved_excerpt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1200,
+          "description": "经筛选的事实/知识摘要，低信任文本；不是执行指令"
+        }
+      }
+    },
+    "Issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "severity",
+        "affected_ids",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "稳定机器码"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "blocking"
+          ],
+          "description": ""
+        },
+        "affected_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 30,
+          "description": "受影响目录ID；全局错误可空",
+          "uniqueItems": true
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "脱敏缺失原因；不能包含供应商错误原文"
+        }
+      }
+    },
+    "ProviderInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "request_id",
+        "snapshot_id",
+        "as_of",
+        "timezone",
+        "locale",
+        "data_mode",
+        "report_kind",
+        "plan",
+        "policy",
+        "metrics",
+        "cost_buckets",
+        "confirmed_schedule",
+        "execution_records",
+        "stop_context",
+        "candidates",
+        "baselines",
+        "comparisons",
+        "market_points",
+        "evidence",
+        "issues",
+        "focus",
+        "user_request"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "fxplanner.agent.input.v0.2",
+          "description": ""
+        },
+        "request_id": {
+          "$ref": "#/$defs/Id",
+          "description": "单次逻辑请求的非敏感别名"
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/Id",
+          "description": "不可变上下文快照"
+        },
+        "as_of": {
+          "$ref": "#/$defs/DateTime",
+          "description": "本次业务快照的统一截止时间"
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "有效IANA时区；服务验证，例如Asia/Shanghai"
+        },
+        "locale": {
+          "const": "zh-CN",
+          "description": ""
+        },
+        "data_mode": {
+          "type": "string",
+          "enum": [
+            "production",
+            "fixture"
+          ],
+          "description": ""
+        },
+        "report_kind": {
+          "$ref": "#/$defs/ReportKind",
+          "description": ""
+        },
+        "plan": {
+          "$ref": "#/$defs/Plan",
+          "description": ""
+        },
+        "policy": {
+          "$ref": "#/$defs/Policy",
+          "description": ""
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Metric",
+            "description": ""
+          },
+          "minItems": 1,
+          "maxItems": 200,
+          "description": "注册指标，不得静默截断"
+        },
+        "cost_buckets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CostBucket",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 60,
+          "description": ""
+        },
+        "confirmed_schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfirmedSchedule",
+              "description": ""
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execution_records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExecutionRecord",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 100,
+          "description": ""
+        },
+        "stop_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopContext",
+              "description": ""
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Candidate",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 3,
+          "description": ""
+        },
+        "baselines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Baseline",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 10,
+          "description": ""
+        },
+        "comparisons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Comparison",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 20,
+          "description": ""
+        },
+        "market_points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MarketPoint",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 30,
+          "description": ""
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Evidence",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 100,
+          "description": ""
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Issue",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 30,
+          "description": ""
+        },
+        "focus": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "holdings",
+              "schedule",
+              "reference_comparison",
+              "execution_review",
+              "education"
+            ],
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 5,
+          "description": "仅控制说明侧重，不删固定区块",
+          "uniqueItems": true
+        },
+        "user_request": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "可空字符串；非可信偏好/问题，不是业务事实；脱敏后进入模型"
+        }
+      }
+    },
+    "Section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "metric_ids",
+        "evidence_ids",
+        "missing_ids"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600,
+          "description": "纯文本，最多六百字符；业务数字/日期只能用{{m:id}}；不含HTML/URL"
+        },
+        "metric_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 30,
+          "description": "必须恰好等于正文占位符去重集合；都available",
+          "uniqueItems": true
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 16,
+          "description": "本段知识/事实依据，必须可解析",
+          "uniqueItems": true
+        },
+        "missing_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 30,
+          "description": "只允许不可用/不适用指标或Issue.code",
+          "uniqueItems": true
+        }
+      }
+    },
+    "Sections": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "holdings",
+        "schedule",
+        "reference_comparison",
+        "execution_review",
+        "education",
+        "data_notes"
+      ],
+      "properties": {
+        "summary": {
+          "$ref": "#/$defs/Section",
+          "description": ""
+        },
+        "holdings": {
+          "$ref": "#/$defs/Section",
+          "description": ""
+        },
+        "schedule": {
+          "$ref": "#/$defs/Section",
+          "description": ""
+        },
+        "reference_comparison": {
+          "$ref": "#/$defs/Section",
+          "description": ""
+        },
+        "execution_review": {
+          "$ref": "#/$defs/Section",
+          "description": ""
+        },
+        "education": {
+          "$ref": "#/$defs/Section",
+          "description": ""
+        },
+        "data_notes": {
+          "$ref": "#/$defs/Section",
+          "description": ""
+        }
+      }
+    },
+    "Action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "related_ids"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ActionCode",
+          "description": ""
+        },
+        "related_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 10,
+          "description": "合法候选/记录/指标/接续计划ID",
+          "uniqueItems": true
+        }
+      }
+    },
+    "ModelOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "request_id",
+        "snapshot_id",
+        "status",
+        "selected_candidate_id",
+        "recommendation_reason",
+        "review_flags",
+        "sections",
+        "actions",
+        "mandatory_notice_codes"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "fxplanner.agent.output.v0.2",
+          "description": ""
+        },
+        "request_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "status": {
+          "$ref": "#/$defs/Status",
+          "description": "必须等于输入policy.eligibility，发现冲突则校验失败/降级"
+        },
+        "selected_candidate_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": "必须等于policy.selection.candidate_id，只是推荐预览"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recommendation_reason": {
+          "$ref": "#/$defs/SelectionReason",
+          "description": "必须等于服务selection.reason"
+        },
+        "review_flags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "INPUT_CONFLICT_SUSPECTED"
+            ],
+            "description": "模型发现疑似输入矛盾时请求服务重新校验；不自行改变事实"
+          },
+          "minItems": 0,
+          "maxItems": 1,
+          "description": "",
+          "uniqueItems": true
+        },
+        "sections": {
+          "$ref": "#/$defs/Sections",
+          "description": ""
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Action",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 3,
+          "description": ""
+        },
+        "mandatory_notice_codes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NoticeCode",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 7,
+          "description": "与输入required_notice_codes集合相等",
+          "uniqueItems": true
+        }
+      }
+    },
+    "ModelPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_id",
+        "primary",
+        "secondary",
+        "prompt_version",
+        "input_schema_version",
+        "output_schema_version",
+        "template_version",
+        "temperature",
+        "max_output_tokens",
+        "total_timeout_ms",
+        "max_attempts",
+        "max_repairs"
+      ],
+      "properties": {
+        "policy_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "已审核供应商与版本配置ID"
+        },
+        "primary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96,
+          "description": "供应商/模型部署别名"
+        },
+        "secondary": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 96,
+              "description": "已审核备用部署别名；未配置null"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prompt_version": {
+          "const": "fxplanner.report.system.v0.2",
+          "description": ""
+        },
+        "input_schema_version": {
+          "const": "fxplanner.agent.input.v0.2",
+          "description": ""
+        },
+        "output_schema_version": {
+          "const": "fxplanner.agent.output.v0.2",
+          "description": ""
+        },
+        "template_version": {
+          "const": "fxplanner.plan-report.v0.2",
+          "description": ""
+        },
+        "temperature": {
+          "const": "0",
+          "description": "字符串配置值；适配器映射供应商参数，不支持时选其最小受控值并记录"
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12000,
+          "description": "报告专用配置起始建议，须实测"
+        },
+        "total_timeout_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 60000,
+          "description": "含排队/传输/退避/修复/校验，初始建议30000"
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3,
+          "description": "跨主备及修复的总调用上限，初始建议3"
+        },
+        "max_repairs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "只用于结构问题；最多1次"
+        }
+      }
+    },
+    "HarnessJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "capability",
+        "request_id",
+        "trace_id",
+        "actor_id",
+        "resource",
+        "input_snapshot_ref",
+        "context_hash",
+        "idempotency_key_hash",
+        "request_body_hash",
+        "model_policy",
+        "created_at",
+        "deadline_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "fxplanner.report.job.v0.2",
+          "description": ""
+        },
+        "capability": {
+          "const": "report.explain.v1",
+          "description": "能力名稳定，契约版本独立升级"
+        },
+        "request_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "trace_id": {
+          "$ref": "#/$defs/Id",
+          "description": "跨服务关联ID"
+        },
+        "actor_id": {
+          "$ref": "#/$defs/Id",
+          "description": "鉴权得到的内部用户ID，不取客户端值"
+        },
+        "resource": {
+          "$ref": "#/$defs/ResourceRef",
+          "description": ""
+        },
+        "input_snapshot_ref": {
+          "$ref": "#/$defs/Id",
+          "description": "服务端快照库指针；不可变且与resource绑定"
+        },
+        "context_hash": {
+          "$ref": "#/$defs/Hash",
+          "description": "对精确ProviderInput规范JSON求哈希，重试不变"
+        },
+        "idempotency_key_hash": {
+          "$ref": "#/$defs/Hash",
+          "description": "仅服务端幂等键摘要；按actor分域"
+        },
+        "request_body_hash": {
+          "$ref": "#/$defs/Hash",
+          "description": "对GenerateRequest规范JSON求哈希；同键不同body必须409"
+        },
+        "model_policy": {
+          "$ref": "#/$defs/ModelPolicy",
+          "description": ""
+        },
+        "created_at": {
+          "$ref": "#/$defs/DateTime",
+          "description": ""
+        },
+        "deadline_at": {
+          "$ref": "#/$defs/DateTime",
+          "description": "审计时间；运行超时用单调时钟预算"
+        }
+      }
+    },
+    "GenerationMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "validation",
+        "provider",
+        "model",
+        "prompt_version",
+        "template_version",
+        "context_hash",
+        "generated_at",
+        "fallback_reason",
+        "attempts"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "ai",
+            "template"
+          ],
+          "description": ""
+        },
+        "validation": {
+          "const": "passed",
+          "description": "AI及固定模板均通过输出校验；拒绝报告没有meta"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "供应商名，非key"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "description": "精确部署版本"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prompt_version": {
+          "const": "fxplanner.report.system.v0.2",
+          "description": ""
+        },
+        "template_version": {
+          "const": "fxplanner.plan-report.v0.2",
+          "description": ""
+        },
+        "context_hash": {
+          "$ref": "#/$defs/Hash",
+          "description": ""
+        },
+        "generated_at": {
+          "$ref": "#/$defs/DateTime",
+          "description": ""
+        },
+        "fallback_reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "MODEL_DISABLED",
+                "PROVIDER_AUTH",
+                "PROVIDER_QUOTA",
+                "PROVIDER_UNAVAILABLE",
+                "TIMEOUT",
+                "INVALID_OUTPUT",
+                "FACT_CONFLICT",
+                "PRIVACY_POLICY",
+                "INPUT_TOO_LARGE"
+              ],
+              "description": ""
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "description": "真实发出调用数，0代表未调用"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "ai"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "provider": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "description": ""
+              },
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "description": ""
+              },
+              "fallback_reason": {
+                "type": "null"
+              },
+              "attempts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3,
+                "description": ""
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "provider": {
+                "type": "null"
+              },
+              "model": {
+                "type": "null"
+              },
+              "fallback_reason": {
+                "type": "string",
+                "enum": [
+                  "MODEL_DISABLED",
+                  "PROVIDER_AUTH",
+                  "PROVIDER_QUOTA",
+                  "PROVIDER_UNAVAILABLE",
+                  "TIMEOUT",
+                  "INVALID_OUTPUT",
+                  "FACT_CONFLICT",
+                  "PRIVACY_POLICY",
+                  "INPUT_TOO_LARGE"
+                ],
+                "description": ""
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ReportContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "report_id",
+        "snapshot_id",
+        "facts",
+        "narrative",
+        "generation"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "fxplanner.report.content.v0.2",
+          "description": ""
+        },
+        "report_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "facts": {
+          "$ref": "#/$defs/ProviderInput",
+          "description": "确定性表格依据；user_request清为空串后返回，不改变已保存的模型context_hash"
+        },
+        "narrative": {
+          "$ref": "#/$defs/ModelOutput",
+          "description": "通过校验的AI解释，或同结构本地模板；不能从文字逆向建事实"
+        },
+        "generation": {
+          "$ref": "#/$defs/GenerationMeta",
+          "description": ""
+        }
+      }
+    },
+    "ErrorDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "errorCode",
+        "messageKey",
+        "requestId",
+        "details"
+      ],
+      "properties": {
+        "errorCode": {
+          "type": "string",
+          "enum": [
+            "INVALID_REQUEST",
+            "UNAUTHORIZED",
+            "RESOURCE_NOT_FOUND",
+            "RESOURCE_VERSION_CONFLICT",
+            "IDEMPOTENCY_CONFLICT",
+            "REPORT_STAGE_MISMATCH",
+            "SNAPSHOT_INCONSISTENT",
+            "RATE_LIMITED",
+            "REPORT_IN_PROGRESS",
+            "SNAPSHOT_UNAVAILABLE",
+            "REPORT_PERSISTENCE_FAILED",
+            "REPORT_TEMPLATE_FAILED"
+          ],
+          "description": ""
+        },
+        "messageKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "前端i18n键"
+        },
+        "requestId": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Issue",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 30,
+          "description": "只返回当前用户有权限的字段，不泄漏对象是否属于其他用户"
+        }
+      }
+    },
+    "ServiceResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "request_id",
+        "trace_id",
+        "delivery_status",
+        "report",
+        "error"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "fxplanner.report.response.v0.2",
+          "description": ""
+        },
+        "request_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "trace_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "delivery_status": {
+          "type": "string",
+          "enum": [
+            "generated",
+            "rejected",
+            "retryable_error"
+          ],
+          "description": ""
+        },
+        "report": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReportContent",
+              "description": ""
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorDetail",
+              "description": ""
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "delivery_status": {
+                "const": "generated"
+              }
+            },
+            "required": [
+              "delivery_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "report": {
+                "$ref": "#/$defs/ReportContent",
+                "description": ""
+              },
+              "error": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "report": {
+                "type": "null"
+              },
+              "error": {
+                "$ref": "#/$defs/ErrorDetail",
+                "description": ""
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens"
+      ],
+      "properties": {
+        "input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000,
+              "description": ""
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000,
+              "description": ""
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000,
+              "description": ""
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "Attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordinal",
+        "kind",
+        "provider",
+        "model",
+        "latency_ms",
+        "result",
+        "usage"
+      ],
+      "properties": {
+        "ordinal": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3,
+          "description": "调用次序"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "initial",
+            "transport_retry",
+            "repair",
+            "secondary"
+          ],
+          "description": ""
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "供应商名"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "精确部署版本"
+        },
+        "latency_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000,
+          "description": ""
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "success",
+            "timeout",
+            "auth_error",
+            "quota_error",
+            "transport_error",
+            "invalid_output",
+            "fact_conflict"
+          ],
+          "description": ""
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage",
+          "description": ""
+        }
+      }
+    },
+    "AuditRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "request_id",
+        "trace_id",
+        "actor_id",
+        "report_id",
+        "snapshot_id",
+        "capability",
+        "context_hash",
+        "output_hash",
+        "model_policy_id",
+        "rule_version",
+        "calculation_version",
+        "attempts",
+        "outcome",
+        "validation_codes",
+        "created_at",
+        "completed_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "fxplanner.report.audit.v0.2",
+          "description": ""
+        },
+        "request_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "trace_id": {
+          "$ref": "#/$defs/Id",
+          "description": ""
+        },
+        "actor_id": {
+          "$ref": "#/$defs/Id",
+          "description": "仅内部授权查询"
+        },
+        "report_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": ""
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapshot_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id",
+              "description": ""
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capability": {
+          "const": "report.explain.v1",
+          "description": ""
+        },
+        "context_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hash",
+              "description": "调用前拒绝可能无上下文"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hash",
+              "description": "仅通过校验的canonical输出摘要"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model_policy_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "可反查所有模型/提示词/Schema固定版本"
+        },
+        "rule_version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": ""
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "calculation_version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": ""
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attempts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Attempt",
+            "description": ""
+          },
+          "minItems": 0,
+          "maxItems": 3,
+          "description": ""
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "ai",
+            "template",
+            "rejected",
+            "retryable_error"
+          ],
+          "description": ""
+        },
+        "validation_codes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "校验器稳定错误码，不能放原始响应"
+          },
+          "minItems": 0,
+          "maxItems": 30,
+          "description": "",
+          "uniqueItems": true
+        },
+        "created_at": {
+          "$ref": "#/$defs/DateTime",
+          "description": ""
+        },
+        "completed_at": {
+          "$ref": "#/$defs/DateTime",
+          "description": ""
+        }
+      }
+    }
+  }
+}

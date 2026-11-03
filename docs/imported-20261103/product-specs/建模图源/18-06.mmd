@@ -1,0 +1,15 @@
+stateDiagram-v2
+    direction TB
+    state "填写更正" as EDITING
+    state "核对影响" as REVIEW
+    state "已保存" as APPLIED
+    state "已取消" as CANCELLED
+    state "提交失败" as REJECTED
+    [*] --> EDITING
+    EDITING --> REVIEW: T01 查看影响
+    REVIEW --> EDITING: T02 返回修改
+    REVIEW --> REVIEW: T03 重新核对
+    REVIEW --> APPLIED: T04 确认成功
+    REVIEW --> REJECTED: T05 明确失败
+    EDITING --> CANCELLED: T06 取消
+    REVIEW --> CANCELLED: T06 取消
