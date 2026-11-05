@@ -1,7 +1,7 @@
 import type { INestApplication } from "@nestjs/common";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
-import { TEST_PASSWORD } from "../fixtures/test-credentials";
+import { TEST_ALT_PASSWORD, TEST_PASSWORD } from "../fixtures/test-credentials";
 import {
 	createTestApp,
 	createTestUser,
@@ -81,7 +81,7 @@ describe("AuthController（e2e）", () => {
 		it("错误密码应该 401", () => {
 			return request(app.getHttpServer())
 				.post("/api/auth/login")
-				.send({ email: EMAIL, password: "wrong-password" })
+				.send({ email: EMAIL, password: TEST_ALT_PASSWORD })
 				.expect(401);
 		});
 	});

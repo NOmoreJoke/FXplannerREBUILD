@@ -217,11 +217,17 @@ test.describe("【账号与数据】导出/清空/注销", () => {
 				data: { id: string } | null;
 			};
 			if (!body.data) return { status: 500, viewUrl: "" };
+			// 路径参数先过形状白名单再拼接（服务端 id 为 cuid；防路径注入，静态
+			// 污点分析也据此认可「校验 → 拼 URL」链路）
+			const requestId = body.data.id;
+			if (!/^[A-Za-z0-9_-]+$/.test(requestId)) {
+				return { status: 500, viewUrl: "" };
+			}
 			const dl = await fetch(
-				`${apiUrl}${body.data.id ? `/api/data-requests/${body.data.id}/download` : ""}`,
+				`${apiUrl}/api/data-requests/${requestId}/download`,
 				{ headers: { Authorization: `Bearer ${token}` } },
 			);
-			return { status: dl.status, viewUrl: body.data.id };
+			return { status: dl.status, viewUrl: requestId };
 		}, API_URL);
 		expect(downloadResp.status).toBe(200);
 

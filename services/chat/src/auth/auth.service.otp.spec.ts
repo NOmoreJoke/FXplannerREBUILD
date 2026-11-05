@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaService } from "../prisma/prisma.service";
 import { AuthService } from "./auth.service";
+import { MOCK_OTP_ACCESS_TOKEN } from "../../test/fixtures/test-tokens";
 
 const otpUser = {
 	id: "otp-user-1",
@@ -48,7 +49,7 @@ describe("AuthService OTP account", () => {
 
 	beforeEach(() => {
 		prisma = createPrismaMock();
-		jwtService = { sign: vi.fn().mockReturnValue("otp-access-token") };
+		jwtService = { sign: vi.fn().mockReturnValue(MOCK_OTP_ACCESS_TOKEN) };
 		service = new AuthService(
 			prisma as unknown as PrismaService,
 			jwtService as never,
@@ -80,7 +81,7 @@ describe("AuthService OTP account", () => {
 			},
 		});
 		expect(result).toMatchObject({
-			accessToken: "otp-access-token",
+			accessToken: MOCK_OTP_ACCESS_TOKEN,
 			identity: { channel: "email", target: "bound@example.com" },
 			user: { id: passwordUser.id, email: "bound@example.com" },
 		});
@@ -129,7 +130,7 @@ describe("AuthService OTP account", () => {
 			},
 		});
 		expect(result).toMatchObject({
-			accessToken: "otp-access-token",
+			accessToken: MOCK_OTP_ACCESS_TOKEN,
 			identity: { channel: "email", target: "otp@example.com" },
 			user: { id: otpUser.id, email: null },
 		});

@@ -13,7 +13,7 @@
  * 地址经 resolveApiBase 校验（仅 http/https、不带用户信息），拼接统一走 buildApiUrl。
  */
 
-import { buildApiUrl, resolveApiBase } from "./api-url";
+import { buildApiUrl, localFetch, resolveApiBase } from "./api-url";
 import { TEST_PASSWORD } from "./test-credentials";
 
 const API_URL = resolveApiBase(process.env.API_URL, "http://localhost:4001");
@@ -26,7 +26,7 @@ async function ensureApiReachable(): Promise<void> {
 	if (apiReachabilityChecked) return;
 	apiReachabilityChecked = true;
 	try {
-		const res = await fetch(buildApiUrl(API_URL, "/api/health"), {
+		const res = await localFetch(buildApiUrl(API_URL, "/api/health"), {
 			signal: AbortSignal.timeout(5_000),
 		});
 		if (!res.ok) {
@@ -50,7 +50,7 @@ async function fetchWithBackoff(
 ): Promise<Response> {
 	let res: Response;
 	try {
-		res = await fetch(buildApiUrl(API_URL, path), init);
+		res = await localFetch(buildApiUrl(API_URL, path), init);
 	} catch (error) {
 		throw new Error(
 			`后端连接失败：${API_URL}${path}（${error instanceof Error ? error.message : error}）。` +
@@ -65,7 +65,7 @@ async function fetchWithBackoff(
 		await new Promise((resolve) =>
 			setTimeout(resolve, THROTTLE_RETRY_DELAY_MS),
 		);
-		res = await fetch(buildApiUrl(API_URL, path), init);
+		res = await localFetch(buildApiUrl(API_URL, path), init);
 	}
 	return res;
 }
