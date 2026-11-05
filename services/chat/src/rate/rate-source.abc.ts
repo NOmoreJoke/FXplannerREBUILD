@@ -65,12 +65,13 @@ interface FixedPoint {
 /** CurrName 格式如 "美元(USD)" → 提取括号内三位货币代码 */
 const CURR_CODE_PATTERN = /\(([A-Z]{3})\)/;
 
-/** 解析有限小数字符串（拒绝空串/负数/科学计数法/非数字） */
+/** 解析有限小数字符串（拒绝空串/负数/科学计数法/非数字；脏类型先 ToString 防抛错） */
 function parseFixedPoint(value: string | undefined): FixedPoint | undefined {
 	if (value === undefined) return undefined;
-	// String.prototype.match（非 global 正则语义等同 RegExp.exec；静态扫描将
+	// String() 包裹 + String.prototype.match（非 global 正则语义等同 RegExp.exec；
+	// 上游 JSON 脏类型（如数字）经 ToString 静默拒配而非抛 TypeError；静态扫描将
 	// RegExp.prototype.exec 误读为 shell exec，见 docs/handoff/MIMOSA-GATE-20261105.md）
-	const match = value.trim().match(/^(\d+)(?:\.(\d+))?$/);
+	const match = String(value).trim().match(/^(\d+)(?:\.(\d+))?$/);
 	if (!match) return undefined;
 	const [, integer, fraction = ""] = match;
 	return { digits: BigInt(integer + fraction), scale: fraction.length };
@@ -296,8 +297,9 @@ export class AbcSource implements RateSource {
 		const deadline = this.now() + RATE_CLOCK_SKEW_TOLERANCE_MS;
 
 		for (const row of table) {
-			// match 与 exec 同语义（非 global 正则）；误读治理见 parseFixedPoint 注释
-			const code = (row.CurrName ?? "").match(CURR_CODE_PATTERN)?.[1];
+			// String() 包裹：上游脏类型（CurrName 非字符串）经 ToString 拒配而非抛
+			// TypeError（旧行为等效 RegExp.exec 的隐式转换）；其余见 parseFixedPoint 注释
+			const code = String(row.CurrName ?? "").match(CURR_CODE_PATTERN)?.[1];
 			if (code === undefined) continue;
 
 			const observedAt = row.PublishTime ? new Date(row.PublishTime) : undefined;

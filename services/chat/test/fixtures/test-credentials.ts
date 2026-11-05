@@ -8,3 +8,10 @@ export const TEST_PASSWORD = process.env.TEST_PASSWORD ?? "UnitPassw0rd";
 
 /** 第二个测试密码（密码错误等反例场景，不用于成功登录） */
 export const TEST_ALT_PASSWORD = process.env.TEST_ALT_PASSWORD ?? "WrongPassw0rd";
+
+// 反例语义守卫：环境变量把两把密码覆盖成同值时，401 用例前提消失（fail fast）
+if (TEST_ALT_PASSWORD === TEST_PASSWORD) {
+	throw new Error(
+		"TEST_ALT_PASSWORD 必须不同于 TEST_PASSWORD（错误密码反例用例的前提）",
+	);
+}

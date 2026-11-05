@@ -16,7 +16,7 @@ export async function localTestFetch(
 		throw new Error(`接口测试仅允许 http/https 协议：${url.protocol}`);
 	}
 	const host = url.hostname;
-	if (host !== "localhost" && host !== "127.0.0.1" && host !== "::1") {
+	if (host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]") {
 		throw new Error(`接口测试仅允许本地回环地址，收到：${host}`);
 	}
 	return fetch(url.toString(), init);
