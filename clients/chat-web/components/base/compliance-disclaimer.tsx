@@ -9,7 +9,7 @@ import { ShieldCheck } from "lucide-react";
  * Kaiming 选定后只改 COMPLIANCE_DISCLAIMER_TEXT 一处。纯展示无状态，服务端组件可直接渲染。
  */
 
-/** 免责短句（A 版终审候选，71 字）：改措辞只动此常量 */
+/** 免责短句（A 版终审候选，70 字）：改措辞只动此常量 */
 export const COMPLIANCE_DISCLAIMER_TEXT =
 	"本工具由非持牌主体提供，非投资顾问服务；汇率与计划均为工具测算，不构成投资建议、不预测涨跌、不经手资金；据此操作的风险与损失由用户自行承担。";
 

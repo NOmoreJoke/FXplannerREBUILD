@@ -61,6 +61,24 @@ describe("AbcSource（农行牌价主源）", () => {
 			expect(batch.source).toBe("abc");
 		});
 
+		it("脏类型行（CurrName 非字符串）被跳过且不影响其余有效报价（回归：String.match 勿对脏行抛 TypeError）", async () => {
+			const table = tableBody([
+				sampleRow("USD"),
+				{
+					CurrName: 123, // 上游 JSON 脏类型：旧 exec 隐式 ToString 跳过，解析不得整表失败
+					BenchMarkPrice: "671.0",
+					PublishTime: "2026-09-15T10:26:54+08:00",
+				},
+				sampleRow("EUR"),
+			]);
+			const batch = await mkSource(okTransport(table)).fetchLatestBatch("CNY", [
+				"USD",
+				"EUR",
+			]);
+
+			expect(Object.keys(batch.quotes).sort()).toEqual(["EUR", "USD"]);
+		});
+
 		it("百外币单位 ÷ 100：实测样本归一化，raw 保留百单位原值", async () => {
 			const source = mkSource(okTransport(JSON.stringify(ABC_SAMPLE_FIXTURE)));
 			const batch = await source.fetchLatestBatch("CNY", ["USD", "HKD", "JPY"]);
