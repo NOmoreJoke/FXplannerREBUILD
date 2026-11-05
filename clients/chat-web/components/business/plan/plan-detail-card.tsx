@@ -1,6 +1,7 @@
 "use client";
 
 import { CircleCheck, CircleDashed } from "lucide-react";
+import Decimal from "decimal.js";
 import type { PacePreference, PlanDetail } from "@/lib/api/contract";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -37,16 +38,29 @@ const FUND_STATUS_LABEL: Record<PlanDetail["fundStatus"], string> = {
 };
 
 export function PlanDetailCard({ plan }: { plan: PlanDetail }) {
-	// 服务端金额为字符串，这里仅展示层换算；目标为 0 的防御分支不除零
-	const target = Number(plan.targetAmount);
-	const gap = Number(plan.gap);
-	const used = Number(plan.usedAmount);
-	const toPercent = (value: number) =>
-		Number.isFinite(target) && target > 0 && Number.isFinite(value)
-			? Math.min(100, Math.max(0, Math.round((value / target) * 100)))
+	// 服务端金额为字符串，Decimal 运算（禁裸 Number/parseFloat 算钱，对齐
+	// plan-list/use-home-state 先例）；目标 ≤ 0 的防御分支不除零
+	const target = new Decimal(plan.targetAmount);
+	const gap = new Decimal(plan.gap);
+	const used = new Decimal(plan.usedAmount);
+	/** Decimal → 0-100 整数百分比：HALF_UP 取整后钳位 */
+	const toPercent = (value: Decimal) =>
+		target.gt(0)
+			? Math.min(
+					100,
+					Math.max(
+						0,
+						value
+							.div(target)
+							.mul(100)
+							.toDecimalPlaces(0, Decimal.ROUND_HALF_UP)
+							.toNumber(),
+					),
+				)
 			: 0;
 	// 准备进度 =（目标 − 缺口）/ 目标；使用进度 = 累计已使用 / 目标（修正：两条进度各归各位）
-	const preparedPercent = toPercent(target - gap);
+	const preparedAmount = target.minus(gap);
+	const preparedPercent = toPercent(preparedAmount);
 	const usedPercent = toPercent(used);
 	const isActive = plan.status === "ACTIVE";
 
@@ -84,7 +98,7 @@ export function PlanDetailCard({ plan }: { plan: PlanDetail }) {
 						<div className="flex items-center justify-between text-xs text-muted-foreground">
 							<span>
 								准备进度：已备齐{" "}
-								{formatDisplayAmount((target - gap).toFixed(4))} / 目标{" "}
+								{formatDisplayAmount(preparedAmount.toFixed(4))} / 目标{" "}
 								{formatDisplayAmount(plan.targetAmount)} {plan.targetCurrency}
 							</span>
 							<span>{preparedPercent}%</span>
