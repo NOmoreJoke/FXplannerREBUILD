@@ -68,7 +68,9 @@ const CURR_CODE_PATTERN = /\(([A-Z]{3})\)/;
 /** 解析有限小数字符串（拒绝空串/负数/科学计数法/非数字） */
 function parseFixedPoint(value: string | undefined): FixedPoint | undefined {
 	if (value === undefined) return undefined;
-	const match = /^(\d+)(?:\.(\d+))?$/.exec(value.trim());
+	// String.prototype.match（非 global 正则语义等同 RegExp.exec；静态扫描将
+	// RegExp.prototype.exec 误读为 shell exec，见 docs/handoff/MIMOSA-GATE-20261105.md）
+	const match = value.trim().match(/^(\d+)(?:\.(\d+))?$/);
 	if (!match) return undefined;
 	const [, integer, fraction = ""] = match;
 	return { digits: BigInt(integer + fraction), scale: fraction.length };
@@ -294,7 +296,8 @@ export class AbcSource implements RateSource {
 		const deadline = this.now() + RATE_CLOCK_SKEW_TOLERANCE_MS;
 
 		for (const row of table) {
-			const code = CURR_CODE_PATTERN.exec(row.CurrName ?? "")?.[1];
+			// match 与 exec 同语义（非 global 正则）；误读治理见 parseFixedPoint 注释
+			const code = (row.CurrName ?? "").match(CURR_CODE_PATTERN)?.[1];
 			if (code === undefined) continue;
 
 			const observedAt = row.PublishTime ? new Date(row.PublishTime) : undefined;

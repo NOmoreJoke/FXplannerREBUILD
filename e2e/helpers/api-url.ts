@@ -32,3 +32,27 @@ export function buildApiUrl(base: string, path: string): string {
 	}
 	return `${base}${path}`;
 }
+
+/**
+ * E2E 造数/断一专用的本地 fetch（唯一合法 fetch 出口）。
+ *
+ * E2E 测试基建按设计只打本地开发服务（localhost/127.0.0.1/[::1]），
+ * 不构成生产 SSRF 面；本函数在 fetch 前于**同一函数内**显式校验协议与回环主机，
+ * 使污点分析能看到「URL → 校验 → fetch」链路（生产代码请勿模仿——生产侧
+ * 应拒绝环回/私网地址，方向与此相反）。各 spec/造数 helper 的裸 `fetch(...)`
+ * 一律改走本函数（Mimosa gate 误报治理，见 docs/handoff/MIMOSA-GATE-20261105.md）。
+ */
+export async function localFetch(
+	rawUrl: string,
+	init?: RequestInit,
+): Promise<Response> {
+	const url = new URL(rawUrl);
+	if (url.protocol !== "http:" && url.protocol !== "https:") {
+		throw new Error(`E2E 仅允许 http/https 协议：${url.protocol}`);
+	}
+	const host = url.hostname;
+	if (host !== "localhost" && host !== "127.0.0.1" && host !== "::1") {
+		throw new Error(`E2E 仅允许本地回环地址（测试基建），收到：${host}`);
+	}
+	return fetch(url.toString(), init);
+}

@@ -1,7 +1,7 @@
 import { test, expect } from "../fixtures/auto-screenshot";
 import { TestLogger } from "../helpers/logger";
 import { saveScreenshot } from "../helpers/save-screenshot";
-import { buildApiUrl, resolveApiBase } from "../helpers/api-url";
+import { buildApiUrl, localFetch, resolveApiBase } from "../helpers/api-url";
 import {
 	injectLoginCookie,
 	seedOnboarding,
@@ -32,7 +32,7 @@ async function seedUnknownFeePurchase(
 	token: string,
 	currencyCode: string,
 ): Promise<string> {
-	const res = await fetch(buildApiUrl(API_URL, "/api/transactions"), {
+	const res = await localFetch(buildApiUrl(API_URL, "/api/transactions"), {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
@@ -180,7 +180,7 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 
 		const user = await seedRegisterAndLogin(`corr-holding-${Date.now()}`);
 		// complete 带初始持仓（依赖真实外部汇率源；不可用环境 skip）
-		await fetch(buildApiUrl(API_URL, "/api/onboarding/consents"), {
+		await localFetch(buildApiUrl(API_URL, "/api/onboarding/consents"), {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -188,21 +188,24 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 			},
 			body: JSON.stringify({ age18Confirmed: true, termsConfirmed: true }),
 		}).then((res) => res.json());
-		const completeRes = await fetch(buildApiUrl(API_URL, "/api/onboarding/complete"), {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${user.accessToken}`,
+		const completeRes = await localFetch(
+			buildApiUrl(API_URL, "/api/onboarding/complete"),
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${user.accessToken}`,
+				},
+				body: JSON.stringify({
+					baseCurrency: "CNY",
+					locale: "zh-CN",
+					region: "CN",
+					prepPreference: "balanced",
+					reminderEnabled: true,
+					initialHoldings: [{ currencyCode: "USD", amount: "1000" }],
+				}),
 			},
-			body: JSON.stringify({
-				baseCurrency: "CNY",
-				locale: "zh-CN",
-				region: "CN",
-				prepPreference: "balanced",
-				reminderEnabled: true,
-				initialHoldings: [{ currencyCode: "USD", amount: "1000" }],
-			}),
-		});
+		);
 		if (!completeRes.ok) {
 			test.skip(true, "外部汇率数据源不可用，初始持仓造数失败");
 			return;

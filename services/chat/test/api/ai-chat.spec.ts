@@ -25,6 +25,7 @@ import {
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
+import { localTestFetch } from "../helpers/local-test-fetch";
 
 // 关闭全局接口限流（先例：transaction.spec/plan.spec——APP_GUARD token 被 scanner 改写，只能 mock 类）
 vi.mock("@nestjs/throttler", async (importOriginal) => {
@@ -891,7 +892,9 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 			throw new Error("http server not listening");
 		}
 		const clientAbort = new AbortController();
-		const fetchPromise = fetch(
+		// 动态端口 URL 必须经 localTestFetch 的同函数回环校验（裸模板串 fetch 会被
+		// 静态污点分析判 SSRF；127.0.0.1 临时端口是测试基建唯一目标）
+		const fetchPromise = localTestFetch(
 			`http://127.0.0.1:${address.port}/api/ai/conversations`,
 			{
 				method: "POST",

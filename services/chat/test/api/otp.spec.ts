@@ -22,6 +22,7 @@ import {
 import { OtpService } from "../../src/auth/otp/otp.service";
 import { SendOtpCodeDto } from "../../src/auth/otp/dto/send-otp-code.dto";
 import { OtpLoginDto } from "../../src/auth/otp/dto/otp-login.dto";
+import { MOCK_OTP_ACCESS_TOKEN } from "../fixtures/test-tokens";
 
 type Challenge = {
 	id: string;
@@ -139,7 +140,7 @@ class OtpTestController {
 		return {
 			success: true,
 			data: {
-				accessToken: "otp-access-token",
+				accessToken: MOCK_OTP_ACCESS_TOKEN,
 				user: {
 					id: "otp-user",
 					email: null,
@@ -256,7 +257,7 @@ describe("OTP API", () => {
 			.send({ challengeId: requested.body.data.challengeId, code })
 			.expect(200);
 
-		expect(loggedIn.body.data.accessToken).toBe("otp-access-token");
+		expect(loggedIn.body.data.accessToken).toBe(MOCK_OTP_ACCESS_TOKEN);
 		expect(loggedIn.body.data.identity).toEqual({
 			channel: "email",
 			target: "user@example.com",
