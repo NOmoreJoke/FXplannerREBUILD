@@ -52,6 +52,7 @@ describe("RateService", () => {
 		fetchLatest: ReturnType<typeof vi.fn>;
 		fetchLatestBatch: ReturnType<typeof vi.fn>;
 		fetchHistory: ReturnType<typeof vi.fn>;
+		fetchReferenceSeries: ReturnType<typeof vi.fn>;
 		sourceForPair: ReturnType<typeof vi.fn>;
 	};
 
@@ -946,6 +947,7 @@ describe("RateService.findQuoteAt 原时点取价（MVP-F0-2 按源粒度）", (
 			fetchLatest: vi.fn(),
 			fetchLatestBatch: vi.fn(),
 			fetchHistory: vi.fn(),
+			fetchReferenceSeries: vi.fn(),
 			sourceForPair: vi.fn(() => "frankfurter"),
 		};
 		const service = new RateService(
@@ -1080,4 +1082,211 @@ describe("RateService.findQuoteAt 原时点取价（MVP-F0-2 按源粒度）", (
 			}),
 		);
 	});
+});
+
+// ────────── getHistory TWD 参考层（MVP-F0-2 C2·图表冷缺口补点，frankfurter v2 隔离）──────────
+
+describe("RateService.getHistory 参考层合并（er-api 路由币对）", () => {
+	const NOW = new Date("2026-11-19T02:00:00.000Z"); // 周四
+
+	function build() {
+		const prisma = {
+			exchangeRate: {
+				findFirst: vi.fn(),
+				findMany: vi.fn(),
+				upsert: vi.fn(),
+				createMany: vi.fn(),
+			},
+		};
+		const provider = {
+			fetchLatest: vi.fn(),
+			fetchLatestBatch: vi.fn(),
+			fetchHistory: vi.fn(),
+			fetchReferenceSeries: vi.fn(),
+			sourceForPair: vi.fn(() => "er-api"),
+		};
+		const service = new RateService(
+			prisma as unknown as PrismaService,
+			provider as never,
+		);
+		return { service, prisma, provider };
+	}
+
+	const rowAt = (date: string, rate = "32.0000000000") => ({
+		rate: decimal(rate),
+		observedAt: new Date(`${date}T00:00:00.000Z`),
+		source: "er-api",
+	});
+
+	beforeEach(() => {
+		vi.useFakeTimers({ now: NOW });
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
+	it("本地序列不完整 → v2 参考补点合并：本地行按日期优先，参考点仅补缺，逐点 source 标注", async () => {
+		const { service, prisma, provider } = build();
+		// 本地仅有一个 er-api 快照（2026-11-13）；v2 补 11-12 缺口、11-13 同日被本地优先
+		const localRow = rowAt("2026-11-13");
+		prisma.exchangeRate.findMany
+			.mockResolvedValueOnce([localRow])
+			.mockResolvedValueOnce([localRow]);
+		provider.fetchHistory.mockResolvedValue([]); // er-api 无历史端点
+		provider.fetchReferenceSeries.mockResolvedValue([
+			{ rate: "0.2102297812", observedAt: new Date("2026-11-12T00:00:00.000Z") },
+			{ rate: "0.2102297900", observedAt: new Date("2026-11-13T00:00:00.000Z") },
+		]);
+
+		const result = await service.getHistory("CNY", "TWD", 7);
+
+		expect(provider.fetchReferenceSeries).toHaveBeenCalledWith(
+			"CNY",
+			"TWD",
+			expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+			expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+		);
+		// 本地行 source=er-api；参考点 source=frankfurter-v2-reference；同日本地优先
+		expect(result.data_points).toEqual([
+			{
+				date: "2026-11-12",
+				rate: "0.2102297812",
+				source: "frankfurter-v2-reference",
+			},
+			{ date: "2026-11-13", rate: "32.0000000000", source: "er-api" },
+		]);
+		// current_rate 为合并序列末点（本地行）
+		expect(result.current_rate).toBe("32.0000000000");
+		// 参考点严禁回写：本次无 v1 回补行 → createMany 零调用
+		expect(prisma.exchangeRate.createMany).not.toHaveBeenCalled();
+	});
+
+	it("本地缓存完整（覆盖全部工作日）→ 不取参考序列（无外呼放大）", async () => {
+		const { service, prisma, provider } = build();
+		const complete = [
+			rowAt("2026-11-12", "32.0000000000"),
+			rowAt("2026-11-13", "32.0100000000"),
+			rowAt("2026-11-16", "32.0200000000"),
+			rowAt("2026-11-17", "32.0300000000"),
+			rowAt("2026-11-18", "32.0400000000"),
+		];
+		prisma.exchangeRate.findMany
+			.mockResolvedValueOnce(complete)
+			.mockResolvedValueOnce(complete);
+		provider.fetchHistory.mockResolvedValue([]);
+
+		const result = await service.getHistory("CNY", "TWD", 7);
+
+		expect(provider.fetchReferenceSeries).not.toHaveBeenCalled();
+		expect(
+			result.data_points.every(
+				(point: { source?: string }) => point.source === "er-api",
+			),
+		).toBe(true);
+	});
+
+	it("非 er-api 路由（frankfurter/abc）→ 不取参考序列（v1-only 回归保留）", async () => {
+		const { service, prisma, provider } = build();
+		provider.sourceForPair.mockReturnValue("frankfurter");
+		prisma.exchangeRate.findMany
+			.mockResolvedValueOnce([rowAt("2026-11-13", "7.2500000000")])
+			.mockResolvedValueOnce([rowAt("2026-11-13", "7.2500000000")]);
+		provider.fetchHistory.mockResolvedValue([]);
+
+		await service.getHistory("CNY", "MYR", 7);
+
+		expect(provider.fetchReferenceSeries).not.toHaveBeenCalled();
+	});
+
+		it("参考源失败 → 本地序列照常返回，区间缓存登记后 TTL 内第二次零外呼（防外呼放大）", async () => {
+			const { service, prisma, provider } = build();
+			const localRow = rowAt("2026-11-13");
+			prisma.exchangeRate.findMany.mockResolvedValue([localRow]);
+			provider.fetchHistory.mockResolvedValue([]);
+			provider.fetchReferenceSeries.mockRejectedValue(
+				new Error("reference down"),
+			);
+
+			const first = await service.getHistory("CNY", "TWD", 7);
+			expect(first.data_points).toHaveLength(1);
+			expect(first.data_points[0].source).toBe("er-api");
+			expect(provider.fetchReferenceSeries).toHaveBeenCalledTimes(1);
+
+			// 第二次（同区间）：参考缓存命中 → 不再外呼（v1 负缓存也命中，无 fetchHistory）
+			const second = await service.getHistory("CNY", "TWD", 7);
+			expect(provider.fetchReferenceSeries).toHaveBeenCalledTimes(1);
+			expect(second.data_points).toHaveLength(1);
+		});
+
+		it("成功结果同样登记区间缓存：第二次同区间零外呼且合并结果一致", async () => {
+			const { service, prisma, provider } = build();
+			const localRow = rowAt("2026-11-13");
+			prisma.exchangeRate.findMany.mockResolvedValue([localRow]);
+			provider.fetchHistory.mockResolvedValue([]);
+			provider.fetchReferenceSeries.mockResolvedValue([
+				{ rate: "0.2102297812", observedAt: new Date("2026-11-12T00:00:00.000Z") },
+			]);
+
+			const first = await service.getHistory("CNY", "TWD", 7);
+			expect(first.data_points).toHaveLength(2);
+			expect(provider.fetchReferenceSeries).toHaveBeenCalledTimes(1);
+
+			// 第二次：成功缓存命中（不外呼），合并结果与首次一致
+			const second = await service.getHistory("CNY", "TWD", 7);
+			expect(provider.fetchReferenceSeries).toHaveBeenCalledTimes(1);
+			expect(second.data_points).toEqual(first.data_points);
+		});
+
+		it("同区间并发 3 请求：参考序列单飞合并为 1 次外呼", async () => {
+			const { service, prisma, provider } = build();
+			const localRow = rowAt("2026-11-13");
+			prisma.exchangeRate.findMany.mockResolvedValue([localRow]);
+			provider.fetchHistory.mockResolvedValue([]);
+			// 微任务延迟（不用 setTimeout：本 describe 为 fake timers 环境）；
+			// 单飞注册在首个请求的同步段完成，后续请求复用同一 promise
+			provider.fetchReferenceSeries.mockImplementation(async () => {
+				await Promise.resolve();
+				return [
+					{
+						rate: "0.2102297812",
+						observedAt: new Date("2026-11-12T00:00:00.000Z"),
+					},
+				];
+			});
+
+			const results = await Promise.all([
+				service.getHistory("CNY", "TWD", 7),
+				service.getHistory("CNY", "TWD", 7),
+				service.getHistory("CNY", "TWD", 7),
+			]);
+
+			expect(provider.fetchReferenceSeries).toHaveBeenCalledTimes(1);
+			for (const result of results) {
+				expect(result.data_points).toHaveLength(2);
+			}
+		});
+
+		it("同币对不同区间（7 与 365）并发：按范围隔离，各自外呼（FX-03 并发区间）", async () => {
+			const { service, prisma, provider } = build();
+			const localRow = rowAt("2026-11-13");
+			prisma.exchangeRate.findMany.mockResolvedValue([localRow]);
+			provider.fetchHistory.mockResolvedValue([]);
+			provider.fetchReferenceSeries.mockResolvedValue([
+				{ rate: "0.2102297812", observedAt: new Date("2026-11-12T00:00:00.000Z") },
+			]);
+
+			await Promise.all([
+				service.getHistory("CNY", "TWD", 7),
+				service.getHistory("CNY", "TWD", 365),
+			]);
+
+			// 区间入键：7 天与 365 天各得一次外呼（互不合并、互不污染）
+			expect(provider.fetchReferenceSeries).toHaveBeenCalledTimes(2);
+			const ranges = provider.fetchReferenceSeries.mock.calls.map(
+				(call) => call[2] as string,
+			);
+			expect(new Set(ranges).size).toBe(2);
+		});
 });

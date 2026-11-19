@@ -12,28 +12,19 @@ export type LatestRateItem = Schemas["LatestRateItemDto"];
 /** 多目标响应（后端 LatestRateGroupResponseDto；错误按项下沉到 items） */
 export type LatestRateGroupResponse = Schemas["LatestRateGroupResponseDto"];
 
-/** history 单点（GET /rates/history 的 data_points 项；rate 为数据源原始精度字符串） */
-export interface RateHistoryPoint {
-	/** 观测日（YYYY-MM-DD，UTC） */
-	date: string;
-	/** 汇率（数据源原始精度字符串，展示直接转 number 透传，不二次舍入） */
-	rate: string;
-}
-
 /**
- * history 响应 data（后端 RateService.toHistoryResponse 的返回）。
- * 手写维护（方案 §4）：schema.gen 对该端点为 content?: never（后端 DTO 未打
- * 响应注解），generate:api 覆盖不到；字段以后端实现为唯一事实。
- * 允许部分序列（无回源能力币对 365 档按 cron 积累尽力返回）。
+ * history 单点（GET /rates/history 的 data_points 项；rate 为数据源原始精度字符串）。
+ * MVP-F0-2 C2 起后端定义 RateHistoryPointDto（含逐点 source 来源标注）并重生成契约——
+ * 手写影子类型已清零（DEBT-05 范围收敛），字段以后端 DTO 为唯一事实来源。
+ * source：er-api/abc/frankfurter/identity = 原来源报价；frankfurter-v2-reference = 参考价（图表须区分）。
  */
-export interface RateHistoryData {
-	base: string;
-	target: string;
-	period: number;
-	data_points: RateHistoryPoint[];
-	/** 序列末点汇率；空序列为 null */
-	current_rate: string | null;
-}
+export type RateHistoryPoint = Schemas["RateHistoryPointDto"];
+
+/** history 响应 data（后端 RateHistoryResponseDto，generate:api 生成） */
+export type RateHistoryData = Schemas["RateHistoryResponseDto"];
+
+/** 图表参考价来源标识（与后端 REFERENCE_RATE_SOURCE 常量同值；展示层据此区分参考价） */
+export const REFERENCE_RATE_SOURCE = "frankfurter-v2-reference";
 
 export const ratesApi = {
 	/**

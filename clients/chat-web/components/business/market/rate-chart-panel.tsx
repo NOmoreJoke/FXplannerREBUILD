@@ -209,6 +209,10 @@ export function RateChartPanel({
 	const pendingCount = series.filter(
 		(item) => item.status === "loading",
 	).length;
+	// 含参考价补点的币种（展示区分参考价与原来源报价，MVP-F0-2 C2）
+	const referenceCurrencies = series
+		.filter((item) => item.referenceCount > 0)
+		.map((item) => item.currency);
 
 	return (
 		<div
@@ -270,6 +274,17 @@ export function RateChartPanel({
 					className="mt-2 text-xs text-muted-foreground"
 				>
 					数据自 {firstDate} 起（更早历史暂无积累）
+				</p>
+			)}
+
+			{/* 参考价来源标注（MVP-F0-2 C2：含 v2 参考补点的曲线必须在展示中说明参考价来源） */}
+			{referenceCurrencies.length > 0 && (
+				<p
+					data-testid="market-chart-reference-note"
+					className="mt-2 text-xs text-muted-foreground"
+				>
+					{referenceCurrencies.join("、")} 曲线含参考价数据点（frankfurter v2
+					参考序列，非原来源报价）
 				</p>
 			)}
 

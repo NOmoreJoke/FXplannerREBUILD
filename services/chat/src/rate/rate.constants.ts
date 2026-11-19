@@ -46,6 +46,16 @@ export const ERAPI_RATE_URL = "https://open.er-api.com/v6";
 /** frankfurter（ECB 日更）接口根路径 */
 export const FRANKFURTER_RATE_URL = "https://api.frankfurter.app";
 
+/**
+ * frankfurter v2 日级参考序列接口根路径（MVP-F0-2 C2·TWD 图表）。
+ * 参考点仅用于历史图表冷缺口补点（响应合并层），严禁回写 exchange_rates；
+ * date 仅证明序列日期，不参与原时点入账（底稿 §2 可用性条件）。
+ */
+export const FRANKFURTER_V2_RATE_URL = "https://api.frankfurter.dev/v2";
+
+/** 图表参考点来源标识（与数据源标识域隔离：参考价非原来源报价） */
+export const REFERENCE_RATE_SOURCE = "frankfurter-v2-reference";
+
 /** 时钟漂移容差：报价发布时间晚于「当前时间 + 容差」视为未来报价（恰好容差值放行），按源不可用处理 */
 export const RATE_CLOCK_SKEW_TOLERANCE_MS = 60_000;
 

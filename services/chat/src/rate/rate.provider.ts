@@ -13,6 +13,7 @@ import {
 	DEFAULT_RATE_PROVIDER_TIMEOUT_MS,
 	FrankfurterSource,
 } from './rate-source.frankfurter';
+import { FrankfurterV2Source } from './rate-source.frankfurter-v2';
 import type {
 	RateBatchQuote,
 	RateHistoryPoint,
@@ -40,6 +41,7 @@ export class RateProvider {
 	private readonly abcSource: AbcSource;
 	private readonly erApiSource: ErApiSource;
 	private readonly frankfurterSource: FrankfurterSource;
+	private readonly frankfurterV2Source: FrankfurterV2Source;
 
 	constructor(
 		@Optional()
@@ -76,6 +78,10 @@ export class RateProvider {
 			fetchImpl,
 		});
 		this.frankfurterSource = new FrankfurterSource({
+			timeoutMs: this.timeoutMs,
+			fetchImpl,
+		});
+		this.frankfurterV2Source = new FrankfurterV2Source({
 			timeoutMs: this.timeoutMs,
 			fetchImpl,
 		});
@@ -119,6 +125,24 @@ export class RateProvider {
 		end: string,
 	): Promise<RateHistoryPoint[]> {
 		return this.sourceFor(target).fetchHistory(base, target, start, end);
+	}
+
+	/**
+	 * frankfurter v2 日级参考序列（MVP-F0-2 C2·TWD 图表冷缺口补点）。
+	 * 仅产出参考序列供图表响应合并层；严禁回写 exchange_rates（调用方约束）。
+	 */
+	async fetchReferenceSeries(
+		base: string,
+		target: string,
+		start: string,
+		end: string,
+	): Promise<RateHistoryPoint[]> {
+		return this.frankfurterV2Source.fetchReferenceSeries(
+			base,
+			target,
+			start,
+			end,
+		);
 	}
 
 	/** 币对路由的数据源标识（history 落库 source 标注用；降级模式恒为 frankfurter） */

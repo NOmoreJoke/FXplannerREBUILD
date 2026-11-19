@@ -3,6 +3,7 @@ import {
 	ABC_RATE_URL,
 	ERAPI_RATE_URL,
 	FRANKFURTER_RATE_URL,
+	FRANKFURTER_V2_RATE_URL,
 } from "../../src/rate/rate.constants";
 
 /**
@@ -182,6 +183,8 @@ export interface RateSourceRoutes {
 	abc?: (url: string) => Response | Promise<Response>;
 	erApi?: (url: string) => Response | Promise<Response>;
 	frankfurter?: (url: string) => Response | Promise<Response>;
+	/** frankfurter v2 参考序列（MVP-F0-2 C2·TWD 图表）；缺省空序列 */
+	frankfurterV2?: (url: string) => Response | Promise<Response>;
 }
 
 /**
@@ -200,6 +203,12 @@ export function createRateSourceFetchStub(
 			return routes.erApi
 				? routes.erApi(href)
 				: jsonResponse(erApiLatestBody({ TWD: "4.5023" }));
+		}
+		// v2 参考序列域名（api.frankfurter.dev）与 v1（api.frankfurter.app）区分路由
+		if (href.startsWith(FRANKFURTER_V2_RATE_URL)) {
+			return routes.frankfurterV2
+				? routes.frankfurterV2(href)
+				: jsonResponse({ rates: {} });
 		}
 		if (href.startsWith(FRANKFURTER_RATE_URL)) {
 			return routes.frankfurter

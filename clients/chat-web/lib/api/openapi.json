@@ -509,7 +509,7 @@
     },
     "/api/rates/history": {
       "get": {
-        "description": "按 base、target 和 period 查询工作日历史汇率；完整缓存直接返回，缓存不完整时回源并补齐。",
+        "description": "按 base、target 和 period 查询工作日历史汇率；完整缓存直接返回，缓存不完整时回源并补齐。 er-api 路由币对（TWD）本地序列不完整时由 frankfurter v2 参考序列补点（仅响应合并层，不落库）， 逐点 source 区分原来源报价与参考价（frankfurter-v2-reference）。",
         "operationId": "RateController_history",
         "parameters": [
           {
@@ -582,7 +582,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "历史序列（base/target/period/data_points/current_rate）；逐点含可选 source 来源标注",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateHistoryResponseDto"
+                }
+              }
+            }
           }
         },
         "summary": "查询历史汇率序列",
@@ -3477,6 +3484,76 @@
         "required": [
           "base",
           "items"
+        ]
+      },
+      "RateHistoryPointDto": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "观测日（YYYY-MM-DD，UTC）",
+            "example": "2026-09-15"
+          },
+          "rate": {
+            "type": "string",
+            "description": "汇率（1 外币 = X 本位币；数据源原始精度字符串）",
+            "example": "0.2102297812"
+          },
+          "source": {
+            "type": "string",
+            "description": "逐点来源：本地行 = 落库数据源（abc / er-api / frankfurter / identity）；参考补点 = frankfurter-v2-reference（参考价，非原来源报价，图表须区分展示）",
+            "example": "er-api"
+          }
+        },
+        "required": [
+          "date",
+          "rate"
+        ]
+      },
+      "RateHistoryResponseDto": {
+        "type": "object",
+        "properties": {
+          "base": {
+            "type": "string",
+            "description": "基准币种代码",
+            "example": "USD"
+          },
+          "target": {
+            "type": "string",
+            "description": "目标币种代码",
+            "example": "TWD"
+          },
+          "period": {
+            "type": "number",
+            "description": "查询天数",
+            "enum": [
+              7,
+              30,
+              90,
+              365
+            ],
+            "example": 7
+          },
+          "data_points": {
+            "description": "历史序列（工作日；TWD 冷缺口由 v2 参考序列补点并标注来源）",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RateHistoryPointDto"
+            }
+          },
+          "current_rate": {
+            "type": "string",
+            "description": "序列末点汇率；空序列为 null",
+            "nullable": true,
+            "example": "0.2102297812"
+          }
+        },
+        "required": [
+          "base",
+          "target",
+          "period",
+          "data_points",
+          "current_rate"
         ]
       },
       "AccountSummaryDto": {

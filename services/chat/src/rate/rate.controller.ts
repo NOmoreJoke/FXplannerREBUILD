@@ -34,10 +34,11 @@ import {
   RateErrorDto,
 } from './dto/rate-latest.dto';
 import { RateHistoryDto } from './dto/rate-history.dto';
+import { RateHistoryResponseDto } from './dto/rate-history-response.dto';
 import { RateService } from './rate.service';
 
 @ApiTags('Rate')
-@ApiExtraModels(LatestRateResponseDto, LatestRateGroupResponseDto)
+@ApiExtraModels(LatestRateResponseDto, LatestRateGroupResponseDto, RateHistoryResponseDto)
 @Controller('rates')
 export class RateController {
   constructor(
@@ -130,7 +131,13 @@ export class RateController {
   @Get('history')
   @ApiOperation({
     summary: '查询历史汇率序列',
-    description: '按 base、target 和 period 查询工作日历史汇率；完整缓存直接返回，缓存不完整时回源并补齐。',
+    description: '按 base、target 和 period 查询工作日历史汇率；完整缓存直接返回，缓存不完整时回源并补齐。'
+      + ' er-api 路由币对（TWD）本地序列不完整时由 frankfurter v2 参考序列补点（仅响应合并层，不落库），'
+      + ' 逐点 source 区分原来源报价与参考价（frankfurter-v2-reference）。',
+  })
+  @ApiOkResponse({
+    description: '历史序列（base/target/period/data_points/current_rate）；逐点含可选 source 来源标注',
+    schema: { $ref: getSchemaPath(RateHistoryResponseDto) },
   })
   @ApiQuery({
     name: 'base',

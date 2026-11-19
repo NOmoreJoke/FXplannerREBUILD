@@ -30,9 +30,11 @@ vi.mock("@/lib/api/client", () => {
 	return { ApiError: MockApiError };
 });
 
-// Mock ratesApi（传输层由 client.ts mock 承接，此处直接断言 API 封装的入参）
+// Mock ratesApi（传输层由 client.ts mock 承接，此处直接断言 API 封装的入参）；
+// REFERENCE_RATE_SOURCE 随模块 mock 提供（use-rate-history 的 series 依赖其常量）
 vi.mock("@/lib/api/rates", () => ({
 	ratesApi: { history: vi.fn() },
+	REFERENCE_RATE_SOURCE: "frankfurter-v2-reference",
 }));
 
 /** 构造单币种 history 响应 data */
@@ -115,16 +117,49 @@ describe("useRateHistory", () => {
 				status: "success",
 				startDate: "2026-02-10",
 				errorMessage: null,
+				referenceCount: 0,
 			},
 			{
 				currency: "EUR",
 				status: "success",
 				startDate: "2026-02-10",
 				errorMessage: null,
+				referenceCount: 0,
 			},
 		]);
 		expect(result.current.isLoading).toBe(false);
 		expect(result.current.isAllUnavailable).toBe(false);
+	});
+
+	it("含 v2 参考价数据点：series.referenceCount 按来源标注计数（MVP-F0-2 C2 展示区分）", async () => {
+		vi.mocked(ratesApi.history).mockImplementation((_base, target) =>
+			Promise.resolve({
+				base: "CNY",
+				target,
+				period: 7,
+				data_points: [
+					{
+						date: "2026-02-10",
+						rate: "0.2102297812",
+						source: "frankfurter-v2-reference",
+					},
+					{ date: "2026-02-11", rate: "0.2103", source: "er-api" },
+				],
+				current_rate: "0.2103",
+			} as RateHistoryData),
+		);
+
+		const { result } = renderHook(
+			() => useRateHistory({ base: "CNY", targets: ["TWD"], period: 7 }),
+			{ wrapper: createWrapper() },
+		);
+		await advance(0);
+
+		expect(result.current.series[0]).toMatchObject({
+			currency: "TWD",
+			status: "success",
+			referenceCount: 1,
+		});
 	});
 
 	it("单币种失败隔离：某币种 422 失败不影响其余币种出图，失败项 status=error", async () => {
@@ -153,6 +188,7 @@ describe("useRateHistory", () => {
 			status: "error",
 			startDate: null,
 			errorMessage: "不支持该币对（RATE_PAIR_UNSUPPORTED）",
+			referenceCount: 0,
 		});
 		expect(usd).toMatchObject({ status: "success" });
 		// 只有成功币种参与合并（TWD 列不出现）
@@ -227,12 +263,19 @@ describe("useRateHistory", () => {
 
 		expect(result.current.rows).toBeNull();
 		expect(result.current.series).toEqual([
-			{ currency: "USD", status: "empty", startDate: null, errorMessage: null },
+			{
+				currency: "USD",
+				status: "empty",
+				startDate: null,
+				errorMessage: null,
+				referenceCount: 0,
+			},
 			{
 				currency: "MYR",
 				status: "error",
 				startDate: null,
 				errorMessage: "数据源不可用",
+				referenceCount: 0,
 			},
 		]);
 		expect(result.current.isAllUnavailable).toBe(true);
