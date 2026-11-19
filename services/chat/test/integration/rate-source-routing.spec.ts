@@ -79,11 +79,11 @@ describe("RateProvider 门面多源路由（realtime-rate §3.1）", () => {
 			TWD: "er-api",
 			MYR: "frankfurter",
 		});
-		// abc 项：百单位换算 + 双价；er-api/frankfurter 项：源字符串透传
+		// abc 项：百单位换算 + 双价（方向本就正确）；er-api/frankfurter 项：上游取倒数（MVP-F0-1）
 		expect(result.quotes.USD.rate).toBe(ABC_SAMPLE_ROWS.USD.rate);
 		expect(result.quotes.USD.sellRate).toBe(ABC_SAMPLE_ROWS.USD.sellRate);
-		expect(result.quotes.TWD.rate).toBe("4.5023");
-		expect(result.quotes.MYR.rate).toBe("0.6102");
+		expect(result.quotes.TWD.rate).toBe("0.2221087000");
+		expect(result.quotes.MYR.rate).toBe("1.6388069485");
 		// 三组并发外呼（max 在途 = 3）
 		expect(maxInFlight).toBe(3);
 	});
@@ -114,8 +114,8 @@ describe("RateProvider 门面多源路由（realtime-rate §3.1）", () => {
 			stub as unknown as typeof fetch,
 		).fetchLatestBatch("CNY", ["USD", "TWD", "MYR"]);
 
-		expect(result.quotes.TWD.rate).toBe("4.5023");
-		expect(result.quotes.MYR.rate).toBe("0.6102");
+		expect(result.quotes.TWD.rate).toBe("0.2221087000");
+		expect(result.quotes.MYR.rate).toBe("1.6388069485");
 		expect(result.sources).toEqual({ TWD: "er-api", MYR: "frankfurter" });
 		expect(result.failures?.USD).toBeInstanceOf(BadGatewayException);
 		expect(result.quotes.USD).toBeUndefined();
@@ -139,7 +139,11 @@ describe("RateProvider 门面多源路由（realtime-rate §3.1）", () => {
 			"2026-09-01",
 			"2026-09-03",
 		);
-		expect(myrHistory.map((point) => point.rate)).toEqual(["0.6088", "0.6102"]);
+		// 上游 1 CNY = 0.6088/0.6102 MYR → 取倒数后 1 MYR = X CNY（方向统一）
+		expect(myrHistory.map((point) => point.rate)).toEqual([
+			"1.6425755585",
+			"1.6388069485",
+		]);
 		expect(countCalls(stub, "https://api.frankfurter.app")).toBe(1);
 
 		const twdHistory = await provider.fetchHistory(
@@ -188,7 +192,7 @@ describe("RateProvider 门面多源路由（realtime-rate §3.1）", () => {
 		const result = await provider.fetchLatestBatch("CNY", ["USD", "TWD"]);
 
 		expect(result.source).toBe("frankfurter");
-		expect(result.quotes.USD.rate).toBe("0.1391");
+		expect(result.quotes.USD.rate).toBe("7.1890726096");
 		// ECB 无 TWD：该目标不在 quotes（由调用方标记 422 语义）
 		expect(result.quotes.TWD).toBeUndefined();
 		expect(countCalls(stub, ABC_RATE_URL)).toBe(0);

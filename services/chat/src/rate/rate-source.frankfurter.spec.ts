@@ -17,7 +17,7 @@ describe("FrankfurterSource（MYR + 整体降级单源）", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("latest 保留报价字符串；observedAt 日精度（date → UTC 零点）", async () => {
+	it("latest 上游「1 base = raw target」取倒数（raw 保留源字符串）；observedAt 日精度", async () => {
 		const fetchImpl = okFetch({
 			date: "2026-08-03",
 			rates: { USD: "0.7300123456" },
@@ -32,13 +32,15 @@ describe("FrankfurterSource（MYR + 整体降级单源）", () => {
 			expect.objectContaining({ signal: expect.any(AbortSignal) }),
 		);
 		expect(batch.source).toBe("frankfurter");
-		expect(batch.quotes.USD.rate).toBe("0.7300123456");
+		// 1 CAD = 0.7300123456 USD → 1 USD = 1.3698398473 CAD（HALF_UP 10 位）
+		expect(batch.quotes.USD.rate).toBe("1.3698398473");
+		expect(batch.quotes.USD.raw).toBe("0.7300123456");
 		expect(batch.quotes.USD.observedAt.toISOString()).toBe(
 			"2026-08-03T00:00:00.000Z",
 		);
 	});
 
-	it("历史按日期升序返回，observedAt 日精度", async () => {
+	it("history 上游取倒数后按日期升序返回，observedAt 日精度", async () => {
 		const fetchImpl = okFetch({
 			rates: {
 				"2026-08-03": { CNY: "7.2500" },
@@ -52,8 +54,44 @@ describe("FrankfurterSource（MYR + 整体降级单源）", () => {
 			"2026-08-03",
 		);
 
-		expect(points.map((point) => point.rate)).toEqual(["7.2000", "7.2500"]);
+		// 1 USD = 7.20/7.25 CNY → 1 CNY = 0.1388888889 / 0.1379310345 USD
+		expect(points.map((point) => point.rate)).toEqual([
+			"0.1388888889",
+			"0.1379310345",
+		]);
 		expect(points[0].observedAt.toISOString()).toBe("2026-08-01T00:00:00.000Z");
+	});
+
+	it("date 缺失 / 非法日期 / 不存在的日历日期 → 502（不得回落系统时间或静默归一化，FX-01）", async () => {
+		const missing = okFetch({ rates: { USD: "0.7300123456" } });
+		await expect(
+			new FrankfurterSource({ fetchImpl: missing }).fetchLatestBatch("CAD", [
+				"USD",
+			]),
+		).rejects.toThrow("缺少报价日期");
+		for (const badDate of ["not-a-date", "2026-02-29", "2026-13-01"]) {
+			const invalid = okFetch({
+				date: badDate,
+				rates: { USD: "0.7300123456" },
+			});
+			await expect(
+				new FrankfurterSource({ fetchImpl: invalid }).fetchLatestBatch("CAD", [
+					"USD",
+				]),
+			).rejects.toThrow("无效日期");
+		}
+		// 非字符串 date（null / 数字 / 对象）→ 502 缺少报价日期（不裸抛 TypeError）
+		for (const nonString of [null, 17_350_000_000, { raw: "2026-08-03" }]) {
+			const invalid = okFetch({
+				date: nonString,
+				rates: { USD: "0.7300123456" },
+			});
+			await expect(
+				new FrankfurterSource({ fetchImpl: invalid }).fetchLatestBatch("CAD", [
+					"USD",
+				]),
+			).rejects.toThrow("缺少报价日期");
+		}
 	});
 
 	it("404 → RatePairUnsupportedException（币对不支持，单目标与批量同语义）", async () => {
@@ -83,8 +121,9 @@ describe("FrankfurterSource（MYR + 整体降级单源）", () => {
 			`${FRANKFURTER_RATE_URL}/latest?from=USD&to=CNY%2CJPY`,
 			expect.objectContaining({ signal: expect.any(AbortSignal) }),
 		);
-		expect(batch.quotes.CNY.rate).toBe("0.1391");
-		expect(batch.quotes.JPY.rate).toBe("0.0067");
+		// 1 USD = 0.1391 CNY / 0.0067 JPY → 取倒数后 1 CNY = 7.1890726096 USD、1 JPY = 149.2537313433 USD
+		expect(batch.quotes.CNY.rate).toBe("7.1890726096");
+		expect(batch.quotes.JPY.rate).toBe("149.2537313433");
 		expect(batch.quotes.CNY.observedAt).toEqual(batch.quotes.JPY.observedAt);
 		expect(batch.quotes.CNY.observedAt.toISOString()).toBe(
 			"2026-08-03T00:00:00.000Z",
@@ -101,7 +140,7 @@ describe("FrankfurterSource（MYR + 整体降级单源）", () => {
 			["CNY", "TWD"],
 		);
 
-		expect(batch.quotes.CNY.rate).toBe("0.1391");
+		expect(batch.quotes.CNY.rate).toBe("7.1890726096");
 		expect(batch.quotes.TWD).toBeUndefined();
 	});
 

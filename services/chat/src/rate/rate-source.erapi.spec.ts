@@ -23,7 +23,7 @@ describe("ErApiSource（TWD 补充源）", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("URL 拼接 /latest/{base}；TWD 取值透传（raw 保留源字符串，顶层 source=er-api）", async () => {
+	it("URL 拼接 /latest/{base}；上游「1 base = raw target」取倒数为「1 target = X base」（raw 保留源字符串）", async () => {
 		const fetchImpl = okFetch(
 			erApiLatestBody({ TWD: "4.5023", HKD: "1.0975" }),
 		);
@@ -36,7 +36,8 @@ describe("ErApiSource（TWD 补充源）", () => {
 			expect.objectContaining({ signal: expect.any(AbortSignal) }),
 		);
 		expect(batch.source).toBe("er-api");
-		expect(batch.quotes.TWD.rate).toBe("4.5023");
+		// 1/4.5023 = 0.22210870…（HALF_UP 10 位；方向修复 MVP-F0-1）
+		expect(batch.quotes.TWD.rate).toBe("0.2221087000");
 		expect(batch.quotes.TWD.raw).toBe("4.5023");
 	});
 
