@@ -380,7 +380,7 @@ describe("OnboardingService", () => {
 			});
 
 			// getLatest 以规范化后的币种代码取价（base = 本位币）
-			expect(rateService.getLatest).toHaveBeenCalledWith("CNY", ["USD", "JPY"]);
+			expect(rateService.getLatest).toHaveBeenCalledWith("CNY", ["USD", "JPY"], false);
 
 			// InitialHolding × 2：rate = sellRate ?? rate（8 位 HALF_UP），rawRate = 原值
 			const holdingCalls = prisma.initialHolding.create.mock.calls;
@@ -521,22 +521,20 @@ describe("OnboardingService", () => {
 			expect(body.code).toBe("INVALID_AMOUNT");
 		});
 
-		it("报价超时效（observedAt + 5min ≤ now）→ 400 RATE_UNAVAILABLE", async () => {
+		it("陈旧回显且一次同步回源后仍不 fresh → 400 RATE_UNAVAILABLE（MVP-F0-2：锚点为系统确认 fresh/validUntil）", async () => {
 			mockCompleteSuccess();
-			rateService.getLatest.mockResolvedValue({
-				base: "CNY",
-				items: [
-					{
-						target: "USD",
-						rate: "7.25",
-						source: "er-api",
-						observedAt: T0.toISOString(),
-						validUntil: new Date(T0.getTime() + 5 * 60 * 1000).toISOString(),
-						fresh: true,
-					},
-				],
-			});
-			// 时钟推进 6 分钟：以报价来源标注时间 observedAt 为锚过期
+			const staleItem = {
+				target: "USD",
+				rate: "7.25",
+				source: "er-api",
+				observedAt: T0.toISOString(),
+				validUntil: new Date(T0.getTime() + 5 * 60 * 1000).toISOString(),
+				fresh: false,
+			};
+			// 初查陈旧回显 → 同步刷新仍不 fresh（如供应商停更且响应过期）→ 拒绝
+			rateService.getLatest
+				.mockResolvedValueOnce({ base: "CNY", items: [staleItem] })
+				.mockResolvedValueOnce({ base: "CNY", items: [staleItem] });
 			vi.setSystemTime(new Date(T0.getTime() + 6 * 60 * 1000));
 
 			const { body } = await errorOf(
@@ -549,6 +547,158 @@ describe("OnboardingService", () => {
 			);
 
 			expect(body.code).toBe("RATE_UNAVAILABLE");
+			// 恰好两次取价：初查 + 一次同步刷新，不重试第三次
+			expect(rateService.getLatest).toHaveBeenCalledTimes(2);
+			expect(rateService.getLatest).toHaveBeenNthCalledWith(
+				1,
+				"CNY",
+				["USD"],
+				false,
+			);
+			expect(rateService.getLatest).toHaveBeenNthCalledWith(
+				2,
+				"CNY",
+				["USD"],
+				true,
+			);
+		});
+
+		it("日级源 observedAt 早于 5 分钟但系统确认 fresh 且 validUntil 未过期 → 正常入账（不再以 observedAt 自设时效）", async () => {
+			mockCompleteSuccess();
+			mockGroupQuotes();
+			rateService.getLatest.mockResolvedValue({
+				base: "CNY",
+				items: [
+					{
+						target: "USD",
+						rate: "7.25",
+						source: "er-api",
+						// 日级源发布时间恒早于 5 分钟窗口：fresh 以系统确认为锚
+						observedAt: new Date(T0.getTime() - 60 * 60 * 1000).toISOString(),
+						validUntil: new Date(T0.getTime() + 30 * 60 * 1000).toISOString(),
+						fresh: true,
+					},
+				],
+			});
+			vi.setSystemTime(new Date(T0.getTime() + 6 * 60 * 1000));
+
+			await service.complete("u1", {
+				...validWizard,
+				initialHoldings: [{ currencyCode: "USD", amount: "100.00" }],
+			});
+
+			const holding = prisma.initialHolding.create.mock.calls.at(-1)![0]
+				.data as { rateObservedAt: Date };
+			// 发布时间原样落库（rateObservedAt），不因早于窗口被拒
+			expect(holding.rateObservedAt).toEqual(
+				new Date(T0.getTime() - 60 * 60 * 1000),
+			);
+		});
+
+		it("系统确认 fresh 但 validUntil 已过（写账前跨过有效期）→ 刷新后仍过期 → 400", async () => {
+			mockCompleteSuccess();
+			const contradictionItem = {
+				target: "USD",
+				rate: "7.25",
+				source: "er-api",
+				observedAt: T0.toISOString(),
+				validUntil: new Date(T0.getTime() - 60 * 60 * 1000).toISOString(),
+				fresh: true,
+			};
+			// fresh=true 与过期 validUntil 并存（取价与写账间隙跨过有效期）：
+			// validUntil 判定拒绝 → 一次同步刷新 → 仍过期 → 整单拒绝
+			rateService.getLatest
+				.mockResolvedValueOnce({ base: "CNY", items: [contradictionItem] })
+				.mockResolvedValueOnce({ base: "CNY", items: [contradictionItem] });
+
+			const { body } = await errorOf(
+				() =>
+					service.complete("u1", {
+						...validWizard,
+						initialHoldings: [{ currencyCode: "USD", amount: "100.00" }],
+					}),
+				RateUnavailableException,
+			);
+			expect(body.code).toBe("RATE_UNAVAILABLE");
+			expect(rateService.getLatest).toHaveBeenCalledTimes(2);
+		});
+
+		it("fresh=true 但 validUntil 非法（不可解析）→ 视同不 fresh → 刷新后仍非法 → 400（isFresh 解析防御回归）", async () => {
+			mockCompleteSuccess();
+			const badValidUntilItem = {
+				target: "USD",
+				rate: "7.25",
+				source: "er-api",
+				observedAt: T0.toISOString(),
+				validUntil: "not-an-iso-date",
+				fresh: true,
+			};
+			rateService.getLatest
+				.mockResolvedValueOnce({ base: "CNY", items: [badValidUntilItem] })
+				.mockResolvedValueOnce({ base: "CNY", items: [badValidUntilItem] });
+
+			const { body } = await errorOf(
+				() =>
+					service.complete("u1", {
+						...validWizard,
+						initialHoldings: [{ currencyCode: "USD", amount: "100.00" }],
+					}),
+				RateUnavailableException,
+			);
+			expect(body.code).toBe("RATE_UNAVAILABLE");
+			expect(rateService.getLatest).toHaveBeenCalledTimes(2);
+		});
+
+		it("固定 UTC+8 00:05 / 14:30 / 23:55 三时点：陈旧回显 → 一次同步回源后入账（FX-04 时段覆盖）", async () => {
+			// 日级源 observedAt = 2026-09-14T16:05:00Z（UTC+8 09-15 00:05）：
+			// 建账发生在三个固定 UTC+8 时点，均按系统确认时效（一次回源后 fresh）入账
+			const observedAt = new Date("2026-09-14T16:05:00.000Z");
+			for (const [label, instant] of [
+				["00:05", "2026-09-15T16:05:00.000Z"], // = UTC+8 09-16 00:05
+				["14:30", "2026-09-15T06:30:00.000Z"], // = UTC+8 09-15 14:30
+				["23:55", "2026-09-15T15:55:00.000Z"], // = UTC+8 09-15 23:55
+			] as const) {
+				mockCompleteSuccess();
+				mockGroupQuotes();
+				prisma.initialHolding.create.mockClear();
+				rateService.getLatest.mockClear();
+				vi.setSystemTime(new Date(instant));
+				const staleItem = {
+					target: "TWD",
+					rate: "0.0307284801",
+					source: "er-api",
+					observedAt: observedAt.toISOString(),
+					validUntil: new Date(Date.now() - 60_000).toISOString(),
+					fresh: false,
+				};
+				const freshItem = {
+					...staleItem,
+					validUntil: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+					fresh: true,
+				};
+				rateService.getLatest
+					.mockResolvedValueOnce({ base: "CNY", items: [staleItem] })
+					.mockResolvedValueOnce({ base: "CNY", items: [freshItem] });
+
+				await service.complete(`u1-${label}`, {
+					...validWizard,
+					initialHoldings: [{ currencyCode: "TWD", amount: "1000" }],
+				});
+
+				// 每时点恰好两次取价（初查 + 一次同步回源），发布时间原样落库
+				expect(rateService.getLatest).toHaveBeenCalledTimes(2);
+				expect(rateService.getLatest).toHaveBeenNthCalledWith(
+					2,
+					"CNY",
+					["TWD"],
+					true,
+				);
+				const holding = prisma.initialHolding.create.mock.calls.at(-1)![0]
+					.data as { rateObservedAt: Date; currencyCode: string };
+				expect(holding.currencyCode).toBe("TWD");
+				expect(holding.rateObservedAt).toEqual(observedAt);
+			}
+			vi.useRealTimers();
 		});
 
 		it("取价失败（数据源不可用）→ 400 RATE_UNAVAILABLE，事务回调内抛出即回滚", async () => {
@@ -701,7 +851,7 @@ describe("OnboardingService", () => {
 
 			const result = await service.saveInitialHoldings("u1", backfillDto);
 
-			expect(rateService.getLatest).toHaveBeenCalledWith("CNY", ["EUR"]);
+			expect(rateService.getLatest).toHaveBeenCalledWith("CNY", ["EUR"], false);
 			expect(result.created).toHaveLength(1);
 			expect(result.created[0]).toMatchObject({
 				currencyCode: "EUR",

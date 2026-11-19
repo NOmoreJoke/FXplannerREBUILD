@@ -78,6 +78,25 @@ export function resolveRateSourceMode(
  */
 export const QUOTE_TTL_MS = 5 * 60 * 1000;
 
+/**
+ * 原时点取价的来源粒度分组（MVP-F0-2，realtime-rate 底稿 §2）。
+ *
+ * - 实时源（abc，秒级 PublishTime）：沿用确认时点前 5 分钟窗口；
+ * - 日级源（er-api，time_last_update_unix 为真实供应商发布时间）：
+ *   UTC+8 同日优先 + 有限回看；
+ * - frankfurter 的 date 仅解析为 UTC 零点（日期表示），无法证明原时点可用，
+ *   不参与原时点入账（保留 RATE_QUOTE_UNAVAILABLE；日价冷历史入账需另行
+ *   确认适用条件后按底稿 §2 增加独立验收）。
+ */
+export const REALTIME_QUOTE_SOURCES = ["abc"] as const;
+export const DAILY_QUOTE_SOURCES = ["er-api"] as const;
+
+/**
+ * 日级报价原时点回看上限：最多 7 个 UTC+8 自然日（工作假设，底稿 §2）。
+ * 覆盖节假日/供应商停更场景；最终边界由回看上限两侧测试锁定。
+ */
+export const DAILY_QUOTE_LOOKBACK_DAYS = 7;
+
 /** 恒等报价（base = target）的来源标识：数学事实而非数据源报价，不外呼 */
 export const IDENTITY_RATE_SOURCE = "identity";
 

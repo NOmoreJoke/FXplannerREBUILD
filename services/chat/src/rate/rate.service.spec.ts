@@ -1,6 +1,7 @@
 import { BadRequestException } from "@nestjs/common";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaService } from "../prisma/prisma.service";
+import { utc8DayStart } from "../transaction/transaction-calculator";
 import { QUOTE_TTL_MS, SUPPORTED_CURRENCIES } from "./rate.constants";
 import {
 	RatePairUnsupportedException,
@@ -921,12 +922,16 @@ describe("RateService", () => {
 	});
 });
 
-// ────────────────────────── findQuoteAt（corrections M8，方案 §5.3）──────────────────────────
+// ────────────────────────── findQuoteAt（corrections M8，方案 §5.3；MVP-F0-2 按源粒度）──────────────────────────
 
-describe("RateService.findQuoteAt 原时点取价", () => {
-	const AT = new Date("2026-09-10T02:00:00.000Z"); // 原确认时点
+describe("RateService.findQuoteAt 原时点取价（MVP-F0-2 按源粒度）", () => {
+	const AT = new Date("2026-09-10T02:00:00.000Z"); // 原确认时点 = UTC+8 2026-09-10 10:00
 	const inWindow = (minutesAgo: number) =>
 		new Date(AT.getTime() - minutesAgo * 60_000);
+	// UTC+8 当日零点 = 2026-09-09T16:00Z；日级回看窗口起点 = 再前推 7 个自然日
+	const LOOKBACK_START = new Date(
+		utc8DayStart(AT).getTime() - 7 * 86_400_000,
+	);
 
 	function build() {
 		const prisma = {
@@ -955,15 +960,16 @@ describe("RateService.findQuoteAt 原时点取价", () => {
 		quote: "USD",
 		rate: decimal("7.2480000000"),
 		sellRate: null,
-		source: "frankfurter",
+		source: "er-api",
 		observedAt: inWindow(3),
 		...overrides,
 	});
 
-	it("窗口 (at−5min, at] 内取 observedAt 最后一笔；sellRate 优先于 rate", async () => {
+	it("实时源（abc）：窗口 (at−5min, at] 命中即返回；sellRate 优先于 rate；不再触发日级查询与回补", async () => {
 		const { service, prisma } = build();
-		prisma.exchangeRate.findFirst.mockResolvedValue(
+		prisma.exchangeRate.findFirst.mockResolvedValueOnce(
 			mkQuoteRow({
+				source: "abc",
 				rate: decimal("7.2400000000"),
 				sellRate: decimal("7.2512300000"),
 				observedAt: inWindow(1),
@@ -975,58 +981,103 @@ describe("RateService.findQuoteAt 原时点取价", () => {
 		expect(quote!.rate).toBe("7.2400000000");
 		expect(quote!.sellRate).toBe("7.2512300000");
 		expect(quote!.observedAt).toEqual(inWindow(1));
-		// 方向断言：1 外币 = X 本位币（base = 本位币、quote = 外币）
-		expect(prisma.exchangeRate.findFirst).toHaveBeenCalledWith(
+		// 首次查询即实时窗口：source 限定 abc、(at−5min, at]
+		expect(prisma.exchangeRate.findFirst).toHaveBeenNthCalledWith(
+			1,
 			expect.objectContaining({
-				where: expect.objectContaining({ base: "CNY", quote: "USD" }),
+				where: expect.objectContaining({
+					base: "CNY",
+					quote: "USD",
+					source: { in: ["abc"] },
+					observedAt: {
+						gt: new Date(AT.getTime() - 5 * 60_000),
+						lte: AT,
+					},
+				}),
+				orderBy: { observedAt: "desc" },
 			}),
 		);
-		// 窗口内命中：不回补历史
+		// 窗口内命中：不进入日级查询、不回补历史
+		expect(prisma.exchangeRate.findFirst).toHaveBeenCalledTimes(1);
 		expect(prisma.exchangeRate.createMany).not.toHaveBeenCalled();
 	});
 
-	it("本地窗口无报价 → fetchHistory 回补当日历史后重查；仍无 → null", async () => {
-		const { service, prisma, provider } = build();
+	it("实时窗口无行 → 日级查询（er-api）：UTC+8 同日 + 7 自然日回看 + 未来点排除，命中返回", async () => {
+		const { service, prisma } = build();
+		// 同日但早于窗口的日级点（如 08:02 UTC+8 发布）：实时查不到、日级命中
+		const dailyPoint = new Date("2026-09-10T00:02:00.000Z"); // UTC+8 08:02
 		prisma.exchangeRate.findFirst
-			.mockResolvedValueOnce(null) // 第一次查询：本地无
-			.mockResolvedValueOnce(mkQuoteRow({ observedAt: inWindow(2) })); // 回补后重查命中
-		provider.fetchHistory.mockResolvedValue([
-			{ rate: "7.25", observedAt: inWindow(2) },
-		]);
+			.mockResolvedValueOnce(null) // 实时窗口无 abc 行
+			.mockResolvedValueOnce(mkQuoteRow({ source: "er-api", observedAt: dailyPoint }));
 
 		const quote = await service.findQuoteAt("CNY", "USD", AT);
 		expect(quote).not.toBeNull();
-		expect(quote!.rate).toBe("7.2480000000");
-		// 回补落库：当日历史 + skipDuplicates 幂等
-		expect(provider.fetchHistory).toHaveBeenCalledWith(
-			"CNY",
-			"USD",
-			expect.any(String),
-			expect.any(String),
+		expect(quote!.source).toBe("er-api");
+		expect(quote!.observedAt).toEqual(dailyPoint);
+		// 日级查询形状：source 限定 er-api、窗口 [UTC+8 当日零点 − 7 天, at]（未来点由 lte 排除）
+		expect(prisma.exchangeRate.findFirst).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				where: expect.objectContaining({
+					base: "CNY",
+					quote: "USD",
+					source: { in: ["er-api"] },
+					observedAt: { gte: LOOKBACK_START, lte: AT },
+				}),
+				orderBy: { observedAt: "desc" },
+			}),
 		);
-		expect(prisma.exchangeRate.createMany).toHaveBeenCalledWith(
-			expect.objectContaining({ skipDuplicates: true }),
-		);
+		expect(prisma.exchangeRate.createMany).not.toHaveBeenCalled();
 	});
 
-	it("回补后窗口内仍无报价（M2 日级粒度常落在窗口外）→ null，上层抛 400", async () => {
+	it("仅日期源（frankfurter）不参与原时点取价：两路查询皆空 → 回补后仍空 → null（上层 400 RATE_QUOTE_UNAVAILABLE）", async () => {
 		const { service, prisma, provider } = build();
+		// 实时/日级/回补后重查/重查 全部空（date-only 行不可作原时点证据）
 		prisma.exchangeRate.findFirst.mockResolvedValue(null);
 		provider.fetchHistory.mockResolvedValue([
-			// 历史点在窗口之外（3 天前）：重查仍不命中
+			// frankfurter 历史点（date 零点）：回补落库但不可用于原时点
 			{ rate: "7.25", observedAt: new Date("2026-09-07T00:00:00.000Z") },
 		]);
 
 		const quote = await service.findQuoteAt("CNY", "USD", AT);
 		expect(quote).toBeNull();
+		// 回补通道保留（落库行供图表与后续语义使用）
+		expect(prisma.exchangeRate.createMany).toHaveBeenCalledWith(
+			expect.objectContaining({ skipDuplicates: true }),
+		);
 	});
 
-	it("回补外呼失败不阻断失败路径：按「窗口内无报价」返回 null", async () => {
+	it("回补外呼失败不阻断失败路径：按「无合格报价」返回 null", async () => {
 		const { service, prisma, provider } = build();
 		prisma.exchangeRate.findFirst.mockResolvedValue(null);
 		provider.fetchHistory.mockRejectedValue(new Error("source down"));
 
 		const quote = await service.findQuoteAt("CNY", "USD", AT);
 		expect(quote).toBeNull();
+	});
+
+	it("回补行为与结果一致：frankfurter 历史点以 sourceForPair 来源落库（供图表），但原时点重查仍为 null——回补不伪造原时点可用性", async () => {
+		const { service, prisma, provider } = build();
+		prisma.exchangeRate.findFirst.mockResolvedValue(null);
+		provider.fetchHistory.mockResolvedValue([
+			{ rate: "7.25", observedAt: new Date("2026-09-10T00:00:00.000Z") },
+		]);
+
+		const quote = await service.findQuoteAt("CNY", "USD", AT);
+		// er-api 免费档无历史端点、frankfurter 仅日期点不可作原时点证据：
+		// 回补只落库（图表用），原时点取价如实返回 null
+		expect(quote).toBeNull();
+		expect(provider.fetchHistory).toHaveBeenCalledWith(
+			"CNY",
+			"USD",
+			"2026-09-09", // 回补区间起点 = UTC+8 当日零点
+			"2026-09-10",
+		);
+		expect(prisma.exchangeRate.createMany).toHaveBeenCalledWith(
+			expect.objectContaining({
+				skipDuplicates: true,
+				data: [expect.objectContaining({ source: "frankfurter" })],
+			}),
+		);
 	});
 });
