@@ -1,5 +1,6 @@
 import { BadGatewayException } from "@nestjs/common";
 import { FRANKFURTER_RATE_URL } from "./rate.constants";
+import { invertQuoteRate } from "./rate-invert";
 import { RatePairUnsupportedException } from "./rate.errors";
 import type {
 	RateBatchQuote,
@@ -29,6 +30,8 @@ export interface FrankfurterSourceOptions {
  *
  * 负责 MYR 币对，并作为 RATE_SOURCE=frankfurter 整组单源降级开关的路径；
  * 日精度 date 解析、404 → 币对不支持、非 2xx → 502、超时语义全部保持。
+ * 方向（MVP-F0-1）：上游 from/to 语义为「1 base = raw target」，
+ * latest 与 history 均经 invertQuoteRate 精确取倒数为「1 target = X base」。
  */
 export class FrankfurterSource implements RateSource {
 	readonly source = "frankfurter";
@@ -64,7 +67,7 @@ export class FrankfurterSource implements RateSource {
 			const rawRate = response.rates?.[target];
 			if (rawRate !== undefined) {
 				quotes[target] = {
-					rate: String(rawRate),
+					rate: invertQuoteRate(rawRate, base, target),
 					observedAt,
 					raw: String(rawRate),
 				};
@@ -91,7 +94,13 @@ export class FrankfurterSource implements RateSource {
 				const rawRate = rates[target];
 				if (rawRate === undefined) return [];
 
-				return [{ rate: String(rawRate), observedAt: this.parseDate(date) }];
+				return [
+					{
+						// 上游「1 base = raw target」→ 取倒数（FX-01：仅转换一次）
+						rate: invertQuoteRate(rawRate, base, target),
+						observedAt: this.parseDate(date),
+					},
+				];
 			});
 	}
 
@@ -130,9 +139,19 @@ export class FrankfurterSource implements RateSource {
 		}
 	}
 
-	private parseDate(value: string | undefined): Date {
-		const date = value ? new Date(`${value}T00:00:00.000Z`) : new Date();
-		if (Number.isNaN(date.getTime())) {
+	/** v1 日期 → UTC 零点；缺失/非法日期一律拒绝（FX-01：不得回落系统时间冒充报价时点） */
+	private parseDate(value: unknown): Date {
+		// 上游 JSON 不可信：非字符串（null/数字/对象）一律按缺失日期拒绝，避免 TypeError 裸抛
+		if (typeof value !== "string" || value.trim() === "") {
+			throw new BadGatewayException("汇率供应商缺少报价日期");
+		}
+		// 严格 YYYY-MM-DD + 反向比对：拒绝 2026-02-29 这类不存在日历日期被
+		// new Date() 静默归一化（如滚动到 03-01）伪造 observedAt
+		if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+			throw new BadGatewayException("汇率供应商返回了无效日期");
+		}
+		const date = new Date(`${value}T00:00:00.000Z`);
+		if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
 			throw new BadGatewayException("汇率供应商返回了无效日期");
 		}
 		return date;

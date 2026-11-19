@@ -21,7 +21,7 @@ describe("RateProvider", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("调用 Frankfurter 最新接口并保留报价字符串", async () => {
+	it("调用 Frankfurter 最新接口：上游「1 base = raw target」取倒数为「1 target = X base」", async () => {
 		const fetchMock = vi
 			.fn()
 			.mockResolvedValue(
@@ -40,13 +40,13 @@ describe("RateProvider", () => {
 		expect(result).toEqual({
 			base: "CAD",
 			quote: "USD",
-			rate: "0.7300123456",
+			rate: "1.3698398473",
 			source: "frankfurter",
 			observedAt: new Date("2026-08-03T00:00:00.000Z"),
 		});
 	});
 
-	it("获取历史数据后按日期升序返回", async () => {
+	it("获取历史数据：取倒数后按日期升序返回", async () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn().mockResolvedValue(
@@ -66,7 +66,10 @@ describe("RateProvider", () => {
 			"2026-08-03",
 		);
 
-		expect(result.map((point) => point.rate)).toEqual(["7.2000", "7.2500"]);
+		expect(result.map((point) => point.rate)).toEqual([
+			"0.1388888889",
+			"0.1379310345",
+		]);
 		expect(result[0].observedAt.toISOString()).toBe("2026-08-01T00:00:00.000Z");
 	});
 
@@ -112,8 +115,9 @@ describe("RateProvider", () => {
 		expect(result.quotes.JPY.observedAt).toEqual(
 			new Date("2026-08-03T00:00:00.000Z"),
 		);
-		expect(result.quotes.CNY.rate).toBe("0.1391");
-		expect(result.quotes.JPY.rate).toBe("0.0067");
+		// 上游 1 USD = 0.1391 CNY / 0.0067 JPY → 取倒数后方向统一
+		expect(result.quotes.CNY.rate).toBe("7.1890726096");
+		expect(result.quotes.JPY.rate).toBe("149.2537313433");
 	});
 
 	it("批量响应缺失某目标币种时：该目标不在 rates 映射，其余照常返回", async () => {
@@ -132,7 +136,7 @@ describe("RateProvider", () => {
 			"TWD",
 		]);
 
-		expect(result.quotes.CNY.rate).toBe("0.1391");
+		expect(result.quotes.CNY.rate).toBe("7.1890726096");
 		expect(result.quotes.TWD).toBeUndefined();
 	});
 

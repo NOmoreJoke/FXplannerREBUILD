@@ -485,17 +485,18 @@ describe("RateController（接口）", () => {
 				sellRate: "6.72531",
 				observedAt: "2026-09-15T02:26:54.000Z",
 			});
-			// er-api 项：日精度发布时间，响应不含 sellRate 键（非 null）
+			// er-api 项：日精度发布时间，响应不含 sellRate 键（非 null）；
+			// rate 为上游 4.5023 取倒数后的 0.2221087000 入账、toItem 8 位展示
 			expect(items[1]).toMatchObject({
 				source: "er-api",
-				rate: "4.5023",
+				rate: "0.2221087",
 				observedAt: "2026-09-15T00:00:00.000Z",
 			});
 			expect(items[1]).not.toHaveProperty("sellRate");
-			// frankfurter 项：日精度发布时间，无 sellRate
+			// frankfurter 项：0.6102 取倒数 → 1.6388069485 入账、8 位展示
 			expect(items[2]).toMatchObject({
 				source: "frankfurter",
-				rate: "0.6102",
+				rate: "1.63880695",
 				observedAt: "2026-09-15T00:00:00.000Z",
 			});
 			expect(items[2]).not.toHaveProperty("sellRate");
@@ -567,7 +568,7 @@ describe("RateController（接口）", () => {
 			});
 			expect(items[1]).toMatchObject({
 				target: "TWD",
-				rate: "4.5023",
+				rate: "0.2221087",
 				source: "er-api",
 			});
 		});
@@ -600,7 +601,7 @@ describe("RateController（接口）", () => {
 				const items = res.body.data.items;
 				expect(items[0]).toMatchObject({
 					target: "USD",
-					rate: "0.1391",
+					rate: "7.18907261",
 					source: "frankfurter",
 				});
 				expect(items[0]).not.toHaveProperty("sellRate");
@@ -817,9 +818,10 @@ describe("RateController（接口）", () => {
 			expect(points.map((p: { date: string }) => p.date)).toEqual(
 				expectedDates,
 			);
-			expect(points.every((p: { rate: string }) => p.rate === "0.61")).toBe(
-				true,
-			);
+			// 历史 rate 为上游 0.61 取倒数后的落库值（10 位定点字符串）
+			expect(
+				points.every((p: { rate: string }) => p.rate === "1.6393442623"),
+			).toBe(true);
 			// current_rate 为末点
 			expect(res.body.data.current_rate).toBe(points.at(-1).rate);
 			// 回源数据落库

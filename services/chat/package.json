@@ -70,6 +70,8 @@
     "@types/node": "^22.0.0",
     "@types/passport-jwt": "^4.0.1",
     "@types/supertest": "^7.2.1",
+    "decimal.js": "^10.6.0",
+    "fast-check": "^4.10.3",
     "supertest": "^7.2.2",
     "ts-loader": "^9.6.2",
     "tsconfig-paths": "^4.2.0",
