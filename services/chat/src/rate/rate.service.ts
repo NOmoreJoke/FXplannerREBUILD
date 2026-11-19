@@ -6,11 +6,15 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { utc8DayStart } from '../transaction/transaction-calculator';
 import {
+  DAILY_QUOTE_LOOKBACK_DAYS,
+  DAILY_QUOTE_SOURCES,
   IDENTITY_RATE_SOURCE,
   isSupportedCurrency,
   normalizeCurrency,
   QUOTE_TTL_MS,
+  REALTIME_QUOTE_SOURCES,
   SUPPORTED_CURRENCIES,
   VALID_PERIODS,
   type RatePeriod,
@@ -199,12 +203,17 @@ export class RateService {
   }
 
   /**
-   * 原时点取价（corrections 技术方案 §5.3，初始持仓币种更正依赖）：
-   * 查找 observedAt ∈ (at − 5min, at] 窗口内「1 外币 = X 本位币」的最后一笔报价；
-   * 本地无则按当前路由源 fetchHistory 回补当日历史后重查（doc 02:113「取最后一笔」）；
-   * 仍无 → 返回 null，上层抛 400 RATE_QUOTE_UNAVAILABLE。
+   * 原时点取价（corrections 技术方案 §5.3，初始持仓币种更正依赖；MVP-F0-2 按源粒度分组）：
+   *
+   * - 实时源（abc）：observedAt ∈ (at − 5min, at] 窗口最后一笔（doc 02 机制原样）；
+   * - 日级源（er-api，真实供应商发布时间）：UTC+8 同日且 observedAt ≤ at 的最近合格点，
+   *   未命中按最多 7 个 UTC+8 自然日有限回看（节假日/停更场景；未来点一律排除）；
+   * - frankfurter 等仅日期源：date 零点只是日期表示，无法证明原时点可用 → 不参与
+   *   原时点入账（上层保留 RATE_QUOTE_UNAVAILABLE）；
+   * - 本地皆无则按当前路由源 fetchHistory 回补当日历史后重查（skipDuplicates 幂等；
+   *   er-api 免费档无历史端点返回空数组，回补只对具备真实历史的源产生可用行）；
+   * - 仍无 → 返回 null，上层抛 400 RATE_QUOTE_UNAVAILABLE。严禁伪造 observedAt。
    * 方向与采用价口径与 onboarding 取价一致（sellRate ?? rate，1 外币 = X 本位币）。
-   * 注意：M2 历史汇率为日级粒度，历史确认时点常落在窗口外——调用方必须处理 null 失败路径。
    */
   async findQuoteAt(
     baseCurrency: string,
@@ -216,21 +225,40 @@ export class RateService {
     source: string;
     observedAt: Date;
   } | null> {
-    const windowStart = new Date(at.getTime() - QUOTE_TTL_MS);
-    const findInWindow = () =>
+    const realtimeWindowStart = new Date(at.getTime() - QUOTE_TTL_MS);
+    const lookbackStart = new Date(
+      utc8DayStart(at).getTime() -
+        DAILY_QUOTE_LOOKBACK_DAYS * 86_400_000,
+    );
+
+    const findRealtime = () =>
       this.prisma.exchangeRate.findFirst({
         where: {
           base: baseCurrency,
           quote: currencyCode,
-          observedAt: { gt: windowStart, lte: at },
+          source: { in: [...REALTIME_QUOTE_SOURCES] },
+          observedAt: { gt: realtimeWindowStart, lte: at },
+        },
+        orderBy: { observedAt: 'desc' },
+      });
+    const findDaily = () =>
+      this.prisma.exchangeRate.findFirst({
+        where: {
+          base: baseCurrency,
+          quote: currencyCode,
+          source: { in: [...DAILY_QUOTE_SOURCES] },
+          observedAt: { gte: lookbackStart, lte: at },
         },
         orderBy: { observedAt: 'desc' },
       });
 
-    let row = await findInWindow();
+    let row = await findRealtime();
     if (!row) {
-      // 本地窗口无报价：回补当日历史后重查（与 getHistory 同一落库通道，skipDuplicates 幂等）
-      const dayStart = this.startOfUtcDay(at);
+      row = await findDaily();
+    }
+    if (!row) {
+      // 本地无合格报价：回补当日历史后重查（与 getHistory 同一落库通道，skipDuplicates 幂等）
+      const dayStart = utc8DayStart(at);
       try {
         const fetched = await this.provider.fetchHistory(
           baseCurrency,
@@ -251,9 +279,9 @@ export class RateService {
           });
         }
       } catch {
-        // 数据源不可用：不阻断失败路径，按「窗口内无报价」处理（返回 null）
+        // 数据源不可用：不阻断失败路径，按「无合格报价」处理（返回 null）
       }
-      row = await findInWindow();
+      row = (await findRealtime()) ?? (await findDaily());
     }
     if (!row) return null;
     return {

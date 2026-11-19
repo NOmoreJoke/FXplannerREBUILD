@@ -20,7 +20,6 @@ import type {
 	LatestRateItem,
 	LatestRateResponse,
 } from "../rate/rate.service";
-import { QUOTE_TTL_MS } from "../rate/rate.constants";
 import { utc8DayStart } from "../transaction/transaction-calculator";
 import {
 	CONSENT_TYPES,
@@ -407,12 +406,9 @@ export class OnboardingService {
 				throw new RateUnavailableException();
 			}
 			const adopted = quote.sellRate ?? quote.rate;
+			// 时效已在 fetchLatestQuotes 按系统确认 fresh/validUntil 断言（MVP-F0-2）；
+			// observedAt 仅作「真实供应商发布时间」落库（rateObservedAt），不参与时效判定
 			const observedAt = new Date(quote.observedAt);
-			// 时效断言以报价来源标注时间 observedAt 为锚（非数据接收时间）
-			if (Date.now() >= observedAt.getTime() + QUOTE_TTL_MS) {
-				this.warnFailure(userId, "RATE", `币种 ${code} 报价超过 5 分钟时效`);
-				throw new RateUnavailableException();
-			}
 
 			const rate = roundRateTo8(adopted);
 			const amount = new Prisma.Decimal(item.amount);
@@ -504,36 +500,66 @@ export class OnboardingService {
 	 * 批量取价并归一为 items 映射：单目标平铺响应（无 items）包一层、
 	 * 多目标组响应原样取 items（两种响应形状归一，对齐前端 use-latest-rates 思路）。
 	 * getLatest 整体异常（币对不支持/数据源不可用等）统一映射 400 RATE_UNAVAILABLE。
+	 *
+	 * 时效口径（MVP-F0-2，realtime-rate 底稿 §2「首次建账与补录」）：
+	 * 断言锚点为系统确认时效 fresh/validUntil（getLatest 既有语义），不再以
+	 * observedAt（供应商发布时间，日级源恒早于窗口）自设 5 分钟门槛——日级源
+	 * 刚获系统确认即可入账。陈旧回显 → 取一次真实同步刷新；刷新失败或刷新后
+	 * 仍不 fresh（如供应商停更且响应已过 validUntil）→ 保留 400 RATE_UNAVAILABLE。
 	 */
 	private async fetchLatestQuotes(
 		userId: string,
 		baseCurrency: string,
 		codes: string[],
 	): Promise<Map<string, LatestRateItem>> {
+		// 项级失败（error 项无 fresh 字段）视同「不 fresh」：进入刷新并在仍失败时整单拒绝。
+		// 双保险：系统给出的 validUntil 必须仍然有效——取价返回后、写账前跨过有效期同样拒绝
+		const isFresh = (item: LatestRateItem): boolean => {
+			if (!("fresh" in item) || !item.fresh) return false;
+			const until = Date.parse(item.validUntil);
+			return Number.isFinite(until) && Date.now() < until;
+		};
+		let items = await this.fetchLatestOnce(userId, baseCurrency, codes, false);
+		if (items.some((item) => !isFresh(item))) {
+			this.warnFailure(userId, "RATE", "存在超窗陈旧报价，执行一次同步回源");
+			items = await this.fetchLatestOnce(userId, baseCurrency, codes, true);
+		}
+		if (items.some((item) => !isFresh(item))) {
+			this.warnFailure(userId, "RATE", "同步回源后仍存在过期报价");
+			throw new RateUnavailableException();
+		}
+		return new Map(items.map((item) => [item.target, item]));
+	}
+
+	/** 单次 getLatest 取价与形状归一（refresh 语义透传）；整体异常统一 RATE_UNAVAILABLE */
+	private async fetchLatestOnce(
+		userId: string,
+		baseCurrency: string,
+		codes: string[],
+		refresh: boolean,
+	): Promise<LatestRateItem[]> {
 		let response: LatestRatesResponse;
 		try {
-			response = await this.rateService.getLatest(baseCurrency, codes);
+			response = await this.rateService.getLatest(baseCurrency, codes, refresh);
 		} catch {
 			this.warnFailure(userId, "RATE", "汇率服务取价失败（整体异常）");
 			throw new RateUnavailableException();
 		}
-		const items: LatestRateItem[] =
-			"items" in response
-				? response.items
-				: [
-						{
-							target: response.target,
-							rate: response.rate,
-							...(response.sellRate !== undefined
-								? { sellRate: response.sellRate }
-								: {}),
-							source: response.source,
-							observedAt: response.observedAt,
-							validUntil: response.validUntil,
-							fresh: response.fresh,
-						},
-					];
-		return new Map(items.map((item) => [item.target, item]));
+		return "items" in response
+			? response.items
+			: [
+					{
+						target: response.target,
+						rate: response.rate,
+						...(response.sellRate !== undefined
+							? { sellRate: response.sellRate }
+							: {}),
+						source: response.source,
+						observedAt: response.observedAt,
+						validUntil: response.validUntil,
+						fresh: response.fresh,
+					},
+				];
 	}
 
 	/**

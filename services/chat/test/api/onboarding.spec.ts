@@ -7,6 +7,7 @@ import {
 	RATE_PROVIDER_TIMEOUT_TOKEN,
 	RateProvider,
 } from "../../src/rate/rate.provider";
+import { ERAPI_RATE_URL, FRANKFURTER_RATE_URL } from "../../src/rate/rate.constants";
 import {
 	bearer,
 	cleanupUser,
@@ -15,6 +16,11 @@ import {
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
+import {
+	erApiLatestBody,
+	frankfurterLatestBody,
+	jsonResponse,
+} from "../helpers/rate-source-fixtures";
 
 // 关闭全局接口限流（先例：transaction.spec/plan.spec——APP_GUARD token 无法 override，只能 mock 类）
 vi.mock("@nestjs/throttler", async (importOriginal) => {
@@ -45,12 +51,20 @@ describe("OnboardingController（e2e）", () => {
 	};
 
 	beforeAll(async () => {
-		// 汇率外呼一律拒绝（初始持仓取价只依赖本文件 seedRate 造的 fresh 行，
-		// 防止并行 spec 的真实回源行与网络抖动污染断言）
+		// 汇率外呼默认拒绝；仅 er-api 路由返回确定夹具（fresh 门控：陈旧回显 →
+		// 同步回源用例，MVP-F0-2）。防止并行 spec 的真实回源行与网络抖动污染断言。
 		ctx = await createTestApp((builder) =>
 			builder.overrideProvider(RateProvider).useFactory({
 				factory: (timeoutMs: number) =>
-					new RateProvider(timeoutMs, (async () => {
+					new RateProvider(timeoutMs, (async (url: string) => {
+						if (String(url).startsWith(ERAPI_RATE_URL)) {
+							return jsonResponse(erApiLatestBody({ TWD: "32.5431" }));
+						}
+						if (String(url).startsWith(FRANKFURTER_RATE_URL)) {
+							return jsonResponse(
+								frankfurterLatestBody("2026-09-15", { MYR: "0.6102" }),
+							);
+						}
 						throw new Error("onboarding.spec: 未预期的汇率数据源外呼");
 					}) as unknown as typeof fetch),
 				inject: [RATE_PROVIDER_TIMEOUT_TOKEN],
@@ -87,6 +101,33 @@ describe("OnboardingController（e2e）", () => {
 		await ctx.prisma.exchangeRate.deleteMany({ where: { base, quote } });
 		const row = await ctx.prisma.exchangeRate.create({
 			data: { base, quote, rate, source: "er-api", observedAt: new Date() },
+		});
+		createdRateIds.push(row.id);
+		return row;
+	}
+
+	/**
+	 * 造「陈旧回显」报价行：createdAt 强制回拨（过 5 分钟 validUntil 窗口），
+	 * observedAt 保留真实日级发布时间（MVP-F0-2 fresh 门控用例；
+	 * 走 refresh=false 命中 SWR 陈旧回显分支，fresh=false）。
+	 */
+	async function seedStaleRate(
+		base: string,
+		quote: string,
+		rate: string,
+		observedAt = new Date("2026-09-15T00:00:00.000Z"),
+		ageMs = 10 * 60_000,
+	) {
+		await ctx.prisma.exchangeRate.deleteMany({ where: { base, quote } });
+		const row = await ctx.prisma.exchangeRate.create({
+			data: {
+				base,
+				quote,
+				rate,
+				source: "er-api",
+				observedAt,
+				createdAt: new Date(Date.now() - ageMs),
+			},
 		});
 		createdRateIds.push(row.id);
 		return row;
@@ -270,6 +311,190 @@ describe("OnboardingController（e2e）", () => {
 		);
 		expect(balanceByCode.get("SGD")).toBe("1000.0000");
 		expect(balanceByCode.get("KRW")).toBe("100000.0000");
+	});
+
+	it("日级源陈旧回显 → 一次同步回源后入账（FX-04：observedAt 早于 5 分钟但刚获系统确认可入账）", async () => {
+		// TWD 路由 er-api：陈旧行（createdAt 已过 validUntil）→ SWR 回显 fresh=false
+		// → 同步刷新（er-api 夹具应答、upsert 刷新 createdAt）→ fresh=true → 入账
+		await seedStaleRate("CNY", "TWD", "32.0000000000");
+		const created = await createTestUser(app, "onb-stale-refresh");
+		extraUserIds.push(created.userId);
+		await request(app.getHttpServer())
+			.post("/api/onboarding/consents")
+			.set(bearer(created.accessToken))
+			.send({ age18Confirmed: true, termsConfirmed: true })
+			.expect(201);
+
+		const res = await request(app.getHttpServer())
+			.post("/api/onboarding/complete")
+			.set(bearer(created.accessToken))
+			.send({
+				...wizard,
+				initialHoldings: [{ currencyCode: "TWD", amount: "1000" }],
+			})
+			.expect(201);
+		expect(res.body.data.settings.baseCurrency).toBe("CNY");
+
+		// 采用夹具新报价（上游 1 CNY = 32.5431 TWD → 取倒数 1 TWD = 0.0307284801 CNY，
+		// 入账 8 位 0.03072848）；rateObservedAt 保留真实日级发布时间
+		const holding = await ctx.prisma.initialHolding.findFirstOrThrow({
+			where: { userId: created.userId },
+		});
+		expect(holding.currencyCode).toBe("TWD");
+		expect(holding.rate.toFixed(8)).toBe("0.03072848");
+		expect(holding.rawRate.toFixed(10)).toBe("0.0307284800");
+		expect(holding.rateSource).toBe("er-api");
+		expect(holding.rateObservedAt.toISOString()).toBe(
+			"2026-09-15T00:00:00.000Z",
+		);
+		// 同步刷新后行的 createdAt 已回源刷新（下一次取价 fresh）
+		const row = await ctx.prisma.exchangeRate.findFirstOrThrow({
+			where: { base: "CNY", quote: "TWD" },
+		});
+		expect(row.createdAt.getTime()).toBeGreaterThan(Date.now() - 60_000);
+	});
+
+	it("恰过 validUntil（5 分钟+1 秒）且回源失败 → 400 RATE_UNAVAILABLE，整单回滚（FX-04 同步刷新失败拒绝）", async () => {
+		// USD 路由 abc（stub 拒绝外呼）：createdAt 恰过 5 分钟窗口 → SWR 回显 fresh=false
+		// → 同步刷新失败 → 拒绝（恰过边界，而非任意陈旧）
+		await seedStaleRate("CNY", "USD", "7.2480000000", new Date("2026-09-15T00:00:00.000Z"), 5 * 60_000 + 1_000);
+		const created = await createTestUser(app, "onb-stale-fail");
+		extraUserIds.push(created.userId);
+		await request(app.getHttpServer())
+			.post("/api/onboarding/consents")
+			.set(bearer(created.accessToken))
+			.send({ age18Confirmed: true, termsConfirmed: true })
+			.expect(201);
+
+		const res = await request(app.getHttpServer())
+			.post("/api/onboarding/complete")
+			.set(bearer(created.accessToken))
+			.send({
+				...wizard,
+				initialHoldings: [{ currencyCode: "USD", amount: "1000" }],
+			})
+			.expect(400);
+		expect(res.body.code).toBe("RATE_UNAVAILABLE");
+
+		// 整单回滚：无设置、无持仓、无批次、无账户
+		const settings = await ctx.prisma.userSettings.findUnique({
+			where: { userId: created.userId },
+		});
+		expect(settings).toBeNull();
+		const holdings = await ctx.prisma.initialHolding.findMany({
+			where: { userId: created.userId },
+		});
+		expect(holdings).toHaveLength(0);
+		const lots = await ctx.prisma.costLot.findMany({
+			where: { userId: created.userId },
+		});
+		expect(lots).toHaveLength(0);
+		const accounts = await ctx.prisma.account.findMany({
+			where: { userId: created.userId },
+		});
+		expect(accounts).toHaveLength(0);
+	});
+
+	it("多币种组单项失效 → 整单拒绝零业务写入（FX-04：组内一项超窗即拒绝）", async () => {
+		// TWD fresh 命中；USD 陈旧且回源失败（abc stub 拒绝）→ 组级拒绝
+		await seedRate("CNY", "TWD", "32.0000000000");
+		await seedStaleRate("CNY", "USD", "7.2480000000");
+		const created = await createTestUser(app, "onb-group-partial");
+		extraUserIds.push(created.userId);
+		await request(app.getHttpServer())
+			.post("/api/onboarding/consents")
+			.set(bearer(created.accessToken))
+			.send({ age18Confirmed: true, termsConfirmed: true })
+			.expect(201);
+
+		const res = await request(app.getHttpServer())
+			.post("/api/onboarding/complete")
+			.set(bearer(created.accessToken))
+			.send({
+				...wizard,
+				initialHoldings: [
+					{ currencyCode: "TWD", amount: "1000" },
+					{ currencyCode: "USD", amount: "500" },
+				],
+			})
+			.expect(400);
+		expect(res.body.code).toBe("RATE_UNAVAILABLE");
+
+		// 零业务写入：设置、持仓、批次、账户全部不存在（事务整体回滚）
+		const settings = await ctx.prisma.userSettings.findUnique({
+			where: { userId: created.userId },
+		});
+		expect(settings).toBeNull();
+		const holdings = await ctx.prisma.initialHolding.count({
+			where: { userId: created.userId },
+		});
+		expect(holdings).toBe(0);
+		const lots = await ctx.prisma.costLot.count({
+			where: { userId: created.userId },
+		});
+		expect(lots).toBe(0);
+		const accounts = await ctx.prisma.account.count({
+			where: { userId: created.userId },
+		});
+		expect(accounts).toBe(0);
+	});
+
+	it("HKD/TWD 组合：本位币 HKD 下 TWD 陈旧回显 → 同步回源后入账（FX-04 币对覆盖）", async () => {
+		await seedStaleRate("HKD", "TWD", "32.0000000000");
+		const created = await createTestUser(app, "onb-hkd-twd");
+		extraUserIds.push(created.userId);
+		await request(app.getHttpServer())
+			.post("/api/onboarding/consents")
+			.set(bearer(created.accessToken))
+			.send({ age18Confirmed: true, termsConfirmed: true })
+			.expect(201);
+
+		const res = await request(app.getHttpServer())
+			.post("/api/onboarding/complete")
+			.set(bearer(created.accessToken))
+			.send({
+				...wizard,
+				baseCurrency: "HKD",
+				initialHoldings: [{ currencyCode: "TWD", amount: "2000" }],
+			})
+			.expect(201);
+		expect(res.body.data.settings.baseCurrency).toBe("HKD");
+
+		const holding = await ctx.prisma.initialHolding.findFirstOrThrow({
+			where: { userId: created.userId },
+		});
+		expect(holding.currencyCode).toBe("TWD");
+		// 1 TWD = 0.0307284801 HKD（er-api 夹具取倒数，8 位入账）
+		expect(holding.rate.toFixed(8)).toBe("0.03072848");
+		expect(holding.rateSource).toBe("er-api");
+	});
+
+	it("CNY/MYR 组合：frankfurter 日级源陈旧回显 → 同步回源后入账（FX-04 币对覆盖）", async () => {
+		await seedStaleRate("CNY", "MYR", "1.5000000000");
+		const created = await createTestUser(app, "onb-cny-myr");
+		extraUserIds.push(created.userId);
+		await request(app.getHttpServer())
+			.post("/api/onboarding/consents")
+			.set(bearer(created.accessToken))
+			.send({ age18Confirmed: true, termsConfirmed: true })
+			.expect(201);
+
+		await request(app.getHttpServer())
+			.post("/api/onboarding/complete")
+			.set(bearer(created.accessToken))
+			.send({
+				...wizard,
+				initialHoldings: [{ currencyCode: "MYR", amount: "1000" }],
+			})
+			.expect(201);
+
+		const holding = await ctx.prisma.initialHolding.findFirstOrThrow({
+			where: { userId: created.userId },
+		});
+		expect(holding.currencyCode).toBe("MYR");
+		// frankfurter 夹具 1 CNY = 0.6102 MYR → 取倒数 1 MYR = 1.6388069485 CNY（8 位展示）
+		expect(holding.rate.toFixed(8)).toBe("1.63880695");
+		expect(holding.rateSource).toBe("frankfurter");
 	});
 
 	it("holdings 含本位币 → 400 INVALID_HOLDINGS，整单回滚（UserSettings 不存在）", async () => {

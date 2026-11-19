@@ -15,8 +15,8 @@
 | W | 切片（真源） | 分支 | 基线 | 状态 |
 | --- | --- | --- | --- | --- |
 | W1 | A·护栏（money fast-check + 测试护栏 + 目录对齐） | `feat/f0-w1-money-fastcheck-guardrails` | feat/iteration-a-mvp-closeout | ✅ 完成（PR #2） |
-| W2 | B1·方向（ErApi/Frankfurter 取倒数统一） | `feat/f0-w2-rate-direction-invert` | W1 | 进行中 |
-| W3 | C1·日级取价（getLatest fresh/validUntil + findQuoteAt 日级回看） | `feat/f0-w3-daily-quote-window` | W2 | 待做 |
+| W2 | B1·方向（ErApi/Frankfurter 取倒数统一） | `feat/f0-w2-rate-direction-invert` | W1 | ✅ 完成（`6c39887`，PR #3） |
+| W3 | C1·日级取价（getLatest fresh/validUntil + findQuoteAt 日级回看） | `feat/f0-w3-daily-quote-window` | W2 | 进行中 |
 | W4 | C2·TWD 图表（Frankfurter v2 隔离） | `feat/f0-w4-twd-chart-v2` | W3 | 待做 |
 | W5 | B2·迁移脚本（幂等转换/回滚，演练受限标注） | `feat/f0-w5-cache-migration-scripts` | W4 | 待做 |
 | W6 | D·USAGE 闭环（共享 FIFO 内核 + 移除挡板 + T-CORR-004） | `feat/f0-w6-usage-correction-fifo` | W5 | 待做 |
@@ -82,10 +82,43 @@ InvalidAmountError/InvalidRateError 不符，现统一包装为 money 类型化�
 - AGENTS.md 前端树仍列 `(protected)/projects/` 但实际目录不存在（本轮按 task A 范围
   只改 services 树，前端树漂移留给人类裁决）
 
+## W2 · 汇率方向 ✅（commit `6c39887`，draft PR #3 → W2 基线）
+
+改动：新增 `services/chat/src/rate/rate-invert.ts`——共享取倒数唯一口径
+（BigInt 定点 10^(s+10)/N、一次 HALF_UP 到 Decimal(20,10) 10 位、禁
+`1 / Number(raw)`；零/负/非法/舍入归零/超落库范围 → 502）；
+ErApi/Frankfurter 的 latest+history 接入；frankfurter `parseDate` 改为
+缺失/非法/不存在日历日期（2026-02-29）/非字符串（null/数字/对象）一律拒绝
+（原实现回落系统时间 + new Date 静默归一化，均为 observedAt 伪造面）；
+新增 `rate-invert.spec.ts`（FX-01 固定夹具 4.7567→0.2102297812 等 +
+fast-check 一次守恒 |r·inv−1|≤r·5e-10 与二次往返不发散属性）与
+`rate-source.equivalence.spec.ts`（三源同币对等价：同一市场事实
+「1 USD = 8 CNY」三源产出 8.0000000000）；四个受影响 spec 方向断言按新
+契约修正（上游 raw 不变，无断言删除）。全仓消费方二次取倒数排查：无
+（report/transaction/home 的 div 均为成本/数量计算；rate-tool 无倒数）。
+
+验证实测：src/rate 92/92 ✓；unit 436 ✓；api 275 ✓；integration 53 ✓；
+typecheck/lint ✓；money 55 ✓。L3 未运行（人类未启 dev 服务）。
+
+对抗审：codex `gpt-5.6-terra` 三轮。首轮 FAIL——[Important]×2（parseDate
+会把 2026-02-29 归一化为 03-01 伪造 observedAt；缺三源同币对等价测试）+
+[Nit]×1（trim 语义与注释矛盾）→ 全部修复。二轮 FAIL——[Important]×1
+（parseDate 对非字符串 date 裸抛 TypeError）→ 修复。三轮 **PASS（0
+[Important]）**。
+
+遗留记账：
+- [Pre-existing] 组合跑 api+integration 时偶发单测失败（本轮实测
+  auth.spec「旧路由 404」1 次、account-data-lifecycle 到期推进 2 次；
+  单跑与复跑均绿，疑似并行 worker + 时间推进型用例的负载敏感），记账观察，
+  未删改任何断言
+- B2 旧缓存迁移（W5）执行口径按汇率底稿 §3：ErApi 原位转换优先、
+  Frankfurter 可证原位转换、实测盘点待生产库只读盘查（人类执行）
+
 ## 下一分支预告
 
-W2（B1·方向）将基于本分支切 `feat/f0-w2-rate-direction-invert`：
-ErApi latest 与 Frankfurter v1 latest/history 的 `1 base = raw quote` →
-`1 quote = X base` 定点/Decimal 取倒数（禁 `1 / Number(raw)`），
-ABC/ErApi/Frankfurter 三源同币对等价单测 + fast-check 倒数往返属性，
-全仓消费方二次取倒数排查（onboarding/transaction/report/market/AI 工具/E2E 脚本）。
+W3（C1·日级取价）将基于本分支切 `feat/f0-w3-daily-quote-window`：
+首次建账/补录统一 getLatest 的 fresh/validUntil 系统确认时效；
+初始持仓币种更正 findQuoteAt 按 original.confirmedAt 区分实时窗口与
+有证据日级回看（UTC+8 同日 FIFO 语义），无法证明原时点可用时保留
+RATE_QUOTE_UNAVAILABLE，严禁伪造 observedAt。依据：汇率底稿 §2、
+`docs/handoff/OVERNIGHT-ZCODE-20261103.md` B1 教训。
