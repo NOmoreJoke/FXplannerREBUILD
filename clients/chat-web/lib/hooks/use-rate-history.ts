@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { ApiError } from "@/lib/api/client";
-import { ratesApi } from "@/lib/api/rates";
+import { ratesApi, REFERENCE_RATE_SOURCE } from "@/lib/api/rates";
 import {
 	mergeSeries,
 	type MergedRateRow,
@@ -31,7 +31,7 @@ export const RATE_HISTORY_STALE_TIME_MS = 10 * 60_000;
 /** 请求超时（§6：7/30/90 档 10s；365 档首次可能回源，放宽 15s） */
 const TIMEOUT_MS = { normal: 10_000, long: 15_000 } as const;
 
-/** 单币种序列状态（UI 据此置灰标签/标注起始日） */
+/** 单币种序列状态（UI 据此置灰标签/标注起始日/标注参考价来源） */
 export interface CurrencySeriesState {
 	/** loading=请求中；success=有数据；empty=请求成功但序列为空；error=请求失败 */
 	status: "loading" | "success" | "empty" | "error";
@@ -39,6 +39,8 @@ export interface CurrencySeriesState {
 	startDate: string | null;
 	/** 失败摘要（error 时提供，供空态聚合展示） */
 	errorMessage: string | null;
+	/** 参考价数据点数量（source=frankfurter-v2-reference；MVP-F0-2 C2 展示区分用） */
+	referenceCount: number;
 }
 
 /** 单币种序列状态（含币种代码） */
@@ -126,6 +128,7 @@ export function useRateHistory(
 					status: "loading",
 					startDate: null,
 					errorMessage: null,
+					referenceCount: 0,
 				};
 			}
 			if (query.error) {
@@ -134,6 +137,7 @@ export function useRateHistory(
 					status: "error",
 					startDate: null,
 					errorMessage: toErrorMessage(query.error),
+					referenceCount: 0,
 				};
 			}
 			const points = query.data?.data_points ?? [];
@@ -143,6 +147,7 @@ export function useRateHistory(
 					status: "empty",
 					startDate: null,
 					errorMessage: null,
+					referenceCount: 0,
 				};
 			}
 			return {
@@ -150,6 +155,10 @@ export function useRateHistory(
 				status: "success",
 				startDate: points[0].date,
 				errorMessage: null,
+				// 参考价数据点计数（MVP-F0-2 C2：图表须区分参考价与原来源报价）
+				referenceCount: points.filter(
+					(point) => point.source === REFERENCE_RATE_SOURCE,
+				).length,
 			};
 		});
 		// queries 数组元素引用稳定；targetsKey 表达 targets 依赖（数组字面量每次 render 新建）

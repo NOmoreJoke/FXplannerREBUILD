@@ -254,7 +254,7 @@ export interface paths {
         };
         /**
          * 查询历史汇率序列
-         * @description 按 base、target 和 period 查询工作日历史汇率；完整缓存直接返回，缓存不完整时回源并补齐。
+         * @description 按 base、target 和 period 查询工作日历史汇率；完整缓存直接返回，缓存不完整时回源并补齐。 er-api 路由币对（TWD）本地序列不完整时由 frankfurter v2 参考序列补点（仅响应合并层，不落库）， 逐点 source 区分原来源报价与参考价（frankfurter-v2-reference）。
          */
         get: operations["RateController_history"];
         put?: never;
@@ -1439,6 +1439,48 @@ export interface components {
             base: string;
             /** @description 逐目标报价项（顺序与请求 targets 一致） */
             items: components["schemas"]["LatestRateItemDto"][];
+        };
+        RateHistoryPointDto: {
+            /**
+             * @description 观测日（YYYY-MM-DD，UTC）
+             * @example 2026-09-15
+             */
+            date: string;
+            /**
+             * @description 汇率（1 外币 = X 本位币；数据源原始精度字符串）
+             * @example 0.2102297812
+             */
+            rate: string;
+            /**
+             * @description 逐点来源：本地行 = 落库数据源（abc / er-api / frankfurter / identity）；参考补点 = frankfurter-v2-reference（参考价，非原来源报价，图表须区分展示）
+             * @example er-api
+             */
+            source?: string;
+        };
+        RateHistoryResponseDto: {
+            /**
+             * @description 基准币种代码
+             * @example USD
+             */
+            base: string;
+            /**
+             * @description 目标币种代码
+             * @example TWD
+             */
+            target: string;
+            /**
+             * @description 查询天数
+             * @example 7
+             * @enum {number}
+             */
+            period: 7 | 30 | 90 | 365;
+            /** @description 历史序列（工作日；TWD 冷缺口由 v2 参考序列补点并标注来源） */
+            data_points: components["schemas"]["RateHistoryPointDto"][];
+            /**
+             * @description 序列末点汇率；空序列为 null
+             * @example 0.2102297812
+             */
+            current_rate: string | null;
         };
         AccountSummaryDto: {
             /**
@@ -3820,11 +3862,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description 历史序列（base/target/period/data_points/current_rate）；逐点含可选 source 来源标注 */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RateHistoryResponseDto"];
+                };
             };
         };
     };

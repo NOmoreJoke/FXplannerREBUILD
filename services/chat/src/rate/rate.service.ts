@@ -15,6 +15,7 @@ import {
   normalizeCurrency,
   QUOTE_TTL_MS,
   REALTIME_QUOTE_SOURCES,
+  REFERENCE_RATE_SOURCE,
   SUPPORTED_CURRENCIES,
   VALID_PERIODS,
   type RatePeriod,
@@ -118,6 +119,20 @@ export class RateService {
   private readonly historyInFlight = new Map<string, Promise<RateHistoryPoint[]>>();
   /** 历史回源负缓存：币对 → 负缓存过期时间戳，窗口内不再回源直接返回积累序列（rate-chart 方案 §6） */
   private readonly historyNegativeCache = new Map<string, number>();
+  /**
+   * 参考序列（frankfurter v2）缓存：币对+区间 → { points, expiresAt }（MVP-F0-2 C2）。
+   * 成功与失败均登记 TTL：日级参考数据无 DB 落库层，缓存是防外呼放大的唯一闸门；
+   * 区间入键实现「同币对不同窗口按范围隔离」。
+   */
+  private readonly referenceCache = new Map<
+    string,
+    { points: RateHistoryPoint[]; expiresAt: number }
+  >();
+  /** 参考序列单飞：同币对同区间的进行中 fetchReferenceSeries 被并发请求复用 */
+  private readonly referenceInFlight = new Map<
+    string,
+    Promise<RateHistoryPoint[]>
+  >();
 
   private readonly logger = new Logger(RateService.name);
 
@@ -381,7 +396,135 @@ export class RateService {
       );
     }
 
-    return this.toHistoryResponse(normalizedBase, normalizedTarget, normalizedPeriod, saved);
+    // 参考层（MVP-F0-2 C2·TWD 图表）：er-api 路由币对（TWD）本地序列不完整时，
+    // 用 frankfurter v2 日级参考序列在【响应合并层】补点——严禁回写 exchange_rates
+    //（参考点不占现行键、不刷新 createdAt、不出现在最新/原时点报价候选中）。
+    // 其余源（abc/frankfurter/identity）维持原行为（v1-only 回归保留）。
+    const routedSource = this.provider.sourceForPair(
+      normalizedBase,
+      normalizedTarget,
+    );
+    let responseRates: Array<{
+      rate: { toString(): string };
+      observedAt: Date;
+      source: string;
+    }> = saved.map((row) => ({
+      rate: row.rate,
+      observedAt: row.observedAt,
+      source: row.source,
+    }));
+    if (
+      normalizedBase !== normalizedTarget &&
+      routedSource === 'er-api' &&
+      !this.isHistoryCacheComplete(saved, start, end)
+    ) {
+      responseRates = await this.mergeReferenceLayer(
+        responseRates,
+        pairKey,
+        normalizedBase,
+        normalizedTarget,
+        start,
+        end,
+      );
+    }
+
+    return this.toHistoryResponse(
+      normalizedBase,
+      normalizedTarget,
+      normalizedPeriod,
+      responseRates,
+    );
+  }
+
+  /** 本地序列 + v2 参考序列合并：本地行按日期优先，参考点仅补缺；按 observedAt 升序 */
+  private mergeReferencePoints(
+    localPoints: Array<{
+      rate: { toString(): string };
+      observedAt: Date;
+      source: string;
+    }>,
+    reference: RateHistoryPoint[],
+  ): Array<{
+    rate: { toString(): string };
+    observedAt: Date;
+    source: string;
+  }> {
+    if (reference.length === 0) return localPoints;
+    const localDates = new Set(
+      localPoints.map((point) => this.formatDate(point.observedAt)),
+    );
+    const merged = localPoints.map((point) => ({ ...point }));
+    for (const point of reference) {
+      if (!localDates.has(this.formatDate(point.observedAt))) {
+        merged.push({
+          rate: point.rate,
+          observedAt: point.observedAt,
+          source: REFERENCE_RATE_SOURCE,
+        });
+      }
+    }
+    return merged.sort(
+      (left, right) => left.observedAt.getTime() - right.observedAt.getTime(),
+    );
+  }
+
+  /**
+   * 参考层合并守卫：区间级缓存（成功/失败均登记 TTL，防外呼放大）+ 区间级单飞；
+   * 参考序列获取失败不阻断图表（按「无参考点」返回本地序列，冷缺口如实披露）。
+   */
+  private async mergeReferenceLayer(
+    localPoints: Array<{
+      rate: { toString(): string };
+      observedAt: Date;
+      source: string;
+    }>,
+    pairKey: string,
+    base: string,
+    target: string,
+    start: Date,
+    end: Date,
+  ): Promise<
+    Array<{ rate: { toString(): string }; observedAt: Date; source: string }>
+  > {
+    const rangeKey = `${pairKey}|${this.formatDate(start)}|${this.formatDate(end)}`;
+    const cached = this.referenceCache.get(rangeKey);
+    if (cached && Date.now() < cached.expiresAt) {
+      return this.mergeReferencePoints(localPoints, cached.points);
+    }
+
+    const existing = this.referenceInFlight.get(rangeKey);
+    if (existing) {
+      const points = await existing.catch(() => [] as RateHistoryPoint[]);
+      return this.mergeReferencePoints(localPoints, points);
+    }
+
+    const promise = this.provider
+      .fetchReferenceSeries(
+        base,
+        target,
+        this.formatDate(start),
+        this.formatDate(end),
+      )
+      .finally(() => {
+        this.referenceInFlight.delete(rangeKey);
+      });
+    this.referenceInFlight.set(rangeKey, promise);
+
+    let points: RateHistoryPoint[] = [];
+    try {
+      points = await promise;
+    } catch (error) {
+      // 参考源不可用：不阻断图表，登记负缓存窗口（与 v1 同 TTL）
+      this.logger.debug(
+        `参考序列获取失败（${rangeKey}），窗口内按无参考点返回本地序列`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+    this.referenceCache.set(rangeKey, {
+      points,
+      expiresAt: Date.now() + HISTORY_NEGATIVE_CACHE_TTL_MS,
+    });
+    return this.mergeReferencePoints(localPoints, points);
   }
 
   /** 历史回源单飞：同币对进行中的 fetchHistory 复用给并发缺口请求，结束即清除（rate-chart 方案 §6） */
@@ -824,11 +967,15 @@ export class RateService {
     rates: Array<{
       rate: { toString(): string };
       observedAt: Date;
+      source?: string;
     }>,
   ) {
+    // 逐点来源标注（MVP-F0-2 C2）：行情/AI 历史工具据此区分参考价与原来源；
+    // 参考点 source = frankfurter-v2-reference，本地行 source = 落库数据源标识
     const dataPoints = rates.map((rate) => ({
       date: rate.observedAt.toISOString().slice(0, 10),
       rate: rate.rate.toString(),
+      ...(rate.source !== undefined ? { source: rate.source } : {}),
     }));
 
     return {

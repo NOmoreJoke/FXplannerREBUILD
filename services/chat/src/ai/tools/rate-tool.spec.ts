@@ -185,6 +185,46 @@ describe("query_exchange_rate 工具", () => {
 		expect(result).toContain("暂无历史数据");
 	});
 
+	it("history 含参考价数据点：输出显式区分参考价与原来源报价（MVP-F0-2 C2 来源区分）", async () => {
+		const rateService = buildRateService({
+			getHistory: vi.fn(async () => ({
+				base: "CNY",
+				target: "TWD",
+				period: 7,
+				data_points: [
+					{ date: "2026-02-12", rate: "0.2102297812", source: "frankfurter-v2-reference" },
+					{ date: "2026-02-13", rate: "0.2103", source: "er-api" },
+				],
+				current_rate: "0.2103",
+			})),
+		});
+		const tool = createRateTool(rateService);
+
+		const result = await tool.invoke({
+			mode: "history",
+			base: "CNY",
+			target: "TWD",
+			period: 7,
+		});
+
+		expect(result).toContain("参考价");
+		expect(result).toContain("frankfurter v2 参考序列");
+		expect(result).toContain("1 个数据点为参考价");
+	});
+
+	it("history 全部为原来源报价：不含参考价标注", async () => {
+		const tool = createRateTool(buildRateService());
+
+		const result = await tool.invoke({
+			mode: "history",
+			base: "CNY",
+			target: "USD",
+			period: 30,
+		});
+
+		expect(result).not.toContain("参考价");
+	});
+
 	it("数据源不可用（502）：错误文本回喂而非抛出", async () => {
 		const rateService = buildRateService({
 			getLatest: vi.fn(() => {

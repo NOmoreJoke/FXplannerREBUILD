@@ -3,6 +3,7 @@ import type { HttpException } from "@nestjs/common";
 import { z } from "zod";
 import {
 	isSupportedCurrency,
+	REFERENCE_RATE_SOURCE,
 	SUPPORTED_CURRENCIES,
 	VALID_PERIODS,
 } from "../../rate/rate.constants";
@@ -157,7 +158,16 @@ export function createRateTool(rateService: RateService) {
 				const rates = points.map((point) => Number(point.rate));
 				const first = points[0];
 				const last = points[points.length - 1];
-				return `${base}/${target} 近 ${period} 天历史走势（${points.length} 个数据点）：起点 ${first.date} = ${first.rate}，终点 ${last.date} = ${last.rate}，区间最高 ${Math.max(...rates)}，区间最低 ${Math.min(...rates)}。回答时请注明数据时间范围。`;
+				// 来源区分（MVP-F0-2 C2）：参考价（frankfurter v2 参考序列）与原来源报价
+				// 必须在输出中显式区分，不得混为同源走势（realtime-rate 底稿 §2）
+				const referenceCount = points.filter(
+					(point) => point.source === REFERENCE_RATE_SOURCE,
+				).length;
+				const referenceNote =
+					referenceCount > 0
+						? `其中 ${referenceCount} 个数据点为参考价（frankfurter v2 参考序列，非原来源报价）`
+						: "";
+				return `${base}/${target} 近 ${period} 天历史走势（${points.length} 个数据点${referenceNote ? `，${referenceNote}` : ""}）：起点 ${first.date} = ${first.rate}，终点 ${last.date} = ${last.rate}，区间最高 ${Math.max(...rates)}，区间最低 ${Math.min(...rates)}。回答时请注明数据时间范围${referenceNote ? "，并区分参考价与原来源报价" : ""}。`;
 			} catch (error) {
 				return toToolErrorText(error);
 			}
