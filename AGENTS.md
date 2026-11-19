@@ -64,6 +64,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  ├─ config/                    # env 加载与 zod 校验（12-Factor）
 │  │  └─ prisma/                    # PrismaService
 │  ├─ prisma/                       # schema + migrations + seed
+│  │  └─ rate-cache-migration/      # 旧汇率缓存迁移运维 CLI（B2；README 见目录内）
 │  └─ test/
 │     ├─ api/                       # 接口测试
 │     ├─ integration/               # 集成测试
