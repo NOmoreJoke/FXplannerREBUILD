@@ -63,6 +63,8 @@ AGENT.md
 
 .pi/**
 docs/learning-notes/**
+# ZCode 会话截图为本地运行产物
+/docs/handoff/zcode-ui/*.png
 # 代码地图生成产物
 polygrapher/
 
