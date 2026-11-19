@@ -3,6 +3,7 @@
 > 适用阶段：Phase 0 护栏补齐 + Phase 1（MVP-F0 正确性硬门）
 > 前置门控：**必须在 PR #1 已合入 `dev` 后启动**（从最新干净 `dev` 切出新特性分支）
 > 依据决策：`docs/ITERATION-REFACTOR-ROADMAP-20261119.md`（D1–D9）、`docs/VIBE-CODING-PLAYBOOK.md`、`changes/tob-agent-workspace/技术方案.md` §15.1、`docs/VERIFY.md`、`AGENTS.md`
+> 汇率切片实施底稿：`changes/realtime-rate/MVP-F0-汇率回补与缓存迁移计划-20261119.md`，包含外部覆盖实测、清理与回滚顺序和 FX-01 至 FX-07 验收。
 
 ---
 
@@ -43,18 +44,17 @@
 
 ### 任务 B：跨源汇率方向统一与历史脏汇率清洗（MVP-F0-1）
 1. 冻结系统唯一汇率方向口径：**1 外币（`quote`）= X 本位币（`base`）**（与 `services/chat/src/rate/rate-source.abc.ts:43,198-201` 一致）。
-2. 修复 `services/chat/src/rate/rate-source.erapi.ts` 与 `services/chat/src/rate/rate-source.frankfurter.ts`（同时覆盖 `fetchLatestBatch` 与 `fetchHistory`）：
+2. 修复 `services/chat/src/rate/rate-source.erapi.ts` 的 latest 与 `services/chat/src/rate/rate-source.frankfurter.ts` 的 latest/history。ErApi 无密钥接口保留本地历史路径：
    - 将上游返回的 `1 base = raw quote` 精确取倒数为 `1 quote = X base`；
    - 使用定点运算或 `Decimal` + 约定小数位舍入，**严禁使用原生浮点 `1 / Number(raw)`**。
 3. 排查所有下游消费方（`onboarding`、`transaction`、`report`、`market`、AI 汇率工具、`e2e/scripts/run-e2e-tests.sh:91` 的 `RATE_SOURCE=frankfurter` 路径），确认无双重取倒数或 mock/断言方向错乱。
-4. 依据 D3（尚未对外切流，可接受短维护窗口结构清洗），编写并验证幂等历史脏汇率清理脚本（清理 `exchange_rates` 中旧版写入的反向 `er-api` / `frankfurter` 缓存行并支持重拉），附可重复执行与影响计数输出。
+4. 缓存处理在方向和日级规则就绪后演练。先盘点、停旧写并保全快照，再原位转换方向可证的 ErApi 行，最后转换或受控替换 Frankfurter 旧行。附迁移清单、复跑计数、覆盖对账和回滚记录。依据为实施底稿 §3。
 5. **验收测试**：新增 ABC / ErApi / Frankfurter 三源同币对等价单测 + `fast-check` 倒数往返与高精度属性测试；确认 `rate` 相关单测/API/E2E 全绿。
 
 ### 任务 C：日级报价时效与原时点回补修复（MVP-F0-2）
-1. 修复 `services/chat/src/rate/rate.constants.ts` 与 `services/chat/src/rate/rate.service.ts:209-250` 中的 `findQuoteAt`：
-   - 当前硬编码 `(at - 5min, at]` 窗口导致 `observedAt` 为 `00:00:00.000Z` 的日级数据源仅在 08:00–08:05 UTC+8 可命中；
-   - 改为按数据源粒度区分策略：实时源（如 `abc`）保持 5 分钟窗口；日级源（如 `frankfurter`、`er-api`）按交易日 / UTC+8 自然日回溯匹配最近有效日级报价，**严禁伪造 `observedAt` 时间戳**。
-2. **验收测试**：覆盖非 08:00–08:05 UTC+8（如 00:05、14:30、23:55 UTC+8）的首次建账初始化与初始持仓币种更正原时点回补 API/集成测试，验证不再误抛 `RATE_QUOTE_UNAVAILABLE`。
+1. 首次建账及补录走 `getLatest`，按系统确认的 `fresh/validUntil` 校验，保留真实来源时间。初始持仓币种更正走 `findQuoteAt`，以 `original.confirmedAt` 区分实时窗口与有证据的日级回看。
+2. TWD 图表缺口使用 Frankfurter v2 日级参考序列。参考点与 `exchange_rates` 和原时点入账候选隔离；只有日期的序列无法证明当时可用时，保留 `RATE_QUOTE_UNAVAILABLE`。
+3. **验收测试**覆盖 00:05、14:30、23:55 UTC+8 的建账与原时点更正，分别断言最新报价时效、历史来源、未来点排除、冷缺口拒绝和无部分业务写入。另验 7/30/90/365 天图表与多源 E2E。依据为实施底稿 §2、§4。
 
 ### 任务 D：USAGE 更正完整闭环 + 共享 FIFO 纯函数内核（MVP-F0-3 / DEBT-01 & DEBT-02）
 1. 从 `services/chat/src/correction/ledger-replay.ts` 与 `services/chat/src/usage/usage-calculator.ts` 抽取单一共享 FIFO 消耗纯函数内核，消除双实现算法漂移；用既有 FIFO 镜像测试与 15 类计算用例回归验证零差异。
