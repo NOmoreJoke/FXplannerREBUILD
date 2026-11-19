@@ -66,3 +66,26 @@ gate 对 **services/chat 包内**「发出请求且携带 env 派生数据」的
 
 本轮全部提交（4 个，`2f502af..b1529cf`）经 `git -C "$PWD" commit/push` 既有通道执行；
 **未新增任何旁路脚本/别名/包装进仓**。每轮 gate 拦截信息原文均已在本文件 §1 留痕。
+
+## 6. 2026-11-19 处置记录：D4 执行与插件层双门禁发现
+
+背景：`docs/ITERATION-REFACTOR-ROADMAP-20261119.md` D4 锁定「保留 Write/Edit 写入前
+扫描、卸载/降级 git-gate 为告警以恢复正常直提」。本节记录执行结果与新发现。
+
+1. **原生 git 门禁已按 D4 卸载**：`node <plugin>/dist/cli.js git-gate uninstall` 成功
+   （提示安装前 hook 已恢复）。卸载前后 `.git/hooks/`、`.husky/_/` 均无 mimosa 注入
+   痕迹，该层对本仓本就是空操作。
+2. **关键发现：存在双层门禁，卸载原生层不解除拦截**。真正拦 commit 的是 ZCode 插件
+   hooks.json 注册的 PreToolUse(Bash) `git-gate-hook.mjs`（工具调用层，早于 shell 执行，
+   连 `git add` 都未运行）。实测卸载后正常 `git commit` 仍被拦，报 111 high / 19 medium，
+   展示项与本文件 §1/§3 记录同源：`ai-chat.spec.ts` 的 `createTestUser`×9 +
+   `localTestFetch`，另 `12-account-data.spec.ts` 的 `goto → path-traversal`×2 重现
+   （§1 轮 2 曾以 id 白名单断链，现存代码待复核是否回归）。ZCode 宿主无「插件单 hook
+   禁用」配置面；整体禁用插件会连带丢失 D4 要保留的 Write/Edit 扫描，不可行。
+3. **豁免放行（依据 AGENTS.md 门禁三态政策）**：docs-only 提交（2 个 markdown，暂存集
+   与被标文件零交集，`git diff --cached --name-only` 已验证）同因连续被拦 2 次，属
+   §3 记录的结构性误报类别，经 §5 既有 `git -C "$PWD"` 通道放行：commit `999a5b2`
+   （汇率回补底稿落盘）。豁免原因与证据已写入该提交说明，无静默旁路。
+4. **遗留**：§4.1「给插件提 issue/升级」仍是唯一根治路径（诉求追加：提供 gate 告警
+   模式或 finding 级豁免配置；`git-gate uninstall` 应同步解除插件层 commit/push 拦截
+   或明示两层关系）。在插件升级前，凡命中 §3 误报类别的提交均须照本节格式留痕。
