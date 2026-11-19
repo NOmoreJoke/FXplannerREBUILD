@@ -8,7 +8,7 @@
     "start": "NODE_ENV=production bun run dist/main.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p prisma/rate-cache-migration/tsconfig.json",
     "lint": "tsc --noEmit",
     "clean:logs": "rm -rf logs/*.log",
     "db:up": "bash ../../scripts/db-local.sh up",

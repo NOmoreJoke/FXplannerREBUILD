@@ -17,8 +17,8 @@
 | W1 | A·护栏（money fast-check + 测试护栏 + 目录对齐） | `feat/f0-w1-money-fastcheck-guardrails` | feat/iteration-a-mvp-closeout | ✅ 完成（PR #2） |
 | W2 | B1·方向（ErApi/Frankfurter 取倒数统一） | `feat/f0-w2-rate-direction-invert` | W1 | ✅ 完成（`6c39887`，PR #3） |
 | W3 | C1·日级取价（getLatest fresh/validUntil + findQuoteAt 日级回看） | `feat/f0-w3-daily-quote-window` | W2 | ✅ 完成（`2bf93cc`，PR #4） |
-| W4 | C2·TWD 图表（Frankfurter v2 隔离） | `feat/f0-w4-twd-chart-v2` | W3 | 待做 |
-| W5 | B2·迁移脚本（幂等转换/回滚，演练受限标注） | `feat/f0-w5-cache-migration-scripts` | W4 | 待做 |
+| W4 | C2·TWD 图表（Frankfurter v2 隔离） | `feat/f0-w4-twd-chart-v2` | W3 | ✅ 完成（`4290fd2`，PR #5） |
+| W5 | B2·迁移脚本（幂等转换/回滚，演练受限标注） | `feat/f0-w5-cache-migration-scripts` | W4 | 进行中 |
 | W6 | D·USAGE 闭环（共享 FIFO 内核 + 移除挡板 + T-CORR-004） | `feat/f0-w6-usage-correction-fifo` | W5 | 待做 |
 | W7 | E·导出（Dockerfile 权限 + CSV 精度 + Decimal 累加） | `feat/f0-w7-export-precision` | W6 | 待做 |
 | W8 | F1-1 findLatestRows 数据库端常数行 | `feat/f1-w8-latest-rows-query` | W7 | 待做 |
