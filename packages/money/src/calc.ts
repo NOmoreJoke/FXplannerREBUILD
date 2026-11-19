@@ -18,6 +18,18 @@ import { roundRateTo8 } from "./rate.ts";
 Decimal.set({ precision: 32 });
 
 /**
+ * 将入参解析为 Decimal；非有效数字（如非数字字符串）统一抛 InvalidAmountError，
+ * 不让底层 DecimalError 裸抛——本包计算入口只抛 money 类型化错误（见 errors.ts）。
+ */
+function parseOperand(value: Decimal.Value, message: string): Decimal {
+	try {
+		return new Decimal(value);
+	} catch {
+		throw new InvalidAmountError(message);
+	}
+}
+
+/**
  * 折算/到账金额 ＝ principal × rate。
  * 中间全精度运算，仅对最终结果按币种精度四舍五入一次；
  * 正数结果被舍入为 0 时抛 RoundToZeroError（不得入账）。
@@ -27,7 +39,9 @@ export function finalAmountOf(
 	rate: Decimal.Value,
 	decimalPlaces: 0 | 2,
 ): Decimal {
-	const product = new Decimal(principal).mul(new Decimal(rate));
+	const product = parseOperand(principal, "金额与汇率必须为大于 0 的有效数字").mul(
+		parseOperand(rate, "金额与汇率必须为大于 0 的有效数字"),
+	);
 	const rounded = roundToCurrency(product, decimalPlaces);
 	if (rounded.isZero() && product.gt(0)) {
 		throw new RoundToZeroError();
@@ -45,8 +59,8 @@ export function receivedAmountOf(
 	rate: Decimal.Value,
 	decimalPlaces: 0 | 2,
 ): Decimal {
-	const base = new Decimal(principal);
-	const quote = new Decimal(rate);
+	const base = parseOperand(principal, "本金与汇率必须为大于 0 的有效数字");
+	const quote = parseOperand(rate, "本金与汇率必须为大于 0 的有效数字");
 	if (!base.isFinite() || base.lte(0) || !quote.isFinite() || quote.lte(0)) {
 		throw new InvalidAmountError("本金与汇率必须为大于 0 的有效数字");
 	}
@@ -72,8 +86,8 @@ export function impliedRate(
 	received: Decimal.Value,
 	_decimalPlaces: 0 | 2,
 ): Decimal {
-	const base = new Decimal(principal);
-	const quote = new Decimal(received);
+	const base = parseOperand(principal, "本金与到账金额必须为大于 0 的有效数字");
+	const quote = parseOperand(received, "本金与到账金额必须为大于 0 的有效数字");
 	if (!base.isFinite() || base.lte(0) || !quote.isFinite() || quote.lte(0)) {
 		throw new InvalidAmountError("本金与到账金额必须为大于 0 的有效数字");
 	}

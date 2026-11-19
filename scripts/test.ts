@@ -12,6 +12,8 @@
  *   integration  后端集成      services/chat/test/integration/
  *   infra        后端基础设施  services/chat/test/prisma.spec.ts
  *   web          前端单元      clients/chat-web（vitest）
+ *   money        精度计算包    packages/money（vitest，含 fast-check 属性测试）
+ *   dev-log      日志服务包    packages/dev-log-server（vitest）
  *   e2e          端到端        e2e/modules/（Playwright）
  *   scripts      工具链        scripts/__tests__/（bun:test）
  */
@@ -62,6 +64,18 @@ const SUITES: Suite[] = [
 		label: "前端单元（chat-web）",
 		cmd: ["bun", "run", "test"],
 		cwd: "clients/chat-web",
+	},
+	{
+		key: "money",
+		label: "精度计算包（packages/money，属性测试）",
+		cmd: ["bunx", "vitest", "run"],
+		cwd: "packages/money",
+	},
+	{
+		key: "dev-log",
+		label: "开发日志服务包（packages/dev-log-server）",
+		cmd: ["bunx", "vitest", "run"],
+		cwd: "packages/dev-log-server",
 	},
 	{
 		key: "e2e",

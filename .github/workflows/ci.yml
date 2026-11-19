@@ -104,6 +104,16 @@ jobs:
           NEXT_PUBLIC_API_BASE_URL: http://localhost:4001/api
         run: bun run test
 
+      # 精度计算包（含 fast-check 属性测试）——金融换汇精度防线，必须随 CI 全量执行
+      - name: Money package tests
+        working-directory: packages/money
+        run: bunx vitest run
+
+      # 本地开发日志服务包——独立测试套件，防止工具链漏跑
+      - name: Dev-log server package tests
+        working-directory: packages/dev-log-server
+        run: bunx vitest run
+
       # 防假绿：套件不存在时明确 SKIP，而不是空跑退出 0 显示 ✅（与 scripts/test.ts 约定一致）
       - name: Scripts tests
         run: |
