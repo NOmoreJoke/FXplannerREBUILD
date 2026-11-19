@@ -18,6 +18,18 @@ import {
 export const AMOUNT_UPPER_LIMIT = new Decimal("100000000000");
 
 /**
+ * 将入参解析为 Decimal；非有效数字（如非数字字符串）统一抛 InvalidAmountError，
+ * 不让底层 DecimalError 裸抛——本包校验入口只抛 money 类型化错误（见 errors.ts）。
+ */
+function parseAmount(value: Decimal.Value): Decimal {
+	try {
+		return new Decimal(value);
+	} catch {
+		throw new InvalidAmountError();
+	}
+}
+
+/**
  * 按币种精度四舍五入一次（ROUND_HALF_UP）。
  * 例：10.005 @2 位 → 10.01；100.5 @0 位（日元）→ 101。
  */
@@ -25,7 +37,8 @@ export function roundToCurrency(
 	amount: Decimal.Value,
 	decimalPlaces: 0 | 2,
 ): Decimal {
-	return new Decimal(amount).toDecimalPlaces(
+	// 非有效数字（如非数字字符串）统一抛 InvalidAmountError，不让底层 DecimalError 裸抛
+	return parseAmount(amount).toDecimalPlaces(
 		decimalPlaces,
 		Decimal.ROUND_HALF_UP,
 	);
@@ -39,7 +52,7 @@ export function assertNotRoundToZero(
 	positive: Decimal.Value,
 	decimalPlaces: 0 | 2,
 ): void {
-	const value = new Decimal(positive);
+	const value = parseAmount(positive);
 	if (value.gt(0) && roundToCurrency(value, decimalPlaces).isZero()) {
 		throw new RoundToZeroError();
 	}
@@ -47,7 +60,7 @@ export function assertNotRoundToZero(
 
 /** 金额必须为有效数字且 > 0，否则抛 InvalidAmountError */
 export function assertPositiveAmount(amount: Decimal.Value): void {
-	const value = new Decimal(amount);
+	const value = parseAmount(amount);
 	if (!value.isFinite() || value.lte(0)) {
 		throw new InvalidAmountError();
 	}
@@ -59,7 +72,7 @@ export function assertPositiveAmount(amount: Decimal.Value): void {
  * - ≥ 上限 → AmountLimitExceededError（提示修改，不截断保存）。
  */
 export function assertAmountLimit(amount: Decimal.Value): void {
-	const value = new Decimal(amount);
+	const value = parseAmount(amount);
 	if (!value.isFinite() || value.lte(0)) {
 		throw new InvalidAmountError();
 	}

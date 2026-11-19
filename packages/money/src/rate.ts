@@ -14,15 +14,25 @@ export const RATE_DECIMAL_PLACES = 8;
 
 /** 汇率按来源报价四舍五入到 8 位小数（ROUND_HALF_UP） */
 export function roundRateTo8(rate: Decimal.Value): Decimal {
-	return new Decimal(rate).toDecimalPlaces(
-		RATE_DECIMAL_PLACES,
-		Decimal.ROUND_HALF_UP,
-	);
+	// 非有效数字（如非数字字符串）统一抛 InvalidRateError，不让底层 DecimalError 裸抛
+	let value: Decimal;
+	try {
+		value = new Decimal(rate);
+	} catch {
+		throw new InvalidRateError();
+	}
+	return value.toDecimalPlaces(RATE_DECIMAL_PLACES, Decimal.ROUND_HALF_UP);
 }
 
 /** 汇率必须为大于 0 的有效数字，否则抛 InvalidRateError */
 export function assertValidRate(rate: Decimal.Value): void {
-	const value = new Decimal(rate);
+	// 非有效数字（如非数字字符串）统一抛 InvalidRateError，不让底层 DecimalError 裸抛
+	let value: Decimal;
+	try {
+		value = new Decimal(rate);
+	} catch {
+		throw new InvalidRateError();
+	}
 	if (!value.isFinite() || value.lte(0)) {
 		throw new InvalidRateError();
 	}

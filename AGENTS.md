@@ -47,9 +47,21 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  ├─ app.module.ts              # 根模块（模块唯一注册点）
 │  │  ├─ app.controller.ts          # health / hello 探针
 │  │  ├─ auth/                      # L1：JWT 认证
-│  │  ├─ project/                   # L2：示例业务模块（禁止在此定义前端已有的类型）
+│  │  ├─ account/                   # 账户与分配只读视图
+│  │  ├─ ai/                        # AI 助手（会话、配额、汇率工具）
+│  │  ├─ correction/                # 更正与账本重放（FIFO）
+│  │  ├─ currency/                  # 币种清单下发
+│  │  ├─ data-request/              # 数据请求与全局锁（导出/清空/注销）
+│  │  ├─ home/                      # 首页聚合
+│  │  ├─ onboarding/                # 首次建账向导（初始持仓）
+│  │  ├─ plan/                      # 换汇计划（排期、分配、变更日志）
+│  │  ├─ rate/                      # 汇率（三源路由、窗口、图表缓存）
+│  │  ├─ reminder/                  # 提醒
+│  │  ├─ report/                    # 报告与成本核算
+│  │  ├─ settings/                  # 用户设置
+│  │  ├─ transaction/               # 交易（买入/卖出记录）
+│  │  ├─ usage/                     # 使用记录与消耗计算（FIFO）
 │  │  ├─ config/                    # env 加载与 zod 校验（12-Factor）
-│  │  ├─ database/                  # 数据库辅助
 │  │  └─ prisma/                    # PrismaService
 │  ├─ prisma/                       # schema + migrations + seed
 │  └─ test/
