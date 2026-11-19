@@ -74,11 +74,15 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 ├─ infra/compose/                   # Docker Compose + Dockerfile
 ├─ scripts/                         # 工程脚本（init / test / worktree）+ __tests__/
 ├─ changes/                         # ⛔ 变更文档唯一位置（需求/方案/验收），按功能名称分目录
+│  └─ tob-agent-workspace/          # ToB 组织工作台与 Agent 需求和技术方案
 ├─ docs/                            # 长期规范文档
-│  └─ handoff/                      # 跨会话交接（夜间批次产出：OVERNIGHT-* / 状态快照）
+│  ├─ VERIFY.md                     # 验证驱动、属性/差分测试与 Diff 触发防回归规范
+│  ├─ ITERATION-REFACTOR-ROADMAP-20261119.md # 迭代与重构总方案（MVP-F0/F1/F2 → ToB R1/R2）
+│  ├─ VIBE-CODING-PLAYBOOK.md       # 基于本仓工具链的 Vibe Coding 最佳实践手册
+│  └─ handoff/                      # 跨会话交接（OVERNIGHT-* / GOAL-* / 状态快照）
 ├─ .changeset/                      # Changesets 配置与变更记录
 ├─ .husky/                          # git hooks
-└─ .pi/skills/                      # AI 工作流技能存档
+└─ .pi/skills/                      # AI 工作流技能存档（verify/ 为本地可选）
 ```
 
 ## 核心约定
@@ -103,7 +107,10 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | 集成测试         | `services/chat/test/integration/<模块组合>.spec.ts`（一个业务流一个文件） |
 | 单元测试         | 与源码同目录`<被测文件>.spec.ts`                                          |
 | E2E 用例         | `e2e/modules/<编号>-<模块>.spec.ts`                                       |
-| 跨会话交接文档   | `docs/handoff/`（夜间批次产出：OVERNIGHT-* / 状态快照；需求/方案/验收仍归 `changes/`） |
+| ToB 组织工作台与 Agent 规划 | `changes/tob-agent-workspace/` |
+| 验证与防回归规范 | `docs/VERIFY.md`（验证分级、属性/差分测试、Diff 触发检查） |
+| 迭代路线与工作流手册 | `docs/ITERATION-REFACTOR-ROADMAP-20261119.md`、`docs/VIBE-CODING-PLAYBOOK.md` |
+| 跨会话交接文档   | `docs/handoff/`（夜间批次产出：OVERNIGHT-* / 接力目标提示词：GOAL-* / 状态快照；需求/方案/验收仍归 `changes/`） |
 
 ### 组件引用
 
@@ -111,21 +118,33 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 
 ### 测试约定
 
-- 前端只测 `lib/hooks`，组件测试靠 E2E
+- **三类防愚弄测试（Anti-Gaming Tests）**：
+  - **E2E + 行为断言量表**：前端只测 `lib/hooks`，组件与业务流防线是 Playwright E2E；对照 `docs/VERIFY.md` 与 `docs/handoff/` 行为断言清单打分，拒绝只测 mock 的同义反复（tautological）测试。
+  - **属性测试（Property-based Testing，`fast-check`）**：`packages/money/`（币种常量、金额/汇率换算、舍入规则纯函数）及核心 DTO 校验逻辑新增或修改时，**必须编写属性测试**，验证往返守恒（Round-trip）、精度/非负/守恒不变量（Invariants）、重复计算幂等性（Idempotency）与等价性（Equivalence）。
+  - **差分测试（Differential Testing）**：从旧版 `FXplanner` 迁移换汇计算、计划生成或更正流水逻辑时，以旧版输出或黄金样本集为 Oracle 同输入比对，归一化无关噪音并记录合法差异白名单。
+- **廉价检查先行 & 本地 3 轮自愈熔断**：先跑本地 `bun run typecheck` / `bun run lint` / `bun run test unit api integration infra web scripts`，通过后再跑 E2E；同一测试/构建失败本地自动修复最多 **3 轮**，连续 3 轮未果必须立即停机汇报人类，严禁死循环盲改。
+- **Flaky 测试零容忍**：严禁为刷绿删减业务断言、添加硬编码 `sleep`、随意放大 timeout 或加 `skip`；偶发失败若 3 轮内找不到根因，必须显式移除/隔离并在验收报告中写明原因。
 - 测试工具进 `test/helpers/`，禁止 spec 间复制
-- 测试产物只进 `e2e/test-results`，⛔ 根目录、`services/`、`clients/` 下禁止出现 `test-results/` `playwright-report/` `logs/`
+- 测试产物只进 `e2e/test-results`，⛔ 根目录、`services/`、`clients/` 下禁止出现 `test-results/` `playwright-report/` `logs/`（跑完 E2E 查看报告后、提交前及时清理 `e2e/test-results`，避免干扰安全门禁扫描）
 
 ### 质量红线
 
-方案必含测试设计，实施必跑通测试（0 failed），验收必附测试日志。
+方案必含测试设计，实施必跑通测试（0 failed），验收必附测试日志，且改动须过 `docs/VERIFY.md` 命中的 Diff 触发项。
 
-**打回重做**：方案无测试章节、测试未执行、验收无证据。
+**独立审查隔离与三态标签**：
+- 审查规则与门禁配置一律从 `main` / 基线分支读取，被审改动不得自改裁判标准；跨轮复核仅基于前序记录与增量 diff。
+- 审查意见强制标注 **`[Important]`（必改阻断）/ `[Nit]`（非阻断建议）/ `[Pre-existing]`（存量问题，记入 backlog 不阻断本轮）**。
+
+**打回重做**：方案无测试章节、测试未执行、验收无证据、核心精度改动缺属性测试、或为刷绿擅删断言 / 加 `sleep` / `skip`。
 
 ### 提交规范
 
 Conventional Commits（commitlint 强制）。用 `bun run commit` + `bun run changeset`。
+- **Commit 验证戳记**：提交说明尾部须附验证戳记 `Verified: <unit|property|api|e2e|diff|none (reason)>`。
+- **门禁三态演进（`off → observe → enforce`）**：安全/质量 Hook 新规则先开 `observe` 统计误报；在 `enforce` 模式下若遇结构性规则冲突（如 `docs/handoff/MIMOSA-GATE-20261105.md` 记录的测试 helper SSRF 误报）或单会话连续被拦 2 次，允许在提交说明或 `docs/handoff/` 中写明豁免原因与验证证据后放行，严禁无记录静默旁路。
 
 ### 路径引用格式
 
-✅ `services/chat/src/project/project.service.ts:42`  
-❌ `[project.service.ts](path)` 或 `./path`
+✅ `services/chat/src/correction/correction.service.ts:1082`
+
+❌ `[correction.service.ts](path)` 或 `./path`
