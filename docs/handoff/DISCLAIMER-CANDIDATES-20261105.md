@@ -3,7 +3,7 @@
 > 目标（Goal 2026-11-05）：可上线短句，覆盖**非持牌、非投顾、汇率/计划仅工具测算、损失自负**四要素；
 > 中文为主，≤80 字/版。**代码当前默认采用 A 版**（`clients/chat-web/components/base/compliance-disclaimer.tsx`
 > 的 `COMPLIANCE_DISCLAIMER_TEXT`），落地页/首页/报告三处共用同一常量。
-> **待 Kaiming 选定**：选定 B 则只改该常量一处，三处同步生效。
+> **已选定 A 版（2026-11-19）**。个人版与未来 ToB 沿用当前代码默认文案。
 
 ## A 版（代码默认，70 字）
 
@@ -21,6 +21,5 @@
 
 ## 自测记录（2026-11-05）
 
-- 三处落位未变：`app/page.tsx`（落地页）、`home-dashboard.tsx`（登录后首页）、`reports/page.tsx`（报告页）均渲染 `ComplianceDisclaimer`。
-- 无针对该文案的单测/快照（项目约定组件验证靠 E2E）；文案本身未进任何断言，改常量零测试成本。
-- 建议终审后：如需锁定文案不被误改，可在任一既有 E2E 中加一行 `getByText` 断言（本轮未加，避免为文案加脆弱断言）。
+- `clients/chat-web/app/page.tsx`（落地页）、`clients/chat-web/components/business/home/home-dashboard.tsx`（登录后首页）与 `clients/chat-web/app/(protected)/reports/page.tsx`（报告页）均渲染 `ComplianceDisclaimer`。
+- 本次自测未添加针对文案的单测或快照。组件可见性按项目约定由 E2E 验证。
