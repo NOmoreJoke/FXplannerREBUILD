@@ -86,10 +86,10 @@ Phase 4 (ToB R2: 组织只读 Agent 工具 + 草稿人工确认闭环)
    - 冻结系统唯一口径：`rate` / `sellRate` 恒为 **「1 外币（`quote`）= X 本位币（`base`）」**；
    - 改造 `services/chat/src/rate/rate-source.erapi.ts` 与 `services/chat/src/rate/rate-source.frankfurter.ts`（覆盖 `fetchLatestBatch` 与 `fetchHistory`）：使用定点运算或 `Decimal` 求倒数并按约定精度舍入，严禁 `1 / Number(raw)`；
    - 全仓核查消费方（`onboarding`、`transaction`、`report`、`market`、AI 汇率工具、`e2e/scripts/run-e2e-tests.sh:91`），确认无二次取倒数；
-   - 依据 D3（无真实线上用户，可短维护窗口清洗），编写并验证幂等清理脚本（清理 `exchange_rates` 中历史 `er-api` / `frankfurter` 反向缓存行，由新逻辑按正确方向重拉）；
+   - 依据 D3（无真实线上用户，可短维护窗口清洗），编写并验证幂等清理脚本（清理 `exchange_rates` 中历史 `er-api` / `frankfurter` 反向缓存行；清理与回补的执行口径以 `changes/realtime-rate/MVP-F0-汇率回补与缓存迁移计划-20261119.md` §3 为准——ErApi 免费档无历史端点、不可重拉，按本地快照原位转换）；
    - **必配测试**：ABC / ErApi / Frankfurter 三源同币对等价单测 + `fast-check` 倒数往返与极端币种属性测试。
 2. **F0-2 日级报价时效与原时点回补修复**：
-   - 在 `services/chat/src/rate/rate.constants.ts` 与 `rate.service.ts:209-250` 按源粒度区分实时源（5 分钟窗口）与日级源（按交易日/UTC+8 自然日回溯匹配），**严禁伪造 `observedAt`**；
+   - 在 `services/chat/src/rate/rate.constants.ts` 与 `rate.service.ts:209-250` 按源粒度区分实时源（5 分钟窗口）与日级源（按交易日/UTC+8 自然日回溯匹配；日级回看的可用性证据边界以 `changes/realtime-rate/MVP-F0-汇率回补与缓存迁移计划-20261119.md` §2 为准，无法证明原时点可用时保留 `RATE_QUOTE_UNAVAILABLE`），**严禁伪造 `observedAt`**；
    - **必配测试**：非 08:00–08:05 UTC+8（如 00:05、14:30、23:55 UTC+8）的建账初始化与初始持仓币种更正 API/集成测试。
 3. **F0-3 USAGE 更正完整闭环 + 共享 FIFO 纯函数内核（联动 DEBT-01/02）**：
    - 从 `services/chat/src/correction/ledger-replay.ts` 与 `services/chat/src/usage/usage-calculator.ts` 抽出单一共享 FIFO 消耗纯函数内核，并以原 FIFO 镜像测试与 15 类计算用例回归锁定；
