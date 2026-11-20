@@ -1075,52 +1075,125 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		]);
 	});
 
-	it("#12 USAGE 改大（补分配）：剩余分配不足 → supplement 补入并写 PlanChangeLog", async () => {
+	it("#12 USAGE 连续两次补分配：每条计划日志关联同次更正并保留前后值", async () => {
 		const { user, planId, u1Id } = await seedUsageScenario("corr-usage-increase");
-		const before = await ctx.prisma.usageRecord.findUniqueOrThrow({
-			where: { id: u1Id },
-		});
+		const corrections = [
+			{
+				baseVersion: 1,
+				amountBefore: "1200.0000",
+				amountAfter: "3000.0000",
+				allocationBefore: "3000.0000",
+				allocationAfter: "3800.0000",
+				usedBefore: "2000.0000",
+				usedAfter: "3800.0000",
+				balanceBefore: "2000.0000",
+				balanceAfter: "200.0000",
+				supplement: "800.0000",
+			},
+			{
+				baseVersion: 2,
+				amountBefore: "3000.0000",
+				amountAfter: "3100.0000",
+				allocationBefore: "3800.0000",
+				allocationAfter: "3900.0000",
+				usedBefore: "3800.0000",
+				usedAfter: "3900.0000",
+				balanceBefore: "200.0000",
+				balanceAfter: "100.0000",
+				supplement: "100.0000",
+			},
+		];
+		const correctionIds: string[] = [];
 
-		// 1,200 → 3,000（diff 1,800 > 剩余分配 1,000 → 补分配 800；分配 3,000+800=3,800 ≤ 目标）
-		await request(app.getHttpServer())
-			.post("/api/corrections")
-			.set(bearer(user.accessToken))
-			.send({
-				targetType: "USAGE",
-				targetId: u1Id,
-				baseVersion: before.version,
-				reason: "使用金额少记了 1,800",
-				changes: { amount: "3000.0000" },
-			})
-			.expect(201);
+		for (const step of corrections) {
+			const result = await request(app.getHttpServer())
+				.post("/api/corrections")
+				.set(bearer(user.accessToken))
+				.send({
+					targetType: "USAGE",
+					targetId: u1Id,
+					baseVersion: step.baseVersion,
+					reason: `更正使用金额至 ${step.amountAfter}`,
+					changes: { amount: step.amountAfter },
+				})
+				.expect(201);
+			expect(result.body.data.targetVersion).toBe(step.baseVersion + 1);
+			correctionIds.push(result.body.data.correctionId);
+			const allocation = await ctx.prisma.planAllocation.findUniqueOrThrow({
+				where: { planId },
+			});
+			expect(allocation.amount.toFixed(4)).toBe(step.allocationAfter);
+			expect(allocation.usedAmount.toFixed(4)).toBe(step.usedAfter);
+			const account = await ctx.prisma.account.findUniqueOrThrow({
+				where: { userId_currencyCode: { userId: user.userId, currencyCode: "TWD" } },
+			});
+			expect(account.balance.toFixed(4)).toBe(step.balanceAfter);
+		}
+		expect(new Set(correctionIds).size).toBe(2);
 
-		const allocation = await ctx.prisma.planAllocation.findFirstOrThrow({
-			where: { planId },
-		});
-		expect(allocation.amount.toFixed(4)).toBe("3800.0000");
-		expect(allocation.usedAmount.toFixed(4)).toBe("3800.0000");
 		const changeLogs = await ctx.prisma.planChangeLog.findMany({
 			where: { planId, changeType: "ALLOCATION_ADJUSTED" },
 		});
-		expect(changeLogs).toHaveLength(1);
-		// 留痕快照：before/after 金额为更正前/后的使用金额（beforeUsage 语义）
-		const snapshotBefore = changeLogs[0].beforeSnapshot as {
-			amountBefore: string;
-		};
-		const snapshotAfter = changeLogs[0].afterSnapshot as {
-			amountAfter: string;
-			supplement: string;
-		};
-		expect(snapshotBefore.amountBefore).toBe("1200.0000");
-		expect(snapshotAfter.amountAfter).toBe("3000.0000");
-		expect(snapshotAfter.supplement).toBe("800.0000");
-		// 余额：4,000 − (3,000 + 800) = 200（重放重建）
-		const account = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "TWD" },
-			},
+		expect(changeLogs).toHaveLength(2);
+		const rows = await ctx.prisma.correction.findMany({
+			where: { userId: user.userId, targetType: "USAGE", targetId: u1Id },
 		});
-		expect(account.balance.toFixed(4)).toBe("200.0000");
+		expect(rows).toHaveLength(2);
+
+		// 两笔提交后再读历史，确保第二笔未覆盖第一笔的快照。
+		for (const [index, correctionId] of correctionIds.entries()) {
+			const step = corrections[index];
+			const versionAfter = step.baseVersion + 1;
+			const link = { correctionId, usageId: u1Id, reason: "USAGE_CORRECTION_SUPPLEMENT" };
+			const log = changeLogs.find(
+				(row) => (row.beforeSnapshot as { correctionId?: string }).correctionId === correctionId,
+			)!;
+			expect(log).toMatchObject({
+				beforeSnapshot: {
+					...link,
+					amountBefore: step.amountBefore,
+					versionBefore: step.baseVersion,
+					usedBefore: step.usedBefore,
+				},
+				afterSnapshot: {
+					...link,
+					amountAfter: step.amountAfter,
+					versionAfter,
+					usedAfter: step.usedAfter,
+					supplement: step.supplement,
+				},
+			});
+			expect(log.beforeAlloc.toFixed(4)).toBe(step.allocationBefore);
+			expect(log.afterAlloc.toFixed(4)).toBe(step.allocationAfter);
+			const impacts = {
+				allocations: [
+					{
+						planId,
+						currencyCode: "TWD",
+						amountBefore: step.allocationBefore,
+						amountAfter: step.allocationAfter,
+						usedBefore: step.usedBefore,
+						usedAfter: step.usedAfter,
+						supplement: step.supplement,
+					},
+				],
+				balances: [{ currencyCode: "TWD", before: step.balanceBefore, after: step.balanceAfter }],
+			};
+			expect(rows.find((row) => row.id === correctionId)).toMatchObject({
+				status: "APPLIED",
+				createdAt: log.createdAt,
+				beforeSnapshot: {
+					target: { amount: step.amountBefore, version: step.baseVersion },
+					baseVersion: step.baseVersion,
+					impacts,
+				},
+				afterSnapshot: {
+					target: { amount: step.amountAfter, version: versionAfter },
+					versionAfter,
+					impacts,
+				},
+			});
+		}
 	});
 
 	it("#13 USAGE 改日期：重放次序对调 → 成本与分摊跨批次重排（u1 400 → 6,200、u2 10,300 → 4,500）", async () => {

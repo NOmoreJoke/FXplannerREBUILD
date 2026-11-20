@@ -211,6 +211,16 @@ interface Evaluation {
 	planIdDetached: boolean;
 }
 
+interface UsageAllocationAudit {
+	planId: string;
+	currencyCode: string;
+	amountBefore: string;
+	amountAfter: string;
+	usedBefore: string;
+	usedAfter: string;
+	supplement: string;
+}
+
 /** 列表分页大小（个人工具量级，固定值防深翻页） */
 const PAGE_SIZE = 20;
 
@@ -399,12 +409,13 @@ export class CorrectionService {
 			throw this.failuresToException(evaluation.failures);
 		}
 
-		// ④~⑦ 落库：目标行（USAGE 连带计划分配调整）→ 批次重建 → 余额 → APPLIED 留痕
+		// ④~⑦ 落库：目标行（USAGE 连带计划分配调整）→ 批次重建 → 余额 → APPLIED 与补分配留痕
 		//（同事务，任一失败全部回滚）
+		let usageAllocationAudit: UsageAllocationAudit | null = null;
 		if (evaluation.targetType === "TRANSACTION") {
 			await this.persistTransactionCorrection(tx, evaluation);
 		} else if (evaluation.targetType === "USAGE") {
-			await this.persistUsageCorrection(tx, evaluation);
+			usageAllocationAudit = await this.persistUsageCorrection(tx, evaluation);
 		} else {
 			await this.persistHoldingCorrection(tx, evaluation);
 		}
@@ -418,7 +429,14 @@ export class CorrectionService {
 				update: { balance: replay.finalBalance },
 			});
 		}
-		const snapshots = this.buildSnapshots(dto, evaluation);
+		const targetVersion =
+			evaluation.afterTransaction?.version ?? evaluation.afterUsage?.version ?? null;
+		const snapshots = this.buildSnapshots(
+			dto,
+			evaluation,
+			targetVersion,
+			usageAllocationAudit,
+		);
 		const correction = await tx.correction.create({
 			data: {
 				userId,
@@ -429,18 +447,17 @@ export class CorrectionService {
 				afterSnapshot: snapshots.after,
 				status: "APPLIED",
 			},
+			select: { id: true, createdAt: true },
 		});
+		if (usageAllocationAudit && evaluation.usageAllocationDelta?.supplement.gt(0)) {
+			await this.recordUsageSupplement(tx, correction, evaluation, usageAllocationAudit);
+		}
 		return {
 			correctionId: correction.id,
 			status: "APPLIED",
 			targetType: evaluation.targetType,
 			targetId: evaluation.targetId,
-			targetVersion:
-				evaluation.targetType === "TRANSACTION"
-					? evaluation.afterTransaction!.version
-					: evaluation.targetType === "USAGE"
-						? evaluation.afterUsage!.version
-						: null,
+			targetVersion,
 			createdAt: correction.createdAt.toISOString(),
 		};
 	}
@@ -1132,13 +1149,12 @@ export class CorrectionService {
 
 	/**
 	 * 使用更正落库（MVP-F0-3）：目标行 update（amount/usedAt/version+1）+
-	 * 计划分配调整（computeAllocationDelta：amount/usedAmount 同步；补分配时
-	 * 写 PlanChangeLog ALLOCATION_ADJUSTED 留痕）。账户余额由重放重建承担。
+	 * 计划分配调整（computeAllocationDelta：amount/usedAmount 同步）。
 	 */
 	private async persistUsageCorrection(
 		tx: Prisma.TransactionClient,
 		evaluation: Evaluation,
-	): Promise<void> {
+	): Promise<UsageAllocationAudit | null> {
 		const effective = evaluation.afterUsage!;
 		const delta = evaluation.usageAllocationDelta!;
 		const usagePlan = evaluation.usagePlan!;
@@ -1151,40 +1167,66 @@ export class CorrectionService {
 			},
 		});
 		if (delta.amountDelta.eq(0) && delta.usedAmountDelta.eq(0)) {
-			return;
+			return null;
 		}
-		await tx.planAllocation.update({
+		const allocation = await tx.planAllocation.update({
 			where: { planId: usagePlan.planId },
 			data: {
 				amount: { increment: delta.amountDelta },
 				usedAmount: { increment: delta.usedAmountDelta },
 			},
+			select: { amount: true, usedAmount: true },
 		});
-		if (delta.supplement.gt(0)) {
-			// 补分配留痕（对齐 plan.service ALLOCATION_ADJUSTED 形态）
-			await tx.planChangeLog.create({
-				data: {
-					planId: usagePlan.planId,
-					changeType: "ALLOCATION_ADJUSTED",
-					beforeTarget: usagePlan.planTargetAmount,
-					afterTarget: usagePlan.planTargetAmount,
-					beforeAlloc: usagePlan.allocationAmount,
-					afterAlloc: usagePlan.allocationAmount.add(delta.amountDelta),
-					releasedAmount: new Prisma.Decimal(0),
-					beforeSnapshot: {
-						reason: "USAGE_CORRECTION_SUPPLEMENT",
-						usageId: effective.id,
-						amountBefore: evaluation.beforeUsage!.amount.toFixed(4),
-					} as unknown as Prisma.InputJsonValue,
-					afterSnapshot: {
-						reason: "USAGE_CORRECTION_SUPPLEMENT",
-						usageId: effective.id,
-						amountAfter: effective.amount.toFixed(4),
-						supplement: delta.supplement.toFixed(4),
-					} as unknown as Prisma.InputJsonValue,
+		// 用实际写入行和本次增量还原写前值，两个审计记录共用这组金额。
+		return {
+			planId: usagePlan.planId,
+			currencyCode: effective.currencyCode,
+			amountBefore: allocation.amount.sub(delta.amountDelta).toFixed(4),
+			amountAfter: allocation.amount.toFixed(4),
+			usedBefore: allocation.usedAmount.sub(delta.usedAmountDelta).toFixed(4),
+			usedAfter: allocation.usedAmount.toFixed(4),
+			supplement: delta.supplement.toFixed(4),
+		};
+	}
+
+	private async recordUsageSupplement(
+		tx: Prisma.TransactionClient,
+		correction: { id: string; createdAt: Date },
+		evaluation: Evaluation,
+		allocation: UsageAllocationAudit,
+	): Promise<void> {
+		const before = evaluation.beforeUsage!;
+		const after = evaluation.afterUsage!;
+		const planTargetAmount = evaluation.usagePlan!.planTargetAmount;
+		const link = {
+			reason: "USAGE_CORRECTION_SUPPLEMENT",
+			usageId: before.id,
+			correctionId: correction.id,
+		};
+		await tx.planChangeLog.create({
+			data: {
+				planId: allocation.planId,
+				changeType: "ALLOCATION_ADJUSTED",
+				beforeTarget: planTargetAmount,
+				afterTarget: planTargetAmount,
+				beforeAlloc: allocation.amountBefore,
+				afterAlloc: allocation.amountAfter,
+				createdAt: correction.createdAt,
+				beforeSnapshot: {
+					...link,
+					amountBefore: before.amount.toFixed(4),
+					versionBefore: before.version,
+					usedBefore: allocation.usedBefore,
 				},
-			});
-		}
+				afterSnapshot: {
+					...link,
+					amountAfter: after.amount.toFixed(4),
+					versionAfter: after.version,
+					usedAfter: allocation.usedAfter,
+					supplement: allocation.supplement,
+				},
+			},
+		});
 	}
 
 	/** 初始持仓更正落库：金额/币种与报价三元组更新（无 version 列，乐观校验已在行锁后完成） */
@@ -1714,6 +1756,8 @@ export class CorrectionService {
 	private buildSnapshots(
 		dto: CorrectionRequestDto,
 		evaluation: Evaluation,
+		targetVersion: number | null,
+		usageAllocationAudit: UsageAllocationAudit | null,
 	): { before: Prisma.InputJsonValue; after: Prisma.InputJsonValue } {
 		const impactsSummary = {
 			balances: evaluation.balances.map((balance) => ({
@@ -1721,6 +1765,7 @@ export class CorrectionService {
 				before: balance.before.toFixed(4),
 				after: balance.after.toFixed(4),
 			})),
+			...(usageAllocationAudit && { allocations: [usageAllocationAudit] }),
 			costs: [...evaluation.costsAfter.entries()].map(([usageId, costAfter]) => ({
 				usageId,
 				costBefore: serializeCostOrNull(evaluation.costsBefore.get(usageId)),
@@ -1738,10 +1783,7 @@ export class CorrectionService {
 			} as unknown as Prisma.InputJsonValue,
 			after: {
 				target: evaluation.after,
-				versionAfter:
-					evaluation.targetType === "TRANSACTION"
-						? evaluation.afterTransaction!.version
-						: null,
+				versionAfter: targetVersion,
 				planIdDetached: evaluation.planIdDetached,
 				impacts: impactsSummary,
 				appliedAt: new Date().toISOString(),

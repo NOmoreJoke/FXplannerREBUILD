@@ -337,6 +337,66 @@ describe("更正重放一致性（集成）", () => {
 		expect(totalAllocCost.toFixed(4)).toBe("15048.0000");
 	});
 
+	it("补分配日志写入后发生异常：更正和整笔账本变更一并回滚", async () => {
+		const user = await newUser("corr-it-audit-rollback");
+		const { planId, usageId } = await seedFullLedger(user);
+		const prisma = ctx.prisma;
+		const accountKey = { userId: user.userId, currencyCode: "USD" };
+		async function readLedger() {
+			return Promise.all([
+				prisma.usageRecord.findUniqueOrThrow({ where: { id: usageId } }),
+				prisma.planAllocation.findUniqueOrThrow({ where: { planId } }),
+				prisma.account.findUniqueOrThrow({ where: { userId_currencyCode: accountKey } }),
+				prisma.costLot.findMany({ where: accountKey, orderBy: { id: "asc" } }),
+				prisma.usageLotAllocation.findMany({ where: { usageId }, orderBy: { id: "asc" } }),
+			]);
+		}
+		const before = await readLedger();
+
+		// 复用事务客户端也会执行的 Prisma 中间件。先真实 INSERT，再模拟中断。
+		let injectFailure = true;
+		let insertedCorrectionId: string | undefined;
+		let insertedLogId: string | undefined;
+		let linkedCorrectionId: string | undefined;
+		prisma.$use(async (params, next) => {
+			const result = await next(params);
+			if (injectFailure && params.action === "create") {
+				if (params.model === "Correction" && params.args.data.targetId === usageId) {
+					insertedCorrectionId = result.id;
+				}
+				if (params.model === "PlanChangeLog" && params.args.data.planId === planId) {
+					insertedLogId = result.id;
+					linkedCorrectionId = result.beforeSnapshot.correctionId;
+					throw new Error("injected failure after supplement log insert");
+				}
+			}
+			return result;
+		});
+
+		try {
+			await request(app.getHttpServer())
+				.post("/api/corrections")
+				.set(bearer(user.accessToken))
+				.send({
+					targetType: "USAGE",
+					targetId: usageId,
+					baseVersion: 1,
+					reason: "补分配写日志后模拟中断",
+					changes: { amount: "2000" },
+				})
+				.expect(500);
+		} finally {
+			injectFailure = false;
+		}
+
+		expect(insertedLogId).toEqual(expect.any(String));
+		expect(insertedCorrectionId).toEqual(expect.any(String));
+		expect(linkedCorrectionId).toBe(insertedCorrectionId);
+		expect(await readLedger()).toEqual(before);
+		expect(await prisma.planChangeLog.count({ where: { planId } })).toBe(0);
+		expect(await prisma.correction.count({ where: { targetType: "USAGE", targetId: usageId } })).toBe(0);
+	});
+
 	it("#3 重放幂等：同一请求二次 apply → 409 TARGET_CHANGED，数据与首次后状态逐字段一致", async () => {
 		const user = await newUser("corr-it-idempotent");
 		const { tradeIds } = await seedFullLedger(user);
