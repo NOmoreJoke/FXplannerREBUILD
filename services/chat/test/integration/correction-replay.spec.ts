@@ -9,8 +9,8 @@
  * 断言锚定：账户不变式「balance = Σ剩余分配 + 未分配余额」与「Σ使用成本 = Σ分摊成本」。
  */
 import type { INestApplication } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
-import request from "supertest";
+import { Prisma, PrismaClient } from "@prisma/client";
+import request, { type Response } from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	bearer,
@@ -647,127 +647,91 @@ describe("更正重放一致性（集成）", () => {
 		await assertInvariants(ctx.prisma, user.userId);
 	});
 
-	// ── #6 锁序回归（MVP-F0-3）：确定性锁竞争证明——
-	// 外部事务先持账户行锁 → 发起「记录使用」→ 轮询 pg_stat_activity 观察到其
-	// 在 plan_allocations 上等锁（证明新锁真实存在且顺序为 Account→分配）→
-	// 放行 → create 201。这证明使用链路真实取账户锁；更正 apply 侧已由
-	// lockAccountRows（apply 事务首步）保证同一顺序 → 倒序死锁窗口消除。 ──
-	it("#6 锁序回归：持有账户行锁时记录使用阻塞于分配更新、放行后成功（确定性观察）", { timeout: 20_000 }, async () => {
+	// 真实账户行锁固定竞争。旧写序会先占住分配，再阻塞于账户 UPDATE。
+	it("#6 锁序回归：记录使用先等账户行锁，分配仍可锁定，放行后更正与使用均成功", { timeout: 20_000 }, async () => {
 		const user = await newUser("corr-it-concurrent-locks");
-		const { planId } = await seedFullLedger(user, "1500");
-
-		let holderAcquired = false;
-		let observedBlocked = false;
-		const gate = { release: () => {} };
-		const gatePromise = new Promise<void>((resolve) => {
-			gate.release = resolve;
-		});
-
-		// 持锁者：锁定账户行并保持，直至观察到竞争方等锁
-		const holderPromise = ctx.prisma.$transaction(
-			async (tx) => {
-				await tx.$queryRaw`
-					SELECT id FROM accounts
-					WHERE user_id = ${user.userId} AND currency_code = 'USD'
-					FOR UPDATE`;
-				holderAcquired = true;
-				await gatePromise;
-			},
-			{ maxWait: 30_000, timeout: 30_000 },
-		);
-
-		// 等待持锁者拿到行锁（本地标志，确定性观察）
-		for (let i = 0; i < 200 && !holderAcquired; i += 1) {
-			await new Promise((resolve) => setTimeout(resolve, 10));
-		}
-		expect(holderAcquired).toBe(true);
-
-		// 竞争方：记录使用 300（事务首步即取同账户行锁 → 必然阻塞）
-		let createCompleted: number | null = null;
-		const createPromise = request(app.getHttpServer())
-			.post(`/api/plans/${planId}/usages`)
-			.set(bearer(user.accessToken))
-			.send({
-				amount: "300",
-				usedAt: daysAgo(0).toISOString(),
-			}).then((res) => {
-				createCompleted = res.status;
-				return res;
-			});
-
-		// 有界轮询 pg_stat_activity：观察到 create 的语句在等行锁（wait_event_type=
-		// 'Lock'，查询为账户 FOR UPDATE / 分配 UPDATE）——证明其真实取账户锁（⓪ 步）
-		for (let i = 0; i < 200 && !observedBlocked; i += 1) {
-			const activities = await ctx.prisma.$queryRaw<Array<{ query: string }>>`
-				SELECT query FROM pg_stat_activity
-				WHERE wait_event_type = 'Lock'
-					AND (query ILIKE '%accounts%' OR query ILIKE '%plan_allocations%')`;
-			if (activities.length > 0) {
-				observedBlocked = true;
-			} else {
-				await new Promise((resolve) => setTimeout(resolve, 25));
-			}
-		}
-		expect(observedBlocked).toBe(true);
-		expect(createCompleted).toBeNull(); // 等锁期间未完成
-
-		// 放行 → create 在账户锁上排队成功
-		gate.release();
-		const createRes = await createPromise;
-		expect(createRes.status).toBe(201);
-		await holderPromise;
-		expect(createCompleted).toBe(201);
-
-		// 终态不变式：使用 300 落库、余额与批次守恒
-		await assertInvariants(ctx.prisma, user.userId);
-		const usages = await ctx.prisma.usageRecord.findMany({
-			where: { userId: user.userId },
-		});
-		expect(usages.reduce((sum, usage) => sum.add(usage.amount), new Prisma.Decimal(0)).toFixed(4)).toBe("1500.0000");
-		const account = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
-		});
-		expect(account.balance.toFixed(4)).toBe("1500.0000");
-	});
-
-	// ── #6-2 并发双流程（变更无丢失）：使用更正 apply 与「记录使用」并发提交——
-	// 种子分配 1,500（留 300 余量）：任一串行顺序下两流程都成功；确定性终态：
-	// 更正 1,200→800（−400）、新建 300（+300）→ usedAmount/amount 同减至 1,100、
-	// 余额 = 3,000 − 1,100 = 1,900。 ──
-	it("#6-2 并发双流程：更正与记录使用同时提交 → 双 201、分配/余额变更无丢失", async () => {
-		const user = await newUser("corr-it-concurrent-flows");
 		const { planId, usageId } = await seedFullLedger(user, "1500");
 		const usageBefore = await ctx.prisma.usageRecord.findUniqueOrThrow({
 			where: { id: usageId },
 		});
 
-		const correctionPromise = request(app.getHttpServer())
-			.post("/api/corrections")
-			.set(bearer(user.accessToken))
-			.send({
-				targetType: "USAGE",
-				targetId: usageId,
-				baseVersion: usageBefore.version,
-				reason: "并发锁序回归：使用金额改小",
-				changes: { amount: "800" },
-			});
-		const usageCreatePromise = request(app.getHttpServer())
-			.post(`/api/plans/${planId}/usages`)
-			.set(bearer(user.accessToken))
-			.send({
-				amount: "300",
-				usedAt: daysAgo(0).toISOString(),
-				remark: "并发锁序回归",
-			});
+		// 持锁与观察使用独立连接池，应用连接可同时服务两个写入事务。
+		const locks = new PrismaClient();
+		let usageRequest: Promise<Response> | undefined;
+		let correctionRequest: Promise<Response> | undefined;
+		try {
+			await locks.$transaction(async (holder) => {
+				const [{ pid: holderPid }] = await holder.$queryRaw<Array<{ pid: number }>>`
+					SELECT pg_backend_pid() AS pid FROM accounts
+					WHERE user_id = ${user.userId} AND currency_code = 'USD'
+					FOR UPDATE`;
 
-		const [correctionRes, usageRes] = await Promise.all([
-			correctionPromise,
-			usageCreatePromise,
-		]);
-		expect(correctionRes.status).toBe(201);
-		expect(usageRes.status).toBe(201);
+				const blockedBy = (pids: number[]) =>
+					locks.$queryRaw<Array<{ pid: number; query: string }>>`
+						SELECT pid, query FROM pg_stat_activity
+						WHERE datname = current_database() AND wait_event_type = 'Lock'
+							AND pg_blocking_pids(pid) && ARRAY[${Prisma.join(pids)}]::int[]`;
+
+				usageRequest = request(app.getHttpServer())
+					.post(`/api/plans/${planId}/usages`)
+					.set(bearer(user.accessToken))
+					.send({
+						amount: "300",
+						usedAt: daysAgo(0).toISOString(),
+						remark: "并发锁序回归",
+					})
+					.then((res) => res);
+				// 提前接收传输错误，释放行锁后仍用原始 Promise 断言结果。
+				void usageRequest.catch(() => {});
+
+				// 当前只有 usage 请求能等待该持锁连接，记录具体的等待语句。
+				const [waitingUsage] = await vi.waitFor(
+					async () => {
+						const waiters = await blockedBy([holderPid]);
+						expect(waiters).toHaveLength(1);
+						return waiters;
+					},
+					{ interval: 25, timeout: 2_000 },
+				);
+				expect.soft(waitingUsage.query).toMatch(
+					/^\s*SELECT\b[\s\S]*\bFROM\s+(?:(?:"public"|public)\s*\.\s*)?(?:"accounts"|accounts)\s+[\s\S]*\bFOR\s+UPDATE\s*;?\s*$/i,
+				);
+
+				// holder 和 usage 都在各自的事务中。从另一连接立即尝试锁定同一分配行。
+				await expect(locks.$queryRaw`
+					SELECT plan_id AS "planId" FROM plan_allocations
+					WHERE plan_id = ${planId}
+					FOR UPDATE NOWAIT`).resolves.toEqual([{ planId }]);
+
+				correctionRequest = request(app.getHttpServer())
+					.post("/api/corrections")
+					.set(bearer(user.accessToken))
+					.send({
+						targetType: "USAGE",
+						targetId: usageId,
+						baseVersion: usageBefore.version,
+						reason: "并发锁序回归：使用金额改小",
+						changes: { amount: "800" },
+					})
+					.then((res) => res);
+				void correctionRequest.catch(() => {});
+
+				// 排在 usage 后的更正可能直接等待 holder，也可能等待 usage 排队持有的锁。
+				await vi.waitFor(
+					async () => {
+						const waiters = await blockedBy([holderPid, waitingUsage.pid]);
+						expect(waiters.some(({ pid }) => pid !== waitingUsage.pid)).toBe(true);
+					},
+					{ interval: 25, timeout: 2_000 },
+				);
+			}, { timeout: 10_000 });
+		} finally {
+			// holder 已提交或回滚。等待已发出的请求结束，再进入断言或清理夹具。
+			await Promise.allSettled([usageRequest, correctionRequest]);
+			await locks.$disconnect();
+		}
+		await expect(usageRequest).resolves.toMatchObject({ status: 201 });
+		await expect(correctionRequest).resolves.toMatchObject({ status: 201 });
 
 		// 确定性终态（与串行顺序无关）
 		const usages = await ctx.prisma.usageRecord.findMany({
@@ -778,6 +742,9 @@ describe("更正重放一致性（集成）", () => {
 			"300.0000",
 			"800.0000",
 		]);
+		const correctedUsage = usages.find((usage) => usage.id === usageId);
+		expect(correctedUsage?.amount.toFixed(4)).toBe("800.0000");
+		expect(correctedUsage?.version).toBe(usageBefore.version + 1);
 		const allocation = await ctx.prisma.planAllocation.findUniqueOrThrow({
 			where: { planId },
 		});
@@ -794,6 +761,6 @@ describe("更正重放一致性（集成）", () => {
 			where: { userId: user.userId, targetType: "USAGE" },
 		});
 		expect(corrections).toHaveLength(1);
-		expect(corrections[0].status).toBe("APPLIED");
+		expect(corrections[0]).toMatchObject({ targetId: usageId, status: "APPLIED" });
 	});
 });
