@@ -4476,7 +4476,10 @@ export interface operations {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                /** @description 币种代码（3 位字母，ISO 4217，大小写不敏感） */
+                currencyCode: string;
+            };
             cookie?: never;
         };
         requestBody?: never;

@@ -458,6 +458,7 @@ describe("AccountController（接口）", () => {
 		const empty = await getAllocations(userMain, "USD").expect(200);
 		expect(empty.body.data).toEqual({ items: [] });
 
+		await getAllocations(userMain, "").expect(404); // 缺少币种路径段
 		await getAllocations(userMain, "XYZ").expect(400); // INVALID_ACCOUNT_CURRENCY
 		await getAllocations(userMain, "JPY").expect(404); // 未建账户
 		// 他人账户币种：404 不泄露存在性（userOther 无账户，userCost 有 CAD）

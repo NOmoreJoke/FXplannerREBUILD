@@ -97,4 +97,18 @@ describe("Swagger 接口说明", () => {
 			]),
 		);
 	});
+
+	it("账户分配明细的 OpenAPI 契约要求传入币种路径参数", () => {
+		const document = SwaggerModule.createDocument(app, createSwaggerConfig());
+		const operation = document.paths["/api/accounts/{currencyCode}/allocations"]?.get;
+
+		expect(operation?.parameters).toEqual([
+			expect.objectContaining({
+				name: "currencyCode",
+				in: "path",
+				required: true,
+				schema: expect.objectContaining({ type: "string" }),
+			}),
+		]);
+	});
 });

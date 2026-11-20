@@ -1451,7 +1451,18 @@
       "get": {
         "description": "按计划逐条返回该币种的分配明细（计划名/状态、分配总额、累计已使用、剩余分配），按计划创建时间升序，无分页（个位到十位级，take 100 兜底）。不过滤计划状态，与列表/详情 allocatedAmount 汇总口径一致（CANCELLED 已释放剩余 0 仍如实列出）；amount 与 usedAmount 均为 0 的计划不出明细行。鉴权与 400/404 口径同详情接口（ACCOUNT_NOT_FOUND 不泄露存在性）。",
         "operationId": "AccountController_getAllocations",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "currencyCode",
+            "required": true,
+            "in": "path",
+            "description": "币种代码（3 位字母，ISO 4217，大小写不敏感）",
+            "schema": {
+              "example": "CAD",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "获取成功，响应体为 { success, data, message } 包装",

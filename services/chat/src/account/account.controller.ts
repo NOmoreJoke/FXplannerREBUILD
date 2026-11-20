@@ -14,6 +14,7 @@ import {
 	ApiNotFoundResponse,
 	ApiOkResponse,
 	ApiOperation,
+	ApiParam,
 	ApiTags,
 } from "@nestjs/swagger";
 import type { User } from "@prisma/client";
@@ -147,6 +148,13 @@ export class AccountController {
 	}
 
 	@Get(":currencyCode/allocations")
+	@ApiParam({
+		name: "currencyCode",
+		type: String,
+		required: true,
+		description: "币种代码（3 位字母，ISO 4217，大小写不敏感）",
+		example: "CAD",
+	})
 	@ApiOperation({
 		summary: "账户按计划分配明细（只读；分配与调整操作在计划中，本端点无写操作）",
 		description:
