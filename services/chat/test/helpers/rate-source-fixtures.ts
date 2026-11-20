@@ -69,6 +69,13 @@ export const FRANKFURTER_V2_CNY_TWD_SAMPLE = [
 	{ date: "2026-10-09", base: "CNY", quote: "TWD", rate: 4.7635 },
 ] as const;
 
+export const FRANKFURTER_V2_MIXED_PAIR_SAMPLE = [
+	{ date: "2026-10-03", base: "HKD", quote: "TWD", rate: 4.1 },
+	{ date: "2026-10-04", quote: "TWD", rate: 4.2 },
+	{ date: "2026-10-05", base: "CNY", quote: "HKD", rate: 1.1 },
+	...FRANKFURTER_V2_CNY_TWD_SAMPLE,
+] as const;
+
 /** er-api 样本更新时间（日更语义：UTC 日零点 2026-09-15T00:00:00Z 对应的 Unix 秒） */
 export const ERAPI_SAMPLE_UNIX = Math.floor(
 	new Date("2026-09-15T00:00:00.000Z").getTime() / 1000,

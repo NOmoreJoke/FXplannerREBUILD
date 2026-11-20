@@ -11,6 +11,7 @@ import { BadGatewayException } from "@nestjs/common";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	FRANKFURTER_V2_CNY_TWD_SAMPLE,
+	FRANKFURTER_V2_MIXED_PAIR_SAMPLE,
 	jsonResponse,
 } from "../../test/helpers/rate-source-fixtures";
 import { FRANKFURTER_V2_RATE_URL } from "./rate.constants";
@@ -49,6 +50,20 @@ describe("FrankfurterV2Source（TWD 图表参考序列）", () => {
 		expect(points[0].rate).toBe("0.2102297812");
 		expect(points[0].observedAt.toISOString()).toBe("2026-10-08T00:00:00.000Z");
 		expect(points[1].rate).toBe("0.2099296736");
+	});
+
+	it.each([
+		["顶层数组", FRANKFURTER_V2_MIXED_PAIR_SAMPLE],
+		["rates 包装数组", { rates: FRANKFURTER_V2_MIXED_PAIR_SAMPLE }],
+	])("%s 逐行匹配请求币对，过滤错 base、缺 base 和错 quote", async (_shape, body) => {
+		const source = new FrankfurterV2Source({ fetchImpl: okFetch(body) });
+
+		await expect(
+			source.fetchReferenceSeries("CNY", "TWD", "2026-10-02", "2026-10-09"),
+		).resolves.toEqual([
+			{ observedAt: new Date("2026-10-08T00:00:00Z"), rate: "0.2102297812" },
+			{ observedAt: new Date("2026-10-09T00:00:00Z"), rate: "0.2099296736" },
+		]);
 	});
 
 	it("兼容 v1 风格嵌套 map（rates[date][target]）；按日期升序；周末日期原样保留", async () => {

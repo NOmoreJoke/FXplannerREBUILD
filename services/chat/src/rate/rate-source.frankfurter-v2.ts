@@ -57,20 +57,19 @@ export class FrankfurterV2Source {
 		);
 
 		const rates = Array.isArray(response) ? response : response.rates;
-		const entries = this.normalizeRates(rates, target);
+		const entries = this.normalizeRates(rates, base, target);
 		const startMs = this.parseDate(start, "区间起点").getTime();
 		const endMs = this.parseDate(end, "区间终点").getTime();
 		const endExclusive = endMs + 86_400_000;
 
 		return entries
 			.map((entry) => ({
-				// 日期校验先行：所有逐条记录（含非目标币对/缺 quote 条目）一律过校验，
-				// 不得借 quote 过滤绕过非法日期（FX-01）
+				// 所有逐条记录先校验日期，即使币对不匹配或缺少币种字段（FX-01）。
 				observedAt: this.parseDate(entry.date, "参考序列"),
-				isTarget: entry.isTarget,
+				matchesPair: entry.matchesPair,
 				rawRate: entry.rate,
 			}))
-			.filter((entry) => entry.isTarget && entry.rawRate !== undefined)
+			.filter((entry) => entry.matchesPair && entry.rawRate !== undefined)
 			.map((entry) => ({
 				rate: invertQuoteRate(entry.rawRate as string | number, base, target),
 				observedAt: entry.observedAt,
@@ -84,21 +83,21 @@ export class FrankfurterV2Source {
 	}
 
 	/**
-	 * v2 rates 归一：优先实测的逐条记录契约（条目自带 quote 币对标识，
-	 * 仅 quote === target 的条目计入——缺 quote 不视为目标）；兼容 v1 风格
-	 * 嵌套 map（rates[date][target]，键位即目标币种，天然 isTarget）。
+	 * 逐条记录须同时匹配请求的 base 和 quote。兼容的 v1 风格嵌套 map
+	 * 按请求 base 解释整张表，并从 rates[date][target] 读取目标币种牌价。
 	 */
 	private normalizeRates(
 		raw: unknown,
+		base: string,
 		target: string,
-	): Array<{ date: unknown; rate: unknown; isTarget: boolean }> {
+	): Array<{ date: unknown; rate: unknown; matchesPair: boolean }> {
 		if (Array.isArray(raw)) {
 			return raw.map((entry) => {
 				const record = entry as Record<string, unknown> | undefined;
 				return {
 					date: record?.date,
 					rate: record?.rate,
-					isTarget: record?.quote === target,
+					matchesPair: record?.base === base && record?.quote === target,
 				};
 			});
 		}
@@ -108,7 +107,7 @@ export class FrankfurterV2Source {
 			).map(([date, rates]) => ({
 				date,
 				rate: (rates ?? {})[target],
-				isTarget: true,
+				matchesPair: true,
 			}));
 		}
 		return [];

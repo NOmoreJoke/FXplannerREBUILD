@@ -36,7 +36,7 @@ import { RateService } from "../../src/rate/rate.service";
 import { SUPPORTED_CURRENCIES } from "../../src/rate/rate.constants";
 import {
 	ABC_SAMPLE_FIXTURE,
-	FRANKFURTER_V2_CNY_TWD_SAMPLE,
+	FRANKFURTER_V2_MIXED_PAIR_SAMPLE,
 	createRateSourceFetchStub,
 	erApiLatestBody,
 	frankfurterBusinessDaySeries,
@@ -1099,12 +1099,13 @@ describe("RateController（接口）", () => {
 			expect(res.body).toMatchObject({ code: "RATE_PAIR_UNSUPPORTED" });
 		});
 
-		it("CNY/TWD 空库历史：v2 顶层数组逐点标注参考来源，重复请求仍有数据且零落库（W4-01）", async () => {
+		it.each([
+			["v2 顶层数组", FRANKFURTER_V2_MIXED_PAIR_SAMPLE],
+			["rates 包装数组", { rates: FRANKFURTER_V2_MIXED_PAIR_SAMPLE }],
+		])("CNY/TWD 空库历史（%s）：仅返回同币对参考点，重复请求仍有数据且零落库（W4-01/W4-08）", async (_shape, body) => {
 			const pair = { base: "CNY", quote: "TWD" };
 			await realCtx.prisma.exchangeRate.deleteMany({ where: pair });
-			const referenceFetch = vi.fn(() =>
-				jsonResponse(FRANKFURTER_V2_CNY_TWD_SAMPLE),
-			);
+			const referenceFetch = vi.fn(() => jsonResponse(body));
 			const { app: twdApp } = await buildRateApp(
 				"multi",
 				createRateSourceFetchStub({ frankfurterV2: referenceFetch }),
