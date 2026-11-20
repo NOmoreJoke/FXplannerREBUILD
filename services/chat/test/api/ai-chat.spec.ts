@@ -945,32 +945,21 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 			where: { userId: user.userId, title: "断连用例" },
 		});
 
-		// supertest 无法中途 abort，用原生 fetch + AbortSignal（Node 18+）；
-		// supertest 模式下 server 未监听，手动 listen(0) 取临时端口
-		const server = app.getHttpServer();
-		await new Promise<void>((resolve, reject) => {
-			server.once("error", reject);
-			server.listen(0, () => resolve());
-		});
-		const address = server.address();
-		if (typeof address !== "object" || address === null) {
-			throw new Error("http server not listening");
+		// 用原生 fetch + AbortSignal 中止流，复用夹具已绑定的回环端口。
+		const url = new URL("/api/ai/conversations", await app.getUrl());
+		if (url.protocol !== "http:" || url.hostname !== "127.0.0.1") {
+			throw new Error("测试应用必须监听 HTTP IPv4 回环地址");
 		}
 		const clientAbort = new AbortController();
-		// 动态端口 URL 必须经 localTestFetch 的同函数回环校验（裸模板串 fetch 会被
-		// 静态污点分析判 SSRF；127.0.0.1 临时端口是测试基建唯一目标）
-		const fetchPromise = localTestFetch(
-			`http://127.0.0.1:${address.port}/api/ai/conversations`,
-			{
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					authorization: `Bearer ${user.accessToken}`,
-				},
-				body: JSON.stringify({ content: "断连用例" }),
-				signal: clientAbort.signal,
+		const fetchPromise = localTestFetch(url.toString(), {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				authorization: `Bearer ${user.accessToken}`,
 			},
-		);
+			body: JSON.stringify({ content: "断连用例" }),
+			signal: clientAbort.signal,
+		});
 
 		let conversationId = "";
 		await waitUntil(async () => {

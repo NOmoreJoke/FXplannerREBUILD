@@ -51,25 +51,28 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 	});
 
 	afterAll(async () => {
-		for (const userId of extraUserIds.splice(0).reverse()) {
-			// 裸外键表先删（PlanAllocation / UsageLotAllocation 无 user relation）
-			const plans = await ctx.prisma.plan.findMany({
-				where: { userId },
-				select: { id: true },
-			});
-			await ctx.prisma.planAllocation.deleteMany({
-				where: { planId: { in: plans.map((plan) => plan.id) } },
-			});
-			const usages = await ctx.prisma.usageRecord.findMany({
-				where: { userId },
-				select: { id: true },
-			});
-			await ctx.prisma.usageLotAllocation.deleteMany({
-				where: { usageId: { in: usages.map((usage) => usage.id) } },
-			});
-			await cleanupUser(ctx.prisma, userId);
+		try {
+			for (const userId of extraUserIds.splice(0).reverse()) {
+				// 裸外键表先删（PlanAllocation / UsageLotAllocation 无 user relation）
+				const plans = await ctx.prisma.plan.findMany({
+					where: { userId },
+					select: { id: true },
+				});
+				await ctx.prisma.planAllocation.deleteMany({
+					where: { planId: { in: plans.map((plan) => plan.id) } },
+				});
+				const usages = await ctx.prisma.usageRecord.findMany({
+					where: { userId },
+					select: { id: true },
+				});
+				await ctx.prisma.usageLotAllocation.deleteMany({
+					where: { usageId: { in: usages.map((usage) => usage.id) } },
+				});
+				await cleanupUser(ctx.prisma, userId);
+			}
+		} finally {
+			await app?.close();
 		}
-		await app.close();
 	});
 
 	async function newUser(label: string): Promise<TestUser> {

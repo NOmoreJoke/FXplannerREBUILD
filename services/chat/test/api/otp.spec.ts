@@ -23,6 +23,7 @@ import { OtpService } from "../../src/auth/otp/otp.service";
 import { SendOtpCodeDto } from "../../src/auth/otp/dto/send-otp-code.dto";
 import { OtpLoginDto } from "../../src/auth/otp/dto/otp-login.dto";
 import { MOCK_OTP_ACCESS_TOKEN } from "../fixtures/test-tokens";
+import { listenOnTestLoopback } from "../helpers/test-http";
 
 type Challenge = {
 	id: string;
@@ -229,7 +230,7 @@ describe("OTP API", () => {
 		app = module.createNestApplication();
 		app.setGlobalPrefix("api");
 		app.useGlobalPipes(new ValidationPipe({ transform: true }));
-		await app.init();
+		await listenOnTestLoopback(app);
 	});
 
 	afterAll(async () => {
@@ -350,7 +351,7 @@ describe("OTP API（M1.1 发送上限与输错锁定）", () => {
 		app = module.createNestApplication();
 		app.setGlobalPrefix("api");
 		app.useGlobalPipes(new ValidationPipe({ transform: true }));
-		await app.init();
+		await listenOnTestLoopback(app);
 	});
 
 	afterAll(async () => {

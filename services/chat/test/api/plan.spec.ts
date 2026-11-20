@@ -139,12 +139,15 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 	});
 
 	afterAll(async () => {
-		// plan_allocations 无外键无级联：必须先按 planId 显式清理孤儿行
-		await cleanupPlanData(ctx.prisma, planIds);
-		for (const userId of userIds) {
-			await cleanupUser(ctx.prisma, userId);
+		try {
+			// plan_allocations 无外键无级联：必须先按 planId 显式清理孤儿行
+			await cleanupPlanData(ctx.prisma, planIds);
+			for (const userId of userIds) {
+				await cleanupUser(ctx.prisma, userId);
+			}
+		} finally {
+			await app?.close();
 		}
-		await app.close();
 	});
 
 	it("#1 未登录访问 schedule-preview 与 POST /plans 均 401", async () => {
@@ -619,12 +622,15 @@ describe("PlanController（接口）—— M5 管理端点", () => {
 	});
 
 	afterAll(async () => {
-		// plan_allocations 无外键无级联：必须先按 planId 显式清理孤儿行
-		await cleanupPlanData(ctx.prisma, planIds);
-		for (const userId of userIds) {
-			await cleanupUser(ctx.prisma, userId);
+		try {
+			// plan_allocations 无外键无级联：必须先按 planId 显式清理孤儿行
+			await cleanupPlanData(ctx.prisma, planIds);
+			for (const userId of userIds) {
+				await cleanupUser(ctx.prisma, userId);
+			}
+		} finally {
+			await app?.close();
 		}
-		await app.close();
 	});
 
 	it("#14 M5 六端点未登录均 401", async () => {

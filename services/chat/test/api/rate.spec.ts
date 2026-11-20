@@ -7,6 +7,7 @@ import openapi from "../../../../clients/chat-web/lib/api/openapi.json";
 import { mergeSeries } from "../../../../clients/chat-web/components/business/market/merge-series";
 import { createRateTool } from "../../src/ai/tools/rate-tool";
 import { createTestApp, type TestContext } from "../helpers/test-app";
+import { closeTestApps, listenOnTestLoopback } from "../helpers/test-http";
 import {
 	afterAll,
 	beforeAll,
@@ -233,17 +234,19 @@ describe("RateController（接口）", () => {
 		app.useGlobalPipes(
 			new ValidationPipe({ transform: true, whitelist: true }),
 		);
-		await app.init();
+		await listenOnTestLoopback(app);
 		realCtx = await createTestApp();
 		realApp = realCtx.app;
 	});
 
 	afterAll(async () => {
-		await realCtx.prisma.exchangeRate.deleteMany({
-			where: { base: "USD", quote: "USD" },
-		});
-		await realApp.close();
-		await app.close();
+		try {
+			await realCtx?.prisma.exchangeRate.deleteMany({
+				where: { base: "USD", quote: "USD" },
+			});
+		} finally {
+			await closeTestApps(realApp, app);
+		}
 	});
 
 	it("真实 AppModule 的 latest/USD 恒等报价：rate=1、落库、窗口内重复请求不再落库", async () => {
@@ -443,12 +446,13 @@ describe("RateController（接口）", () => {
 		});
 
 		afterAll(async () => {
-			await realCtx.prisma.exchangeRate.deleteMany({
-				where: { base: "CNY", quote: { in: ["USD", "TWD", "MYR"] } },
-			});
-			await multiApp?.close();
-			await failureApp?.close();
-			await degradedApp?.close();
+			try {
+				await realCtx?.prisma.exchangeRate.deleteMany({
+					where: { base: "CNY", quote: { in: ["USD", "TWD", "MYR"] } },
+				});
+			} finally {
+				await closeTestApps(multiApp, failureApp, degradedApp);
+			}
 		});
 
 		// flaky 治理：multiApp 单例的 abcSource 状态跨用例残留，每用例前重置
@@ -833,12 +837,13 @@ describe("RateController（接口）", () => {
 		});
 
 		afterAll(async () => {
-			await realCtx.prisma.exchangeRate.deleteMany({
-				where: { base: "CNY" },
-			});
-			await cronApp?.close();
-			await failureCronApp?.close();
-			await dedupeApp?.close();
+			try {
+				await realCtx?.prisma.exchangeRate.deleteMany({
+					where: { base: "CNY" },
+				});
+			} finally {
+				await closeTestApps(cronApp, failureCronApp, dedupeApp);
+			}
 		});
 
 		// flaky 治理：三个 app 单例的 abcSource 状态跨用例残留，每用例前重置
@@ -935,17 +940,19 @@ describe("RateController（接口）", () => {
 		});
 
 		afterAll(async () => {
-			await realCtx.prisma.exchangeRate.deleteMany({
-				where: {
-					OR: [
-						{ base: "USD", quote: "MYR" },
-						{ base: "JPY", quote: "MYR" },
-						{ base: "USD", quote: "TWD" },
-					],
-				},
-			});
-			await marketApp?.close();
-			await singleSourceApp?.close();
+			try {
+				await realCtx?.prisma.exchangeRate.deleteMany({
+					where: {
+						OR: [
+							{ base: "USD", quote: "MYR" },
+							{ base: "JPY", quote: "MYR" },
+							{ base: "USD", quote: "TWD" },
+						],
+					},
+				});
+			} finally {
+				await closeTestApps(marketApp, singleSourceApp);
+			}
 		});
 
 		// flaky 治理：单飞/负缓存 Map 为 RateService 单例进程内状态，每用例前重置

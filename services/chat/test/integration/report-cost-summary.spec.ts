@@ -164,11 +164,14 @@ describe("报告成本摘要联动（集成）", () => {
 	});
 
 	afterAll(async () => {
-		await cleanupPlanData(ctx.prisma, planIds);
-		for (const userId of userIds) {
-			await cleanupUser(ctx.prisma, userId);
+		try {
+			await cleanupPlanData(ctx.prisma, planIds);
+			for (const userId of userIds) {
+				await cleanupUser(ctx.prisma, userId);
+			}
+		} finally {
+			await app?.close();
 		}
-		await app.close();
 	});
 
 	it("#1 更正前：两次使用跨来源分摊聚合正确（来源拆分 + hasUnknownFee + 均价）", async () => {

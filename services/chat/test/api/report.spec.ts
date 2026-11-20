@@ -137,11 +137,14 @@ describe("ReportController（接口）", () => {
 	});
 
 	afterAll(async () => {
-		await cleanupPlanData(ctx.prisma, planIds);
-		for (const userId of userIds) {
-			await cleanupUser(ctx.prisma, userId);
+		try {
+			await cleanupPlanData(ctx.prisma, planIds);
+			for (const userId of userIds) {
+				await cleanupUser(ctx.prisma, userId);
+			}
+		} finally {
+			await app?.close();
 		}
-		await app.close();
 	});
 
 	it("#1 未登录访问两个端点均 401（Controller 级守卫）", async () => {
@@ -356,11 +359,14 @@ describe("usedQuantity 双接口口径一致（UI-P0③ 回归）", () => {
 	}, 60_000);
 
 	afterAll(async () => {
-		await cleanupPlanData(ctx.prisma, planIds);
-		for (const userId of userIds) {
-			await cleanupUser(ctx.prisma, userId);
+		try {
+			await cleanupPlanData(ctx.prisma, planIds);
+			for (const userId of userIds) {
+				await cleanupUser(ctx.prisma, userId);
+			}
+		} finally {
+			await app?.close();
 		}
-		await app.close();
 	});
 
 	it("录使用后：plans 详情 usedAmount = reports 单计划/列表 usedQuantity = 500", async () => {

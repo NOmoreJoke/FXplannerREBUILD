@@ -8,6 +8,7 @@ import request from "supertest";
 import { AppModule } from "../../src/app.module";
 import { PrismaService } from "../../src/prisma/prisma.service";
 import { TEST_PASSWORD } from "../fixtures/test-credentials";
+import { listenOnTestLoopback } from "./test-http";
 
 /**
  * 接口测试共享工具
@@ -39,7 +40,7 @@ export async function createTestApp(
 	app.setGlobalPrefix("api");
 	// 与 main.ts 生产配置一致（whitelist：漏标装饰器的字段静默剥离）
 	app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
-	await app.init();
+	await listenOnTestLoopback(app);
 
 	return { app, prisma: app.get(PrismaService) };
 }

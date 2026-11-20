@@ -1,4 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
+import type { Server } from 'node:http';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, type TestContext } from '../helpers/test-app';
@@ -36,4 +37,26 @@ describe('AppController（e2e）', () => {
       return request(app.getHttpServer()).get('/api/hello').expect(404);
     });
   });
+});
+
+it('测试应用在 IPv4 回环上持续监听同一端口，并在关闭时释放监听', async () => {
+  const { app } = await createTestApp();
+  const server = app.getHttpServer<Server>();
+  try {
+    const address = server.address();
+    expect(address).toEqual({
+      address: '127.0.0.1',
+      family: 'IPv4',
+      port: expect.toSatisfy((port: number) => port > 0),
+    });
+
+    await request(server).get('/api/health').expect(200, { ok: true });
+    expect(server.address()).toEqual(address);
+    await request(server).get('/api/health').expect(200, { ok: true });
+    expect(server.address()).toEqual(address);
+  } finally {
+    await app.close();
+  }
+  expect(server.listening).toBe(false);
+  expect(server.address()).toBeNull();
 });

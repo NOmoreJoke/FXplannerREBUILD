@@ -58,18 +58,21 @@ describe("HomeController（e2e）", () => {
 	});
 
 	afterAll(async () => {
-		// PlanAllocation 无 Prisma relation（planId 裸外键），删除用户不级联，按记录的 ID 精确清理
-		if (allocationIds.length > 0) {
-			await ctx.prisma.planAllocation.deleteMany({
-				where: { id: { in: allocationIds } },
+		try {
+			// PlanAllocation 无 Prisma relation（planId 裸外键），删除用户不级联，按记录的 ID 精确清理
+			if (allocationIds.length > 0) {
+				await ctx.prisma.planAllocation.deleteMany({
+					where: { id: { in: allocationIds } },
+				});
+			}
+			if (user) await cleanupUser(ctx.prisma, user.userId);
+			if (other) await cleanupUser(ctx.prisma, other.userId);
+			await ctx.prisma.exchangeRate.deleteMany({
+				where: { source: HOME_RATE_SOURCE },
 			});
+		} finally {
+			await app?.close();
 		}
-		if (user) await cleanupUser(ctx.prisma, user.userId);
-		if (other) await cleanupUser(ctx.prisma, other.userId);
-		await ctx.prisma.exchangeRate.deleteMany({
-			where: { source: HOME_RATE_SOURCE },
-		});
-		await app.close();
 	});
 
 	it("#1 未携带 token 访问应该 401", () => {

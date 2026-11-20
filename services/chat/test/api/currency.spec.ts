@@ -38,10 +38,13 @@ describe("CurrencyController（接口）", () => {
 	});
 
 	afterAll(async () => {
-		await ctx.prisma.currency.deleteMany({
-			where: { code: { in: CURRENCIES.map((currency) => currency.code) } },
-		});
-		await app.close();
+		try {
+			await ctx.prisma.currency.deleteMany({
+				where: { code: { in: CURRENCIES.map((currency) => currency.code) } },
+			});
+		} finally {
+			await app?.close();
+		}
 	});
 
 	it("无需登录返回 200，items 长度为 15", async () => {
