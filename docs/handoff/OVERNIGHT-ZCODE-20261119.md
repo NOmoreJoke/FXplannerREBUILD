@@ -20,7 +20,7 @@
 | W4 | C2·TWD 图表（Frankfurter v2 隔离） | `feat/f0-w4-twd-chart-v2` | W3 | ✅ 完成（`4290fd2`，PR #5） |
 | W5 | B2·迁移脚本（幂等转换/回滚，演练受限标注） | `feat/f0-w5-cache-migration-scripts` | W4 | ✅ 完成（`9565475`，PR #6） |
 | W6 | D·USAGE 闭环（共享 FIFO 内核 + 移除挡板 + T-CORR-004） | `feat/f0-w6-usage-correction-fifo` | W5 | ✅ 完成（`1735c08`，PR #7） |
-| W7 | E·导出（Dockerfile 权限 + CSV 精度 + Decimal 累加） | `feat/f0-w7-export-precision` | W6 | 待做 |
+| W7 | E·导出（Dockerfile 权限 + CSV 精度 + Decimal 累加） | `feat/f0-w7-export-precision` | W6 | ✅ 完成（`da907b7`，PR #8） |
 | W8 | F1-1 findLatestRows 数据库端常数行 | `feat/f1-w8-latest-rows-query` | W7 | 待做 |
 | W9 | F1-2 DataRequestLockGuard 查询合并 | `feat/f1-w9-lock-guard-merge` | W8 | 待做 |
 | W10 | F1-3 前端降噪 + QueryKey 工厂 | `feat/f1-w10-query-dedup-keys` | W9 | 待做 |
@@ -178,11 +178,27 @@ PID 轮询因环境敏感移除，改为持锁窗口 + settle 标志 + 静态锁
 beforeSnapshot.amountBefore 错值、契约注释过期语义。最终 **PASS（0
 [Important]）**；遗留 [Nit] 双计划 supplement 409 回归已补（#15-2）。
 
+## W7 · 导出修复 ✅（commit `da907b7`，draft PR #8）
+
+改动：Dockerfile.chat USER bun 前预建 /data/exports 与
+/app/services/chat/data-exports 并 chown bun:bun（compose.prod 挂载
+fxplanner-exports:/data/exports，命名卷首挂继承镜像属主）；export-builder
+买入 CSV 的 principalAmount/feeAmount 改本位币精度（JPY 买入不再截断 CNY
+金额，数量列保持外币精度）；usageCostOf 改 Decimal 累加消除浮点尾差
+（4 位定点返回，decimal.js 移入 dependencies）；测试含浮点尾差夹具
+（Number 参照断言防同义反复）与 JPY/CNY CSV 精度测试。
+验证实测：unit 487（export-builder 16/16）、typecheck/lint 全绿；
+Docker 实测通过——以 runner 阶段完全一致语句构建探针镜像，bun 用户写
+/data/exports（命名卷首挂+复挂）与 data-exports 全通过（属主 bun:bun，
+探针镜像与卷已清理；完整镜像构建留待 CI/人工）。
+对抗审：codex `gpt-5.6-terra` 一轮 PASS（0 [Important]；2 Nit——decimal.js
+依赖归位、夹具贴合接口——已处置）。
+
 ## 下一分支预告
 
-W7（E·导出修复）将基于本分支切 `feat/f0-w7-export-precision`：
-infra/compose/Dockerfile.chat 补 /data/exports 与 data-exports 的
-chown（bun 用户可写）；export-builder 的 principalAmount/feeAmount 改
-本位币格式化（data.settings?.baseCurrency ?? "CNY"）、usageCostOf 改
-Decimal 累加；JPY/KRW 交易 CNY 本位币 CSV 精度单测；容器写入实测受
-Docker 环境限制时如实标注边界。
+MVP-F0 四切片（B/C/D/E）全部完成。F1/F2（W8–W12，对应 Goal #2 的
+切片 1–5）按 `docs/handoff/GOAL-2-MVP-F1-F2-REFACTOR-20261119.md` 继续：
+F1-1 findLatestRows 常数行查询 → F1-2 DataRequestLockGuard 查询合并 →
+F1-3 前端降噪 + QueryKey 工厂 → F2-1 影子 DTO 清零 → F2-2 ESLint
+observe + 依赖清理。注意：F1/F2 的 Goal #2 前置门要求 F0 合入 dev 后启动；
+本夜间批次全部为叠栈 draft PR（#2→#3→#4→#5→#6→#7→#8），待人工按序审合。
