@@ -74,13 +74,15 @@ async function assertInvariants(prisma: TestContext["prisma"], userId: string) {
 			);
 		}
 		expect(allocationSum.gte(0)).toBe(true);
+		// 数量不变量（真实断言，替换历史上的恒真 `|| true`）：无历史缺口的已应用
+		// 账本中，分摊数量合计 === 该笔使用金额（有缺口会在 V3 被拒，不会走到这里）
 		expect(
 			allocations
 				.reduce(
 					(sum, allocation) => sum.add(allocation.quantity),
 					new Prisma.Decimal(0),
 				)
-				.lte(usage.amount) || true,
+				.eq(usage.amount),
 		).toBe(true);
 	}
 }
@@ -127,8 +129,13 @@ describe("更正重放一致性（集成）", () => {
 		return user;
 	}
 
-	/** doc 15 + 例 10 全链路造数：初始 1,000 → 两笔买入（7,800/8,000）→ 分配 → 使用 1,200 */
-	async function seedFullLedger(user: TestUser) {
+	/** doc 15 + 例 10 全链路造数：初始 1,000 → 两笔买入（7,800/8,000）→ 分配 → 使用 1,200。
+	 * allocatedAmount 可注入：默认 1,200（使用后剩余分配 0）；并发锁序测试传 1,500
+	 * 留 300 余量，保证两条并发流程在任一串行顺序下均可成功（真正覆盖账户锁竞争） */
+	async function seedFullLedger(
+		user: TestUser,
+		allocatedAmount = "1200",
+	) {
 		await seedInitialHolding(ctx.prisma, {
 			userId: user.userId,
 			currencyCode: "USD",
@@ -162,7 +169,7 @@ describe("更正重放一致性（集成）", () => {
 			userId: user.userId,
 			targetCurrency: "USD",
 			targetAmount: "10000",
-			allocatedAmount: "1200",
+			allocatedAmount,
 		});
 		const lots = await ctx.prisma.costLot.findMany({
 			where: { userId: user.userId, currencyCode: "USD" },
@@ -260,23 +267,74 @@ describe("更正重放一致性（集成）", () => {
 		await assertInvariants(ctx.prisma, user.userId);
 	});
 
-	it("#2 USAGE 降级（M7 未接线）：apply 返回 400 CORRECTION_TARGET_TYPE_UNAVAILABLE；接线后恢复使用改大补分配全链路断言", async () => {
+	it("#2 USAGE 改大补分配全链路（MVP-F0-3）：记录 v2 / 分配补入 + PlanChangeLog / 批次重建 / 两不变式", async () => {
 		const user = await newUser("corr-it-usage");
-		await seedFullLedger(user);
+		const { planId, usageId } = await seedFullLedger(user);
+		const before = await ctx.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: usageId },
+		});
+
+		// 使用 1,200 → 2,000（diff 800 > 剩余分配 0 → 补分配 800；分配 1,200+800=2,000）
+		const preview = await request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send({
+				targetType: "USAGE",
+				targetId: usageId,
+				baseVersion: before.version,
+				reason: "使用金额少记了 800",
+				changes: { amount: "2000" },
+			})
+			.expect(200);
+		expect(preview.body.data.before.amount).toBe("1200.0000");
+		expect(preview.body.data.after.amount).toBe("2000.0000");
+		expect(preview.body.data.blockers).toHaveLength(0);
+
 		await request(app.getHttpServer())
 			.post("/api/corrections")
 			.set(bearer(user.accessToken))
 			.send({
 				targetType: "USAGE",
-				targetId: "placeholder",
-				baseVersion: 1,
-				reason: "使用金额改大（M7 接线前不可用）",
-				changes: { amount: "1300" },
+				targetId: usageId,
+				baseVersion: before.version,
+				reason: "使用金额少记了 800",
+				changes: { amount: "2000" },
 			})
-			.expect(400)
-			.expect((errorRes) => {
-				expect(errorRes.body.code).toBe("CORRECTION_TARGET_TYPE_UNAVAILABLE");
-			});
+			.expect(201);
+
+		// 目标行：amount/version 联动
+		const usage = await ctx.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: usageId },
+		});
+		expect(usage.amount.toFixed(4)).toBe("2000.0000");
+		expect(usage.version).toBe(2);
+		// 计划分配：补分配 +800 → amount 2,000；usedAmount 1,200+800 = 2,000
+		const allocation = await ctx.prisma.planAllocation.findUniqueOrThrow({
+			where: { planId },
+		});
+		expect(allocation.amount.toFixed(4)).toBe("2000.0000");
+		expect(allocation.usedAmount.toFixed(4)).toBe("2000.0000");
+		// PlanChangeLog ALLOCATION_ADJUSTED 留痕
+		const changeLogs = await ctx.prisma.planChangeLog.findMany({
+			where: { planId, changeType: "ALLOCATION_ADJUSTED" },
+		});
+		expect(changeLogs).toHaveLength(1);
+		// 批次重建：usage 2,000 = 初始 1,000@7.248 + 买入一 1,000@7.8
+		const allocations = await ctx.prisma.usageLotAllocation.findMany({
+			where: { usageId },
+		});
+		expect(allocations).toHaveLength(2);
+		// 两不变式：balance = Σ剩余分配 + 未分配；重建分摊 = 理论成本（初始 1,000@7.248 + 买入一 1,000@7.8 = 15,048）
+		const account = await ctx.prisma.account.findUniqueOrThrow({
+			where: {
+				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
+			},
+		});
+		expect(account.balance.toFixed(4)).toBe("1000.0000");
+		const totalAllocCost = (
+			await ctx.prisma.usageLotAllocation.findMany({ where: { usageId } })
+		).reduce((sum, item) => sum.add(item.cost), new Prisma.Decimal(0));
+		expect(totalAllocCost.toFixed(4)).toBe("15048.0000");
 	});
 
 	it("#3 重放幂等：同一请求二次 apply → 409 TARGET_CHANGED，数据与首次后状态逐字段一致", async () => {
@@ -587,5 +645,155 @@ describe("更正重放一致性（集成）", () => {
 		expect(applied.body.data).toMatchObject({ status: "APPLIED", targetVersion: 2 });
 		await assertOriginalAllocations();
 		await assertInvariants(ctx.prisma, user.userId);
+	});
+
+	// ── #6 锁序回归（MVP-F0-3）：确定性锁竞争证明——
+	// 外部事务先持账户行锁 → 发起「记录使用」→ 轮询 pg_stat_activity 观察到其
+	// 在 plan_allocations 上等锁（证明新锁真实存在且顺序为 Account→分配）→
+	// 放行 → create 201。这证明使用链路真实取账户锁；更正 apply 侧已由
+	// lockAccountRows（apply 事务首步）保证同一顺序 → 倒序死锁窗口消除。 ──
+	it("#6 锁序回归：持有账户行锁时记录使用阻塞于分配更新、放行后成功（确定性观察）", { timeout: 20_000 }, async () => {
+		const user = await newUser("corr-it-concurrent-locks");
+		const { planId } = await seedFullLedger(user, "1500");
+
+		let holderAcquired = false;
+		let observedBlocked = false;
+		const gate = { release: () => {} };
+		const gatePromise = new Promise<void>((resolve) => {
+			gate.release = resolve;
+		});
+
+		// 持锁者：锁定账户行并保持，直至观察到竞争方等锁
+		const holderPromise = ctx.prisma.$transaction(
+			async (tx) => {
+				await tx.$queryRaw`
+					SELECT id FROM accounts
+					WHERE user_id = ${user.userId} AND currency_code = 'USD'
+					FOR UPDATE`;
+				holderAcquired = true;
+				await gatePromise;
+			},
+			{ maxWait: 30_000, timeout: 30_000 },
+		);
+
+		// 等待持锁者拿到行锁（本地标志，确定性观察）
+		for (let i = 0; i < 200 && !holderAcquired; i += 1) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		expect(holderAcquired).toBe(true);
+
+		// 竞争方：记录使用 300（事务首步即取同账户行锁 → 必然阻塞）
+		let createCompleted: number | null = null;
+		const createPromise = request(app.getHttpServer())
+			.post(`/api/plans/${planId}/usages`)
+			.set(bearer(user.accessToken))
+			.send({
+				amount: "300",
+				usedAt: daysAgo(0).toISOString(),
+			}).then((res) => {
+				createCompleted = res.status;
+				return res;
+			});
+
+		// 有界轮询 pg_stat_activity：观察到 create 的语句在等行锁（wait_event_type=
+		// 'Lock'，查询为账户 FOR UPDATE / 分配 UPDATE）——证明其真实取账户锁（⓪ 步）
+		for (let i = 0; i < 200 && !observedBlocked; i += 1) {
+			const activities = await ctx.prisma.$queryRaw<Array<{ query: string }>>`
+				SELECT query FROM pg_stat_activity
+				WHERE wait_event_type = 'Lock'
+					AND (query ILIKE '%accounts%' OR query ILIKE '%plan_allocations%')`;
+			if (activities.length > 0) {
+				observedBlocked = true;
+			} else {
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+		}
+		expect(observedBlocked).toBe(true);
+		expect(createCompleted).toBeNull(); // 等锁期间未完成
+
+		// 放行 → create 在账户锁上排队成功
+		gate.release();
+		const createRes = await createPromise;
+		expect(createRes.status).toBe(201);
+		await holderPromise;
+		expect(createCompleted).toBe(201);
+
+		// 终态不变式：使用 300 落库、余额与批次守恒
+		await assertInvariants(ctx.prisma, user.userId);
+		const usages = await ctx.prisma.usageRecord.findMany({
+			where: { userId: user.userId },
+		});
+		expect(usages.reduce((sum, usage) => sum.add(usage.amount), new Prisma.Decimal(0)).toFixed(4)).toBe("1500.0000");
+		const account = await ctx.prisma.account.findUniqueOrThrow({
+			where: {
+				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
+			},
+		});
+		expect(account.balance.toFixed(4)).toBe("1500.0000");
+	});
+
+	// ── #6-2 并发双流程（变更无丢失）：使用更正 apply 与「记录使用」并发提交——
+	// 种子分配 1,500（留 300 余量）：任一串行顺序下两流程都成功；确定性终态：
+	// 更正 1,200→800（−400）、新建 300（+300）→ usedAmount/amount 同减至 1,100、
+	// 余额 = 3,000 − 1,100 = 1,900。 ──
+	it("#6-2 并发双流程：更正与记录使用同时提交 → 双 201、分配/余额变更无丢失", async () => {
+		const user = await newUser("corr-it-concurrent-flows");
+		const { planId, usageId } = await seedFullLedger(user, "1500");
+		const usageBefore = await ctx.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: usageId },
+		});
+
+		const correctionPromise = request(app.getHttpServer())
+			.post("/api/corrections")
+			.set(bearer(user.accessToken))
+			.send({
+				targetType: "USAGE",
+				targetId: usageId,
+				baseVersion: usageBefore.version,
+				reason: "并发锁序回归：使用金额改小",
+				changes: { amount: "800" },
+			});
+		const usageCreatePromise = request(app.getHttpServer())
+			.post(`/api/plans/${planId}/usages`)
+			.set(bearer(user.accessToken))
+			.send({
+				amount: "300",
+				usedAt: daysAgo(0).toISOString(),
+				remark: "并发锁序回归",
+			});
+
+		const [correctionRes, usageRes] = await Promise.all([
+			correctionPromise,
+			usageCreatePromise,
+		]);
+		expect(correctionRes.status).toBe(201);
+		expect(usageRes.status).toBe(201);
+
+		// 确定性终态（与串行顺序无关）
+		const usages = await ctx.prisma.usageRecord.findMany({
+			where: { userId: user.userId },
+			orderBy: { amount: "asc" },
+		});
+		expect(usages.map((usage) => usage.amount.toFixed(4))).toEqual([
+			"300.0000",
+			"800.0000",
+		]);
+		const allocation = await ctx.prisma.planAllocation.findUniqueOrThrow({
+			where: { planId },
+		});
+		expect(allocation.usedAmount.toFixed(4)).toBe("1100.0000");
+		expect(allocation.amount.toFixed(4)).toBe("1100.0000");
+		const account = await ctx.prisma.account.findUniqueOrThrow({
+			where: {
+				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
+			},
+		});
+		expect(account.balance.toFixed(4)).toBe("1900.0000");
+		await assertInvariants(ctx.prisma, user.userId);
+		const corrections = await ctx.prisma.correction.findMany({
+			where: { userId: user.userId, targetType: "USAGE" },
+		});
+		expect(corrections).toHaveLength(1);
+		expect(corrections[0].status).toBe("APPLIED");
 	});
 });

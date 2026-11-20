@@ -635,37 +635,420 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			});
 	});
 
-	// ── #11~#16 / #24 USAGE 降级（M7 未接线；接线后恢复原场景断言）──
-	it("#11~#16/#24 USAGE 目标在 M7 接线前一律 400 CORRECTION_TARGET_TYPE_UNAVAILABLE", async () => {
-		const user = await newUser("corr-usage-degraded");
-		const usagePayload = {
-			targetType: "USAGE",
-			targetId: "usage-placeholder",
-			baseVersion: 1,
-			reason: "使用金额改小",
-			changes: { amount: "400.0000" },
-		};
-		await request(app.getHttpServer())
+	// ── #11~#16/#24 USAGE 更正闭环（MVP-F0-3 接线：改小/改大补分配/改日期成本重排/
+	//    V4 矩阵/并发版本/失败回滚零变化）──
+	/**
+	 * USAGE 场景构造（批次序即账本序）：
+	 * INITIAL 2,000 TWD @0.5（当日 00:30 UTC+8，先耗）→ 买入 A 1,000 @7（01:00）→
+	 * 买入 B 1,000 @9（09:00）；计划 target 10,000 / 分配 3,000；
+	 * u1 1,200 @12:00（耗 INITIAL 1,200）+ u2 800 @18:00（耗 INITIAL 800）。
+	 * 种子后：INITIAL 剩 0、A 剩 1,000、B 剩 1,000；余额 4,000 − 2,000 = 2,000；
+	 * 分配 usedAmount = 2,000（剩 1,000）。
+	 */
+	async function seedUsageScenario(
+		label: string,
+		overrides: {
+			planStatus?: string;
+			u1Amount?: string;
+			u2Amount?: string;
+			planAllocated?: string;
+		} = {},
+	): Promise<{ user: TestUser; planId: string; u1Id: string; u2Id: string }> {
+		const user = await newUser(label);
+		const dayStart = utc8DayStart(new Date());
+		const at = (hourUTC: number) => new Date(dayStart.getTime() + hourUTC * 3_600_000);
+		const { holdingId } = await seedInitialHolding(ctx.prisma, {
+			userId: user.userId,
+			currencyCode: "TWD",
+			amount: "2000",
+			rate: "0.5",
+			cost: "1000",
+			confirmedAt: at(0.5),
+			acquiredAt: at(0.5),
+		});
+		const initialLot = await ctx.prisma.costLot.findFirstOrThrow({
+			where: { sourceId: holdingId },
+		});
+		const tradeA = await request(app.getHttpServer())
+			.post("/api/transactions")
+			.set(bearer(user.accessToken))
+			.send({
+				currencyCode: "TWD",
+				principalAmount: "7000",
+				exchangeRate: "7.00000000",
+				quantity: "1000",
+				transactedAt: at(1).toISOString(),
+			})
+			.expect(201);
+		const tradeB = await request(app.getHttpServer())
+			.post("/api/transactions")
+			.set(bearer(user.accessToken))
+			.send({
+				currencyCode: "TWD",
+				principalAmount: "9000",
+				exchangeRate: "9.00000000",
+				quantity: "1000",
+				transactedAt: at(9).toISOString(),
+			})
+			.expect(201);
+		const lotA = await ctx.prisma.costLot.findFirstOrThrow({
+			where: { sourceId: tradeA.body.data.id },
+		});
+		const lotB = await ctx.prisma.costLot.findFirstOrThrow({
+			where: { sourceId: tradeB.body.data.id },
+		});
+		const { planId } = await seedPlanWithAllocationRow(ctx.prisma, {
+			userId: user.userId,
+			targetCurrency: "TWD",
+			targetAmount: "10000",
+			allocatedAmount: overrides.planAllocated ?? "3000",
+			status: overrides.planStatus,
+		});
+		const u1Id = await seedUsageRecord(ctx.prisma, {
+			userId: user.userId,
+			planId,
+			currencyCode: "TWD",
+			amount: overrides.u1Amount ?? "1200",
+			usedAt: at(12),
+			allocations: [{ lotId: initialLot.id, quantity: overrides.u1Amount ?? "1200" }],
+		});
+		const u2Id = await seedUsageRecord(ctx.prisma, {
+			userId: user.userId,
+			planId,
+			currencyCode: "TWD",
+			amount: overrides.u2Amount ?? "800",
+			usedAt: at(18),
+			allocations: [{ lotId: initialLot.id, quantity: overrides.u2Amount ?? "800" }],
+		});
+		void lotA;
+		void lotB;
+		return { user, planId, u1Id, u2Id };
+	}
+
+	it("#11 USAGE 改小：预览 diff 与成本重算、apply 后记录/分配/余额/分摊全联动", async () => {
+		const { user, u1Id } = await seedUsageScenario("corr-usage-decrease");
+		const before = await ctx.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: u1Id },
+		});
+
+		const preview = await request(app.getHttpServer())
 			.post("/api/corrections/preview")
 			.set(bearer(user.accessToken))
-			.send(usagePayload)
-			.expect(400)
-			.expect((errorRes) => {
-				expect(errorRes.body.code).toBe("CORRECTION_TARGET_TYPE_UNAVAILABLE");
-			});
+			.send({
+				targetType: "USAGE",
+				targetId: u1Id,
+				baseVersion: before.version,
+				reason: "使用金额多记了 400",
+				changes: { amount: "800.0000" },
+			})
+			.expect(200);
+		expect(preview.body.data.before.amount).toBe("1200.0000");
+		expect(preview.body.data.after.amount).toBe("800.0000");
+		const u1CostBefore = preview.body.data.impacts.costs.find(
+			(cost: { usageId: string }) => cost.usageId === u1Id,
+		);
+		expect(u1CostBefore.costBefore).toBe("600.0000"); // 1,200 × 0.5
+		expect(u1CostBefore.costAfter).toBe("400.0000"); // 800 × 0.5
+
 		await request(app.getHttpServer())
 			.post("/api/corrections")
 			.set(bearer(user.accessToken))
-			.send(usagePayload)
+			.send({
+				targetType: "USAGE",
+				targetId: u1Id,
+				baseVersion: before.version,
+				reason: "使用金额多记了 400",
+				changes: { amount: "800.0000" },
+			})
+			.expect(201)
+			.expect((res) => {
+				expect(res.body.data.targetVersion).toBe(2);
+			});
+
+		const usage = await ctx.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: u1Id },
+		});
+		expect(usage.amount.toFixed(4)).toBe("800.0000");
+		expect(usage.version).toBe(2);
+		// 分配联动（doc 14 例 02）：改小时 amount 与 usedAmount 同减差额（−400），
+		// 剩余分配不变（2,600 − 1,600 = 1,000 = 种子剩余）；改小无补分配 → 无 PlanChangeLog
+		const allocation = await ctx.prisma.planAllocation.findFirstOrThrow({
+			where: { planId: usage.planId },
+		});
+		expect(allocation.usedAmount.toFixed(4)).toBe("1600.0000");
+		expect(allocation.amount.toFixed(4)).toBe("2600.0000");
+		const changeLogs = await ctx.prisma.planChangeLog.findMany({
+			where: { planId: usage.planId },
+		});
+		expect(changeLogs).toHaveLength(0);
+		// 余额联动（重放重建）：4,000 − (800 + 800) = 2,400
+		const account = await ctx.prisma.account.findUniqueOrThrow({
+			where: {
+				userId_currencyCode: { userId: user.userId, currencyCode: "TWD" },
+			},
+		});
+		expect(account.balance.toFixed(4)).toBe("2400.0000");
+		// 分摊重建：u1 分摊 800（INITIAL 批）
+		const allocations = await ctx.prisma.usageLotAllocation.findMany({
+			where: { usageId: u1Id },
+		});
+		expect(allocations).toHaveLength(1);
+		expect(allocations[0].quantity.toFixed(4)).toBe("800.0000");
+	});
+
+	it("#12 USAGE 改大（补分配）：剩余分配不足 → supplement 补入并写 PlanChangeLog", async () => {
+		const { user, planId, u1Id } = await seedUsageScenario("corr-usage-increase");
+		const before = await ctx.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: u1Id },
+		});
+
+		// 1,200 → 3,000（diff 1,800 > 剩余分配 1,000 → 补分配 800；分配 3,000+800=3,800 ≤ 目标）
+		await request(app.getHttpServer())
+			.post("/api/corrections")
+			.set(bearer(user.accessToken))
+			.send({
+				targetType: "USAGE",
+				targetId: u1Id,
+				baseVersion: before.version,
+				reason: "使用金额少记了 1,800",
+				changes: { amount: "3000.0000" },
+			})
+			.expect(201);
+
+		const allocation = await ctx.prisma.planAllocation.findFirstOrThrow({
+			where: { planId },
+		});
+		expect(allocation.amount.toFixed(4)).toBe("3800.0000");
+		expect(allocation.usedAmount.toFixed(4)).toBe("3800.0000");
+		const changeLogs = await ctx.prisma.planChangeLog.findMany({
+			where: { planId, changeType: "ALLOCATION_ADJUSTED" },
+		});
+		expect(changeLogs).toHaveLength(1);
+		// 留痕快照：before/after 金额为更正前/后的使用金额（beforeUsage 语义）
+		const snapshotBefore = changeLogs[0].beforeSnapshot as {
+			amountBefore: string;
+		};
+		const snapshotAfter = changeLogs[0].afterSnapshot as {
+			amountAfter: string;
+			supplement: string;
+		};
+		expect(snapshotBefore.amountBefore).toBe("1200.0000");
+		expect(snapshotAfter.amountAfter).toBe("3000.0000");
+		expect(snapshotAfter.supplement).toBe("800.0000");
+		// 余额：4,000 − (3,000 + 800) = 200（重放重建）
+		const account = await ctx.prisma.account.findUniqueOrThrow({
+			where: {
+				userId_currencyCode: { userId: user.userId, currencyCode: "TWD" },
+			},
+		});
+		expect(account.balance.toFixed(4)).toBe("200.0000");
+	});
+
+	it("#13 USAGE 改日期：重放次序对调 → 成本与分摊跨批次重排（u1 400 → 6,200、u2 10,300 → 4,500）", async () => {
+		const { user, u1Id, u2Id } = await seedUsageScenario(
+			"corr-usage-reschedule",
+			{ u1Amount: "800", u2Amount: "2500", planAllocated: "4000" },
+		);
+		const dayStart = utc8DayStart(new Date());
+		const before = await ctx.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: u1Id },
+		});
+		// 改日期到 20:00 UTC+8（晚于 u2 18:00 → 重放次序对调）。
+		// 种子三批成本异构（INITIAL 2,000@0.5 / A 1,000@7 / B 1,000@9）：
+		// 改序前：u1@12:00 耗 INITIAL 800（400）；u2@18:00 耗 INITIAL 1,200（600）
+		// + A 1,000（7,000）+ B 300（2,700）= 11,300。
+		// 改序后：u2@18:00 先耗 INITIAL 2,000（1,000）+ A 500（3,500）= 4,500；
+		// u1@20:00 耗 A 剩余 500（3,500）+ B 300（2,700）= 6,200 —— 真实跨批次重排。
+		const newUsedAt = new Date(dayStart.getTime() + 20 * 3_600_000);
+
+		const preview = await request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send({
+				targetType: "USAGE",
+				targetId: u1Id,
+				baseVersion: before.version,
+				reason: "使用日期记错了",
+				changes: { usedAt: newUsedAt.toISOString() },
+			})
+			.expect(200);
+		const costs = new Map(
+			preview.body.data.impacts.costs.map(
+				(cost: {
+					usageId: string;
+					costBefore: string;
+					costAfter: string;
+				}) => [cost.usageId, cost],
+			),
+		);
+		expect(costs.get(u1Id)?.costBefore).toBe("400.0000");
+		// 改序后 u1@20:00 耗 A 剩余 500（3,500）+ B 300（2,700）= 6,200
+		expect(costs.get(u1Id)?.costAfter).toBe("6200.0000");
+		// 改序前 u2@18:00 耗 INITIAL 1,200（600）+ A 1,000（7,000）+ B 300（2,700）= 10,300
+		expect(costs.get(u2Id)?.costBefore).toBe("10300.0000");
+		// 改序后 u2@18:00 先耗 INITIAL 2,000（1,000）+ A 500（3,500）= 4,500
+		expect(costs.get(u2Id)?.costAfter).toBe("4500.0000");
+
+		await request(app.getHttpServer())
+			.post("/api/corrections")
+			.set(bearer(user.accessToken))
+			.send({
+				targetType: "USAGE",
+				targetId: u1Id,
+				baseVersion: before.version,
+				reason: "使用日期记错了",
+				changes: { usedAt: newUsedAt.toISOString() },
+			})
+			.expect(201);
+
+		const usage = await ctx.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: u1Id },
+		});
+		expect(usage.usedAt.toISOString()).toBe(newUsedAt.toISOString());
+		expect(usage.version).toBe(2);
+		// 金额不变 → 分配不动
+		const allocation = await ctx.prisma.planAllocation.findFirstOrThrow({
+			where: { planId: usage.planId },
+		});
+		expect(allocation.usedAmount.toFixed(4)).toBe("3300.0000");
+		// 分摊跨批次重排断言：u1 改序后跨 A/B 两批（改序前仅 INITIAL 单批）
+		const u1Allocations = await ctx.prisma.usageLotAllocation.findMany({
+			where: { usageId: u1Id },
+		});
+		const lotById = new Map(
+			(
+				await ctx.prisma.costLot.findMany({
+					where: { userId: user.userId, currencyCode: "TWD" },
+				})
+			).map((lot) => [lot.id, lot]),
+		);
+		const u1BySource = u1Allocations.map((item) => ({
+			sourceType: lotById.get(item.lotId)!.sourceType,
+			quantity: item.quantity.toFixed(4),
+		}));
+		expect(u1BySource).toEqual([
+			{ sourceType: "PURCHASE", quantity: "500.0000" }, // A 批 @7
+			{ sourceType: "PURCHASE", quantity: "300.0000" }, // B 批 @9
+		]);
+		// u2 改序后耗 INITIAL 全部 2,000（改序前耗 INITIAL 1,200 + A 1,000 + B 300）
+		const u2Allocations = await ctx.prisma.usageLotAllocation.findMany({
+			where: { usageId: u2Id },
+		});
+		const u2BySource = u2Allocations.map((item) => ({
+			sourceType: lotById.get(item.lotId)!.sourceType,
+			quantity: item.quantity.toFixed(4),
+		}));
+		expect(u2BySource).toEqual([
+			{ sourceType: "INITIAL", quantity: "2000.0000" },
+			{ sourceType: "PURCHASE", quantity: "500.0000" },
+		]);
+	});
+
+	it("#14 V4 矩阵：改 0 与 CANCELLED 计划 → 400 CORRECTION_NOT_ALLOWED", async () => {
+		const { user, u1Id } = await seedUsageScenario("corr-usage-v4-zero");
+		const usage = await ctx.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: u1Id },
+		});
+		await request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send({
+				targetType: "USAGE",
+				targetId: u1Id,
+				baseVersion: usage.version,
+				reason: "作废这笔使用",
+				changes: { amount: "0" },
+			})
 			.expect(400)
 			.expect((errorRes) => {
-				expect(errorRes.body.code).toBe("CORRECTION_TARGET_TYPE_UNAVAILABLE");
+				expect(errorRes.body.code).toBe("CORRECTION_NOT_ALLOWED");
 			});
-		// 降级发生在目标加载前：不泄露目标存在性，也无 FAILED 留痕
-		const corrections = await ctx.prisma.correction.findMany({
-			where: { userId: user.userId },
+
+		const { user: cancelledUser, u1Id: cancelledId } = await seedUsageScenario(
+			"corr-usage-v4-cancelled",
+			{ planStatus: "CANCELLED" },
+		);
+		const cancelledUsage = await ctx.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: cancelledId },
 		});
-		expect(corrections).toHaveLength(0);
+		await request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(cancelledUser.accessToken))
+			.send({
+				targetType: "USAGE",
+				targetId: cancelledId,
+				baseVersion: cancelledUsage.version,
+				reason: "金额有误",
+				changes: { amount: "900.0000" },
+			})
+			.expect(400)
+			.expect((errorRes) => {
+				expect(errorRes.body.code).toBe("CORRECTION_NOT_ALLOWED");
+			});
+		void user;
+	});
+
+	it("#15 USAGE 并发版本冲突 → 409 CORRECTION_TARGET_CHANGED", async () => {
+		const { user, u1Id } = await seedUsageScenario("corr-usage-version");
+		await request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send({
+				targetType: "USAGE",
+				targetId: u1Id,
+				baseVersion: 99,
+				reason: "并发版本冲突",
+				changes: { amount: "900.0000" },
+			})
+			.expect(409)
+			.expect((errorRes) => {
+				expect(errorRes.body.code).toBe("CORRECTION_TARGET_CHANGED");
+			});
+	});
+
+	it("#16 USAGE 改大致历史缺口 → 409 HISTORICAL_SHORTFALL、FAILED 留痕、零变化", async () => {
+		const { user, planId, u1Id } = await seedUsageScenario("corr-usage-shortfall");
+		const before = await ctx.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: u1Id },
+		});
+		// 1,200 → 4,000：重放后 u2 18:00 时点无批次可耗 → V3 缺口 800
+		await request(app.getHttpServer())
+			.post("/api/corrections")
+			.set(bearer(user.accessToken))
+			.send({
+				targetType: "USAGE",
+				targetId: u1Id,
+				baseVersion: before.version,
+				reason: "金额记大了导致历史缺口",
+				changes: { amount: "4000.0000" },
+			})
+			.expect(409)
+			.expect((errorRes) => {
+				expect(errorRes.body.code).toBe("CORRECTION_HISTORICAL_SHORTFALL");
+			});
+
+		// FAILED 留痕
+		const corrections = await ctx.prisma.correction.findMany({
+			where: { userId: user.userId, targetType: "USAGE" },
+		});
+		expect(corrections).toHaveLength(1);
+		expect(corrections[0].status).toBe("FAILED");
+		// 零变化：记录/分配/余额全部保持种子态
+		const usage = await ctx.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: u1Id },
+		});
+		expect(usage.amount.toFixed(4)).toBe("1200.0000");
+		expect(usage.version).toBe(1);
+		const allocation = await ctx.prisma.planAllocation.findFirstOrThrow({
+			where: { planId },
+		});
+		expect(allocation.usedAmount.toFixed(4)).toBe("2000.0000");
+		const account = await ctx.prisma.account.findUniqueOrThrow({
+			where: {
+				userId_currencyCode: { userId: user.userId, currencyCode: "TWD" },
+			},
+		});
+		expect(account.balance.toFixed(4)).toBe("2000.0000");
 	});
 
 	// ── #17/#18 初始持仓金额更正 ──

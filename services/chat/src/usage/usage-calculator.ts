@@ -152,12 +152,63 @@ export function compareLots(a: FifoLotInput, b: FifoLotInput): number {
 }
 
 /**
- * FIFO 顺序分摊（§3.3 算法唯一实现，首记与 M8 更正重算共用）：
- * 按比较器排序后顺序消耗 remainingQty，每片成本按 4 位 HALF_UP 舍一次；
- * ΣremainingQty < 需求量 → 抛 UsageLotShortageError（不产出部分分摊结果）。
+ * FIFO 消耗共享内核（§3.3 分摊算法的唯一消耗实现；DEBT-02 抽取——
+ * 增量记账 allocateLotsFifo 与更正重放 ledger-replay 共用，禁止复制第二份）：
+ * 调用方保证 orderedLots 已按权威比较器（compareLedgerEntries）排好序，
+ * 内核只做「顺序消耗 remainingQty > 0 的批次，每片成本按金额列精度 4 位
+ * HALF_UP 舍一次」；ΣremainingQty < need 时产出部分分摊 + shortfall 数量
+ * （不抛错——增量入口据此抛 UsageLotShortageError，重放入口据此记 V3 违规）。
+ */
+export interface FifoConsumptionLot {
+	id: string;
+	remainingQty: Prisma.Decimal;
+	unitCost: Prisma.Decimal;
+}
+
+export interface FifoConsumptionResult {
+	slices: FifoSlice[];
+	/** totalCost = Σ sliceCost（每片已各自舍入，此处仅求和不二次舍入） */
+	totalCost: Prisma.Decimal;
+	/** 缺口数量（> 0 = 批次不足；增量入口抛错、重放入口记违规） */
+	shortfall: Prisma.Decimal;
+}
+
+export function consumeLotsInFifoOrder(
+	orderedLots: FifoConsumptionLot[],
+	need: Prisma.Decimal,
+): FifoConsumptionResult {
+	const slices: FifoSlice[] = [];
+	let totalCost = new Prisma.Decimal(0);
+	let remaining = need;
+	for (const lot of orderedLots) {
+		if (remaining.lte(0)) {
+			break;
+		}
+		if (lot.remainingQty.lte(0)) {
+			continue; // 防御性跳过（调用方已过滤，此处兜底）
+		}
+		const slice = Prisma.Decimal.min(remaining, lot.remainingQty);
+		const sliceCost = slice
+			.mul(lot.unitCost)
+			.toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
+		slices.push({ lotId: lot.id, quantity: slice, cost: sliceCost });
+		totalCost = totalCost.add(sliceCost);
+		remaining = remaining.sub(slice);
+	}
+	return {
+		slices,
+		totalCost,
+		shortfall: remaining.gt(0) ? remaining : new Prisma.Decimal(0),
+	};
+}
+
+/**
+ * FIFO 顺序分摊（增量记账入口；语义 = 共享内核 consumeLotsInFifoOrder +
+ * 权威比较器排序 + 不足抛 UsageLotShortageError 不产出部分结果）：
+ * 按比较器排序后顺序消耗 remainingQty，每片成本按 4 位 HALF_UP 舍一次。
  *
- * @param lots 成本批次（调用方保证 remainingQty > 0，函数内再防御性跳过 ≤ 0 批次）
- * @param need 本次使用量（> 0；精度校验由 service 层负责）
+ * @param lots 成本批次（调用方保证 remainingQty > 0，内核再防御性跳过 ≤ 0 批次）
+ * @param need 本次使用量（> 0；精度校验由本入口负责）
  * @param decimalPlaces 币种精度（0 = 日元/韩元整数；need 精度超限在此拦截）
  */
 export function allocateLotsFifo(
@@ -181,25 +232,8 @@ export function allocateLotsFifo(
 	}
 
 	const sorted = [...lots].sort(compareLots);
-	const slices: FifoSlice[] = [];
-	let totalCost = new Prisma.Decimal(0);
-	let remaining = need;
-	for (const lot of sorted) {
-		if (remaining.lte(0)) {
-			break;
-		}
-		if (lot.remainingQty.lte(0)) {
-			continue; // 防御性跳过（调用方已过滤，此处兜底）
-		}
-		const slice = Prisma.Decimal.min(remaining, lot.remainingQty);
-		const sliceCost = slice
-			.mul(lot.unitCost)
-			.toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
-		slices.push({ lotId: lot.id, quantity: slice, cost: sliceCost });
-		totalCost = totalCost.add(sliceCost);
-		remaining = remaining.sub(slice);
-	}
-	if (remaining.gt(0)) {
+	const consumption = consumeLotsInFifoOrder(sorted, need);
+	if (consumption.shortfall.gt(0)) {
 		const lotRemaining = lots.reduce(
 			(sum, lot) => sum.add(Prisma.Decimal.max(lot.remainingQty, 0)),
 			new Prisma.Decimal(0),
@@ -209,7 +243,7 @@ export function allocateLotsFifo(
 			{ lotRemaining, requestedAmount: need },
 		);
 	}
-	return { slices, totalCost };
+	return { slices: consumption.slices, totalCost: consumption.totalCost };
 }
 
 // ────────────────────────── 使用日期校验 ──────────────────────────

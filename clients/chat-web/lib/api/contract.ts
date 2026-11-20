@@ -281,7 +281,7 @@ export type ReportErrorCode = Schemas["ReportErrorDto"]["code"];
 // 类型经 bun run generate:api 生成后在此别名（corrections 技术方案 §6）。
 // ---------------------------------------------------------------------------
 
-/** 更正目标类型（TRANSACTION / USAGE / INITIAL_HOLDING；USAGE 依赖 M7，落地前 400 降级） */
+/** 更正目标类型（TRANSACTION / USAGE / INITIAL_HOLDING；USAGE 自 MVP-F0-3 起支持改金额与改日期） */
 export type CorrectionTargetType =
 	Schemas["CorrectionRequestDto"]["targetType"];
 

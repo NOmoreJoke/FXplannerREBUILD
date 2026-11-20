@@ -7,8 +7,8 @@
  * - computeAllocationDelta：使用改小/改大/补分配的 PlanAllocation 调整量（doc 14 例 02~05）。
  *
  * 无 IO、无框架状态，事务编排在 CorrectionService（分层先例与 transaction-calculator 一致）。
- * 本期 USAGE 更正入口被 CORRECTION_TARGET_TYPE_UNAVAILABLE 拦截（方案 §10 依赖边界），
- * V4 与分配调整量以纯函数先行落地并由单测锁定，M7 接线后零改动复用。
+ * USAGE 更正自 MVP-F0-3 起接线（parseCorrectionChanges 的 USAGE 分支 + V4 矩阵 +
+ * computeAllocationDelta 由 CorrectionService 复用），本文件保留纯函数语义与单测锁定。
  */
 import { HttpException, HttpStatus } from "@nestjs/common";
 import { getCurrency } from "@fxplanner-new/money";
@@ -231,10 +231,17 @@ export function parseCorrectionChanges(
 
 	if (context.targetType === "USAGE") {
 		if (has("amount")) {
-			const value = parsePositiveWithLimit(
-				String(rawChanges.amount),
-				"使用金额",
-			);
+			// 「使用金额改 0」在解析期放行为合法数字，由 V4 以 CORRECTION_NOT_ALLOWED
+			// 拦截（doc 10:88-91 错误码区分；负数/超上限/精度仍在此拦截）
+			const value = parseAmountOrThrow(String(rawChanges.amount), "使用金额");
+			if (value.isNegative()) {
+				throw new CorrectionInvalidParamsException("使用金额不能为负数");
+			}
+			if (value.gte(AMOUNT_UPPER_LIMIT)) {
+				throw new CorrectionInvalidParamsException(
+					"使用金额必须小于单笔上限 100,000,000,000",
+				);
+			}
 			const precision =
 				getCurrency(context.currentCurrencyCode)?.decimalPlaces ?? 2;
 			if (value.dp() > precision) {
@@ -366,7 +373,8 @@ export function assertCorrectionBasics(
  * V4 待确定项拦截矩阵（doc 10:88-91 待确定项本期一律拦截，方案假设 6）：
  * - 使用金额改 0；改大后计划累计使用 > 目标；
  * - COMPLETED 计划改大或改日期；CANCELLED 计划任何使用更正。
- * 全部抛 400 CORRECTION_NOT_ALLOWED。本期 USAGE 入口降级，本函数由单测锁定、M7 接线后复用。
+ * 全部抛 400 CORRECTION_NOT_ALLOWED。MVP-F0-3 起 USAGE 入口已接线，本函数由单测锁定并被
+ * CorrectionService.evaluateUsage 复用。
  */
 export function assertUsageCorrectionAllowed(input: {
 	planStatus: string;

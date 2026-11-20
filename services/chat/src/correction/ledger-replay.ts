@@ -15,7 +15,10 @@
  * 量级预估（方案 §2）：单币种重放事件量千级以内，毫秒级完成。
  */
 import { Prisma } from "@prisma/client";
-import { compareLedgerEntries } from "../usage/usage-calculator";
+import {
+	compareLedgerEntries,
+	consumeLotsInFifoOrder,
+} from "../usage/usage-calculator";
 
 export type LedgerEventType = "INITIAL" | "PURCHASE" | "USAGE";
 
@@ -102,41 +105,39 @@ export function replayCurrencyLedger(events: LedgerEvent[]): ReplayResult {
 
 	for (const event of sorted) {
 		if (event.type === "USAGE") {
-			// 时点充足性校验（过去的钱是否够用，doc 09:64-70）：
-			// 不借未来买入补过去使用；不足即记违规（不阻断重放，剩余缺口进 violations）
-			const available = inflow.sub(used);
-			if (available.lt(event.quantity)) {
+			// FIFO 消耗：共享内核 consumeLotsInFifoOrder（DEBT-02 抽取——与增量
+			// allocateLotsFifo 同一消耗实现，docs/15:64「每片成本 = quantity ×
+			// unitCost 按金额列精度 4 位舍一次」，镜像测试 fifo-mirror.spec 锁定逐片相等）。
+			// 重放批次按事件序自然有序（INITIAL/PURCHASE 事件序 = 比较器序）；
+			// 时点充足性校验（过去的钱是否够用，doc 09:64-70）由内核 shortfall 承载：
+			// 不借未来买入补过去使用；shortfall > 0 记 V3 违规（不阻断重放，
+			// 已消耗部分照常入账）。
+			const consumption = consumeLotsInFifoOrder(
+				lots.map((lot) => ({
+					id: lot.sourceId,
+					remainingQty: lot.remainingQty,
+					unitCost: lot.unitCost,
+				})),
+				event.quantity,
+			);
+			for (const slice of consumption.slices) {
+				const replayLot = lots.find((lot) => lot.sourceId === slice.lotId)!;
+				replayLot.remainingQty = replayLot.remainingQty.sub(slice.quantity);
+				usageAllocations.push({
+					usageId: event.id,
+					lotSourceId: slice.lotId,
+					quantity: slice.quantity,
+					cost: slice.cost,
+				});
+			}
+			usageCosts.set(event.id, consumption.totalCost);
+			if (consumption.shortfall.gt(0)) {
 				violations.push({
 					usageId: event.id,
 					usedAt: event.happenedAt,
-					shortfall: event.quantity.sub(available),
+					shortfall: consumption.shortfall,
 				});
 			}
-			// FIFO 消耗：按排序后批次顺序消耗 remainingQty > 0 的批次。
-			// 每片成本按金额列精度 HALF_UP 舍一次——与增量 allocateLotsFifo 同一口径
-			// （docs/15:64「每片成本 = quantity × unitCost 按金额列精度 4 位舍一次」），
-			// 镜像测试（fifo-mirror.spec）锁定逐片相等。
-			let remaining = event.quantity;
-			let cost = new Prisma.Decimal(0);
-			for (const lot of lots) {
-				if (remaining.lte(0)) break;
-				if (lot.remainingQty.lte(0)) continue;
-				const take = Prisma.Decimal.min(lot.remainingQty, remaining);
-				const lotCost = take.mul(lot.unitCost).toDecimalPlaces(
-					4,
-					Prisma.Decimal.ROUND_HALF_UP,
-				);
-				cost = cost.add(lotCost);
-				lot.remainingQty = lot.remainingQty.sub(take);
-				usageAllocations.push({
-					usageId: event.id,
-					lotSourceId: lot.sourceId,
-					quantity: take,
-					cost: lotCost,
-				});
-				remaining = remaining.sub(take);
-			}
-			usageCosts.set(event.id, cost);
 			used = used.add(event.quantity);
 			continue;
 		}
