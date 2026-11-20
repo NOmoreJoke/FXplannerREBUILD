@@ -322,7 +322,7 @@ test.describe("【我的报告】成本摘要与报告", () => {
 		await context.close();
 	});
 
-	test("T-RPT-006: 已取消但曾有使用的计划 → 报告中心与详情均可进入下载流程", async ({
+	test("T-RPT-006: 已取消但曾有使用的计划 → 两处均可下载，打印页脚保留免责声明", async ({
 		browser,
 	}) => {
 		const context = await browser.newContext();
@@ -338,8 +338,30 @@ test.describe("【我的报告】成本摘要与报告", () => {
 		});
 		const rowDownload = page.getByTestId(`report-download-${main.planC}`);
 		await expect(rowDownload).toBeVisible();
+		const approvedDisclaimer =
+			"本工具由非持牌主体提供，非投资顾问服务；汇率与计划均为工具测算，不构成投资建议、不预测涨跌、不经手资金；据此操作的风险与损失由用户自行承担。";
+		const disclaimers = page.getByText(approvedDisclaimer, { exact: true });
+		await expect(disclaimers).toBeVisible();
 		await rowDownload.click();
-		await expect(page.getByText("报告打印预览")).toBeVisible();
+		const previewHeading = page.getByText("报告打印预览");
+		const printReport = page.locator(".print-root");
+		const printDisclaimer = printReport
+			.locator("footer")
+			.getByText(approvedDisclaimer, { exact: true });
+		await expect(previewHeading).toBeVisible();
+		await expect(
+			printReport.getByRole("heading", { name: /成本报告/ }),
+		).toBeVisible();
+
+		await page.emulateMedia({ media: "print" });
+		await expect(printDisclaimer).toBeVisible();
+		await expect(disclaimers.filter({ visible: true })).toHaveCount(1);
+		await expect(
+			printReport.getByText("1500 USD", { exact: true }),
+		).toBeVisible();
+		await expect(previewHeading).toBeHidden();
+		await expect(rowDownload).toBeHidden();
+		await page.emulateMedia({ media: null });
 		await page.getByTestId("print-dialog-close").click();
 
 		// 详情页：同样可进入下载流程

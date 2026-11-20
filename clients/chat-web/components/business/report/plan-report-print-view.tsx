@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
+import { COMPLIANCE_DISCLAIMER_TEXT } from "@/components/base/compliance-disclaimer";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -97,6 +98,7 @@ export function PlanReportPrintView({
 					金额按币种精度展示（日元、韩元整数，其余最多 2
 					位小数）；成本按全精度计算后一次舍入，分项与合计可能存在极小显示差。
 				</p>
+				<p className="mt-1 break-inside-avoid">{COMPLIANCE_DISCLAIMER_TEXT}</p>
 			</footer>
 		</div>
 	);
