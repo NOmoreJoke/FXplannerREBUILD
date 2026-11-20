@@ -1149,92 +1149,72 @@ describe("RateController（接口）", () => {
 			}
 		});
 
-		it("TWD 图表冷缺口：er-api 本地快照按日期优先，v2 参考序列仅补缺并逐点标注来源，严禁回写（C2）", async () => {
-			// 独立 app：行情组 marketApp 请求计数贴近全局限流 10/min/IP 边界，
-			// 本用例自建实例避免把「既有档位」组推过边界 429（各自节流存储隔离）
-			const twdApp = (
-				await buildRateApp("multi", historyStub, disableThrottler)
-			).app;
-			// v2 路由：解析 from/to 区间，返回区间内 2 个参考日（from+1 与 from+3）。
-			// 实测契约：逐条 {date, base, quote, rate} 记录（底稿 §1）
-			historyRoutes.frankfurterV2 = (href) => {
-				const params = new URL(href).searchParams;
-				const from = params.get("from")!;
-				const dayMs = 86_400_000;
-				const day = (offset: number) =>
-					new Date(`${from}T00:00:00.000Z`).getTime() + offset * dayMs;
-				const iso = (time: number) =>
-					new Date(time).toISOString().slice(0, 10);
-				return jsonResponse([
-					{ date: iso(day(1)), base: "USD", quote: "TWD", rate: 4.7567 },
-					{ date: iso(day(3)), base: "USD", quote: "TWD", rate: 4.7569 },
-				]);
-			};
-			// 本地 er-api 快照：窗口末点前 1 天 + 参考点同日（from+1，本地优先）
-			const today = new Date();
-			today.setUTCHours(0, 0, 0, 0);
-			const dayMs = 86_400_000;
-			await realCtx.prisma.exchangeRate.deleteMany({
-				where: { base: "USD", quote: "TWD" },
+		it("W4-02 TWD 日级图表保留当日 ErApi 快照，每日唯一且排除未来观测", async () => {
+			const now = new Date("2026-11-19T02:00:00.000Z");
+			const pair = { base: "USD", quote: "TWD" };
+			const stub = createRateSourceFetchStub({
+				frankfurterV2: () =>
+					jsonResponse({
+						rates: [
+							{ date: "2026-11-13", ...pair, rate: "4.7567" },
+							{ date: "2026-11-15", ...pair, rate: "4.7569" },
+							{ date: "2026-11-19", ...pair, rate: "4.7571" },
+						],
+					}),
 			});
-			await realCtx.prisma.exchangeRate.create({
-				data: {
-					base: "USD",
-					quote: "TWD",
-					rate: "32.0000000000",
-					source: "er-api",
-					observedAt: new Date(today.getTime() - dayMs),
-				},
-			});
-			await realCtx.prisma.exchangeRate.create({
-				data: {
-					base: "USD",
-					quote: "TWD",
-					rate: "32.1000000000",
-					source: "er-api",
-					observedAt: new Date(today.getTime() - 6 * dayMs),
-				},
-			});
-			const countBefore = await realCtx.prisma.exchangeRate.count({
-				where: { base: "USD", quote: "TWD" },
-			});
-
-			const res = await request(twdApp.getHttpServer())
-				.get("/api/rates/history?base=USD&target=TWD&period=7")
-				.expect(200);
-
-			const points = res.body.data.data_points;
-			const isoOf = (time: number) =>
-				new Date(time).toISOString().slice(0, 10);
-			const byDate = new Map(
-				points.map((point: { date: string; rate: string; source?: string }) => [
-					point.date,
-					point,
-				]),
+			const { app: twdApp, prisma } = await buildRateApp(
+				"multi",
+				stub,
+				disableThrottler,
 			);
-			// 参考点（from+1）与本地同日 → 本地行优先且 source=er-api
-			//（Prisma Decimal.toString() 去尾零：32.1000000000 → "32.1"）
-			expect(byDate.get(isoOf(today.getTime() - 6 * dayMs))).toMatchObject({
-				rate: "32.1",
-				source: "er-api",
-			});
-			// 参考补点（from+3）标注参考来源，取倒数（4.7569 → 0.2102209422）
-			expect(byDate.get(isoOf(today.getTime() - 4 * dayMs))).toMatchObject({
-				rate: "0.2102209422",
-				source: "frankfurter-v2-reference",
-			});
-			// 本地末点 source=er-api，current_rate 为其值（toString 去尾零）
-			expect(byDate.get(isoOf(today.getTime() - dayMs))).toMatchObject({
-				rate: "32",
-				source: "er-api",
-			});
-			expect(res.body.data.current_rate).toBe("32");
-			// 参考点严禁回写：请求数据库行数与请求前一致（无 v2 行）
-			const countAfter = await realCtx.prisma.exchangeRate.count({
-				where: { base: "USD", quote: "TWD" },
-			});
-			expect(countAfter).toBe(countBefore);
-			await twdApp.close();
+			try {
+				await prisma.exchangeRate.deleteMany({ where: pair });
+				await prisma.exchangeRate.createMany({
+					data: [
+						["2026-11-11T23:59:59.999Z", "33"],
+						["2026-11-12T00:00:00.000Z", "32.2"],
+						["2026-11-13T12:00:00.000Z", "32.1"],
+						["2026-11-19T00:01:00.000Z", "32.05"],
+						["2026-11-19T00:02:31.000Z", "32"],
+						["2026-11-19T02:00:00.001Z", "31.9"],
+						["2026-11-20T00:00:00.000Z", "31.8"],
+					].map(([time, rate]) => ({
+						...pair,
+						rate,
+						source: "er-api",
+						observedAt: new Date(time),
+					})),
+				});
+
+				// 只冻结 Date，保留 Supertest 和供应商 stub 的真实计时器。
+				vi.useFakeTimers({ toFake: ["Date"], now });
+				const res = await request(twdApp.getHttpServer())
+					.get("/api/rates/history?base=USD&target=TWD&period=7")
+					.expect(200);
+
+				expect(res.body.data.data_points).toEqual([
+					{ date: "2026-11-12", rate: "32.2", source: "er-api" },
+					{ date: "2026-11-13", rate: "32.1", source: "er-api" },
+					{
+						date: "2026-11-15",
+						rate: "0.2102209422",
+						source: "frankfurter-v2-reference",
+					},
+					{ date: "2026-11-19", rate: "32", source: "er-api" },
+				]);
+				expect(res.body.data.current_rate).toBe("32");
+				expect(stub).toHaveBeenCalledOnce();
+				const [url] = stub.mock.calls[0];
+				const params = new URL(String(url)).searchParams;
+				expect([params.get("from"), params.get("to")]).toEqual([
+					"2026-11-12",
+					"2026-11-19",
+				]);
+				expect(await prisma.exchangeRate.count({ where: pair })).toBe(7);
+			} finally {
+				vi.useRealTimers();
+				await twdApp.close();
+			}
 		});
 
 		it("既有档位 7/30/90 回归：仍被接受且防护同样生效，序列随窗口扩大递增（§8.2 行6）", async () => {

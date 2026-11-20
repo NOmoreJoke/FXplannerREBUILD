@@ -1277,7 +1277,7 @@ describe("RateService.getHistory 参考层合并（er-api 路由币对）", () =
 		expect(prisma.exchangeRate.createMany).not.toHaveBeenCalled();
 	});
 
-	it("本地缓存完整（覆盖全部工作日）→ 不取参考序列（无外呼放大）", async () => {
+	it("本地缓存完整时直接返回每日最新快照，不取参考序列", async () => {
 		const { service, prisma, provider } = build();
 		const complete = [
 			rowAt("2026-11-12", "32.0000000000"),
@@ -1285,20 +1285,22 @@ describe("RateService.getHistory 参考层合并（er-api 路由币对）", () =
 			rowAt("2026-11-16", "32.0200000000"),
 			rowAt("2026-11-17", "32.0300000000"),
 			rowAt("2026-11-18", "32.0400000000"),
+			rowAt("2026-11-19", "32.0500000000"),
+			{
+				...rowAt("2026-11-19", "32.0600000000"),
+				observedAt: new Date("2026-11-19T00:02:31.000Z"),
+			},
 		];
-		prisma.exchangeRate.findMany
-			.mockResolvedValueOnce(complete)
-			.mockResolvedValueOnce(complete);
-		provider.fetchHistory.mockResolvedValue([]);
+		prisma.exchangeRate.findMany.mockResolvedValueOnce(complete);
 
 		const result = await service.getHistory("CNY", "TWD", 7);
 
 		expect(provider.fetchReferenceSeries).not.toHaveBeenCalled();
-		expect(
-			result.data_points.every(
-				(point: { source?: string }) => point.source === "er-api",
-			),
-		).toBe(true);
+		expect(provider.fetchHistory).not.toHaveBeenCalled();
+		expect(result.data_points.filter((point) => point.date === "2026-11-19")).toEqual([
+			{ date: "2026-11-19", rate: "32.0600000000", source: "er-api" },
+		]);
+		expect(result.current_rate).toBe("32.0600000000");
 	});
 
 	it("非 er-api 路由（frankfurter/abc）→ 不取参考序列（v1-only 回归保留）", async () => {

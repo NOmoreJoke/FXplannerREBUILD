@@ -26,6 +26,12 @@ import {
 } from './rate.errors';
 import { RateProvider, type RateHistoryPoint } from './rate.provider';
 
+interface HistoryRow {
+  rate: { toString(): string };
+  observedAt: Date;
+  source?: string;
+}
+
 /** 项级报价数据：confirmedAt 为最新确认时间，历史行只可陈旧回显 */
 interface LatestQuoteData {
   rate: string;
@@ -302,23 +308,36 @@ export class RateService {
     const normalizedBase = this.validateCurrency(base, 'base');
     const normalizedTarget = this.validateCurrency(target, 'target');
     const normalizedPeriod = this.validatePeriod(period);
-    const end = this.startOfUtcDay(new Date());
+    const isIdentity = normalizedBase === normalizedTarget;
+    const routedSource = isIdentity
+      ? IDENTITY_RATE_SOURCE
+      : this.provider.sourceForPair(normalizedBase, normalizedTarget);
+    const usesReferenceLayer = routedSource === 'er-api';
+    const now = new Date();
+    const end = this.startOfUtcDay(now);
     const start = new Date(end.getTime() - normalizedPeriod * 86_400_000);
 
-    const cached = await this.prisma.exchangeRate.findMany({
+    // ErApi 快照有真实观测时刻。日期窗口含今天，库查到请求时刻为止。
+    const historyQuery = {
       where: {
         base: normalizedBase,
         quote: normalizedTarget,
-        observedAt: { gte: start, lte: end },
+        observedAt: { gte: start, lte: usesReferenceLayer ? now : end },
       },
-      orderBy: { observedAt: 'asc' },
-    });
+      orderBy: { observedAt: 'asc' as const },
+    };
+    const cached = await this.prisma.exchangeRate.findMany(historyQuery);
 
     if (
       cached.length > 0 &&
-      (normalizedBase === normalizedTarget || this.isHistoryCacheComplete(cached, start, end))
+      (isIdentity || this.isHistoryCacheComplete(cached, start, end))
     ) {
-      return this.toHistoryResponse(normalizedBase, normalizedTarget, normalizedPeriod, cached);
+      return this.toHistoryResponse(
+        normalizedBase,
+        normalizedTarget,
+        normalizedPeriod,
+        usesReferenceLayer ? this.mergeReferencePoints(cached, []) : cached,
+      );
     }
 
     // 回源防护（rate-chart 方案 §6）：负缓存窗口内不再外呼，直接返回积累序列；
@@ -335,7 +354,7 @@ export class RateService {
     }
 
     let fetched: RateHistoryPoint[] = [];
-    if (normalizedBase === normalizedTarget) {
+    if (isIdentity) {
       fetched = this.localHistory(start, end);
     } else if (!negativeCached) {
       fetched = await this.fetchHistoryWithSingleFlight(
@@ -353,33 +372,23 @@ export class RateService {
           base: normalizedBase,
           quote: normalizedTarget,
           rate: point.rate,
-          // 恒等序列为数学事实（identity）；外部序列按币对路由的实际数据源标注
-          source:
-            normalizedBase === normalizedTarget
-              ? IDENTITY_RATE_SOURCE
-              : this.provider.sourceForPair(normalizedBase, normalizedTarget),
+          source: routedSource,
           observedAt: point.observedAt,
         })),
         skipDuplicates: true,
       });
     }
 
-    const saved = await this.prisma.exchangeRate.findMany({
-      where: {
-        base: normalizedBase,
-        quote: normalizedTarget,
-        observedAt: { gte: start, lte: end },
-      },
-      orderBy: { observedAt: 'asc' },
-    });
+    const saved = await this.prisma.exchangeRate.findMany(historyQuery);
+    const savedComplete = this.isHistoryCacheComplete(saved, start, end);
 
     // 负缓存登记：真实回源后仍不完整的币对（含回源为空序列的数据源）→
     // 10 分钟内不再重试回源（方案 §6）；负缓存命中路径不刷新窗口，
     // 保证窗口期满必然重新尝试。恒等币对本地生成不外呼，不参与登记。
     if (
-      normalizedBase !== normalizedTarget &&
+      !isIdentity &&
       !negativeCached &&
-      !this.isHistoryCacheComplete(saved, start, end)
+      !savedComplete
     ) {
       this.historyNegativeCache.set(
         pairKey,
@@ -391,26 +400,9 @@ export class RateService {
     // 用 frankfurter v2 日级参考序列在【响应合并层】补点——严禁回写 exchange_rates
     //（参考点不占现行键、不刷新 createdAt、不出现在最新/原时点报价候选中）。
     // 其余源（abc/frankfurter/identity）维持原行为（v1-only 回归保留）。
-    const routedSource = this.provider.sourceForPair(
-      normalizedBase,
-      normalizedTarget,
-    );
-    let responseRates: Array<{
-      rate: { toString(): string };
-      observedAt: Date;
-      source: string;
-    }> = saved.map((row) => ({
-      rate: row.rate,
-      observedAt: row.observedAt,
-      source: row.source,
-    }));
-    if (
-      normalizedBase !== normalizedTarget &&
-      routedSource === 'er-api' &&
-      !this.isHistoryCacheComplete(saved, start, end)
-    ) {
-      responseRates = await this.mergeReferenceLayer(
-        responseRates,
+    let reference: RateHistoryPoint[] = [];
+    if (usesReferenceLayer && !savedComplete) {
+      reference = await this.fetchReferencePoints(
         pairKey,
         normalizedBase,
         normalizedTarget,
@@ -423,38 +415,27 @@ export class RateService {
       normalizedBase,
       normalizedTarget,
       normalizedPeriod,
-      responseRates,
+      usesReferenceLayer ? this.mergeReferencePoints(saved, reference) : saved,
     );
   }
 
-  /** 本地序列 + v2 参考序列合并：本地行按日期优先，参考点仅补缺；按 observedAt 升序 */
+  /** 每个 UTC 日期保留最后观测的本地行，v2 参考点只补空桶。 */
   private mergeReferencePoints(
-    localPoints: Array<{
-      rate: { toString(): string };
-      observedAt: Date;
-      source: string;
-    }>,
+    localPoints: HistoryRow[],
     reference: RateHistoryPoint[],
-  ): Array<{
-    rate: { toString(): string };
-    observedAt: Date;
-    source: string;
-  }> {
-    if (reference.length === 0) return localPoints;
-    const localDates = new Set(
-      localPoints.map((point) => this.formatDate(point.observedAt)),
-    );
-    const merged = localPoints.map((point) => ({ ...point }));
+  ): HistoryRow[] {
+    const byDate = new Map<string, HistoryRow>();
+    // 两条本地查询均按 observedAt 升序。
+    for (const point of localPoints) {
+      byDate.set(this.formatDate(point.observedAt), point);
+    }
     for (const point of reference) {
-      if (!localDates.has(this.formatDate(point.observedAt))) {
-        merged.push({
-          rate: point.rate,
-          observedAt: point.observedAt,
-          source: REFERENCE_RATE_SOURCE,
-        });
+      const date = this.formatDate(point.observedAt);
+      if (!byDate.has(date)) {
+        byDate.set(date, { ...point, source: REFERENCE_RATE_SOURCE });
       }
     }
-    return merged.sort(
+    return [...byDate.values()].sort(
       (left, right) => left.observedAt.getTime() - right.observedAt.getTime(),
     );
   }
@@ -463,30 +444,22 @@ export class RateService {
    * 参考层合并守卫：区间级缓存（成功/失败均登记 TTL，防外呼放大）+ 区间级单飞；
    * 参考序列获取失败不阻断图表（按「无参考点」返回本地序列，冷缺口如实披露）。
    */
-  private async mergeReferenceLayer(
-    localPoints: Array<{
-      rate: { toString(): string };
-      observedAt: Date;
-      source: string;
-    }>,
+  private async fetchReferencePoints(
     pairKey: string,
     base: string,
     target: string,
     start: Date,
     end: Date,
-  ): Promise<
-    Array<{ rate: { toString(): string }; observedAt: Date; source: string }>
-  > {
+  ): Promise<RateHistoryPoint[]> {
     const rangeKey = `${pairKey}|${this.formatDate(start)}|${this.formatDate(end)}`;
     const cached = this.referenceCache.get(rangeKey);
     if (cached && Date.now() < cached.expiresAt) {
-      return this.mergeReferencePoints(localPoints, cached.points);
+      return cached.points;
     }
 
     const existing = this.referenceInFlight.get(rangeKey);
     if (existing) {
-      const points = await existing.catch(() => [] as RateHistoryPoint[]);
-      return this.mergeReferencePoints(localPoints, points);
+      return existing.catch(() => []);
     }
 
     const promise = this.provider
@@ -515,7 +488,7 @@ export class RateService {
       points,
       expiresAt: Date.now() + HISTORY_NEGATIVE_CACHE_TTL_MS,
     });
-    return this.mergeReferencePoints(localPoints, points);
+    return points;
   }
 
   /** 历史回源单飞：同币对进行中的 fetchHistory 复用给并发缺口请求，结束即清除（rate-chart 方案 §6） */
@@ -994,11 +967,7 @@ export class RateService {
     base: string,
     target: string,
     period: RatePeriod,
-    rates: Array<{
-      rate: { toString(): string };
-      observedAt: Date;
-      source?: string;
-    }>,
+    rates: HistoryRow[],
   ) {
     // 逐点来源标注（MVP-F0-2 C2）：行情/AI 历史工具据此区分参考价与原来源；
     // 参考点 source = frankfurter-v2-reference，本地行 source = 落库数据源标识
