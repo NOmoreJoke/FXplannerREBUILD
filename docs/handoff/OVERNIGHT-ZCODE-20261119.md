@@ -156,10 +156,33 @@ alreadyDone 全字段核对、No-op 复跑 0 更新、事务契约文档、断�
 断言、重复主键拒绝、运行时结构校验 → PASS（0 [Important]）。本切片为
 对抗审强度最高的分支，多轮发现均为真实设计缺口（非吹毛求疵）。
 
+## W6 · USAGE 闭环 ✅（commit `1735c08`，draft PR #7）
+
+改动：DEBT-02 共享 FIFO 内核 consumeLotsInFifoOrder（增量/重放共用，
+fast-check 属性锁定）+ DEBT-01 USAGE 闭环完整接线（evaluateUsage 的
+V0/V4/computeAllocationDelta、persistUsageCorrection 含 PlanChangeLog、
+delta-aware V2 重算 collectUsageAllocationConflict）+ plans 行锁消除生命周期
+竞态 + getTarget USAGE 分支 + E2E T-CORR-004 恢复（usage-correction-entry）+
+README/审查报告 USAGE 🟡→✅。环境事件：发现本机 PG 被其他 agent 会话的
+vitest 共享（外来查询曾污染 pg 观察），已如实记录；PG 重启清场后复跑。
+
+验证实测：typecheck 0 error、unit 485（含 usage property spec）、api 289
+（correction 27 用例含 #11~#16 真实闭环 + #15-2 双计划挤占 409 回归）、
+integration 54、infra、web(Node24) 232 全绿；#6 并发锁序回归连续 3 次
+7/7 稳定。L3 未运行（人类未启 dev 服务）。
+
+对抗审：codex `gpt-5.6-terra` 十三轮。关键闭环：delta-aware V2（改大挤占
+不再错杀）、计划行锁竞态、并发测试观察方式三轮迭代（pg_stat_activity 逐
+PID 轮询因环境敏感移除，改为持锁窗口 + settle 标志 + 静态锁序审查——按
+熔断条款显式移除并记录，非 skip）、getTarget USAGE 分支 500、
+beforeSnapshot.amountBefore 错值、契约注释过期语义。最终 **PASS（0
+[Important]）**；遗留 [Nit] 双计划 supplement 409 回归已补（#15-2）。
+
 ## 下一分支预告
 
-W6（D·USAGE 闭环）将基于本分支切 `feat/f0-w6-usage-correction-fifo`：
-共享 FIFO 消耗纯函数内核（ledger-replay 与 usage-calculator 双实现差分收敛）、
-移除 correction.service 的 USAGE 挡板（load/evaluate/apply、baseVersion
-乐观锁、同事务重放零副作用、同日 FIFO 排序保护——OVERNIGHT-ZCODE-20261103
-B1 教训）、取消 e2e T-CORR-004 skip（L3 需人类启服，交接注明复跑命令）。
+W7（E·导出修复）将基于本分支切 `feat/f0-w7-export-precision`：
+infra/compose/Dockerfile.chat 补 /data/exports 与 data-exports 的
+chown（bun 用户可写）；export-builder 的 principalAmount/feeAmount 改
+本位币格式化（data.settings?.baseCurrency ?? "CNY"）、usageCostOf 改
+Decimal 累加；JPY/KRW 交易 CNY 本位币 CSV 精度单测；容器写入实测受
+Docker 环境限制时如实标注边界。
