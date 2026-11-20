@@ -547,6 +547,88 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		});
 	});
 
+	it("W6-04 买入改晚后，预览、提交拒绝和 FAILED 留痕均包含两个累计历史缺口", async () => {
+		const user = await newUser("corr-cumulative-gap");
+		const firstUsedAt = daysAgo(4);
+		const secondUsedAt = daysAgo(2);
+		const originalTradeAt = daysAgo(5);
+		const proposedTradeAt = daysAgo(1);
+		const { planId, tradeIds, lotIds } = await seedPurchaseWithUsage({
+			user,
+			trades: [
+				{ at: daysAgo(6), principal: "700", quantity: "100" },
+				{ at: originalTradeAt, principal: "900", quantity: "100" },
+				{ at: daysAgo(3), principal: "400", quantity: "50" },
+			],
+			usageAmount: "150",
+			usageAt: firstUsedAt,
+		});
+		await ctx.prisma.planAllocation.update({
+			where: { planId },
+			data: { amount: "170" },
+		});
+		await seedUsageRecord(ctx.prisma, {
+			userId: user.userId,
+			planId,
+			currencyCode: "USD",
+			amount: "20",
+			usedAt: secondUsedAt,
+			allocations: [{ lotId: lotIds[1], quantity: "20" }],
+		});
+
+		const where = { userId: user.userId, targetId: tradeIds[1] };
+		const payload = {
+			targetType: "TRANSACTION",
+			targetId: where.targetId,
+			baseVersion: 1,
+			reason: "更正第二笔买入日期",
+			changes: { transactedAt: proposedTradeAt.toISOString() },
+		};
+		const code = "CORRECTION_HISTORICAL_SHORTFALL";
+		const details = [
+			{
+				currencyCode: "USD",
+				usedAt: firstUsedAt.toISOString(),
+				shortfall: "50.0000",
+				planId: null,
+			},
+			{
+				currencyCode: "USD",
+				usedAt: secondUsedAt.toISOString(),
+				shortfall: "20.0000",
+				planId: null,
+			},
+		];
+		const preview = await request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send(payload)
+			.expect(200);
+		const previewAuditCount = await ctx.prisma.correction.count({ where });
+		const apply = await request(app.getHttpServer())
+			.post("/api/corrections")
+			.set(bearer(user.accessToken))
+			.send(payload)
+			.expect(409);
+
+		// 软断言同时核对两个端点和留痕，任意一处丢明细都能独立报错。
+		expect.soft(preview.body.data.blockers).toEqual([
+			{ code, message: expect.any(String), details },
+		]);
+		expect.soft(previewAuditCount).toBe(0);
+		expect.soft(apply.body).toMatchObject({ code, details });
+		const audits = await ctx.prisma.correction.findMany({ where });
+		expect(audits).toHaveLength(1);
+		expect.soft(audits[0]).toMatchObject({
+			status: "FAILED",
+			beforeSnapshot: { changes: payload.changes, blockers: details },
+		});
+		const transaction = await ctx.prisma.transaction.findUniqueOrThrow({
+			where: { id: where.targetId },
+		});
+		expect(transaction).toMatchObject({ version: 1, transactedAt: originalTradeAt });
+	});
+
 	// ── #9 baseVersion 过期 ──
 	it("#9 baseVersion 过期 → 409 CORRECTION_TARGET_CHANGED", async () => {
 		const user = await newUser("corr-optimistic");

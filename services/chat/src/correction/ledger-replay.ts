@@ -105,13 +105,19 @@ export function replayCurrencyLedger(events: LedgerEvent[]): ReplayResult {
 
 	for (const event of sorted) {
 		if (event.type === "USAGE") {
+			// V3 按历史时点的累计流入减累计使用检查，先前未被批次覆盖的使用也计入累计使用。
+			const available = inflow.sub(used);
+			if (available.lt(event.quantity)) {
+				violations.push({
+					usageId: event.id,
+					usedAt: event.happenedAt,
+					shortfall: event.quantity.sub(available),
+				});
+			}
 			// FIFO 消耗：共享内核 consumeLotsInFifoOrder（DEBT-02 抽取——与增量
 			// allocateLotsFifo 同一消耗实现，docs/15:64「每片成本 = quantity ×
 			// unitCost 按金额列精度 4 位舍一次」，镜像测试 fifo-mirror.spec 锁定逐片相等）。
-			// 重放批次按事件序自然有序（INITIAL/PURCHASE 事件序 = 比较器序）；
-			// 时点充足性校验（过去的钱是否够用，doc 09:64-70）由内核 shortfall 承载：
-			// 不借未来买入补过去使用；shortfall > 0 记 V3 违规（不阻断重放，
-			// 已消耗部分照常入账）。
+			// 重放只消耗已出现的批次，资金不足时仍计算可分摊部分的成本供预览。
 			const consumption = consumeLotsInFifoOrder(
 				lots.map((lot) => ({
 					id: lot.sourceId,
@@ -131,13 +137,6 @@ export function replayCurrencyLedger(events: LedgerEvent[]): ReplayResult {
 				});
 			}
 			usageCosts.set(event.id, consumption.totalCost);
-			if (consumption.shortfall.gt(0)) {
-				violations.push({
-					usageId: event.id,
-					usedAt: event.happenedAt,
-					shortfall: consumption.shortfall,
-				});
-			}
 			used = used.add(event.quantity);
 			continue;
 		}

@@ -157,7 +157,7 @@ export function compareLots(a: FifoLotInput, b: FifoLotInput): number {
  * 调用方保证 orderedLots 已按权威比较器（compareLedgerEntries）排好序，
  * 内核只做「顺序消耗 remainingQty > 0 的批次，每片成本按金额列精度 4 位
  * HALF_UP 舍一次」；ΣremainingQty < need 时产出部分分摊 + shortfall 数量
- * （不抛错——增量入口据此抛 UsageLotShortageError，重放入口据此记 V3 违规）。
+ * （增量入口据此抛 UsageLotShortageError；更正重放以累计资金余额校验 V3）。
  */
 export interface FifoConsumptionLot {
 	id: string;
@@ -169,7 +169,7 @@ export interface FifoConsumptionResult {
 	slices: FifoSlice[];
 	/** totalCost = Σ sliceCost（每片已各自舍入，此处仅求和不二次舍入） */
 	totalCost: Prisma.Decimal;
-	/** 缺口数量（> 0 = 批次不足；增量入口抛错、重放入口记违规） */
+	/** 当前批次无法分摊的数量（> 0 时增量入口抛错） */
 	shortfall: Prisma.Decimal;
 }
 

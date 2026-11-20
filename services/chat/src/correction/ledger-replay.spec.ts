@@ -278,6 +278,47 @@ describe("replayCurrencyLedger 时点充足性（V3，doc 14 例 11#2）", () =>
 		expect(result.finalBalance.eq(d("600"))).toBe(true);
 	});
 
+	it("先前缺口用尽后续流入时，下一笔使用仍有累计缺口", () => {
+		const firstUsedAt = "2026-09-02T02:00:00Z";
+		const secondUsedAt = "2026-09-04T02:00:00Z";
+		const firstPurchaseAt = "2026-09-01T02:00:00Z";
+		const middlePurchaseAt = "2026-09-03T02:00:00Z";
+		const lastPurchaseAt = "2026-09-05T02:00:00Z";
+		const result = replayCurrencyLedger([
+			purchase("p1", firstPurchaseAt, firstPurchaseAt, "100", "700"),
+			usage("u1", firstUsedAt, firstUsedAt, "150"),
+			purchase("p2", middlePurchaseAt, middlePurchaseAt, "50", "400"),
+			usage("u2", secondUsedAt, secondUsedAt, "20"),
+			purchase("p3", lastPurchaseAt, lastPurchaseAt, "100", "900"),
+		]);
+
+		expect(result.violations).toEqual([
+			{ usageId: "u1", usedAt: new Date(firstUsedAt), shortfall: d("50") },
+			{ usageId: "u2", usedAt: new Date(secondUsedAt), shortfall: d("20") },
+		]);
+		expect(result.usageAllocations).toEqual([
+			{
+				usageId: "u1",
+				lotSourceId: "p1",
+				quantity: d("100"),
+				cost: d("700"),
+			},
+			{
+				usageId: "u2",
+				lotSourceId: "p2",
+				quantity: d("20"),
+				cost: d("160"),
+			},
+		]);
+		expect(result.usageCosts).toEqual(
+			new Map([["u1", d("700")], ["u2", d("160")]]),
+		);
+		expect(result.lots.map((lot) => lot.remainingQty)).toEqual([
+			d("0"), d("30"), d("100"),
+		]);
+		expect(result.finalBalance).toEqual(d("80"));
+	});
+
 	it("时点足够但有其他批次顺序变化 → 无违规", () => {
 		const result = replayCurrencyLedger([
 			purchase(
