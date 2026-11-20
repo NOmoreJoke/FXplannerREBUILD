@@ -7,7 +7,11 @@ import {
 	RATE_PROVIDER_TIMEOUT_TOKEN,
 	RateProvider,
 } from "../../src/rate/rate.provider";
-import { ERAPI_RATE_URL, FRANKFURTER_RATE_URL } from "../../src/rate/rate.constants";
+import {
+	ERAPI_RATE_URL,
+	FRANKFURTER_RATE_URL,
+	QUOTE_TTL_MS,
+} from "../../src/rate/rate.constants";
 import {
 	bearer,
 	cleanupUser,
@@ -101,9 +105,14 @@ describe("OnboardingController（e2e）", () => {
 	/**
 	 * 造刚经 latest 确认的报价行，getLatest 走缓存命中。
 	 * 先清理该币对历史行（其他用例/回源可能留有 observedAt 更晚的行，
-	 * findLatestRows 优先取 observedAt 最新的已确认行）。
+	 * findLatestPublishableQuotes 优先取 observedAt 最新的已确认行）。
 	 */
-	async function seedRate(base: string, quote: string, rate: string) {
+	async function seedRate(
+		base: string,
+		quote: string,
+		rate: string,
+		latestConfirmedAt?: Date,
+	) {
 		await ctx.prisma.exchangeRate.deleteMany({ where: { base, quote } });
 		const now = new Date();
 		const row = await ctx.prisma.exchangeRate.create({
@@ -113,7 +122,7 @@ describe("OnboardingController（e2e）", () => {
 				rate,
 				source: "er-api",
 				observedAt: now,
-				latestConfirmedAt: now,
+				latestConfirmedAt: latestConfirmedAt ?? now,
 			},
 		});
 		createdRateIds.push(row.id);
@@ -452,6 +461,92 @@ describe("OnboardingController（e2e）", () => {
 		});
 		expect(accounts).toBe(0);
 	});
+
+	it.each(["complete", "initial-holdings"] as const)(
+		"%s：第一币种写入期间第二币种恰到 validUntil → 整单回滚",
+		async (endpoint) => {
+			const created = await createTestUser(app, `onb-write-expiry-${endpoint}`);
+			extraUserIds.push(created.userId);
+			const headers = bearer(created.accessToken);
+			const where = { userId: created.userId };
+			await request(app.getHttpServer())
+				.post("/api/onboarding/consents")
+				.set(headers)
+				.send({ age18Confirmed: true, termsConfirmed: true })
+				.expect(201);
+			if (endpoint === "initial-holdings") {
+				await request(app.getHttpServer())
+					.post("/api/onboarding/complete")
+					.set(headers)
+					.send(wizard)
+					.expect(201);
+			}
+			const settingsBefore = await ctx.prisma.userSettings.findUnique({ where });
+			expect(settingsBefore !== null).toBe(endpoint === "initial-holdings");
+
+			const now = Date.now();
+			const expiresAt = now + 1;
+			await seedRate("CNY", "SGD", "5.4120", new Date(now));
+			await seedRate("CNY", "KRW", "0.0052", new Date(expiresAt - QUOTE_TTL_MS));
+			const holdings = [
+				{ currencyCode: "SGD", amount: "1000" },
+				{ currencyCode: "KRW", amount: "100000" },
+			];
+
+			const attemptedHoldings: string[] = [];
+			let crossedWriteBarrier = false;
+			let observeWrites = true;
+			ctx.prisma.$use(async (params, next) => {
+				if (
+					observeWrites &&
+					params.runInTransaction &&
+					params.model === "InitialHolding" &&
+					params.action === "create" &&
+					params.args.data.userId === where.userId
+				) {
+					attemptedHoldings.push(params.args.data.currencyCode);
+				}
+				const result = await next(params);
+				if (
+					observeWrites &&
+					params.runInTransaction &&
+					params.model === "Account" &&
+					params.action === "upsert" &&
+					params.args.create.userId === where.userId &&
+					params.args.create.currencyCode === "SGD"
+				) {
+					// 第一笔持仓、批次和账户已写入事务，账户写入尚未返回调用方。
+					crossedWriteBarrier = true;
+					vi.setSystemTime(expiresAt);
+				}
+				return result;
+			});
+
+			vi.useFakeTimers({ toFake: ["Date"], now });
+			try {
+				const res = await request(app.getHttpServer())
+					.post(`/api/onboarding/${endpoint}`)
+					.set(headers)
+					.send(
+						endpoint === "complete"
+							? { ...wizard, initialHoldings: holdings }
+							: { holdings },
+					)
+					.expect(400);
+				expect(res.body.code).toBe("RATE_UNAVAILABLE");
+			} finally {
+				observeWrites = false;
+				vi.useRealTimers();
+			}
+
+			expect(crossedWriteBarrier).toBe(true);
+			expect(attemptedHoldings).toEqual(["SGD"]);
+			expect(await ctx.prisma.userSettings.findUnique({ where })).toEqual(settingsBefore);
+			expect(await ctx.prisma.initialHolding.count({ where })).toBe(0);
+			expect(await ctx.prisma.costLot.count({ where })).toBe(0);
+			expect(await ctx.prisma.account.count({ where })).toBe(0);
+		},
+	);
 
 	it("HKD/TWD 组合：本位币 HKD 下 TWD 陈旧回显 → 同步回源后入账（FX-04 币对覆盖）", async () => {
 		await seedStaleRate("HKD", "TWD", "32.0000000000");

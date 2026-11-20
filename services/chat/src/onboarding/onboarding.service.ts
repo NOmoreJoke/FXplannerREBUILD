@@ -378,7 +378,7 @@ export class OnboardingService {
 	/**
 	 * 初始持仓入账（complete 与补录共用唯一入口，技术方案 §5.1）：
 	 * ① 币种/金额校验 ② 批量取价（现汇卖出价优先，项级错误统一 400）③ 逐币种：
-	 *    时效断言（observedAt + 5min）→ 8 位舍入 → 成本折算（按本位币精度）→
+	 *    8 位舍入 → 成本折算（按本位币精度）→ 按当前确认时刻复核 fresh/validUntil →
 	 *    写 InitialHolding（P2002 → 409）→ 写 CostLot(sourceType=INITIAL) →
 	 *    Account 余额按该币种全部批次 remainingQty 汇总重算（非增量累加，防丢更新）。
 	 * 本方法必须在事务内调用：任一异常抛出即整体回滚。
@@ -406,8 +406,7 @@ export class OnboardingService {
 				throw new RateUnavailableException();
 			}
 			const adopted = quote.sellRate ?? quote.rate;
-			// 时效已在 fetchLatestQuotes 按系统确认 fresh/validUntil 断言（MVP-F0-2）；
-			// observedAt 仅作「真实供应商发布时间」落库（rateObservedAt），不参与时效判定
+			// observedAt 仅记录供应商发布时间；报价时效按系统确认窗口判断。
 			const observedAt = new Date(quote.observedAt);
 
 			const rate = roundRateTo8(adopted);
@@ -426,6 +425,12 @@ export class OnboardingService {
 				);
 			}
 
+			// 前一币种的异步写入可能跨过本报价的有效期。
+			const confirmedAt = Date.now();
+			if (!this.isFreshQuote(quote, confirmedAt)) {
+				this.warnFailure(userId, "RATE", `币种 ${code} 报价在写账前已失效`);
+				throw new RateUnavailableException();
+			}
 			const holding = await tx.initialHolding
 				.create({
 					data: {
@@ -438,7 +443,7 @@ export class OnboardingService {
 						rateSource: quote.source,
 						rateObservedAt: observedAt,
 						cost,
-						confirmedAt: new Date(),
+						confirmedAt: new Date(confirmedAt),
 					},
 				})
 				.catch((error: unknown) => {
@@ -512,23 +517,22 @@ export class OnboardingService {
 		baseCurrency: string,
 		codes: string[],
 	): Promise<Map<string, LatestRateItem>> {
-		// 项级失败（error 项无 fresh 字段）视同「不 fresh」：进入刷新并在仍失败时整单拒绝。
-		// 双保险：系统给出的 validUntil 必须仍然有效——取价返回后、写账前跨过有效期同样拒绝
-		const isFresh = (item: LatestRateItem): boolean => {
-			if (!("fresh" in item) || !item.fresh) return false;
-			const until = Date.parse(item.validUntil);
-			return Number.isFinite(until) && Date.now() < until;
-		};
 		let items = await this.fetchLatestOnce(userId, baseCurrency, codes, false);
-		if (items.some((item) => !isFresh(item))) {
+		if (items.some((item) => !this.isFreshQuote(item, Date.now()))) {
 			this.warnFailure(userId, "RATE", "存在超窗陈旧报价，执行一次同步回源");
 			items = await this.fetchLatestOnce(userId, baseCurrency, codes, true);
 		}
-		if (items.some((item) => !isFresh(item))) {
+		if (items.some((item) => !this.isFreshQuote(item, Date.now()))) {
 			this.warnFailure(userId, "RATE", "同步回源后仍存在过期报价");
 			throw new RateUnavailableException();
 		}
 		return new Map(items.map((item) => [item.target, item]));
+	}
+
+	private isFreshQuote(item: LatestRateItem, now: number): boolean {
+		if (!("fresh" in item) || !item.fresh) return false;
+		const until = Date.parse(item.validUntil);
+		return Number.isFinite(until) && now < until;
 	}
 
 	/** 单次 getLatest 取价与形状归一（refresh 语义透传）；整体异常统一 RATE_UNAVAILABLE */
