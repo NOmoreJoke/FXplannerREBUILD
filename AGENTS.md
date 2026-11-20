@@ -116,6 +116,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | 跨领域复用组件   | `components/base/`（2 处以上复用才准进）                                  |
 | shadcn 原语      | `bunx shadcn add`，进 `components/ui/`，不手改                          |
 | 新后端模块       | `services/chat/src/<模块>/`，在 `app.module.ts` 注册一次                |
+| 旧汇率缓存迁移运维 CLI | `services/chat/prisma/rate-cache-migration/` |
 | 新 package       | `packages/<名称>/`，必须含 `README.md`：做什么（职责）、不做什么（边界/非目标）、为何独立成包 |
 | 新共享类型       | 后端 DTO 为唯一来源，前端 `bun run generate:api` 从 OpenAPI 生成（禁止手写共享类型） |
 | 跨端共享计算逻辑 | `packages/money/`（仅限纯函数：精度、舍入、币种常量；有 IO 的逻辑禁止进包） |
