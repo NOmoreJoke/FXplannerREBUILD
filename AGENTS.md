@@ -141,7 +141,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
   - **E2E + 行为断言量表**：前端只测 `lib/hooks`，组件与业务流防线是 Playwright E2E；对照 `docs/VERIFY.md` 与 `docs/handoff/` 行为断言清单打分，拒绝只测 mock 的同义反复（tautological）测试。
   - **属性测试（Property-based Testing，`fast-check`）**：`packages/money/`（币种常量、金额/汇率换算、舍入规则纯函数）及核心 DTO 校验逻辑新增或修改时，**必须编写属性测试**，验证往返守恒（Round-trip）、精度/非负/守恒不变量（Invariants）、重复计算幂等性（Idempotency）与等价性（Equivalence）。
   - **差分测试（Differential Testing）**：从旧版 `FXplanner` 迁移换汇计算、计划生成或更正流水逻辑时，以旧版输出或黄金样本集为 Oracle 同输入比对，归一化无关噪音并记录合法差异白名单。
-- **廉价检查先行 & 本地 3 轮自愈熔断**：先跑本地 `bun run typecheck` / `bun run lint` / `bun run test unit api integration infra web scripts`，通过后再跑 E2E；同一测试/构建失败本地自动修复最多 **3 轮**，连续 3 轮未果必须立即停机汇报人类，严禁死循环盲改。
+- **廉价检查先行 & 本地 3 轮自愈熔断**：先跑本地 `bun run typecheck` / `bun run lint` / `bun run test unit api integration infra web scripts money dev-log`，通过后再跑 E2E；同一测试/构建失败本地自动修复最多 **3 轮**，连续 3 轮未果必须立即停机汇报人类，严禁死循环盲改。
 - **Flaky 测试零容忍**：严禁为刷绿删减业务断言、添加硬编码 `sleep`、随意放大 timeout 或加 `skip`；偶发失败若 3 轮内找不到根因，必须显式移除/隔离并在验收报告中写明原因。
 - 测试工具进 `test/helpers/`，禁止 spec 间复制
 - 测试产物只进 `e2e/test-results`，⛔ 根目录、`services/`、`clients/` 下禁止出现 `test-results/` `playwright-report/` `logs/`（跑完 E2E 查看报告后、提交前及时清理 `e2e/test-results`，避免干扰安全门禁扫描）

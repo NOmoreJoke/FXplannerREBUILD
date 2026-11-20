@@ -11,7 +11,7 @@
 ```bash
 bun run typecheck
 bun run lint
-bun run test unit web scripts
+bun run test unit web scripts money dev-log
 ```
 - 涉及 `packages/money/`（精度、舍入、汇率换算）时，**必须配备 `fast-check` 属性测试**，覆盖：
   1. **往返守恒（Round-trip）**：编码/序列化/币种换算往返误差在约定精度边界内；

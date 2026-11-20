@@ -65,7 +65,7 @@
    - 改 `clients/chat-web/app/page.tsx`、首页或报告页 → 合规免责声明（A 版常量）与金额格式（`` `$200 USD` ``，货币代码在后）可见；
    - 改 `services/chat/test/**` 或 `e2e/**` → `env-first` 夹具 + 同函数回环校验 `localFetch`；
    - 改 `services/chat/prisma/**` 或 `correction/` → 验证迁移、幂等与审计轨迹。
-2. **L1（秒级）**：`bun run typecheck && bun run lint && bun run test unit web scripts`（护栏补齐后含 `money`、`dev-log`）。
+2. **L1（秒级）**：`bun run typecheck && bun run lint && bun run test unit web scripts money dev-log`。
 3. **L2（十秒级）**：`bun run db:status` 确认数据库就绪后执行 `bun run test api integration infra`。
 4. **L3（分钟级，确认人类已启动服务）**：
    - 先用 `bun run test:e2e --grep "<TAG>"` 跑受影响用例，收口前用 `bun run test:e2e` 跑全量。

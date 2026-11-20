@@ -62,7 +62,7 @@ bun run dev
 
 ```bash
 bun run test            # 交互式选择套件
-bun run test all        # 全量：unit / api / integration / infra / web / scripts
+bun run test all        # 全量：unit / api / integration / infra / web / money / dev-log / e2e / scripts
 ./e2e/scripts/run-e2e-tests.sh --headless   # E2E：自动拉起前后端 → 跑测 → 回收服务，产物收敛在 e2e/test-results/
 ```
 
