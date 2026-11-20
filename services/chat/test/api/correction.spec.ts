@@ -796,6 +796,198 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		expect(allocations[0].quantity.toFixed(4)).toBe("800.0000");
 	});
 
+	it.each([
+		{
+			label: "拒绝占用其他计划分配",
+			allocatedA: "100",
+			allocatedB: "900",
+			blocked: true,
+			supplement: "0.0000",
+		},
+		{
+			label: "允许用完未分配余额补分配",
+			allocatedA: "100",
+			allocatedB: "800",
+			blocked: false,
+			supplement: "100.0000",
+		},
+		{
+			label: "允许用完本计划剩余分配",
+			allocatedA: "200",
+			allocatedB: "800",
+			blocked: false,
+			supplement: "0.0000",
+		},
+	])("W6-01 USAGE 改大：$label", async ({ allocatedA, allocatedB, blocked, supplement }) => {
+		const user = await createTestUser(app, `corr-w6-01-${allocatedA}-${allocatedB}`);
+		const { userId } = user;
+		extraUserIds.push(userId);
+		const server = app.getHttpServer();
+		const auth = bearer(user.accessToken);
+		await request(server)
+			.post("/api/onboarding/consents")
+			.set(auth)
+			.send({ age18Confirmed: true, termsConfirmed: true })
+			.expect(201);
+		const onboarding = await request(server)
+			.post("/api/onboarding/complete")
+			.set(auth)
+			.send({
+				region: "CN",
+				locale: "zh-CN",
+				baseCurrency: "CNY",
+				prepPreference: "balanced",
+				reminderEnabled: false,
+			})
+			.expect(201);
+		const ledgerDay = new Date(onboarding.body.data.ledgerStartedAt);
+		const { transactionId } = await seedUnknownFeePurchase(user, ledgerDay);
+
+		async function createPlan(
+			name: string,
+			allocatedAmount: string,
+		): Promise<string> {
+			const res = await request(server)
+				.post("/api/plans")
+				.set(auth)
+				.send({
+					name,
+					targetCurrency: "USD",
+					targetAmount: "1000",
+					allocatedAmount,
+					expectUseDate: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+					prepLeadDays: 3,
+					pacePreference: "balanced",
+				})
+				.expect(201);
+			return res.body.data.id;
+		}
+
+		const planA = await createPlan("A", allocatedA);
+		const planB = await createPlan("B", allocatedB);
+		const used = await request(server)
+			.post(`/api/plans/${planA}/usages`)
+			.set(auth)
+			.send({ amount: "100", usedAt: ledgerDay.toISOString() })
+			.expect(201);
+		const usageId: string = used.body.data.usage.id;
+		const body = {
+			targetType: "USAGE",
+			targetId: usageId,
+			baseVersion: 1,
+			reason: "使用金额少记了 100",
+			changes: { amount: "200" },
+		};
+		const accountKey = { userId_currencyCode: { userId, currencyCode: "USD" } };
+		const planWhere = { planId: { in: [planA, planB] } };
+		const { prisma } = ctx;
+		const readBusinessRows = () => Promise.all([
+			prisma.account.findUniqueOrThrow({ where: accountKey }),
+			prisma.transaction.findUniqueOrThrow({ where: { id: transactionId } }),
+			prisma.usageRecord.findUniqueOrThrow({ where: { id: usageId } }),
+			prisma.plan.findMany({ where: { userId }, orderBy: { id: "asc" } }),
+			prisma.planAllocation.findMany({
+				where: planWhere,
+				orderBy: { planId: "asc" },
+			}),
+			prisma.planInstallment.findMany({
+				where: planWhere,
+				orderBy: { id: "asc" },
+			}),
+			prisma.planChangeLog.findMany({
+				where: planWhere,
+				orderBy: { id: "asc" },
+			}),
+			prisma.costLot.findMany({ where: { userId }, orderBy: { id: "asc" } }),
+			prisma.usageLotAllocation.findMany({
+				where: { usageId },
+				orderBy: { id: "asc" },
+			}),
+		]);
+		const before = await readBusinessRows();
+		const corrections = () => prisma.correction.findMany({ where: { userId } });
+		expect(await corrections()).toEqual([]);
+		const preview = await request(server)
+			.post("/api/corrections/preview")
+			.set(auth)
+			.send(body)
+			.expect(200);
+		const conflict = {
+			code: "CORRECTION_ALLOCATION_CONFLICT",
+			details: [
+				{
+					currencyCode: "USD",
+					shortfall: "100.0000",
+					usedAt: null,
+					planId: planB,
+				},
+			],
+		};
+
+		if (blocked) {
+			expect(preview.body.data.blockers).toMatchObject([conflict]);
+			expect(await corrections()).toEqual([]);
+			const rejected = await request(server)
+				.post("/api/corrections")
+				.set(auth)
+				.send(body)
+				.expect(409);
+			expect(rejected.body).toMatchObject(conflict);
+			expect(await readBusinessRows()).toEqual(before);
+			expect(await corrections()).toMatchObject([
+				{
+					targetType: "USAGE",
+					targetId: usageId,
+					status: "FAILED",
+					failReason: expect.stringContaining(conflict.code),
+					beforeSnapshot: { blockers: conflict.details },
+				},
+			]);
+			return;
+		}
+
+		expect(preview.body.data.blockers).toEqual([]);
+		const applied = await request(server)
+			.post("/api/corrections")
+			.set(auth)
+			.send(body)
+			.expect(201);
+		expect(applied.body.data).toMatchObject({
+			status: "APPLIED",
+			targetVersion: 2,
+		});
+		const corrected = await prisma.usageRecord.findUniqueOrThrow({
+			where: { id: usageId },
+		});
+		expect(corrected.amount.toFixed(4)).toBe("200.0000");
+		expect(corrected.version).toBe(2);
+		const allocationA = await prisma.planAllocation.findUniqueOrThrow({
+			where: { planId: planA },
+		});
+		expect(allocationA.amount.toFixed(4)).toBe("200.0000");
+		expect(allocationA.usedAmount.toFixed(4)).toBe("200.0000");
+		const allocationB = await prisma.planAllocation.findUniqueOrThrow({
+			where: { planId: planB },
+		});
+		expect(allocationB.amount.toFixed(4)).toBe("800.0000");
+		expect(allocationB.usedAmount.toFixed(4)).toBe("0.0000");
+		const account = await prisma.account.findUniqueOrThrow({ where: accountKey });
+		expect(account.balance.toFixed(4)).toBe("800.0000");
+		const logs = await prisma.planChangeLog.findMany({ where: planWhere });
+		expect(logs).toMatchObject(
+			supplement === "0.0000" ? [] : [
+				{
+					planId: planA,
+					changeType: "ALLOCATION_ADJUSTED",
+					afterSnapshot: { supplement },
+				},
+			],
+		);
+		expect(await corrections()).toMatchObject([
+			{ targetId: usageId, status: "APPLIED" },
+		]);
+	});
+
 	it("#12 USAGE 改大（补分配）：剩余分配不足 → supplement 补入并写 PlanChangeLog", async () => {
 		const { user, planId, u1Id } = await seedUsageScenario("corr-usage-increase");
 		const before = await ctx.prisma.usageRecord.findUniqueOrThrow({

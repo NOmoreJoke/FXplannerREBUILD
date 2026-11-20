@@ -721,6 +721,15 @@ export class CorrectionService {
 			);
 		}
 
+		// V2 按更正后的分配与使用额计算剩余分配，与落库增量一致。
+		context.get(originalUsage.currencyCode)!.planAllocations.set(usagePlan.id, {
+			planId: usagePlan.id,
+			amount: allocationAfter,
+			usedAmount: allocation.usedAmount.add(allocationDelta.usedAmountDelta),
+			planStatus: usagePlan.status,
+			targetAmount: usagePlan.targetAmount,
+		});
+
 		return {
 			targetType: "USAGE",
 			targetId: originalUsage.id,
@@ -750,16 +759,11 @@ export class CorrectionService {
 			costsBefore: collectUsageCosts(beforeReplays),
 			costsAfter: collectUsageCosts(afterReplays),
 			warnings: buildFeeWarnings(afterReplays),
-			// V2 跳过说明：collectReplayFailures 的 V2 用「变更前」的 planAllocations
-			// 判断未分配余额，对 USAGE 不成立——persistUsageCorrection 会按
-			// computeAllocationDelta 调整 amount/usedAmount（改小同减、改大先耗剩余
-			// 再补分配），调整后剩余分配 ≥ 0 由 delta 数学保证、分配池 ≥ 0 由
-			// CorrectionNotAllowed 拦截——故 USAGE 的 V2 一致性不依赖该陈旧检查
 			failures: this.collectReplayFailures(
 				affectedCurrencies,
 				afterReplays,
 				context,
-			).filter((failure) => failure.code !== "CORRECTION_ALLOCATION_CONFLICT"),
+			),
 			replayByCurrency: afterReplays,
 			feeChangedToUnknown: false,
 			planIdDetached: false,
