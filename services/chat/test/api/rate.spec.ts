@@ -629,6 +629,164 @@ describe("RateController（接口）", () => {
 	// vitest test.env 已注入 RATE_CRON_ENABLED="false"（vitest.config.ts §6.0），
 	// 定时调度在测试环境不真实触发；本组经端点直接驱动 runOnce，
 	// 验证与定时任务共用链路的 HTTP 语义与落库行为。
+	describe("latest 八位报价门槛（真实 AppModule + PostgreSQL）", () => {
+		let ctx: TestContext;
+		let routes: RateSourceRoutes;
+		let stub: ReturnType<typeof createRateSourceFetchStub>;
+		const observedAt = new Date("2026-09-15T00:00:00.000Z");
+		const pair = { base: "CNY", quote: "MYR" };
+		const affected = { base: pair.base, quote: { in: ["MYR", "TWD", "USD", "HKD"] } };
+
+		beforeAll(async () => {
+			routes = {};
+			stub = createRateSourceFetchStub(routes);
+			ctx = await buildRateApp("multi", stub, disableThrottler);
+		});
+
+		beforeEach(async () => {
+			await ctx.prisma.exchangeRate.deleteMany({ where: affected });
+			resetAbcSourceState([ctx.app]);
+			stub.mockClear();
+			routes.abc = undefined;
+			routes.erApi = undefined;
+			routes.frankfurter = undefined;
+		});
+
+		afterAll(async () => {
+			await ctx.prisma.exchangeRate.deleteMany({ where: affected });
+			await ctx.app.close();
+		});
+
+		it("Frankfurter 舍入为零：强制刷新返回 502，既有有效报价仍可从缓存读取", async () => {
+			const previous = await ctx.prisma.exchangeRate.create({
+				data: { ...pair, observedAt, rate: "1.6388069485", source: "frankfurter" },
+			});
+			routes.frankfurter = () =>
+				jsonResponse(frankfurterLatestBody("2026-09-15", { MYR: "500000000" }));
+
+			const server = ctx.app.getHttpServer();
+			const failure = await request(server)
+				.get("/api/rates/latest/CNY?targets=MYR&refresh=true")
+				.expect(502);
+			expect(failure.body).toMatchObject({
+				code: "RATE_SOURCE_UNAVAILABLE",
+				lastObservedAt: observedAt.toISOString(),
+			});
+			expect(await ctx.prisma.exchangeRate.findMany({ where: pair })).toEqual([previous]);
+
+			const cached = await request(server)
+				.get("/api/rates/latest/CNY?targets=MYR")
+				.expect(200);
+			expect(cached.body.data).toMatchObject({
+				rate: "1.63880695",
+				fresh: true,
+			});
+			expect(stub).toHaveBeenCalledTimes(1);
+		});
+
+		it("ErApi 倒数和 ABC 卖出价归零时仅标记对应项，Frankfurter 半单位和同源 HKD 仍有效", async () => {
+			routes.erApi = () => jsonResponse(erApiLatestBody({ TWD: "205000000" }));
+			routes.frankfurter = () =>
+				jsonResponse(frankfurterLatestBody("2026-09-15", { MYR: "200000000" }));
+			const [usd, ...rest] = ABC_SAMPLE_FIXTURE.Data.Table;
+			routes.abc = () =>
+				jsonResponse({
+					...ABC_SAMPLE_FIXTURE,
+					Data: { Table: [{ ...usd, SellPrice: "0.00000049" }, ...rest] },
+				});
+
+			const res = await request(ctx.app.getHttpServer())
+				.get("/api/rates/latest/CNY?targets=TWD,USD,MYR,HKD&refresh=true")
+				.expect(200);
+			expect(res.body.data.items).toMatchObject([
+				{ target: "TWD", error: { code: "RATE_SOURCE_UNAVAILABLE", lastObservedAt: null } },
+				{ target: "USD", error: { code: "RATE_SOURCE_UNAVAILABLE", lastObservedAt: null } },
+				{ target: "MYR", source: "frankfurter", rate: "1e-8", fresh: true },
+				{ target: "HKD", source: "abc", rate: "0.85534", sellRate: "0.85705", fresh: true },
+			]);
+			for (const item of res.body.data.items.slice(0, 2)) {
+				expect(Object.keys(item).sort()).toEqual(["error", "target"]);
+			}
+			const stored = await ctx.prisma.exchangeRate.findMany({
+				where: affected,
+				orderBy: { quote: "asc" },
+			});
+			expect(stored.map(({ quote, rate }) => [quote, rate.toFixed(10)])).toEqual([
+				["HKD", "0.8553400000"],
+				["MYR", "0.0000000050"],
+			]);
+		});
+
+		it.each([0, 6])("缓存确认于 %i 分钟前且报价归零：同步回源，失败时 502，恢复后正常返回", async (minutes) => {
+			const previous = await ctx.prisma.exchangeRate.create({
+				data: {
+					...pair,
+					observedAt,
+					createdAt: new Date(Date.now() - minutes * 60_000),
+					rate: "0.0000000020",
+					source: "frankfurter",
+				},
+			});
+			routes.frankfurter = () =>
+				jsonResponse(frankfurterLatestBody("2026-09-15", { MYR: "500000000" }));
+			const server = ctx.app.getHttpServer();
+			const path = "/api/rates/latest/CNY?targets=MYR";
+			const failure = await request(server).get(path).expect(502);
+			expect(failure.body).toMatchObject({
+				code: "RATE_SOURCE_UNAVAILABLE",
+				lastObservedAt: null,
+			});
+			expect(await ctx.prisma.exchangeRate.findMany({ where: pair })).toEqual([previous]);
+
+			routes.frankfurter = () =>
+				jsonResponse(frankfurterLatestBody("2026-09-15", { MYR: "0.6102" }));
+			const recovered = await request(server).get(path).expect(200);
+			expect(recovered.body.data).toMatchObject({ rate: "1.63880695", fresh: true });
+			expect(stub).toHaveBeenCalledTimes(2);
+			const stored = await ctx.prisma.exchangeRate.findMany({ where: pair });
+			expect(stored).toHaveLength(1);
+			expect(stored[0].rate.toFixed(10)).toBe("1.6388069485");
+		});
+
+		it.each([
+			{ sellRate: "0.0000000049", status: 502 },
+			{ sellRate: "7.1250000000", status: 200 },
+		])("ABC 省略卖出价时，保留的 $sellRate 决定同一报价更新能否提交", async ({ sellRate, status }) => {
+			const [usd, ...rest] = ABC_SAMPLE_FIXTURE.Data.Table;
+			const usdPair = { base: "CNY", quote: "USD" };
+			const previous = await ctx.prisma.exchangeRate.create({
+				data: {
+					...usdPair,
+					observedAt: new Date(usd.PublishTime),
+					createdAt: observedAt,
+					rate: "6.7100000000",
+					sellRate,
+					source: "abc",
+				},
+			});
+			routes.abc = () =>
+				jsonResponse({
+					...ABC_SAMPLE_FIXTURE,
+					Data: { Table: [{ ...usd, SellPrice: undefined }, ...rest] },
+				});
+
+			const res = await request(ctx.app.getHttpServer())
+				.get("/api/rates/latest/CNY?targets=USD&refresh=true")
+				.expect(status);
+			const rows = await ctx.prisma.exchangeRate.findMany({ where: usdPair });
+			if (status === 502) {
+				expect(res.body).toMatchObject({ code: "RATE_SOURCE_UNAVAILABLE", lastObservedAt: null });
+				expect(rows).toEqual([previous]);
+			} else {
+				expect(res.body.data).toMatchObject({ rate: "6.71055", sellRate: "7.125", fresh: true });
+				expect(rows).toHaveLength(1);
+				expect(rows[0].id).toBe(previous.id);
+				expect(rows[0].sellRate?.toFixed(10)).toBe(sellRate);
+				expect(rows[0].createdAt.getTime()).toBeGreaterThan(previous.createdAt.getTime());
+			}
+		});
+	});
+
 	describe("cron-refresh 端点（真实 AppModule + fetch stub）", () => {
 		const healthyRoutes: RateSourceRoutes = {
 			abc: async () => jsonResponse(buildFullAbcFixture()),

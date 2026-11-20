@@ -26,16 +26,6 @@ import {
 } from './rate.errors';
 import { RateProvider, type RateHistoryPoint } from './rate.provider';
 
-/** ExchangeRate 行中本模块关心的字段（rate 为 Prisma Decimal，mock 下可为任意 toString 对象） */
-interface LatestRow {
-  quote: string;
-  rate: { toString(): string };
-  sellRate?: { toString(): string } | null;
-  source: string;
-  observedAt: Date;
-  createdAt: Date;
-}
-
 /** 项级成功数据：confirmedAt = 最后一次确认时间（窗口基准） */
 interface LatestQuoteData {
   rate: string;
@@ -161,7 +151,7 @@ export class RateService {
    *   （方案 §2.2 裁决，schema 冻结下 updatedAt 语义的等价落点）；
    * - fresh = now < createdAt + 5min（严格小于，恰好满 5 分钟过期）；
    * - 同币种恒等报价 rate="1" 本地生成不外呼；
-   * - refresh=false 的三档决策（changes/rate-stale-echo-fix/技术方案.md §3.1）：
+   * - refresh=false 以八位精度下仍为正数的缓存报价执行三档决策（changes/rate-stale-echo-fix/技术方案.md §3.1）：
    *   ① 全部目标窗口内 → 命中返回；② 全部目标有行但超窗 → 立即回显旧值
    *   （fresh=false 如实标注）+ 后台异步单飞回源（失败仅告警不上抛）；
    *   ③ 任一目标无行（冷启动）→ 同步回源；
@@ -172,32 +162,35 @@ export class RateService {
     const requested = this.normalizeTargets(targets);
     const externalTargets = requested.filter((target) => target !== normalizedBase);
 
-    const rows = await this.findLatestRows(normalizedBase, requested);
+    const cached = await this.findLatestPublishableQuotes(
+      normalizedBase,
+      requested,
+    );
     const now = Date.now();
     const allFresh = requested.every((target) => {
-      const row = rows.get(target);
-      return row !== undefined && now < row.createdAt.getTime() + QUOTE_TTL_MS;
+      const quote = cached.get(target);
+      return quote !== undefined && now < quote.confirmedAt.getTime() + QUOTE_TTL_MS;
     });
 
     let group: GroupResult;
     if (!refresh && allFresh) {
-      group = this.cachedGroup(requested, rows);
-    } else if (!refresh && requested.every((target) => rows.has(target))) {
+      group = cached;
+    } else if (!refresh && requested.every((target) => cached.has(target))) {
       // SWR 陈旧回显：库内齐但超窗 → 先用旧值响应（不阻塞），后台异步回源落库；
       // 回源成功经 upsert 刷新 createdAt 重置窗口，前端轮询自然拿到新值
-      group = this.cachedGroup(requested, rows);
+      group = cached;
       this.kickBackgroundRefresh(
         normalizedBase,
         requested,
         externalTargets,
-        rows,
+        cached,
       );
     } else {
       group = await this.refreshWithSingleFlight(
         normalizedBase,
         requested,
         externalTargets,
-        rows,
+        cached,
       );
     }
 
@@ -628,12 +621,12 @@ export class RateService {
     return normalized;
   }
 
-  /** 每个币对取 observedAt 最新一行（窗口与兑底提示都基于该行） */
-  private async findLatestRows(
+  /** 每个币对取 observedAt 最新且可发布的报价，供窗口和 lastObservedAt 使用。 */
+  private async findLatestPublishableQuotes(
     base: string,
     quotes: string[],
-  ): Promise<Map<string, LatestRow>> {
-    const latest = new Map<string, LatestRow>();
+  ): Promise<Map<string, LatestQuoteData>> {
+    const latest = new Map<string, LatestQuoteData>();
     if (quotes.length === 0) return latest;
 
     const rows = await this.prisma.exchangeRate.findMany({
@@ -641,28 +634,34 @@ export class RateService {
       orderBy: { observedAt: 'desc' },
     });
     for (const row of rows) {
-      if (!latest.has(row.quote)) latest.set(row.quote, row);
-    }
-    return latest;
-  }
-
-  /** 窗口内命中/陈旧回显共用的组构建：行值原样映射，绝不触碰行（不重置窗口） */
-  private cachedGroup(
-    requested: string[],
-    rows: Map<string, LatestRow>,
-  ): GroupResult {
-    const group: GroupResult = new Map();
-    for (const target of requested) {
-      const row = rows.get(target)!;
-      group.set(target, {
-        rate: row.rate.toString(),
-        ...(row.sellRate != null ? { sellRate: row.sellRate.toString() } : {}),
+      if (latest.has(row.quote)) continue;
+      const prices = this.publishablePrices(
+        row.rate.toString(),
+        row.sellRate?.toString(),
+      );
+      if (prices === undefined) continue;
+      latest.set(row.quote, {
+        ...prices,
         source: row.source,
         observedAt: row.observedAt,
         confirmedAt: row.createdAt,
       });
     }
-    return group;
+    return latest;
+  }
+
+  /** 发布精度为 8 位 HALF_UP，每个报价字段舍入后都须为有限正数。 */
+  private publishablePrices(
+    rate: string,
+    sellRate?: string,
+  ): Pick<LatestQuoteData, 'rate' | 'sellRate'> | undefined {
+    const roundedRate = roundRateTo8(rate);
+    if (!roundedRate.isFinite() || !roundedRate.gt(0)) return undefined;
+    if (sellRate === undefined) return { rate: roundedRate.toString() };
+
+    const roundedSellRate = roundRateTo8(sellRate);
+    if (!roundedSellRate.isFinite() || !roundedSellRate.gt(0)) return undefined;
+    return { rate: roundedRate.toString(), sellRate: roundedSellRate.toString() };
   }
 
   /**
@@ -674,13 +673,13 @@ export class RateService {
     base: string,
     requested: string[],
     externalTargets: string[],
-    rows: Map<string, LatestRow>,
+    cached: Map<string, LatestQuoteData>,
   ): void {
     void this.refreshWithSingleFlight(
       base,
       requested,
       externalTargets,
-      rows,
+      cached,
     ).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(
@@ -694,7 +693,7 @@ export class RateService {
     base: string,
     requested: string[],
     externalTargets: string[],
-    rows: Map<string, LatestRow>,
+    cached: Map<string, LatestQuoteData>,
   ): Promise<GroupResult> {
     const key = `${base}|${[...requested].sort().join(',')}`;
     const existing = this.inFlight.get(key);
@@ -704,7 +703,7 @@ export class RateService {
       base,
       requested,
       externalTargets,
-      rows,
+      cached,
     ).finally(() => {
       this.inFlight.delete(key);
     });
@@ -720,7 +719,7 @@ export class RateService {
     base: string,
     requested: string[],
     externalTargets: string[],
-    rows: Map<string, LatestRow>,
+    cached: Map<string, LatestQuoteData>,
   ): Promise<GroupResult> {
     const confirmedAt = new Date();
     const results: GroupResult = new Map();
@@ -728,7 +727,7 @@ export class RateService {
       base,
       requested,
       externalTargets,
-      rows,
+      cached,
       confirmedAt,
       results,
     );
@@ -759,7 +758,7 @@ export class RateService {
     base: string,
     requested: string[],
     externalTargets: string[],
-    rows: Map<string, LatestRow>,
+    cached: Map<string, LatestQuoteData>,
     confirmedAt: Date,
     results: GroupResult,
   ): Promise<Date | undefined> {
@@ -769,6 +768,7 @@ export class RateService {
     try {
       const batch = await this.provider.fetchLatestBatch(base, externalTargets);
       for (const target of externalTargets) {
+        const lastObservedAt = cached.get(target)?.observedAt ?? null;
         // 多源部分失败：该源币对 502 下沉，不拖垮同组其余币对
         const failure = batch.failures?.[target];
         if (failure !== undefined) {
@@ -778,7 +778,7 @@ export class RateService {
               base,
               target,
               failure,
-              rows.get(target)?.observedAt ?? null,
+              lastObservedAt,
             ),
           );
           continue;
@@ -789,10 +789,8 @@ export class RateService {
           results.set(target, this.unsupportedError(base, target));
           continue;
         }
-        groupObservedAt ??= quote.observedAt;
-        results.set(
-          target,
-          await this.persistQuote({
+        const result = await this.persistQuote(
+          {
             base,
             target,
             rate: quote.rate,
@@ -800,8 +798,11 @@ export class RateService {
             source: batch.sources?.[target] ?? batch.source,
             observedAt: quote.observedAt,
             confirmedAt,
-          }),
+          },
+          lastObservedAt,
         );
+        if (!('code' in result)) groupObservedAt ??= result.observedAt;
+        results.set(target, result);
       }
     } catch (error) {
       if (
@@ -812,7 +813,7 @@ export class RateService {
         // 降级逐个单查：坏币种标记 422，好币种照常落库，不拖垮同组
         await Promise.all(
           externalTargets.map((target) =>
-            this.refreshSingleExternal(base, target, rows, confirmedAt, results),
+            this.refreshSingleExternal(base, target, cached, confirmedAt, results),
           ),
         );
       } else if (requested.length === 1) {
@@ -821,7 +822,7 @@ export class RateService {
           throw error;
         }
         throw new RateSourceUnavailableException(
-          rows.get(requested[0])?.observedAt ?? null,
+          cached.get(requested[0])?.observedAt ?? null,
         );
       } else {
         // 多目标整批失败：逐项 502 error 下沉（恒等项不受影响，照常返回）
@@ -832,7 +833,7 @@ export class RateService {
               base,
               target,
               error,
-              rows.get(target)?.observedAt ?? null,
+              cached.get(target)?.observedAt ?? null,
             ),
           );
         }
@@ -845,23 +846,27 @@ export class RateService {
   private async refreshSingleExternal(
     base: string,
     target: string,
-    rows: Map<string, LatestRow>,
+    cached: Map<string, LatestQuoteData>,
     confirmedAt: Date,
     results: GroupResult,
   ): Promise<void> {
+    const lastObservedAt = cached.get(target)?.observedAt ?? null;
     try {
       const quote = await this.provider.fetchLatest(base, target);
       results.set(
         target,
-        await this.persistQuote({
-          base,
-          target,
-          rate: quote.rate,
-          ...(quote.sellRate !== undefined ? { sellRate: quote.sellRate } : {}),
-          source: quote.source,
-          observedAt: quote.observedAt,
-          confirmedAt,
-        }),
+        await this.persistQuote(
+          {
+            base,
+            target,
+            rate: quote.rate,
+            ...(quote.sellRate !== undefined ? { sellRate: quote.sellRate } : {}),
+            source: quote.source,
+            observedAt: quote.observedAt,
+            confirmedAt,
+          },
+          lastObservedAt,
+        ),
       );
     } catch (fallbackError) {
       results.set(
@@ -870,7 +875,7 @@ export class RateService {
           base,
           target,
           fallbackError,
-          rows.get(target)?.observedAt ?? null,
+          lastObservedAt,
         ),
       );
     }
@@ -881,23 +886,46 @@ export class RateService {
    * sellRate 仅在有值时写入（create 与 update 同步落 sell_rate 列；缺省不触碰该列，
    * 避免无卖出价的源/恒等报价洗掉同行既有值）。
    */
-  private async persistQuote(quote: QuoteToPersist): Promise<LatestQuoteData> {
+  private async persistQuote(
+    quote: QuoteToPersist,
+    lastObservedAt: Date | null = null,
+  ): Promise<LatestQuoteData | LatestQuoteError> {
     const { base, target, rate, sellRate, source, observedAt, confirmedAt } = quote;
+    if (this.publishablePrices(rate, sellRate) === undefined) {
+      return this.unavailableError(lastObservedAt);
+    }
     const sellRateField = sellRate !== undefined ? { sellRate } : {};
-    const row = await this.prisma.exchangeRate.upsert({
-      where: {
-        base_quote_observedAt: { base, quote: target, observedAt },
-      },
-      create: { base, quote: target, rate, source, observedAt, ...sellRateField },
-      update: { rate, source, createdAt: confirmedAt, ...sellRateField },
-    });
-    return {
-      rate: row.rate.toString(),
-      ...(row.sellRate != null ? { sellRate: row.sellRate.toString() } : {}),
-      source: row.source,
-      observedAt: row.observedAt,
-      confirmedAt: row.createdAt,
+    const writeQuote = async ({ exchangeRate }: Pick<PrismaService, 'exchangeRate'>) => {
+      const row = await exchangeRate.upsert({
+        where: {
+          base_quote_observedAt: { base, quote: target, observedAt },
+        },
+        create: { base, quote: target, rate, source, observedAt, ...sellRateField },
+        update: { rate, source, createdAt: confirmedAt, ...sellRateField },
+      });
+      const prices = this.publishablePrices(
+        row.rate.toString(),
+        row.sellRate?.toString(),
+      );
+      if (prices === undefined) throw new RateSourceUnavailableException(lastObservedAt);
+      return {
+        ...prices,
+        source: row.source,
+        observedAt: row.observedAt,
+        confirmedAt: row.createdAt,
+      };
     };
+    try {
+      // 缺省卖出价会保留同行既有值，须在提交前确认实际保留的价格可发布。
+      return await (sellRate === undefined
+        ? this.prisma.$transaction(writeQuote)
+        : writeQuote(this.prisma));
+    } catch (error) {
+      if (error instanceof RateSourceUnavailableException) {
+        return this.unavailableError(lastObservedAt);
+      }
+      throw error;
+    }
   }
 
   private unsupportedError(base: string, target: string): LatestQuoteError {
@@ -917,6 +945,10 @@ export class RateService {
     if (error instanceof RatePairUnsupportedException) {
       return this.unsupportedError(base, target);
     }
+    return this.unavailableError(lastObservedAt);
+  }
+
+  private unavailableError(lastObservedAt: Date | null): LatestQuoteError {
     return {
       code: 'RATE_SOURCE_UNAVAILABLE',
       message: lastObservedAt
@@ -926,7 +958,6 @@ export class RateService {
     };
   }
 
-  /** 组装响应项：rate/sellRate 用 money 包 roundRateTo8 输出 8 位（库中原值保留）；sellRate 缺省时不下发该字段 */
   private toItem(
     target: string,
     entry: LatestQuoteData | LatestQuoteError,
@@ -937,10 +968,8 @@ export class RateService {
     const validUntil = new Date(entry.confirmedAt.getTime() + QUOTE_TTL_MS);
     return {
       target,
-      rate: roundRateTo8(entry.rate).toString(),
-      ...(entry.sellRate !== undefined
-        ? { sellRate: roundRateTo8(entry.sellRate).toString() }
-        : {}),
+      rate: entry.rate,
+      ...(entry.sellRate !== undefined ? { sellRate: entry.sellRate } : {}),
       source: entry.source,
       observedAt: entry.observedAt.toISOString(),
       validUntil: validUntil.toISOString(),

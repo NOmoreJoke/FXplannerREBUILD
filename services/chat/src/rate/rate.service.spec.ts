@@ -1,4 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
+import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaService } from "../prisma/prisma.service";
 import { utc8DayStart } from "../transaction/transaction-calculator";
@@ -41,6 +42,7 @@ const DAY_OBSERVED_AT = LAST_FRIDAY;
 describe("RateService", () => {
 	let service: RateService;
 	let prisma: {
+		$transaction: ReturnType<typeof vi.fn>;
 		exchangeRate: {
 			findFirst: ReturnType<typeof vi.fn>;
 			findMany: ReturnType<typeof vi.fn>;
@@ -77,6 +79,9 @@ describe("RateService", () => {
 	beforeEach(() => {
 		vi.useFakeTimers({ now: T0 });
 		prisma = {
+			$transaction: vi.fn((write: (db: typeof prisma) => Promise<unknown>) =>
+				write(prisma),
+			),
 			exchangeRate: {
 				findFirst: vi.fn(),
 				findMany: vi.fn(),
@@ -542,6 +547,78 @@ describe("RateService", () => {
 		).toMatchObject({
 			lastObservedAt: null,
 		});
+	});
+
+	it("八位报价门槛遵守 HALF_UP 的半单位边界（基准价和卖出价）", async () => {
+		const boundaryTicks = fc.oneof(
+			fc.constantFrom(0, 1, 49, 50, 51, 99, 100),
+			fc.integer({ min: 0, max: 149 }),
+		);
+		const storagePrice = (ticks: number) =>
+			`0.${String(ticks).padStart(10, "0")}`;
+		// 每个八位单位对应 100 个十位单位，正数在第 50 个十位单位向上进位。
+		const publishedUnits = (ticks: number) => Math.floor((ticks + 50) / 100);
+		prisma.exchangeRate.findMany.mockResolvedValue([]);
+
+		await fc.assert(
+			fc.asyncProperty(
+				boundaryTicks,
+				fc.option(boundaryTicks, { nil: undefined }),
+				async (rateTicks, sellTicks) => {
+					const rate = storagePrice(rateTicks);
+					const sellRate = sellTicks === undefined ? undefined : storagePrice(sellTicks);
+					prisma.exchangeRate.upsert.mockClear();
+					prisma.exchangeRate.upsert.mockResolvedValue(
+						mkRow("USD", {
+							rate: decimal(rate),
+							sellRate: sellRate === undefined ? null : decimal(sellRate),
+						}),
+					);
+					provider.fetchLatestBatch.mockResolvedValue({
+						source: "abc",
+						quotes: { USD: { rate, sellRate, observedAt: LAST_FRIDAY } },
+					});
+
+					const rateUnits = publishedUnits(rateTicks);
+					const sellUnits = sellTicks === undefined ? undefined : publishedUnits(sellTicks);
+					const result = service.getLatest("CNY", ["USD"], true);
+					if (rateUnits === 0 || sellUnits === 0) {
+						await expect(result).rejects.toBeInstanceOf(RateSourceUnavailableException);
+						expect(prisma.exchangeRate.upsert).not.toHaveBeenCalled();
+					} else {
+						await expect(result).resolves.toMatchObject({
+							rate: `${rateUnits}e-8`,
+							...(sellUnits === undefined ? {} : { sellRate: `${sellUnits}e-8` }),
+							fresh: true,
+						});
+						expect(prisma.exchangeRate.upsert).toHaveBeenCalledTimes(1);
+					}
+				},
+			),
+			{ seed: 204, numRuns: 150 },
+		);
+	});
+
+	it("跳过较新的无效缓存，保留最近可发布的报价及其时间", async () => {
+		const latestValid = mkRow("USD");
+		prisma.exchangeRate.findMany.mockResolvedValue([
+			mkRow("USD", { observedAt: T0, sellRate: decimal("0.0000000049") }),
+			latestValid,
+		]);
+		await expect(service.getLatest("CAD")).resolves.toMatchObject({
+			rate: "0.73",
+			observedAt: latestValid.observedAt.toISOString(),
+			fresh: true,
+		});
+		expect(provider.fetchLatestBatch).not.toHaveBeenCalled();
+
+		provider.fetchLatestBatch.mockResolvedValue(mkBatch({ USD: "0.0000000049" }));
+		const error = await service.getLatest("CAD", ["USD"], true).catch((err) => err);
+		expect(error).toBeInstanceOf(RateSourceUnavailableException);
+		expect(error.getResponse()).toMatchObject({
+			lastObservedAt: latestValid.observedAt.toISOString(),
+		});
+		expect(prisma.exchangeRate.upsert).not.toHaveBeenCalled();
 	});
 
 	it("多目标数据源不可用：错误逐项下沉（各自 lastObservedAt），HTTP 整体 200", async () => {
