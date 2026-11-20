@@ -45,6 +45,9 @@ PrismaClient 与 `src/rate/rate-invert` 取倒数口径，保证转换期望值�
 盘点后，人工核对并填入 `approvedCandidateIds`，保留这份清单及其 `inventoryId`
 供转换、复跑与回滚使用。
 
+`invert` 和 `rollback` 写入前需要同时传入两个独立的裸旗标。旗标带值
+（无论用空格还是等号）、拼写错误或重复时，CLI 在读取清单前以退出码 1 结束。
+
 ```bash
 bun run prisma/rate-cache-migration/migrate.ts inventory > /path/to/inventory.json
 bun run prisma/rate-cache-migration/migrate.ts invert < /path/to/inventory.json          # dry-run

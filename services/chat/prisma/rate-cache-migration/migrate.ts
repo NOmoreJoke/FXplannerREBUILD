@@ -56,27 +56,6 @@ interface FrozenInventory {
 	};
 }
 
-function parseArgs(argv: string[]): Record<string, string> {
-	const args: Record<string, string> = {};
-	for (let index = 2; index < argv.length; index += 1) {
-		const token = argv[index];
-		if (token.startsWith("--")) {
-			const key = token.slice(2);
-			const next = argv[index + 1];
-			// 布尔旗标（--apply / --confirm-backup-target）不带值；其余 --key value
-			if (next !== undefined && !next.startsWith("--")) {
-				args[key] = next;
-				index += 1;
-			} else {
-				args[key] = "true";
-			}
-		} else {
-			args.command = token;
-		}
-	}
-	return args;
-}
-
 /** 从 stdin 读取冻结清单 JSON（校验和核对在 verifyFrozenPlan 全量比对中完成） */
 async function readFrozenFromStdin(): Promise<FrozenInventory> {
 	const chunks: string[] = [];
@@ -102,8 +81,7 @@ async function disconnectQuietly(
 }
 
 async function main(): Promise<void> {
-	const args = parseArgs(process.argv);
-	const command = args.command;
+	const [command, ...flags] = process.argv.slice(2);
 	if (
 		command !== "inventory" &&
 		command !== "invert" &&
@@ -112,6 +90,28 @@ async function main(): Promise<void> {
 		console.error(
 			"用法：migrate.ts <inventory/invert/rollback> [--apply --confirm-backup-target]" +
 				"（清单经 stdout/stdin 管道传递）",
+		);
+		process.exit(1);
+	}
+
+	// 写入确认只认完整的裸旗标；在读取清单或创建客户端前拒绝非法参数。
+	const options = new Set(flags);
+	if (
+		(command === "inventory" && flags.length > 0) ||
+		options.size !== flags.length ||
+		flags.some((flag) => flag !== "--apply" && flag !== "--confirm-backup-target")
+	) {
+		console.error(
+			"参数无效：inventory 不接收旗标，invert / rollback 仅接受不带值且不重复的 --apply 和 --confirm-backup-target。",
+		);
+		process.exit(1);
+	}
+
+	const apply = options.has("--apply");
+	if (apply && !options.has("--confirm-backup-target")) {
+		console.error(
+			"--apply 需要显式携带 --confirm-backup-target（人工确认 DATABASE_URL " +
+				"指向备份副本；生产 fxplanner_prod 的维护窗口由人类另行批准）",
 		);
 		process.exit(1);
 	}
@@ -188,7 +188,7 @@ async function main(): Promise<void> {
 			approvedCandidateIds: frozen.approvedCandidateIds,
 		});
 
-		if (args.apply && plan.candidates.length === 0) {
+		if (apply && plan.candidates.length === 0) {
 			console.error(
 				"approvedCandidateIds 为空（尚未人工圈选任何候选）：自动分类只给可疑候选，" +
 					"请在冻结清单 JSON 中人工核对方向证据后填写 approvedCandidateIds" +
@@ -198,7 +198,7 @@ async function main(): Promise<void> {
 			process.exit(1);
 		}
 
-		if (plan.conflicts.length > 0 && args.apply) {
+		if (plan.conflicts.length > 0 && apply) {
 			// 冲突行未核实不得放行（§3.1）：存在冲突 → 拒绝 --apply（dry-run 仍可查看）
 			console.error(
 				`存在 ${plan.conflicts.length} 条冲突行（id/原因：` +
@@ -211,7 +211,7 @@ async function main(): Promise<void> {
 			process.exit(1);
 		}
 
-		if (!args.apply) {
+		if (!apply) {
 			const updates = plan.candidates.map((candidate) => ({
 				id: candidate.row.id,
 				batch: candidate.batch,
@@ -237,16 +237,6 @@ async function main(): Promise<void> {
 			}
 			await disconnectQuietly(prisma);
 			return;
-		}
-
-		// --apply 双确认：执行旗标 + 备份目标人工确认旗标
-		if (args["confirm-backup-target"] !== "true") {
-			console.error(
-				"--apply 需要显式携带 --confirm-backup-target（人工确认 DATABASE_URL " +
-					"指向备份副本；生产 fxplanner_prod 的维护窗口由人类另行批准）",
-			);
-			await disconnectQuietly(prisma);
-			process.exit(1);
 		}
 
 		const inventoryId = requireInventoryId(frozen.inventoryId);
