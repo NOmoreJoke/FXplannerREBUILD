@@ -1,7 +1,7 @@
 /**
  * 更正与日志接口测试（corrections 技术方案 §8.2，场景 1~24）。
- * 数值锚定 doc 14 例 10/11/12 与 doc 15 FIFO 例；时钟隔离：日期全部相对「今天」构造
- * （daysAgo(n)），不依赖 vi.setSystemTime（重放排序断言用显式 createdAt 序列）。
+ * 数值锚定 doc 14 例 10/11/12 与 doc 15 FIFO 例。常规交易日期相对今天构造，
+ * 原时点取价用固定 UTC+8 日期。测试不修改系统时钟。
  * USAGE 更正场景（#11~#16）在 M7 接线前按方案 §10 降级断言 400
  * CORRECTION_TARGET_TYPE_UNAVAILABLE，M7 落地后恢复为原场景断言。
  */
@@ -17,7 +17,7 @@ import {
 	type TestUser,
 } from "../helpers/test-app";
 import { ensureOnboarded } from "../helpers/onboarding-helper";
-import { utc8DayStart } from "../../src/transaction/transaction-calculator";
+import { RateProvider } from "../../src/rate/rate.provider";
 import {
 	seedInitialHolding,
 	seedPlanWithAllocationRow,
@@ -44,7 +44,6 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 	let app: INestApplication;
 	let ctx: TestContext;
 	const extraUserIds: string[] = [];
-	const extraRateRowIds: string[] = [];
 
 	beforeAll(async () => {
 		ctx = await createTestApp();
@@ -67,9 +66,6 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			});
 			await ctx.prisma.usageLotAllocation.deleteMany({
 				where: { usageId: { in: usages.map((usage) => usage.id) } },
-			});
-			await ctx.prisma.exchangeRate.deleteMany({
-				where: { id: { in: extraRateRowIds.splice(0).reverse() } },
 			});
 			await cleanupUser(ctx.prisma, userId);
 		}
@@ -799,13 +795,35 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		expect(account.balance.toFixed(4)).toBe("0.0000"); // 账户归零保留
 	});
 
-	// ── #19 初始币种更正（Should Have：原时点 ±5 分钟报价）──
-	it("#19 初始币种更正：窗口内无报价 → 400 RATE_QUOTE_UNAVAILABLE；有报价 → 200 且新三元组落库", async () => {
-		const user = await newUser("corr-holding-currency");
-		// 币种更正依赖 baseCurrency 判定（≠ 本位币、原时点取价方向）；
-		// settings 已由 newUser→ensureOnboarded 建（CNY），无需重复建设置
-		// confirmedAt 取过去某日正午：M2 日级历史（0 点）不会落入 ±5 分钟窗口
-		const confirmedAt = new Date(daysAgo(3).getTime() + 6 * 60 * 60 * 1000);
+	// FX-05：2020-09-20 是周日，按 UTC+8 的自然日计算回看窗口。
+	it.each([
+		{
+			time: "00:05",
+			selectedAt: "2020-09-19T23:50:00+08:00",
+			olderEligibleAt: ["2020-09-13T00:00:00+08:00"],
+		},
+		{
+			time: "14:30",
+			selectedAt: "2020-09-20T13:00:00+08:00",
+			olderEligibleAt: [
+				"2020-09-19T23:50:00+08:00",
+				"2020-09-20T08:00:00+08:00",
+			],
+		},
+		{
+			time: "23:55",
+			selectedAt: "2020-09-13T00:00:00+08:00",
+			olderEligibleAt: [],
+		},
+	])("#19 CNY/TWD 原时点更正（UTC+8 $time）：排除无效行，预览和提交选中合格报价", async ({
+		time,
+		selectedAt,
+		olderEligibleAt,
+	}) => {
+		expect(app.get(RateProvider).sourceForPair("CNY", "TWD")).toBe("er-api");
+
+		const user = await newUser(`corr-twd-${time.replace(":", "")}`);
+		const confirmedAt = new Date(`2020-09-20T${time}:00+08:00`);
 		const { holdingId } = await seedInitialHolding(ctx.prisma, {
 			userId: user.userId,
 			currencyCode: "USD",
@@ -814,184 +832,120 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			cost: "7248.0000",
 			confirmedAt,
 		});
-		const before = await ctx.prisma.initialHolding.findUniqueOrThrow({
-			where: { id: holdingId },
-		});
 
-		// 无报价（本地无窗口行；外呼回补为日级粒度，不落窗口）→ 400
-		await request(app.getHttpServer())
-			.post("/api/corrections/preview")
-			.set(bearer(user.accessToken))
-			.send({
-				targetType: "INITIAL_HOLDING",
-				targetId: holdingId,
-				baseUpdatedAt: before.updatedAt.toISOString(),
-				reason: "当时持有的是加元",
-				changes: { currencyCode: "CAD" },
-			})
-			.expect(400)
-			.expect((errorRes) => {
-				expect(errorRes.body.code).toBe("RATE_QUOTE_UNAVAILABLE");
+		const where = { userId: user.userId };
+		async function ledgerSnapshot() {
+			const [holdings, lots, accounts, corrections, transactions] = await Promise.all([
+				ctx.prisma.initialHolding.findMany({ where, orderBy: { id: "asc" } }),
+				ctx.prisma.costLot.findMany({ where, orderBy: { id: "asc" } }),
+				ctx.prisma.account.findMany({ where, orderBy: { id: "asc" } }),
+				ctx.prisma.correction.findMany({ where, orderBy: { id: "asc" } }),
+				ctx.prisma.transaction.findMany({ where, orderBy: { id: "asc" } }),
+			]);
+			return { holdings, lots, accounts, corrections, transactions };
+		}
+
+		const before = await ledgerSnapshot();
+		const payload = {
+			targetType: "INITIAL_HOLDING",
+			targetId: holdingId,
+			baseUpdatedAt: before.holdings[0]!.updatedAt.toISOString(),
+			reason: "当时持有的是新台币",
+			changes: { currencyCode: "TWD" },
+		};
+
+		const rateIds: string[] = [];
+		async function seedTwdQuotes(quotes: { rate: string; observedAt: Date }[]) {
+			const rows = await ctx.prisma.exchangeRate.createManyAndReturn({
+				data: quotes.map((quote) => ({
+					...quote,
+					base: "CNY",
+					quote: "TWD",
+					source: "er-api",
+				})),
+				select: { id: true },
 			});
+			rateIds.push(...rows.map(({ id }) => id));
+		}
 
-		// 有报价：seed 一条日级源（er-api，真实发布时间语义）confirmedAt 前 1 分钟的
-		// CAD 报价（MVP-F0-2：日级行 UTC+8 同日 ≤ at 即可命中，有限回看）
-		const rateRow = await ctx.prisma.exchangeRate.create({
-			data: {
-				base: "CNY",
-				quote: "CAD",
-				rate: "5.3100000000",
-				source: "er-api",
-				observedAt: new Date(confirmedAt.getTime() - 60_000),
-			},
-		});
-		extraRateRowIds.push(rateRow.id);
+		try {
+			// 超回看上限 1 秒、同一当地日的未来点、次日点同时存在。
+			await seedTwdQuotes([
+				{ rate: "0.2100", observedAt: new Date("2020-09-12T23:59:59+08:00") },
+				{ rate: "0.2600", observedAt: new Date(confirmedAt.getTime() + 60_000) },
+				{ rate: "0.2700", observedAt: new Date("2020-09-21T00:00:00+08:00") },
+			]);
 
-		await request(app.getHttpServer())
-			.post("/api/corrections")
-			.set(bearer(user.accessToken))
-			.send({
-				targetType: "INITIAL_HOLDING",
-				targetId: holdingId,
-				baseUpdatedAt: before.updatedAt.toISOString(),
-				reason: "当时持有的是加元",
-				changes: { currencyCode: "CAD" },
-			})
-			.expect(201);
+			for (const path of ["/api/corrections/preview", "/api/corrections"]) {
+				const response = await request(app.getHttpServer())
+					.post(path)
+					.set(bearer(user.accessToken))
+					.send(payload)
+					.expect(400);
+				expect(response.body.code).toBe("RATE_QUOTE_UNAVAILABLE");
+				expect(await ledgerSnapshot()).toEqual(before);
+			}
 
-		const holding = await ctx.prisma.initialHolding.findUniqueOrThrow({
-			where: { id: holdingId },
-		});
-		expect(holding.currencyCode).toBe("CAD");
-		expect(holding.rate.toFixed(10)).toBe("5.3100000000");
-		expect(holding.rateSource).toBe("er-api");
-		expect(holding.rateObservedAt.getTime()).toBe(
-			new Date(confirmedAt.getTime() - 60_000).getTime(),
-		);
-		expect(holding.cost.toFixed(4)).toBe("5310.0000"); // 1,000 × 5.31
-		// 旧 USD 批次移除、新 CAD 批次建立、账户各归其位
-		const usdLots = await ctx.prisma.costLot.findMany({
-			where: { userId: user.userId, currencyCode: "USD" },
-		});
-		expect(usdLots).toHaveLength(0);
-		const cadLot = await ctx.prisma.costLot.findFirstOrThrow({
-			where: { userId: user.userId, currencyCode: "CAD" },
-		});
-		expect(cadLot.sourceId).toBe(holdingId);
-		const cadAccount = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "CAD" },
-			},
-		});
-		expect(cadAccount.balance.toFixed(4)).toBe("1000.0000");
-	});
+			// 保留全部无效行，并加入应命中行与较早但仍合格的竞争行。
+			const observedAt = new Date(selectedAt);
+			await seedTwdQuotes([
+				...olderEligibleAt.map((at) => ({ rate: "0.2200", observedAt: new Date(at) })),
+				{ rate: "0.2345678912", observedAt },
+			]);
+			const expected = {
+				currencyCode: "TWD",
+				amount: "1000.0000",
+				rawRate: "0.2345678912",
+				rate: "0.2345678900",
+				rateSource: "er-api",
+				rateObservedAt: observedAt.toISOString(),
+				confirmedAt: confirmedAt.toISOString(),
+				cost: "234.5700",
+			};
 
-	// ── #19-1/#19-2 日级回看上限两侧（MVP-F0-2：真实 DB 锁定 7 个 UTC+8 自然日边界）──
-	it("#19-1 日级回看上限内：confirmedAt 前 7 个 UTC+8 自然日整点的 er-api 行可命中", async () => {
-		const user = await newUser("corr-lookback-hit");
-		const confirmedAt = new Date(daysAgo(3).getTime() + 6 * 60 * 60 * 1000);
-		const { holdingId } = await seedInitialHolding(ctx.prisma, {
-			userId: user.userId,
-			currencyCode: "USD",
-			amount: "1000",
-			rate: "7.2480000000",
-			cost: "7248.0000",
-			confirmedAt,
-		});
-		const before = await ctx.prisma.initialHolding.findUniqueOrThrow({
-			where: { id: holdingId },
-		});
+			const preview = await request(app.getHttpServer())
+				.post("/api/corrections/preview")
+				.set(bearer(user.accessToken))
+				.send(payload)
+				.expect(200);
+			expect(preview.body.data.after).toMatchObject(expected);
+			expect(preview.body.data.blockers).toEqual([]);
+			expect(await ledgerSnapshot()).toEqual(before);
 
-		// 恰在回看窗口起点（UTC+8 当日零点前推 7 天）：gte 含边界 → 可命中。
-		// exchange_rates 为全局表：先清本币对残留行（#19 的窗口内行会抢先命中）
-		await ctx.prisma.exchangeRate.deleteMany({
-			where: { base: "CNY", quote: "CAD" },
-		});
-		const rateRow = await ctx.prisma.exchangeRate.create({
-			data: {
-				base: "CNY",
-				quote: "CAD",
-				rate: "5.3100000000",
-				source: "er-api",
-				observedAt: new Date(
-					utc8DayStart(confirmedAt).getTime() - 7 * 86_400_000,
-				),
-			},
-		});
-		extraRateRowIds.push(rateRow.id);
-
-		await request(app.getHttpServer())
-			.post("/api/corrections")
-			.set(bearer(user.accessToken))
-			.send({
-				targetType: "INITIAL_HOLDING",
-				targetId: holdingId,
-				baseUpdatedAt: before.updatedAt.toISOString(),
-				reason: "当时持有的是加元",
-				changes: { currencyCode: "CAD" },
-			})
-			.expect(201);
-
-		const holding = await ctx.prisma.initialHolding.findUniqueOrThrow({
-			where: { id: holdingId },
-		});
-		expect(holding.currencyCode).toBe("CAD");
-		expect(holding.rateSource).toBe("er-api");
-	});
-
-	it("#19-2 日级回看上限外（第 8 天）→ 400 RATE_QUOTE_UNAVAILABLE，目标零变化", async () => {
-		const user = await newUser("corr-lookback-miss");
-		const confirmedAt = new Date(daysAgo(3).getTime() + 6 * 60 * 60 * 1000);
-		const { holdingId } = await seedInitialHolding(ctx.prisma, {
-			userId: user.userId,
-			currencyCode: "USD",
-			amount: "1000",
-			rate: "7.2480000000",
-			cost: "7248.0000",
-			confirmedAt,
-		});
-		const before = await ctx.prisma.initialHolding.findUniqueOrThrow({
-			where: { id: holdingId },
-		});
-
-		// 第 8 天的行（窗口起点再往前 1 天）：落在回看窗口外，不得被选中。
-		// 同样先清本币对残留（#19/#19-1 的窗口内行会抢先命中导致假 200）
-		await ctx.prisma.exchangeRate.deleteMany({
-			where: { base: "CNY", quote: "CAD" },
-		});
-		const rateRow = await ctx.prisma.exchangeRate.create({
-			data: {
-				base: "CNY",
-				quote: "CAD",
-				rate: "5.3100000000",
-				source: "er-api",
-				observedAt: new Date(
-					utc8DayStart(confirmedAt).getTime() - 8 * 86_400_000,
-				),
-			},
-		});
-		extraRateRowIds.push(rateRow.id);
-
-		await request(app.getHttpServer())
-			.post("/api/corrections/preview")
-			.set(bearer(user.accessToken))
-			.send({
-				targetType: "INITIAL_HOLDING",
-				targetId: holdingId,
-				baseUpdatedAt: before.updatedAt.toISOString(),
-				reason: "当时持有的是加元",
-				changes: { currencyCode: "CAD" },
-			})
-			.expect(400)
-			.expect((errorRes) => {
-				expect(errorRes.body.code).toBe("RATE_QUOTE_UNAVAILABLE");
+			const applied = await request(app.getHttpServer())
+				.post("/api/corrections")
+				.set(bearer(user.accessToken))
+				.send(payload)
+				.expect(201);
+			expect(applied.body.data.status).toBe("APPLIED");
+			const after = await ledgerSnapshot();
+			expect(after.holdings).toHaveLength(1);
+			const holding = after.holdings[0]!;
+			expect({
+				...holding,
+				amount: holding.amount.toFixed(4),
+				rawRate: holding.rawRate.toFixed(10),
+				rate: holding.rate.toFixed(10),
+				rateObservedAt: holding.rateObservedAt.toISOString(),
+				confirmedAt: holding.confirmedAt.toISOString(),
+				cost: holding.cost.toFixed(4),
+			}).toMatchObject({ id: holdingId, ...expected });
+			expect(after.corrections).toHaveLength(1);
+			expect(after.corrections[0]).toMatchObject({
+				id: applied.body.data.correctionId,
+				status: "APPLIED",
+				afterSnapshot: { target: expected },
 			});
-
-		const holding = await ctx.prisma.initialHolding.findUniqueOrThrow({
-			where: { id: holdingId },
-		});
-		expect(holding.currencyCode).toBe("USD");
-		expect(holding.rate.toFixed(10)).toBe("7.2480000000");
+			expect(after.lots).toHaveLength(1);
+			expect(after.lots[0]).toMatchObject({ currencyCode: "TWD", sourceId: holdingId });
+			expect(after.lots[0]!.totalCost.toFixed(4)).toBe(expected.cost);
+			const balances = Object.fromEntries(
+				after.accounts.map(({ currencyCode, balance }) => [currencyCode, balance.toFixed(4)]),
+			);
+			expect(balances).toEqual({ TWD: expected.amount, USD: "0.0000" });
+		} finally {
+			await ctx.prisma.exchangeRate.deleteMany({ where: { id: { in: rateIds } } });
+		}
 	});
 
 	// ── #20 他人记录 ──
