@@ -63,6 +63,12 @@ export const ABC_SAMPLE_ROWS = {
 	JPY: { rate: "0.0433600000", sellRate: "0.0435100000" },
 } as const;
 
+/** 原样记录的 v2 JSON：https://api.frankfurter.dev/v2/rates?base=CNY&quotes=TWD&from=2026-10-08&to=2026-10-09 */
+export const FRANKFURTER_V2_CNY_TWD_SAMPLE = [
+	{ date: "2026-10-08", base: "CNY", quote: "TWD", rate: 4.7567 },
+	{ date: "2026-10-09", base: "CNY", quote: "TWD", rate: 4.7635 },
+] as const;
+
 /** er-api 样本更新时间（日更语义：UTC 日零点 2026-09-15T00:00:00Z 对应的 Unix 秒） */
 export const ERAPI_SAMPLE_UNIX = Math.floor(
 	new Date("2026-09-15T00:00:00.000Z").getTime() / 1000,
@@ -208,7 +214,7 @@ export function createRateSourceFetchStub(
 		if (href.startsWith(FRANKFURTER_V2_RATE_URL)) {
 			return routes.frankfurterV2
 				? routes.frankfurterV2(href)
-				: jsonResponse({ rates: {} });
+				: jsonResponse([]);
 		}
 		if (href.startsWith(FRANKFURTER_RATE_URL)) {
 			return routes.frankfurter

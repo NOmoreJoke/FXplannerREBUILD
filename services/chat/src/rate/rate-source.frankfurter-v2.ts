@@ -8,13 +8,12 @@ import { DEFAULT_RATE_PROVIDER_TIMEOUT_MS } from "./rate-source.frankfurter";
 import type { RateHistoryPoint } from "./rate-source";
 
 /**
- * v2 响应条目（底稿 §1 实测契约：逐条 date/base/quote/rate 记录）。
- * 防御性兼容 v1 风格嵌套 map（rates[date][target]），两类形状同套校验。
+ * v2 返回顶层数组（逐条 date/base/quote/rate 记录）。
+ * 保留旧解析器对 { rates } 包装的兼容，包括 v1 风格的日期映射。
  */
-type FrankfurterV2SeriesEntry = { date: unknown; rate: unknown };
-type FrankfurterV2SeriesResponse = {
-	rates?: Array<Record<string, unknown>> | Record<string, unknown>;
-};
+type FrankfurterV2SeriesResponse =
+	| Array<Record<string, unknown>>
+	| { rates?: Array<Record<string, unknown>> | Record<string, unknown> };
 
 export interface FrankfurterV2SourceOptions {
 	timeoutMs?: number;
@@ -57,7 +56,8 @@ export class FrankfurterV2Source {
 			`${FRANKFURTER_V2_RATE_URL}/rates?base=${encodeURIComponent(base)}&quotes=${encodeURIComponent(target)}&from=${encodeURIComponent(start)}&to=${encodeURIComponent(end)}`,
 		);
 
-		const entries = this.normalizeRates(response.rates, target);
+		const rates = Array.isArray(response) ? response : response.rates;
+		const entries = this.normalizeRates(rates, target);
 		const startMs = this.parseDate(start, "区间起点").getTime();
 		const endMs = this.parseDate(end, "区间终点").getTime();
 		const endExclusive = endMs + 86_400_000;

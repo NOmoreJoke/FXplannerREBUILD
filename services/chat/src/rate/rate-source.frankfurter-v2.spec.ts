@@ -9,7 +9,10 @@
  */
 import { BadGatewayException } from "@nestjs/common";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { jsonResponse } from "../../test/helpers/rate-source-fixtures";
+import {
+	FRANKFURTER_V2_CNY_TWD_SAMPLE,
+	jsonResponse,
+} from "../../test/helpers/rate-source-fixtures";
 import { FRANKFURTER_V2_RATE_URL } from "./rate.constants";
 import { FrankfurterV2Source } from "./rate-source.frankfurter-v2";
 
@@ -29,15 +32,8 @@ describe("FrankfurterV2Source（TWD 图表参考序列）", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("URL 形状 /v2/rates?base&quotes&from&to；实测逐条记录契约 + 取倒数一次（4.7567 → 0.2102297812）", async () => {
-		const fetchImpl = okFetch({
-			base: "CNY",
-			quote: "TWD",
-			rates: [
-				{ date: "2026-10-08", base: "CNY", quote: "TWD", rate: "4.7567" },
-				{ date: "2026-10-09", base: "CNY", quote: "TWD", rate: "4.7569" },
-			],
-		});
+	it("URL 形状 /v2/rates?base&quotes&from&to；实测顶层数组及数值 rate 取倒数一次", async () => {
+		const fetchImpl = okFetch(FRANKFURTER_V2_CNY_TWD_SAMPLE);
 		const points = await new FrankfurterV2Source({ fetchImpl }).fetchReferenceSeries(
 			"CNY",
 			"TWD",
@@ -52,7 +48,7 @@ describe("FrankfurterV2Source（TWD 图表参考序列）", () => {
 		expect(points).toHaveLength(2);
 		expect(points[0].rate).toBe("0.2102297812");
 		expect(points[0].observedAt.toISOString()).toBe("2026-10-08T00:00:00.000Z");
-		expect(points[1].rate).toBe("0.2102209422");
+		expect(points[1].rate).toBe("0.2099296736");
 	});
 
 	it("兼容 v1 风格嵌套 map（rates[date][target]）；按日期升序；周末日期原样保留", async () => {

@@ -16,6 +16,7 @@ import {
 	ABC_RATE_URL,
 	ERAPI_RATE_URL,
 	FRANKFURTER_RATE_URL,
+	FRANKFURTER_V2_RATE_URL,
 } from "../../src/rate/rate.constants";
 import {
 	RATE_PROVIDER_TIMEOUT_TOKEN,
@@ -30,6 +31,7 @@ import { RateService } from "../../src/rate/rate.service";
 import { SUPPORTED_CURRENCIES } from "../../src/rate/rate.constants";
 import {
 	ABC_SAMPLE_FIXTURE,
+	FRANKFURTER_V2_CNY_TWD_SAMPLE,
 	createRateSourceFetchStub,
 	erApiLatestBody,
 	frankfurterBusinessDaySeries,
@@ -1092,6 +1094,61 @@ describe("RateController（接口）", () => {
 			expect(res.body).toMatchObject({ code: "RATE_PAIR_UNSUPPORTED" });
 		});
 
+		it("CNY/TWD 空库历史：v2 顶层数组逐点标注参考来源，重复请求仍有数据且零落库（W4-01）", async () => {
+			const pair = { base: "CNY", quote: "TWD" };
+			await realCtx.prisma.exchangeRate.deleteMany({ where: pair });
+			const referenceFetch = vi.fn(() =>
+				jsonResponse(FRANKFURTER_V2_CNY_TWD_SAMPLE),
+			);
+			const { app: twdApp } = await buildRateApp(
+				"multi",
+				createRateSourceFetchStub({ frankfurterV2: referenceFetch }),
+				disableThrottler,
+			);
+			vi.useFakeTimers({
+				toFake: ["Date"],
+				now: new Date("2026-10-09T12:00:00Z"),
+			});
+			try {
+				const rowCountBefore = await realCtx.prisma.exchangeRate.count();
+				expect(await realCtx.prisma.exchangeRate.count({ where: pair })).toBe(0);
+				const history = "/api/rates/history?base=CNY&target=TWD&period=7";
+				const first = await request(twdApp.getHttpServer())
+					.get(history)
+					.expect(200);
+				expect(first.body.data).toEqual({
+					base: "CNY",
+					target: "TWD",
+					period: 7,
+					data_points: [
+						{
+							date: "2026-10-08",
+							rate: "0.2102297812",
+							source: "frankfurter-v2-reference",
+						},
+						{
+							date: "2026-10-09",
+							rate: "0.2099296736",
+							source: "frankfurter-v2-reference",
+						},
+					],
+					current_rate: "0.2099296736",
+				});
+				const second = await request(twdApp.getHttpServer())
+					.get(history)
+					.expect(200);
+				expect(second.body.data).toEqual(first.body.data);
+				expect(referenceFetch).toHaveBeenCalledExactlyOnceWith(
+					`${FRANKFURTER_V2_RATE_URL}/rates?base=CNY&quotes=TWD&from=2026-10-02&to=2026-10-09`,
+				);
+				expect(await realCtx.prisma.exchangeRate.count()).toBe(rowCountBefore);
+				expect(await realCtx.prisma.exchangeRate.count({ where: pair })).toBe(0);
+			} finally {
+				vi.useRealTimers();
+				await twdApp.close();
+			}
+		});
+
 		it("TWD 图表冷缺口：er-api 本地快照按日期优先，v2 参考序列仅补缺并逐点标注来源，严禁回写（C2）", async () => {
 			// 独立 app：行情组 marketApp 请求计数贴近全局限流 10/min/IP 边界，
 			// 本用例自建实例避免把「既有档位」组推过边界 429（各自节流存储隔离）
@@ -1108,14 +1165,10 @@ describe("RateController（接口）", () => {
 					new Date(`${from}T00:00:00.000Z`).getTime() + offset * dayMs;
 				const iso = (time: number) =>
 					new Date(time).toISOString().slice(0, 10);
-				return jsonResponse({
-					base: "USD",
-					quote: "TWD",
-					rates: [
-						{ date: iso(day(1)), base: "USD", quote: "TWD", rate: "4.7567" },
-						{ date: iso(day(3)), base: "USD", quote: "TWD", rate: "4.7569" },
-					],
-				});
+				return jsonResponse([
+					{ date: iso(day(1)), base: "USD", quote: "TWD", rate: 4.7567 },
+					{ date: iso(day(3)), base: "USD", quote: "TWD", rate: 4.7569 },
+				]);
 			};
 			// 本地 er-api 快照：窗口末点前 1 天 + 参考点同日（from+1，本地优先）
 			const today = new Date();
