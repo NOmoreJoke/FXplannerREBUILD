@@ -310,9 +310,12 @@ describe("verifyFrozenPlan 全量防篡改与人工圈选", () => {
 	});
 });
 
+const inventoryId = "fce2fa96-a93e-4de9-a821-83df7ab83829";
+type TestRow = InventoryRow & { migrationOwnerId?: string | null };
+
 /** 内存假事务：记录全部条件（逐字段零差异断言用）；updateMany 按【全字段】匹配评估；
  * findUnique 返回全冻结字段（Date 对象模拟 Prisma Decimal/DateTime 行为） */
-function makeFakeTx(rows: Map<string, InventoryRow>): MigrationTx & {
+function makeFakeTx(rows: Map<string, TestRow>): MigrationTx & {
 	conditions: Array<Record<string, unknown>>;
 } {
 	const conditions: Array<Record<string, unknown>> = [];
@@ -322,8 +325,8 @@ function makeFakeTx(rows: Map<string, InventoryRow>): MigrationTx & {
 			conditions.push(args.where);
 			const row = rows.get(args.where.id);
 			if (!row) return { count: 0 };
-			const observedAtIso = args.where.observedAt?.toISOString() ?? null;
-			const createdAtIso = args.where.createdAt?.toISOString() ?? null;
+			const observedAtIso = args.where.observedAt.toISOString();
+			const createdAtIso = args.where.createdAt.toISOString();
 			const match =
 				row.rate === args.where.rate &&
 				row.base === args.where.base &&
@@ -331,9 +334,10 @@ function makeFakeTx(rows: Map<string, InventoryRow>): MigrationTx & {
 				row.source === args.where.source &&
 				row.sellRate === args.where.sellRate &&
 				row.observedAt === observedAtIso &&
-				row.createdAt === createdAtIso;
+				row.createdAt === createdAtIso &&
+				(row.migrationOwnerId ?? null) === args.where.migrationOwnerId;
 			if (!match) return { count: 0 };
-			row.rate = args.data.rate;
+			rows.set(row.id, { ...row, ...args.data });
 			return { count: 1 };
 		},
 		async findUnique(args) {
@@ -347,6 +351,7 @@ function makeFakeTx(rows: Map<string, InventoryRow>): MigrationTx & {
 				sellRate: row.sellRate,
 				observedAt: new Date(row.observedAt),
 				createdAt: new Date(row.createdAt),
+				migrationOwnerId: row.migrationOwnerId ?? null,
 			};
 		},
 	};
@@ -363,11 +368,15 @@ describe("executeMigrationBatches 可执行差分（FX-06 可执行化）", () =
 		const tx = makeFakeTx(rows);
 
 		const summary = await executeMigrationBatches(tx, plan.candidates, {
-			reverse: false,
+			inventoryId,
+			mode: "invert",
 		});
 
 		expect(summary).toEqual({ converted: 1, alreadyDone: 0 });
-		expect(rows.get("cmwx1")?.rate).toBe("0.2102297812");
+		expect(rows.get("cmwx1")).toMatchObject({
+			rate: "0.2102297812",
+			migrationOwnerId: inventoryId,
+		});
 		// 逐字段零差异：where 携带冻结整行（base/quote/source/sellRate/observedAt/createdAt）
 		expect(tx.conditions[0]).toEqual({
 			id: "cmwx1",
@@ -378,6 +387,7 @@ describe("executeMigrationBatches 可执行差分（FX-06 可执行化）", () =
 			sellRate: null,
 			observedAt: new Date("2026-09-15T00:00:00.000Z"),
 			createdAt: new Date("2026-09-15T00:02:00.000Z"),
+			migrationOwnerId: null,
 		});
 	});
 
@@ -386,15 +396,20 @@ describe("executeMigrationBatches 可执行差分（FX-06 可执行化）", () =
 			rowOf({ id: "cmwx1", rate: "4.7567000000" }),
 		]);
 		const rows = new Map([
-			["cmwx1", rowOf({ id: "cmwx1", rate: "0.2102297812" })],
+			["cmwx1", {
+				...rowOf({ id: "cmwx1", rate: "0.2102297812" }),
+				migrationOwnerId: inventoryId,
+			}],
 		]);
 		const tx = makeFakeTx(rows);
 
 		const summary = await executeMigrationBatches(tx, plan.candidates, {
-			reverse: false,
+			inventoryId,
+			mode: "verify-inverted",
 		});
 
 		expect(summary).toEqual({ converted: 0, alreadyDone: 1 });
+		expect(tx.conditions).toHaveLength(0);
 	});
 
 	it("尾零目标值（0.2 → 5.0000000000，落库读回 \"5\"）→ 幂等复跑在数值归一化域判定 alreadyDone", async () => {
@@ -402,17 +417,24 @@ describe("executeMigrationBatches 可执行差分（FX-06 可执行化）", () =
 			rowOf({ id: "cmwx2", rate: "0.2000000000" }),
 		]);
 		// Prisma Decimal.toString() 去尾零：5.0000000000 落库读回 "5"
-		const rows = new Map([["cmwx2", rowOf({ id: "cmwx2", rate: "5" })]]);
+		const rows = new Map([
+			["cmwx2", {
+				...rowOf({ id: "cmwx2", rate: "5" }),
+				migrationOwnerId: inventoryId,
+			}],
+		]);
 		const tx = makeFakeTx(rows);
 
 		const summary = await executeMigrationBatches(tx, plan.candidates, {
-			reverse: false,
+			inventoryId,
+			mode: "verify-inverted",
 		});
 
 		expect(summary).toEqual({ converted: 0, alreadyDone: 1 });
+		expect(tx.conditions).toHaveLength(0);
 	});
 
-	it("冻结字段漂移（observedAt 被并发改写）→ 全字段条件 0 命中且非幂等 → 抛错中止该批", async () => {
+	it("冻结字段漂移（observedAt 被并发改写）→ 全字段条件 0 命中 → 抛错中止该批", async () => {
 		const plan = deriveMigrationPlan([
 			rowOf({ id: "cmwx1", rate: "4.7567000000" }),
 		]);
@@ -430,8 +452,8 @@ describe("executeMigrationBatches 可执行差分（FX-06 可执行化）", () =
 		const tx = makeFakeTx(rows);
 
 		await expect(
-			executeMigrationBatches(tx, plan.candidates, { reverse: false }),
-		).rejects.toThrow(/条件未命中且非幂等状态/);
+			executeMigrationBatches(tx, plan.candidates, { inventoryId, mode: "invert" }),
+		).rejects.toThrow(/条件未命中/);
 	});
 
 	it("回滚方向：fromRate/expectedRate 互换，恢复原值", async () => {
@@ -439,16 +461,23 @@ describe("executeMigrationBatches 可执行差分（FX-06 可执行化）", () =
 			rowOf({ id: "cmwx1", rate: "4.7567000000" }),
 		]);
 		const rows = new Map([
-			["cmwx1", rowOf({ id: "cmwx1", rate: "0.2102297812" })],
+			["cmwx1", {
+				...rowOf({ id: "cmwx1", rate: "0.2102297812" }),
+				migrationOwnerId: inventoryId,
+			}],
 		]);
 		const tx = makeFakeTx(rows);
 
 		const summary = await executeMigrationBatches(tx, plan.candidates, {
-			reverse: true,
+			inventoryId,
+			mode: "rollback",
 		});
 
 		expect(summary).toEqual({ converted: 1, alreadyDone: 0 });
-		expect(rows.get("cmwx1")?.rate).toBe("4.7567000000");
+		expect(rows.get("cmwx1")).toMatchObject({
+			rate: "4.7567000000",
+			migrationOwnerId: null,
+		});
 	});
 
 	it("No-op 行（rate=1）：不执行 UPDATE，全字段核对通过 → alreadyDone（复跑更新数恒 0）", async () => {
@@ -459,7 +488,8 @@ describe("executeMigrationBatches 可执行差分（FX-06 可执行化）", () =
 		const tx = makeFakeTx(rows);
 
 		const summary = await executeMigrationBatches(tx, plan.candidates, {
-			reverse: false,
+			inventoryId,
+			mode: "invert",
 		});
 
 		expect(summary).toEqual({ converted: 0, alreadyDone: 1 });
@@ -482,11 +512,11 @@ describe("executeMigrationBatches 可执行差分（FX-06 可执行化）", () =
 		const tx = makeFakeTx(rows);
 
 		await expect(
-			executeMigrationBatches(tx, plan.candidates, { reverse: false }),
-		).rejects.toThrow(/No-op 行）行缺失或冻结字段漂移/);
+			executeMigrationBatches(tx, plan.candidates, { inventoryId, mode: "invert" }),
+		).rejects.toThrow(/行缺失、冻结字段漂移/);
 	});
 
-	it("rate 已是目标值但其他冻结字段漂移 → 不得计为 alreadyDone → 抛错中止", async () => {
+	it("复跑核对：rate 和行归属匹配但冻结字段漂移 → 抛错中止", async () => {
 		const plan = deriveMigrationPlan([
 			rowOf({ id: "cmwx3", rate: "4.7567000000" }),
 		]);
@@ -494,25 +524,28 @@ describe("executeMigrationBatches 可执行差分（FX-06 可执行化）", () =
 		const rows = new Map([
 			[
 				"cmwx3",
-				rowOf({
-					id: "cmwx3",
-					rate: "0.2102297812",
-					observedAt: "2026-09-15T00:09:00.000Z",
-				}),
+				{
+					...rowOf({
+						id: "cmwx3",
+						rate: "0.2102297812",
+						observedAt: "2026-09-15T00:09:00.000Z",
+					}),
+					migrationOwnerId: inventoryId,
+				},
 			],
 		]);
 		const tx = makeFakeTx(rows);
 
 		await expect(
-			executeMigrationBatches(tx, plan.candidates, { reverse: false }),
-		).rejects.toThrow(/条件未命中且非幂等状态/);
+			executeMigrationBatches(tx, plan.candidates, { inventoryId, mode: "verify-inverted" }),
+		).rejects.toThrow(/冻结字段漂移/);
 	});
 });
 
 describe("executePlanBatches 组合（FX-06：前批成功、后批漂移 → 调用方事务回滚前批）", () => {
 	/** 带回滚语义的假事务包装：$transaction 抛错时恢复执行前快照（模拟 Prisma 回滚）。
 	 * 快照必须深拷贝行对象（Map 复制仅拷贝引用，行内 rate 变更无法还原） */
-	function makeRollbackTx(rows: Map<string, InventoryRow>) {
+	function makeRollbackTx(rows: Map<string, TestRow>) {
 		const inner = makeFakeTx(rows);
 		return {
 			conditions: inner.conditions,
@@ -564,9 +597,9 @@ describe("executePlanBatches 组合（FX-06：前批成功、后批漂移 → �
 
 		await expect(
 			rollbackTx.$transaction((tx) =>
-				executePlanBatches(tx, plan, { reverse: false }),
+				executePlanBatches(tx, plan, { inventoryId, mode: "invert" }),
 			),
-		).rejects.toThrow(/条件未命中且非幂等状态/);
+		).rejects.toThrow(/条件未命中/);
 
 		// 前批已转换的 er-api 行被事务回滚恢复为原值（无半写）
 		expect(rows.get("erapi-1")?.rate).toBe("4.7567000000");
@@ -600,7 +633,7 @@ describe("executePlanBatches 组合（FX-06：前批成功、后批漂移 → �
 		const rollbackTx = makeRollbackTx(rows);
 
 		const summary = await rollbackTx.$transaction((tx) =>
-			executePlanBatches(tx, plan, { reverse: false }),
+			executePlanBatches(tx, plan, { inventoryId, mode: "invert" }),
 		);
 
 		expect(summary.converted).toBe(2);

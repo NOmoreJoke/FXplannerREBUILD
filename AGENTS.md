@@ -64,6 +64,8 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  ├─ config/                    # env 加载与 zod 校验（12-Factor）
 │  │  └─ prisma/                    # PrismaService
 │  ├─ prisma/                       # schema + migrations + seed
+│  │  ├─ migrations/               # Prisma 版本化迁移
+│  │  │  └─ 20261120090000_rate_cache_migration_receipt/ # 汇率缓存迁移完成记录与行归属
 │  │  └─ rate-cache-migration/      # 旧汇率缓存迁移运维 CLI（B2；README 见目录内）
 │  └─ test/
 │     ├─ api/                       # 接口测试
@@ -123,6 +125,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | E2E 用例         | `e2e/modules/<编号>-<模块>.spec.ts`                                       |
 | ToB 组织工作台与 Agent 规划 | `changes/tob-agent-workspace/` |
 | MVP-F0 汇率回补与缓存迁移底稿 | `changes/realtime-rate/` |
+| 汇率缓存迁移完成记录与行归属 DDL | `services/chat/prisma/migrations/20261120090000_rate_cache_migration_receipt/` |
 | 验证与防回归规范 | `docs/VERIFY.md`（验证分级、属性/差分测试、Diff 触发检查） |
 | 迭代路线与工作流手册 | `docs/ITERATION-REFACTOR-ROADMAP-20261119.md`、`docs/VIBE-CODING-PLAYBOOK.md` |
 | 跨会话交接文档   | `docs/handoff/`（夜间批次产出：OVERNIGHT-* / 接力目标提示词：GOAL-* / 状态快照；需求/方案/验收仍归 `changes/`） |

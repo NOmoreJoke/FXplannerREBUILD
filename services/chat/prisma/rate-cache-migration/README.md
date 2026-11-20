@@ -8,7 +8,7 @@
 
 - `inventory`：只读盘点全表，按底稿 §3.1 分类（ErApi/Frankfurter 候选、
   ABC/identity 排除、sellRate 非空与非法/归零/越界冲突行单列），
-  输出冻结清单 JSON 到 **stdout**（人类重定向落盘）。
+  为清单生成唯一的 `inventoryId`，将 JSON 输出到 **stdout**（人类重定向落盘）。
 - `invert`：经 `verifyFrozenPlan` 全量校验（candidates/conflicts/excludedCount/
   checksum 四侧比对重算结果，stdin 中的候选永不直接执行）后，按【重算计划】
   对候选行做「**全冻结字段条件更新**」（id/rate 之外，base/quote/source/
@@ -16,7 +16,7 @@
   期望值 = invertQuoteRate 口径（HALF_UP 10 位）；批序先 er-api 后
   frankfurter（§3.3），**全部候选在同一计划事务内执行**（任一批失败回滚
   整个计划，无半写）；缺 `--apply` 为 dry-run。
-- `rollback`：按同一清单反向条件更新 → 原值。
+- `rollback`：凭数据库内的完成记录及行归属，按原圈选范围逐字段核对并恢复原汇率。
 
 ## 不做什么（边界）
 
@@ -41,6 +41,10 @@ PrismaClient 与 `src/rate/rate-invert` 取倒数口径，保证转换期望值�
 
 ## 运行（在 services/chat 下）
 
+先在备份副本应用 Prisma 迁移 `20261120090000_rate_cache_migration_receipt`。
+盘点后，人工核对并填入 `approvedCandidateIds`，保留这份清单及其 `inventoryId`
+供转换、复跑与回滚使用。
+
 ```bash
 bun run prisma/rate-cache-migration/migrate.ts inventory > /path/to/inventory.json
 bun run prisma/rate-cache-migration/migrate.ts invert < /path/to/inventory.json          # dry-run
@@ -50,19 +54,22 @@ bun run prisma/rate-cache-migration/migrate.ts rollback --apply --confirm-backup
 
 ## 幂等、复跑与防漂移
 
-- 条件更新 = 全冻结字段匹配：第二遍 `invert --apply` 行已为目标值 →
-  更新数 0、「幂等复跑已达成」计数（底稿 §3.4「已完成批次更新数为 0」）；
-  幂等判定在数值归一化域进行（Prisma Decimal.toString() 去尾零：
-  目标 5.0000000000 落库读回 "5"，直比会误判漂移）；
+- 首次 `invert --apply` 锁定 `inventoryId` 对应的圈选集合、全冻结字段和目标值。
+  数据库完成记录与实际改写行上的归属标记同事务提交。数值不变的候选只核对，
+  也纳入圈选校验和。
 - 候选范围按底稿 §3.1 冻结：ErApi 仅 quote=TWD 的非恒等行（其余 ErApi 行
   一律冲突单列不放行）；Frankfurter 按实际曾写币对；ABC/identity 排除；
   方向证据以冻结 ID 白名单（清单 JSON）承载，人工核对后方可执行；
-- 冻结后任一字段漂移（含并发 upsert 改写 source/createdAt）→ 全字段条件
-  0 命中且非幂等状态 → 抛错回滚【整个计划事务】（含已执行的前批，无半写）；
-- 冻结清单 JSON 即完成台账（无 schema 版本标记）；`verifyFrozenPlan`
-  全量比对不一致时拒绝执行（防清单或数据漂移）。
+- 复跑同一份已提交清单时，只核对目标值、其余冻结字段和归属，更新数为 0。
+  十进制数值核对忽略尾零。只凭目标值相同的行无法取得完成记录或归属。
+- 回滚要求已提交的完成记录、完全相同的圈选范围和当前行归属。普通更新会清除
+  原归属，即使它写回相同字段值。任一候选失去归属或字段漂移会中止整个事务。
+- 回滚完成后保留完成记录，重复回滚只核对恢复状态，更新数为 0。如需再次转换，
+  重新盘点并取得新清单。并发事务冲突时，使用原清单复跑核对已提交状态。
+- 旧清单可用于 dry-run。旧版 CLI 转换的行没有完成记录，须通过原备份恢复。
+  新版写入需使用新版 `inventory` 生成的清单。
 
-## 演练记录（2026-11-19/20 夜间，本地测试库真实 CUID 行）
+## 旧版演练记录（2026-11-19/20 夜间，本地测试库真实 CUID 行）
 
 - 种子 2 行（er-api CNY/TWD 4.7567 + er-api 带 sellRate 冲突行）；
 - inventory：候选 1 / 冲突 1（sell-rate-non-null，CUID id 列出）；

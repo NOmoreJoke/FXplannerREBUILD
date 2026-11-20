@@ -44,10 +44,21 @@ model ExchangeRate {
   source     String
   observedAt DateTime @map("observed_at")
   createdAt  DateTime @default(now()) @map("created_at")
+  /// 当前行版本的缓存迁移归属，普通更新会清除此标记。
+  migrationOwnerId String? @db.Uuid @map("migration_owner_id")
 
   @@unique([base, quote, observedAt])
   @@index([base, quote, observedAt])
   @@map("exchange_rates")
+}
+
+model RateCacheMigrationReceipt {
+  id            String    @id @db.Uuid
+  scopeChecksum String    @map("scope_checksum")
+  appliedAt     DateTime  @default(now()) @map("applied_at")
+  rolledBackAt  DateTime? @map("rolled_back_at")
+
+  @@map("rate_cache_migration_receipts")
 }
 
 model OtpChallenge {

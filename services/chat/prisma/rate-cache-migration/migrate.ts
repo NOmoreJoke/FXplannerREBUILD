@@ -16,11 +16,9 @@
  *       原位转换：verifyFrozenPlan 全量校验后按【重算计划】对候选行做
  *       「全冻结字段条件更新」→ 期望新值。批序先 er-api 后 frankfurter
  *       （§3.3），全部候选在【同一计划事务】内执行；缺 --apply 为 dry-run。
- *       第二遍复跑：原值条件 0 命中且行值已等于目标 → alreadyDone；
- *       其余 0 命中（冻结字段漂移/缺失）→ 抛错回滚整个计划事务（无半写，
- *       含已执行的前批）。
+ *       转换与完成记录同事务提交。复跑只核对圈选范围、行归属和全冻结字段。
  *   bun run prisma/rate-cache-migration/migrate.ts rollback [--apply --confirm-backup-target] < frozen.json
- *       回滚：按同一清单反向条件更新 → 原值。
+ *       回滚：凭数据库完成记录和当前行归属，按原圈选范围反向条件更新。
  *
  * 安全语义：
  * - stdin 中的 candidates 永不直接执行——verifyFrozenPlan 与重算计划全量比对
@@ -28,19 +26,19 @@
  *   执行侧只用重算计划中 approved 圈选的子集；
  * - 存在冲突行（sellRate 非空 / 非法 / 归零 / 越界 / ErApi 非 TWD）→ 拒绝
  *   --apply（冲突未核实不得放行，底稿 §3.1）；dry-run 仍可查看；
- * - 幂等台账 = 冻结清单 JSON（无 schema 版本标记）；防漂移 = 全字段条件更新。
  * 纯函数/执行引擎见 src/rate/rate-migration-plan.ts（含单测与 fast-check 属性）。
  */
+import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import {
 	deriveMigrationPlan,
-	executePlanBatches,
 	verifyFrozenPlan,
 	type InventoryRow,
-	type MigrationTx,
 } from "../../src/rate/rate-migration-plan";
+import { executeFrozenPlan, requireInventoryId } from "./execute";
 
 interface FrozenInventory {
+	inventoryId?: string;
 	generatedAt: string;
 	note: string;
 	/** 人工方向证据圈选的可转换候选 id 集（底稿 §3.1「排除已正确写入行」）；
@@ -144,6 +142,7 @@ async function main(): Promise<void> {
 			}));
 			const plan = deriveMigrationPlan(rows);
 			const frozen: FrozenInventory = {
+				inventoryId: randomUUID(),
 				generatedAt: new Date().toISOString(),
 				// 默认空圈选：自动分类只给「可疑候选」，是否确为旧方向由人工
 				// 核对方向证据后填入 approvedCandidateIds（防混合旧/新缓存二次取倒数）
@@ -244,45 +243,16 @@ async function main(): Promise<void> {
 			process.exit(1);
 		}
 
+		const inventoryId = requireInventoryId(frozen.inventoryId);
 		const reverse = command === "rollback";
-		// 全计划单事务（§3.4「按清单事务执行」）：批内先 er-api 后 frankfurter
-		//（§3.3 顺序在事务内保持）；executePlanBatches 遇冻结字段漂移/缺失
-		// 即抛错 → 整个计划事务回滚（含已执行的前批），无任何半写
-		let planSummary: Awaited<
-			ReturnType<typeof executePlanBatches>
-		> | null = null;
+		let planSummary: Awaited<ReturnType<typeof executeFrozenPlan>>;
 		try {
-			planSummary = await prisma.$transaction(async (tx) => {
-				// Prisma 事务客户端按模型命名空间暴露方法；适配为 MigrationTx 结构。
-				// findUnique 必须返回全冻结字段（executeMigrationBatches 的幂等/漂移
-				// 判定按全字段比对——仅 select rate 会让幂等复跑误判为漂移）
-				const migrationTx: MigrationTx = {
-					updateMany: (updateArgs) =>
-						tx.exchangeRate.updateMany({
-							where: { ...updateArgs.where },
-							data: { rate: updateArgs.data.rate },
-						}),
-					findUnique: async (findArgs) => {
-						const row = await tx.exchangeRate.findUnique({
-							where: { id: findArgs.where.id },
-							select: {
-								rate: true,
-								base: true,
-								quote: true,
-								source: true,
-								sellRate: true,
-								observedAt: true,
-								createdAt: true,
-							},
-						});
-						return row;
-					},
-				};
-				return executePlanBatches(migrationTx, plan, { reverse });
-			});
+			planSummary = await prisma.$transaction(
+				(tx) => executeFrozenPlan(tx, inventoryId, plan, reverse),
+				{ isolationLevel: "Serializable" },
+			);
 		} catch (error) {
-			// 仅当失败发生在计划事务内才声称「已回滚」；预检/管道解析失败未进入事务
-			console.error("计划事务失败并已回滚（无任何半写）：", error);
+			console.error("计划事务未确认提交，请保留原清单复核：", error);
 			await disconnectQuietly(prisma);
 			process.exit(1);
 		}
@@ -302,8 +272,7 @@ async function main(): Promise<void> {
 		// 断连失败不得谎称回滚：事务已提交，仅连接关闭异常
 		await disconnectQuietly(prisma, "事务已提交，但关闭数据库连接失败");
 	} catch (error) {
-		// 预检/管道解析等未进入计划事务的失败（此时无任何写入）；
-		// 计划事务内的失败已在上方以「计划事务失败并已回滚」如实报告并退出
+		// 预检或清单解析失败时尚未写入计划数据。
 		console.error("迁移失败（未进入计划事务，无写入）：", error);
 		await disconnectQuietly(prisma);
 		process.exit(1);

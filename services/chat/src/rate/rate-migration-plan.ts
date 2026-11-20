@@ -1,10 +1,9 @@
 /**
  * 旧缓存迁移清单与期望值推导（MVP-F0-1 B2·迁移演练，实施底稿 §3 唯一口径）。
  *
- * 纯函数层（零 IO、零 DB）：候选分类、期望值派生、冻结校验与执行引擎由 CLI
- * （prisma/rate-cache-migration/migrate.ts）调用。幂等性由「条件更新 = 原值
- * 匹配」构造保证——第二遍执行时行已为新值、原值条件 0 命中 → 已达成计数，
- * 无需 schema 版本标记（冻结清单 JSON 即完成台账）。
+ * 候选分类、期望值派生、冻结校验与执行引擎由 CLI
+ * （prisma/rate-cache-migration/migrate.ts）调用。执行模式由同事务内的数据库
+ * 完成记录决定，写入和复跑均核对行归属与全冻结字段。
  *
  * 分类规则（底稿 §3.1/§3）：
  * - ErApi 候选：source=er-api 且 quote=TWD 且非恒等（底稿 §3.1 限定范围）；
@@ -295,34 +294,6 @@ export function verifyFrozenPlan(
 	};
 }
 
-/** 冻结行全字段核对（幂等复跑/No-op 行判定必须核对全部字段，防部分漂移绕过；
- * sellRate 经 toString 归一（Prisma Decimal | null） */
-function frozenRowMatches(
-	existing: {
-		rate: { toString(): string };
-		base: string;
-		quote: string;
-		source: string;
-		sellRate: { toString(): string } | null;
-		observedAt: Date;
-		createdAt: Date;
-	},
-	row: InventoryRow,
-): boolean {
-	const existingSellRate =
-		existing.sellRate === null ? null : existing.sellRate.toString();
-	return (
-		normalizeDecimalText(existing.rate.toString()) ===
-			normalizeDecimalText(row.rate) &&
-		existing.base === row.base &&
-		existing.quote === row.quote &&
-		existing.source === row.source &&
-		existingSellRate === row.sellRate &&
-		existing.observedAt.toISOString() === row.observedAt &&
-		existing.createdAt.toISOString() === row.createdAt
-	);
-}
-
 /** 迁移事务的最小接口（Prisma 事务客户端的结构子集，测试用内存假件实现；
  * rate/sellRate 以 { toString } 结构兼容 Prisma Decimal） */
 export interface MigrationTx {
@@ -330,14 +301,15 @@ export interface MigrationTx {
 		where: {
 			id: string;
 			rate: string;
-			base?: string;
-			quote?: string;
-			source?: string;
-			sellRate?: string | null;
-			observedAt?: Date;
-			createdAt?: Date;
+			base: string;
+			quote: string;
+			source: string;
+			sellRate: string | null;
+			observedAt: Date;
+			createdAt: Date;
+			migrationOwnerId: string | null;
 		};
-		data: { rate: string };
+		data: { rate: string; migrationOwnerId: string | null };
 	}): Promise<{ count: number }>;
 	findUnique(args: {
 		where: { id: string };
@@ -349,6 +321,7 @@ export interface MigrationTx {
 		sellRate: { toString(): string } | null;
 		observedAt: Date;
 		createdAt: Date;
+		migrationOwnerId: string | null;
 	} | null>;
 }
 
@@ -368,48 +341,44 @@ export interface MigrationBatchSummary {
 	alreadyDone: number;
 }
 
-/**
- * 单批迁移执行（底稿 §3.4）：逐候选做「全冻结字段条件更新」——
- * where 除 id/rate 外还携带 base/quote/source/sellRate/observedAt/createdAt
- * 冻结原值，任一字段漂移即 0 命中。
- *
- * 结果语义（任一分支失败即抛出 → 调用方的 $transaction 整批回滚，无半写）：
- * - No-op 行（原值 = 期望值）：不执行 UPDATE，读取行并全字段核对通过即
- *   alreadyDone（底稿 §3.4：数值相等行按状态判定且复跑更新数为 0）；
- *   漂移即抛错。停写前置由人类维护窗口保证（读-判窗口无并发写）。
- * - count 1 → converted；
- * - count 0 → **重新读取行**（不用条件更新前的旧快照——防「读后、更新前
- *   并发漂移」被旧值误判为幂等）：全字段核对 rate = 目标（数值归一化域）
- *   且其余冻结字段精确一致 → alreadyDone（并发侧已完成转换）；否则抛错。
- */
+export interface MigrationExecution {
+	inventoryId: string;
+	mode: "invert" | "verify-inverted" | "rollback" | "verify-rolled-back";
+}
+
+/** 首次执行要求全字段和行归属均命中。复跑与数值不变的行只读核对。 */
 export async function executeMigrationBatches(
 	tx: MigrationTx,
 	candidates: FrozenCandidate[],
-	options: { reverse: boolean },
+	{ inventoryId, mode }: MigrationExecution,
 ): Promise<MigrationBatchSummary> {
 	const summary: MigrationBatchSummary = { converted: 0, alreadyDone: 0 };
+	const reverse = mode === "rollback" || mode === "verify-rolled-back";
+	const verifyOnly = mode === "verify-inverted" || mode === "verify-rolled-back";
+	const expectOwned = mode === "rollback" || mode === "verify-inverted";
+
 	for (const candidate of candidates) {
 		const { row } = candidate;
-		const fromRate = options.reverse
-			? candidate.expectedRate
-			: candidate.originalRate;
-		const toRate = options.reverse
-			? candidate.originalRate
-			: candidate.expectedRate;
-		// No-op 行（rate = 1 等）：转换前后相同——不执行 UPDATE（否则每遍都命中，
-		// 违反「复跑已完成批次更新数为 0」），读取后做全字段核对
-		if (normalizeDecimalText(fromRate) === normalizeDecimalText(toRate)) {
+		const fromRate = reverse ? candidate.expectedRate : candidate.originalRate;
+		const toRate = reverse ? candidate.originalRate : candidate.expectedRate;
+		const noChange = normalizeDecimalText(fromRate) === normalizeDecimalText(toRate);
+		const migrationOwnerId = expectOwned && !noChange ? inventoryId : null;
+
+		if (verifyOnly || noChange) {
 			const existing = await tx.findUnique({ where: { id: row.id } });
-			if (existing !== null && frozenRowMatches(existing, row)) {
-				summary.alreadyDone += 1;
-				continue;
+			if (
+				existing === null ||
+				existing.migrationOwnerId !== migrationOwnerId ||
+				normalizeDecimalText(existing.rate.toString()) !== normalizeDecimalText(toRate) ||
+				!frozenRowMatchesExceptRate(existing, row)
+			) {
+				throw new Error(`候选 id=${row.id} 行缺失、冻结字段漂移或迁移归属不匹配`);
 			}
-			throw new Error(
-				`候选 id=${row.id}（No-op 行）行缺失或冻结字段漂移：中止该批事务` +
-					"（整批回滚，无半写）——请重新盘点冻结后再执行",
-			);
+			summary.alreadyDone += 1;
+			continue;
 		}
-		const updateResult = await tx.updateMany({
+
+		const result = await tx.updateMany({
 			where: {
 				id: row.id,
 				rate: fromRate,
@@ -419,30 +388,14 @@ export async function executeMigrationBatches(
 				sellRate: row.sellRate,
 				observedAt: new Date(row.observedAt),
 				createdAt: new Date(row.createdAt),
+				migrationOwnerId,
 			},
-			data: { rate: toRate },
+			data: { rate: toRate, migrationOwnerId: reverse ? null : inventoryId },
 		});
-		if (updateResult.count === 1) {
-			summary.converted += 1;
-			continue;
+		if (result.count !== 1) {
+			throw new Error(`候选 id=${row.id} 条件未命中（行缺失、冻结字段漂移或迁移归属不匹配）`);
 		}
-		// 0 命中：重新读取行（新鲜快照，不用更新前的旧读值——防读后更新前
-		// 并发漂移被误判为幂等）：全字段核对「rate = 目标（归一化域）+ 其余
-		// 冻结字段精确一致」才可判 alreadyDone（并发侧已完成）；否则抛错
-		const fresh = await tx.findUnique({ where: { id: row.id } });
-		if (
-			fresh !== null &&
-			normalizeDecimalText(fresh.rate.toString()) ===
-				normalizeDecimalText(toRate) &&
-			frozenRowMatchesExceptRate(fresh, row)
-		) {
-			summary.alreadyDone += 1;
-			continue;
-		}
-		throw new Error(
-			`候选 id=${row.id} 条件未命中且非幂等状态（冻结字段漂移或行缺失）：` +
-				"中止该批事务（整批回滚，无半写）——请重新盘点冻结后再执行",
-		);
+		summary.converted += 1;
 	}
 	return summary;
 }
@@ -455,7 +408,7 @@ export async function executeMigrationBatches(
 export async function executePlanBatches(
 	tx: MigrationTx,
 	plan: MigrationPlan,
-	options: { reverse: boolean },
+	execution: MigrationExecution,
 ): Promise<{
 	converted: number;
 	alreadyDone: number;
@@ -480,9 +433,7 @@ export async function executePlanBatches(
 			(candidate) => candidate.batch === batch,
 		);
 		if (batchCandidates.length === 0) continue;
-		const batchSummary = await executeMigrationBatches(tx, batchCandidates, {
-			reverse: options.reverse,
-		});
+		const batchSummary = await executeMigrationBatches(tx, batchCandidates, execution);
 		summary.batches[batch] = batchSummary;
 		summary.converted += batchSummary.converted;
 		summary.alreadyDone += batchSummary.alreadyDone;
