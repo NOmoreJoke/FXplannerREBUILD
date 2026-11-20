@@ -125,7 +125,7 @@ export class CorrectionChangesDto {
 export class CorrectionRequestDto {
 	@ApiProperty({
 		description:
-			"更正目标类型（USAGE 依赖 M7，落地前返回 400 CORRECTION_TARGET_TYPE_UNAVAILABLE）",
+			"更正目标类型（TRANSACTION / USAGE / INITIAL_HOLDING；USAGE 自 MVP-F0-3 起支持改金额与改日期）",
 		example: "TRANSACTION",
 		enum: [...CORRECTION_TARGET_TYPES],
 		type: String,

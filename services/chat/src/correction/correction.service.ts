@@ -17,12 +17,15 @@ import { RateService } from "../rate/rate.service";
 import { replayCurrencyLedger, type LedgerEvent, type ReplayResult } from "./ledger-replay";
 import {
 	assertCorrectionBasics,
+	assertUsageCorrectionAllowed,
+	computeAllocationDelta,
 	CorrectionInvalidParamsException,
 	CorrectionNotAllowedException,
 	hasEffectiveChange,
 	parseCorrectionChanges,
 	RateQuoteUnavailableException,
 	type ParsedCorrectionChanges,
+	type UsageAllocationDelta,
 } from "./correction-calculator";
 import type {
 	CorrectionApplyResultDto,
@@ -58,7 +61,8 @@ export class CorrectionTargetChangedException extends HttpException {
 	}
 }
 
-/** USAGE 目标依赖 M7 资金使用模块（400 降级，方案 §10 依赖边界） */
+/** （已退役）MVP-F0-3 前 USAGE 更正的 400 降级异常；接线后无引用，保留类型导出
+ *  供历史 Correction 行的 failReason 文本兼容读取，新代码禁止使用 */
 export class CorrectionTargetTypeUnavailableException extends HttpException {
 	constructor() {
 		super(
@@ -114,10 +118,25 @@ export interface EffectiveHolding {
 	updatedAt: Date;
 }
 
-/** 目标加载产物（TRANSACTION / INITIAL_HOLDING 二选一） */
+/** 使用记录目标的内存形态（变更前/后通用；Decimal 全精度；MVP-F0-3 接线） */
+export interface EffectiveUsage {
+	id: string;
+	userId: string;
+	planId: string;
+	currencyCode: string;
+	amount: Prisma.Decimal;
+	usedAt: Date;
+	remark: string | null;
+	version: number;
+	createdAt: Date;
+	updatedAt: Date;
+}
+
+/** 目标加载产物（TRANSACTION / USAGE / INITIAL_HOLDING 三选一） */
 interface LoadedTarget {
-	type: "TRANSACTION" | "INITIAL_HOLDING";
+	type: "TRANSACTION" | "USAGE" | "INITIAL_HOLDING";
 	transaction?: TransactionModel;
+	usage?: UsageRecord;
 	holding?: InitialHolding;
 }
 
@@ -149,6 +168,7 @@ type CorrectionDb = Pick<
 	| "planAllocation"
 	| "userSettings"
 	| "account"
+	| "$queryRaw"
 >;
 
 /** evaluate 的完整产物：preview 序列化为 CorrectionPreviewDto，apply 据此落库 */
@@ -160,9 +180,21 @@ interface Evaluation {
 	before: Record<string, unknown>;
 	beforeTransaction: EffectiveTransaction | null;
 	beforeHolding: EffectiveHolding | null;
+	beforeUsage: EffectiveUsage | null;
 	/** 变更后目标（内存形态，apply 落库依据） */
 	afterTransaction: EffectiveTransaction | null;
 	afterHolding: EffectiveHolding | null;
+	afterUsage: EffectiveUsage | null;
+	/** USAGE 更正的计划分配调整量（apply 落库依据；amountDelta/usedAmountDelta/supplement） */
+	usageAllocationDelta: UsageAllocationDelta | null;
+	/** USAGE 更正关联的计划（分配调整与 V4 校验依据） */
+	usagePlan: {
+		planId: string;
+		planStatus: string;
+		planTargetAmount: Prisma.Decimal;
+		allocationAmount: Prisma.Decimal;
+		allocationUsedAmount: Prisma.Decimal;
+	} | null;
 	after: Record<string, unknown>;
 	diff: Array<{ field: string; before: string | null; after: string | null; display: string }>;
 	balances: Array<{ currencyCode: string; before: Prisma.Decimal; after: Prisma.Decimal }>;
@@ -337,7 +369,9 @@ export class CorrectionService {
 			target:
 				target.type === "TRANSACTION"
 					? this.serializeTransaction(this.toEffectiveTransaction(target.transaction!))
-					: this.serializeHolding(this.toEffectiveHolding(target.holding!)),
+					: target.type === "USAGE"
+						? this.serializeUsage(this.toEffectiveUsage(target.usage!))
+						: this.serializeHolding(this.toEffectiveHolding(target.holding!)),
 		};
 	}
 
@@ -364,9 +398,12 @@ export class CorrectionService {
 			throw this.failuresToException(evaluation.failures);
 		}
 
-		// ④~⑦ 落库：目标行 → 批次重建 → 余额 → APPLIED 留痕（同事务，任一失败全部回滚）
+		// ④~⑦ 落库：目标行（USAGE 连带计划分配调整）→ 批次重建 → 余额 → APPLIED 留痕
+		//（同事务，任一失败全部回滚）
 		if (evaluation.targetType === "TRANSACTION") {
 			await this.persistTransactionCorrection(tx, evaluation);
+		} else if (evaluation.targetType === "USAGE") {
+			await this.persistUsageCorrection(tx, evaluation);
 		} else {
 			await this.persistHoldingCorrection(tx, evaluation);
 		}
@@ -400,7 +437,9 @@ export class CorrectionService {
 			targetVersion:
 				evaluation.targetType === "TRANSACTION"
 					? evaluation.afterTransaction!.version
-					: null,
+					: evaluation.targetType === "USAGE"
+						? evaluation.afterUsage!.version
+						: null,
 			createdAt: correction.createdAt.toISOString(),
 		};
 	}
@@ -427,6 +466,9 @@ export class CorrectionService {
 				target.transaction!,
 				settings,
 			);
+		}
+		if (dto.targetType === "USAGE") {
+			return this.evaluateUsage(db, userId, dto, target.usage!, settings);
 		}
 		return this.evaluateHolding(db, userId, dto, target.holding!, settings);
 	}
@@ -527,8 +569,12 @@ export class CorrectionService {
 			before: this.serializeTransaction(this.toEffectiveTransaction(original)),
 			beforeTransaction: this.toEffectiveTransaction(original),
 			beforeHolding: null,
+			beforeUsage: null,
 			afterTransaction: effective,
 			afterHolding: null,
+			afterUsage: null,
+			usageAllocationDelta: null,
+			usagePlan: null,
 			after: this.serializeTransaction(effective),
 			diff: this.transactionDiff(
 				this.toEffectiveTransaction(original),
@@ -547,6 +593,199 @@ export class CorrectionService {
 			replayByCurrency: afterReplays,
 			feeChangedToUnknown: changes.feeProvided && changes.feeAmount === null,
 			planIdDetached,
+		};
+	}
+
+	/**
+	 * 使用更正评估（MVP-F0-3 / DEBT-01：改金额/改日期；无币种变更维度）：
+	 * 变更解析（V0）→ V4 计划状态矩阵（改 0/超目标/COMPLETED/CANCELLED，400）→
+	 * 计划分配调整量（computeAllocationDelta，doc 14 例 02~05）→ 受影响币种
+	 * 重放（before/after 各一次，usageVariant 应用拟变更）→ V1/V2/V3 收集为 failures。
+	 * 计划分配一致性在重放层之外显式校验（V2'：补分配不超计划目标池）。
+	 */
+	private async evaluateUsage(
+		db: CorrectionDb,
+		userId: string,
+		dto: CorrectionRequestDto,
+		originalUsage: UsageRecord,
+		settings: { baseCurrency: string; ledgerStartedAt: Date | null } | null,
+	): Promise<Evaluation> {
+		const changes = parseCorrectionChanges(dto.changes as Record<string, unknown>, {
+			targetType: "USAGE",
+			now: new Date(),
+			ledgerStartedAt: settings?.ledgerStartedAt ?? null,
+			currentCurrencyCode: originalUsage.currencyCode,
+			// USAGE 分支不使用汇率/三元组自洽（解析器仅 TRANSACTION 分支消费），传安全占位
+			currentExchangeRate: new Prisma.Decimal(1),
+			original: {
+				principalAmount: new Prisma.Decimal(0),
+				quantity: new Prisma.Decimal(1),
+				feeAmount: null,
+			},
+		});
+		assertCorrectionBasics(
+			dto.reason,
+			hasEffectiveChange(changes, {
+				currencyCode: originalUsage.currencyCode,
+				amount: originalUsage.amount,
+				usedAt: originalUsage.usedAt,
+			}),
+		);
+
+		// 计划行锁（MVP-F0-3，与计划取消/完成的「plans 行 → 分配/账户」锁序一致）：
+		// 锁定后再读状态，消除「读到 ACTIVE → 取消先提交 → 更正仍落库」的竞态——
+		// 取消的 updateMany 会阻塞于本锁直至更正事务提交；preview 中 autocommit
+		// 立即释放，无副作用。锁后重读状态保证 V4 基于最新已提交状态判定。
+		if (originalUsage.planId) {
+			await db.$queryRaw`
+				SELECT id FROM "plans" WHERE id = ${originalUsage.planId} FOR UPDATE`;
+		}
+		// 计划与分配装载（UsageRecord.planId 非空；缺失即数据异常，拒绝更正）
+		const usagePlan = await db.plan.findUnique({
+			where: { id: originalUsage.planId },
+			select: { id: true, status: true, targetAmount: true },
+		});
+		const allocation = await db.planAllocation.findUnique({
+			where: { planId: originalUsage.planId },
+		});
+		if (!usagePlan || !allocation) {
+			throw new CorrectionInvalidParamsException(
+				"使用记录关联的计划或分配不存在，无法更正（数据异常）",
+			);
+		}
+
+		// V4 计划状态矩阵（doc 10:88-91：改 0/超目标/COMPLETED 改大或改日期/CANCELLED → 400）
+		assertUsageCorrectionAllowed({
+			planStatus: usagePlan.status,
+			planTargetAmount: usagePlan.targetAmount,
+			planCumulativeUsed: allocation.usedAmount,
+			currentAmount: originalUsage.amount,
+			changes,
+		});
+
+		const effective: EffectiveUsage = {
+			id: originalUsage.id,
+			userId,
+			planId: originalUsage.planId,
+			currencyCode: originalUsage.currencyCode,
+			amount: changes.amount ?? originalUsage.amount,
+			usedAt: changes.usedAt ?? originalUsage.usedAt,
+			remark: originalUsage.remark,
+			version: originalUsage.version + 1,
+			createdAt: originalUsage.createdAt,
+			updatedAt: originalUsage.updatedAt,
+		};
+
+		// 计划分配调整量（doc 14 例 02~05）：改小同减、改大先耗剩余分配再补分配
+		const allocationDelta = computeAllocationDelta({
+			currentAmount: originalUsage.amount,
+			newAmount: effective.amount,
+			remainingAllocation: allocation.amount.sub(allocation.usedAmount),
+		});
+
+		// V2'（补分配池）：计划分配加补分配后不得超过计划目标金额
+		//（targetAmount − amount − amountDelta < 0 即分配池不足）
+		const allocationAfter =
+			allocation.amount.add(allocationDelta.amountDelta);
+		if (allocationAfter.gt(usagePlan.targetAmount)) {
+			throw new CorrectionNotAllowedException(
+				"更正后计划分配将超过计划目标金额，暂不支持（请先调整计划目标）",
+			);
+		}
+
+		const affectedCurrencies = [originalUsage.currencyCode];
+		const context = await this.loadLedgerContexts(db, userId, affectedCurrencies);
+
+		const beforeReplays = new Map<string, ReplayResult>();
+		const afterReplays = new Map<string, ReplayResult>();
+		for (const currencyCode of affectedCurrencies) {
+			const ledger = context.get(currencyCode)!;
+			beforeReplays.set(
+				currencyCode,
+				this.replayCurrency(
+					ledger,
+					currencyCode,
+					settings?.ledgerStartedAt ?? null,
+					null,
+					null,
+					{
+						targetId: originalUsage.id,
+						effective: this.toEffectiveUsage(originalUsage),
+					},
+				),
+			);
+			afterReplays.set(
+				currencyCode,
+				this.replayCurrency(
+					ledger,
+					currencyCode,
+					settings?.ledgerStartedAt ?? null,
+					null,
+					null,
+					{
+						targetId: originalUsage.id,
+						effective,
+					},
+				),
+			);
+		}
+
+		return {
+			targetType: "USAGE",
+			targetId: originalUsage.id,
+			affectedCurrencies,
+			before: this.serializeUsage(this.toEffectiveUsage(originalUsage)),
+			beforeTransaction: null,
+			beforeHolding: null,
+			beforeUsage: this.toEffectiveUsage(originalUsage),
+			afterTransaction: null,
+			afterHolding: null,
+			afterUsage: effective,
+			usageAllocationDelta: allocationDelta,
+			usagePlan: {
+				planId: usagePlan.id,
+				planStatus: usagePlan.status,
+				planTargetAmount: usagePlan.targetAmount,
+				allocationAmount: allocation.amount,
+				allocationUsedAmount: allocation.usedAmount,
+			},
+			after: this.serializeUsage(effective),
+			diff: this.usageDiff(this.toEffectiveUsage(originalUsage), effective),
+			balances: affectedCurrencies.map((currencyCode) => ({
+				currencyCode,
+				before: beforeReplays.get(currencyCode)!.finalBalance,
+				after: afterReplays.get(currencyCode)!.finalBalance,
+			})),
+			costsBefore: collectUsageCosts(beforeReplays),
+			costsAfter: collectUsageCosts(afterReplays),
+			warnings: buildFeeWarnings(afterReplays),
+			// V2（delta-aware 版，MVP-F0-3）：collectReplayFailures 的 V2 用「变更前」
+			// planAllocations 计算未分配余额，对 USAGE 不成立——改为把 delta 应用到
+			// 目标计划后重算全币种分配视图，保留对其他计划的真实冲突拦截
+			failures: ((): ReplayFailure[] => {
+				const base = this.collectReplayFailures(
+					affectedCurrencies,
+					afterReplays,
+					context,
+				).filter((failure) => failure.code !== "CORRECTION_ALLOCATION_CONFLICT");
+				const conflict = this.collectUsageAllocationConflict(
+					affectedCurrencies[0],
+					afterReplays.get(affectedCurrencies[0])!,
+					context,
+					{
+						planId: usagePlan.id,
+						planStatus: usagePlan.status,
+						planTargetAmount: usagePlan.targetAmount,
+						allocationAmount: allocation.amount,
+						allocationUsedAmount: allocation.usedAmount,
+					},
+					allocationDelta,
+				);
+				return conflict ? [...base, conflict] : base;
+			})(),
+			replayByCurrency: afterReplays,
+			feeChangedToUnknown: false,
+			planIdDetached: false,
 		};
 	}
 
@@ -687,8 +926,12 @@ export class CorrectionService {
 			before: this.serializeHolding(this.toEffectiveHolding(original)),
 			beforeTransaction: null,
 			beforeHolding: this.toEffectiveHolding(original),
+			beforeUsage: null,
 			afterTransaction: null,
 			afterHolding: effective,
+			afterUsage: null,
+			usageAllocationDelta: null,
+			usagePlan: null,
 			after: this.serializeHolding(effective),
 			diff: this.holdingDiff(this.toEffectiveHolding(original), effective),
 			balances: affectedCurrencies.map((currencyCode) => ({
@@ -720,6 +963,7 @@ export class CorrectionService {
 		ledgerStartedAt: Date | null,
 		txVariant: { targetId: string; effective: EffectiveTransaction } | null,
 		holdingVariant: { targetId: string; effective: EffectiveHolding } | null,
+		usageVariant: { targetId: string; effective: EffectiveUsage } | null = null,
 	): ReplayResult {
 		const events: LedgerEvent[] = [];
 		for (const holding of ledger.initialHoldings) {
@@ -744,7 +988,11 @@ export class CorrectionService {
 			events.push(this.transactionEvent(txVariant.effective));
 		}
 		for (const usage of ledger.usageRecords) {
+			if (usageVariant && usage.id === usageVariant.targetId) continue;
 			events.push(this.usageEvent(usage));
+		}
+		if (usageVariant && usageVariant.effective.currencyCode === currencyCode) {
+			events.push(this.usageEventFromEffective(usageVariant.effective));
 		}
 		return replayCurrencyLedger(events);
 	}
@@ -780,6 +1028,17 @@ export class CorrectionService {
 	}
 
 	private usageEvent(usage: UsageRecord): LedgerEvent {
+		return {
+			type: "USAGE",
+			id: usage.id,
+			happenedAt: usage.usedAt,
+			createdAt: usage.createdAt,
+			quantity: usage.amount,
+		};
+	}
+
+	/** 拟变更后的使用事件（与 usageEvent 同字段口径；重放排序/消耗共用） */
+	private usageEventFromEffective(usage: EffectiveUsage): LedgerEvent {
 		return {
 			type: "USAGE",
 			id: usage.id,
@@ -859,6 +1118,52 @@ export class CorrectionService {
 		return failures;
 	}
 
+	/**
+	 * USAGE 更正的分配一致性 V2（delta-aware，MVP-F0-3 / DEBT-01）：
+	 * 把 computeAllocationDelta 的调整量应用到目标计划后重算全币种分配视图——
+	 * 未分配余额 = 变更后终态余额 − Σ(调整后 amount − 调整后 usedAmount)。
+	 * 保留对其他计划的真实冲突拦截（如补分配挤占他人剩余分配的场景）。
+	 */
+	private collectUsageAllocationConflict(
+		currencyCode: string,
+		replay: ReplayResult,
+		context: Map<string, CurrencyLedgerContext>,
+		usagePlan: NonNullable<Evaluation["usagePlan"]>,
+		delta: UsageAllocationDelta,
+	): ReplayFailure | null {
+		const ledger = context.get(currencyCode)!;
+		let allocatedRemaining = new Prisma.Decimal(0);
+		const planIdsWithRemaining: string[] = [];
+		for (const allocation of ledger.planAllocations.values()) {
+			const isTarget = allocation.planId === usagePlan.planId;
+			const amount = isTarget
+				? allocation.amount.add(delta.amountDelta)
+				: allocation.amount;
+			const usedAmount = isTarget
+				? allocation.usedAmount.add(delta.usedAmountDelta)
+				: allocation.usedAmount;
+			const remaining = amount.sub(usedAmount);
+			allocatedRemaining = allocatedRemaining.add(remaining);
+			if (remaining.gt(0)) {
+				planIdsWithRemaining.push(allocation.planId);
+			}
+		}
+		const unallocated = replay.finalBalance.sub(allocatedRemaining);
+		if (unallocated.lt(0)) {
+			return {
+				code: "CORRECTION_ALLOCATION_CONFLICT",
+				message: `更正后 ${currencyCode} 未分配余额将变为 ${unallocated.toFixed(4)}；更正不会自动减少计划分配，请先到对应计划调整或解除分配`,
+				details: planIdsWithRemaining.map((planId) => ({
+					currencyCode,
+					shortfall: unallocated.abs().toFixed(4),
+					usedAt: null,
+					planId,
+				})),
+			};
+		}
+		return null;
+	}
+
 	// ──────────────────────── 落库（方案 §5.4 ④~⑦）────────────────────────
 
 	/** 交易更正落库：目标行 update + version+1（改币种时 planId 已在 effective 中解除） */
@@ -879,6 +1184,63 @@ export class CorrectionService {
 				version: { increment: 1 },
 			},
 		});
+	}
+
+	/**
+	 * 使用更正落库（MVP-F0-3）：目标行 update（amount/usedAt/version+1）+
+	 * 计划分配调整（computeAllocationDelta：amount/usedAmount 同步；补分配时
+	 * 写 PlanChangeLog ALLOCATION_ADJUSTED 留痕）。账户余额由重放重建承担。
+	 */
+	private async persistUsageCorrection(
+		tx: Prisma.TransactionClient,
+		evaluation: Evaluation,
+	): Promise<void> {
+		const effective = evaluation.afterUsage!;
+		const delta = evaluation.usageAllocationDelta!;
+		const usagePlan = evaluation.usagePlan!;
+		await tx.usageRecord.update({
+			where: { id: effective.id },
+			data: {
+				amount: effective.amount,
+				usedAt: effective.usedAt,
+				version: { increment: 1 },
+			},
+		});
+		if (delta.amountDelta.eq(0) && delta.usedAmountDelta.eq(0)) {
+			return;
+		}
+		await tx.planAllocation.update({
+			where: { planId: usagePlan.planId },
+			data: {
+				amount: { increment: delta.amountDelta },
+				usedAmount: { increment: delta.usedAmountDelta },
+			},
+		});
+		if (delta.supplement.gt(0)) {
+			// 补分配留痕（对齐 plan.service ALLOCATION_ADJUSTED 形态）
+			await tx.planChangeLog.create({
+				data: {
+					planId: usagePlan.planId,
+					changeType: "ALLOCATION_ADJUSTED",
+					beforeTarget: usagePlan.planTargetAmount,
+					afterTarget: usagePlan.planTargetAmount,
+					beforeAlloc: usagePlan.allocationAmount,
+					afterAlloc: usagePlan.allocationAmount.add(delta.amountDelta),
+					releasedAmount: new Prisma.Decimal(0),
+					beforeSnapshot: {
+						reason: "USAGE_CORRECTION_SUPPLEMENT",
+						usageId: effective.id,
+						amountBefore: evaluation.beforeUsage!.amount.toFixed(4),
+					} as unknown as Prisma.InputJsonValue,
+					afterSnapshot: {
+						reason: "USAGE_CORRECTION_SUPPLEMENT",
+						usageId: effective.id,
+						amountAfter: effective.amount.toFixed(4),
+						supplement: delta.supplement.toFixed(4),
+					} as unknown as Prisma.InputJsonValue,
+				},
+			});
+		}
 	}
 
 	/** 初始持仓更正落库：金额/币种与报价三元组更新（无 version 列，乐观校验已在行锁后完成） */
@@ -987,7 +1349,9 @@ export class CorrectionService {
 				? this.serializeTransaction(
 						this.toEffectiveTransaction(beforeTarget.transaction!),
 					)
-				: this.serializeHolding(this.toEffectiveHolding(beforeTarget.holding!));
+				: beforeTarget.type === "USAGE"
+					? this.serializeUsage(this.toEffectiveUsage(beforeTarget.usage!))
+					: this.serializeHolding(this.toEffectiveHolding(beforeTarget.holding!));
 		await this.prisma.correction.create({
 			data: {
 				userId,
@@ -1023,6 +1387,13 @@ export class CorrectionService {
 			if (!transaction) throw new CorrectionTargetNotFoundException();
 			return { type: "TRANSACTION", transaction };
 		}
+		if (targetType === "USAGE") {
+			const usage = await db.usageRecord.findFirst({
+				where: { id: targetId, userId },
+			});
+			if (!usage) throw new CorrectionTargetNotFoundException();
+			return { type: "USAGE", usage };
+		}
 		const holding = await db.initialHolding.findFirst({
 			where: { id: targetId, userId },
 		});
@@ -1030,18 +1401,22 @@ export class CorrectionService {
 		return { type: "INITIAL_HOLDING", holding };
 	}
 
-	/** 乐观校验（方案假设 3）：TRANSACTION 比对 baseVersion；INITIAL_HOLDING 比对 updatedAt（无版本列） */
+	/** 乐观校验（方案假设 3）：TRANSACTION/USAGE 比对 baseVersion（UsageRecord 有 version 列）；INITIAL_HOLDING 比对 updatedAt（无版本列） */
 	private assertOptimisticMatch(
 		dto: CorrectionRequestDto,
 		target: LoadedTarget,
 	): void {
-		if (target.type === "TRANSACTION") {
+		if (target.type === "TRANSACTION" || target.type === "USAGE") {
 			if (dto.baseVersion === undefined || dto.baseVersion === null) {
 				throw new CorrectionInvalidParamsException(
-					"TRANSACTION 更正必须提供 baseVersion（乐观校验基准）",
+					"TRANSACTION/USAGE 更正必须提供 baseVersion（乐观校验基准）",
 				);
 			}
-			if (target.transaction!.version !== dto.baseVersion) {
+			const version =
+				target.type === "TRANSACTION"
+					? target.transaction!.version
+					: target.usage!.version;
+			if (version !== dto.baseVersion) {
 				throw new CorrectionTargetChangedException();
 			}
 			return;
@@ -1066,6 +1441,10 @@ export class CorrectionService {
 		target: LoadedTarget,
 		changes: CorrectionRequestDto["changes"],
 	): string[] {
+		if (targetType === "USAGE") {
+			// 使用更正无币种变更维度：恒为使用记录自身的币种
+			return [target.usage!.currencyCode];
+		}
 		const original =
 			targetType === "TRANSACTION"
 				? target.transaction!.currencyCode
@@ -1077,11 +1456,9 @@ export class CorrectionService {
 		return next !== original ? [original, next] : [original];
 	}
 
-	/** USAGE 之外的目标类型放行（USAGE 降级：400 CORRECTION_TARGET_TYPE_UNAVAILABLE，方案 §10） */
+	/** 目标类型白名单放行（parseTargetType 已限定三态；MVP-F0-3 起 USAGE 闭环放行） */
 	private assertSupportedTargetType(targetType: CorrectionTargetTypeValue): void {
-		if (targetType === "USAGE") {
-			throw new CorrectionTargetTypeUnavailableException();
-		}
+		void targetType;
 	}
 
 	private parseTargetType(raw: string): CorrectionTargetTypeValue {
@@ -1236,6 +1613,64 @@ export class CorrectionService {
 			createdAt: holding.createdAt,
 			updatedAt: holding.updatedAt,
 		};
+	}
+
+	private toEffectiveUsage(usage: UsageRecord): EffectiveUsage {
+		return {
+			id: usage.id,
+			userId: usage.userId,
+			planId: usage.planId,
+			currencyCode: usage.currencyCode,
+			amount: usage.amount,
+			usedAt: usage.usedAt,
+			remark: usage.remark,
+			version: usage.version,
+			createdAt: usage.createdAt,
+			updatedAt: usage.updatedAt,
+		};
+	}
+
+	/** 使用记录序列化（快照/预览；金额 4 位、时间 ISO；remark 保留 null 语义） */
+	private serializeUsage(usage: EffectiveUsage): Record<string, unknown> {
+		return {
+			id: usage.id,
+			targetType: "USAGE",
+			planId: usage.planId,
+			currencyCode: usage.currencyCode,
+			amount: usage.amount.toFixed(4),
+			usedAt: usage.usedAt.toISOString(),
+			remark: usage.remark,
+			version: usage.version,
+			createdAt: usage.createdAt.toISOString(),
+			updatedAt: usage.updatedAt.toISOString(),
+		};
+	}
+
+	/** 使用 diff（金额/日期变化；remark 本期不在白名单，不参与 diff） */
+	private usageDiff(
+		original: EffectiveUsage,
+		effective: EffectiveUsage,
+	): Evaluation["diff"] {
+		const diff: Evaluation["diff"] = [];
+		if (!effective.amount.eq(original.amount)) {
+			diff.push(
+				fieldDiff(
+					"amount",
+					original.amount.toFixed(4),
+					effective.amount.toFixed(4),
+				),
+			);
+		}
+		if (effective.usedAt.getTime() !== original.usedAt.getTime()) {
+			diff.push(
+				fieldDiff(
+					"usedAt",
+					original.usedAt.toISOString(),
+					effective.usedAt.toISOString(),
+				),
+			);
+		}
+		return diff;
 	}
 
 	/** 交易 diff（仅列变化字段；手续费未知 → 值写「未知 → 20.0000」，绝不写 0 → 20） */

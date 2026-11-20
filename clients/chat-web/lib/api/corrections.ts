@@ -17,9 +17,9 @@ export const correctionsApi = {
 	 * 影响预览（POST /corrections/preview，只读）
 	 *
 	 * 返回前后对比 + 余额/成本影响 + blockers；blockers 非空 = 不能提交。
-	 * 400：INVALID_CORRECTION_PARAMS / CORRECTION_NOT_ALLOWED / RATE_QUOTE_UNAVAILABLE /
-	 * CORRECTION_TARGET_TYPE_UNAVAILABLE（USAGE 依赖 M7）；404：目标不存在或不属于本人；
-	 * 409：CORRECTION_TARGET_CHANGED。
+	 * 400：INVALID_CORRECTION_PARAMS / CORRECTION_NOT_ALLOWED / RATE_QUOTE_UNAVAILABLE；
+	 * 404：目标不存在或不属于本人；409：CORRECTION_TARGET_CHANGED。
+	 * USAGE 自 MVP-F0-3 起支持改金额与改日期（此前 M7 未接线降级拦截已移除）。
 	 */
 	async preview(req: CorrectionRequest): Promise<CorrectionPreview> {
 		return apiClient<CorrectionPreview>("/corrections/preview", {

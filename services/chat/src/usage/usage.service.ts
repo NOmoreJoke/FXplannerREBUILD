@@ -147,6 +147,7 @@ export class UsageService {
 	/**
 	 * 记录使用（POST /api/plans/:id/usages，方案 §3.1 五步事务）：
 	 * 事务外装载与校验（失败不进事务）→ 交互式事务——
+	 * ⓪ Account 行锁（FOR UPDATE；与更正 apply 锁序统一，防倒序死锁）
 	 * ① $executeRaw 条件扣分配（WHERE used + amt <= amount，列间比较单语句原子）
 	 * ② account.updateMany 条件扣余额（WHERE balance >= amt）
 	 * ③ usageRecord.create（version = 1）
@@ -178,6 +179,14 @@ export class UsageService {
 		const remark = this.parseRemark(dto.remark);
 
 		const result = await this.prisma.$transaction(async (tx) => {
+			// ⓪ 账户行锁（MVP-F0-3 锁序统一）：先锁 Account 再动 PlanAllocation——
+			// 与更正 apply 的锁序（lockAccountRows → persistUsageCorrection）一致，
+			// 消除「更正先锁账户后改分配 / 记录使用先改分配后扣账户」的倒序死锁窗口
+			//（同用户同币种并发时在此串行化）。行锁后重读分配现状（条件更新基于最新已提交行）。
+			await tx.$queryRaw`
+				SELECT id FROM accounts
+				WHERE user_id = ${userId} AND currency_code = ${context.currencyCode}
+				FOR UPDATE`;
 			// ① 条件扣分配：列间比较（used + amt <= amount）Prisma updateMany 无法表达，
 			// 单条 UPDATE 原子完成「检查 + 扣减」；updated_at 手动刷新（绕过 @updatedAt）
 			const allocationUpdated = await tx.$executeRaw`

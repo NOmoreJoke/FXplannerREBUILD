@@ -18,8 +18,8 @@
 | W2 | B1·方向（ErApi/Frankfurter 取倒数统一） | `feat/f0-w2-rate-direction-invert` | W1 | ✅ 完成（`6c39887`，PR #3） |
 | W3 | C1·日级取价（getLatest fresh/validUntil + findQuoteAt 日级回看） | `feat/f0-w3-daily-quote-window` | W2 | ✅ 完成（`2bf93cc`，PR #4） |
 | W4 | C2·TWD 图表（Frankfurter v2 隔离） | `feat/f0-w4-twd-chart-v2` | W3 | ✅ 完成（`4290fd2`，PR #5） |
-| W5 | B2·迁移脚本（幂等转换/回滚，演练受限标注） | `feat/f0-w5-cache-migration-scripts` | W4 | 进行中 |
-| W6 | D·USAGE 闭环（共享 FIFO 内核 + 移除挡板 + T-CORR-004） | `feat/f0-w6-usage-correction-fifo` | W5 | 待做 |
+| W5 | B2·迁移脚本（幂等转换/回滚，演练受限标注） | `feat/f0-w5-cache-migration-scripts` | W4 | ✅ 完成（`9565475`，PR #6） |
+| W6 | D·USAGE 闭环（共享 FIFO 内核 + 移除挡板 + T-CORR-004） | `feat/f0-w6-usage-correction-fifo` | W5 | 进行中 |
 | W7 | E·导出（Dockerfile 权限 + CSV 精度 + Decimal 累加） | `feat/f0-w7-export-precision` | W6 | 待做 |
 | W8 | F1-1 findLatestRows 数据库端常数行 | `feat/f1-w8-latest-rows-query` | W7 | 待做 |
 | W9 | F1-2 DataRequestLockGuard 查询合并 | `feat/f1-w9-lock-guard-merge` | W8 | 待做 |
@@ -114,11 +114,52 @@ typecheck/lint ✓；money 55 ✓。L3 未运行（人类未启 dev 服务）。
 - B2 旧缓存迁移（W5）执行口径按汇率底稿 §3：ErApi 原位转换优先、
   Frankfurter 可证原位转换、实测盘点待生产库只读盘查（人类执行）
 
+## W3 · 日级取价 ✅（commit `2bf93cc`，draft PR #4）
+
+改动：onboarding 取价时效锚点从「observedAt+5min 自设门槛」改为系统确认
+fresh/validUntil（isFresh = fresh 且 validUntil 未过，含取价-写账间隙双保险
+与非法 validUntil 防御）；陈旧回显恰好一次同步刷新，失败/仍不 fresh 整单
+拒绝零写入；findQuoteAt 按源粒度（abc 五分钟窗口 / er-api UTC+8 同日+7 自然日
+回看 / frankfurter 仅日期点不参与原时点）；fetchHistory 回补通道保留。
+验证：unit 439→440、api 278、integration 53 全绿。
+对抗审：codex 两轮——首轮 FAIL（4 [Important]：validUntil 双保险、回看边界
+测试同义反复、回补命中假绿、缺固定时点/币对覆盖）→ 修复；二轮 PASS。
+
+## W4 · TWD 图表 v2 隔离 ✅（commit `4290fd2`，draft PR #5）
+
+改动：新增 rate-source.frankfurter-v2（实测逐条 date/base/quote/rate 契约，
+取倒数一次，日期严格校验+区间过滤）；getHistory er-api 路由币对冷缺口由 v2
+参考序列在响应合并层补点（本地行按日期优先、逐点 source 标注、区间级缓存+
+单飞防外呼放大、严禁回写 exchange_rates）；新增 RateHistoryResponseDto/
+RateHistoryPointDto + @ApiOkResponse + generate:api 重生成；前端 history
+影子类型清零（Schemas 别名）；use-rate-history referenceCount + 图表面板
+参考价来源说明行；AI 汇率工具输出区分参考价与原来源。
+验证：unit 456、api 283、integration 53、web(Node24) 232 全绿。
+对抗审：codex 三轮——首轮 FAIL（4 [Important]）→ 二轮 FAIL（缺 quote 条目
+绕过日期校验、前端展示未落地）→ 三轮 PASS（diff 产物修正后 19 文件核对）。
+
+## W5 · 旧缓存迁移工具 ✅（commit `9565475`，draft PR #6）
+
+改动：src/rate/rate-migration-plan.ts 纯函数层（候选分类 ErApi 严格 quote=TWD、
+verifyFrozenPlan 全量防篡改四侧比对 + approvedCandidateIds 人工圈选白名单、
+assertFrozenRowsShape 运行时结构校验、executePlanBatches/executeMigrationBatches
+执行引擎：全冻结字段条件更新、数值归一化域幂等判定、No-op 零 UPDATE、漂移
+即抛错、重复主键拒绝）+ prisma/rate-cache-migration/migrate.ts 零 fs CLI
+（inventory/invert/rollback，全计划单事务，--apply + --confirm-backup-target
+双确认，断连失败不谎称事务状态）+ README（含真实演练记录）+ AGENTS.md
+prisma/ 树登记 + services/chat typecheck 串联 CLI tsconfig。
+验证：unit 479 全绿（migration spec 25 用例含 fast-check 往返属性）；CLI 本地
+测试库真实 CUID 端到端演练取证（盘点→冲突拒绝→圈选→单事务转换 4.7567→
+0.2102297812 与 0.6102→1.6388069485→幂等复跑 0 更新→rollback 恢复双原值）。
+对抗审：codex 十轮——逐轮修复候选范围、尾零幂等误判、人工圈选白名单、
+alreadyDone 全字段核对、No-op 复跑 0 更新、事务契约文档、断连误报、批序
+断言、重复主键拒绝、运行时结构校验 → PASS（0 [Important]）。本切片为
+对抗审强度最高的分支，多轮发现均为真实设计缺口（非吹毛求疵）。
+
 ## 下一分支预告
 
-W3（C1·日级取价）将基于本分支切 `feat/f0-w3-daily-quote-window`：
-首次建账/补录统一 getLatest 的 fresh/validUntil 系统确认时效；
-初始持仓币种更正 findQuoteAt 按 original.confirmedAt 区分实时窗口与
-有证据日级回看（UTC+8 同日 FIFO 语义），无法证明原时点可用时保留
-RATE_QUOTE_UNAVAILABLE，严禁伪造 observedAt。依据：汇率底稿 §2、
-`docs/handoff/OVERNIGHT-ZCODE-20261103.md` B1 教训。
+W6（D·USAGE 闭环）将基于本分支切 `feat/f0-w6-usage-correction-fifo`：
+共享 FIFO 消耗纯函数内核（ledger-replay 与 usage-calculator 双实现差分收敛）、
+移除 correction.service 的 USAGE 挡板（load/evaluate/apply、baseVersion
+乐观锁、同事务重放零副作用、同日 FIFO 排序保护——OVERNIGHT-ZCODE-20261103
+B1 教训）、取消 e2e T-CORR-004 skip（L3 需人类启服，交接注明复跑命令）。

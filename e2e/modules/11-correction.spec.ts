@@ -7,6 +7,8 @@ import {
 	seedOnboarding,
 	seedPlanWithAllocation,
 	seedRegisterAndLogin,
+	seedTransaction,
+	seedUsage,
 } from "../helpers/api-seeder";
 
 /**
@@ -245,8 +247,91 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 		await logger.saveToFile();
 	});
 
-	// M7「资金使用」落地后启用：使用详情更正入口 + 改小差额回未分配（需求验收场景 6）
-	test.skip("T-CORR-004: 使用更正改小（依赖 M7 记录使用功能，落地后启用）", async () => {
-		logger.log("action", "info", "T-CORR-004 占位：M7 未接线");
+	// MVP-F0-3 接线后启用：使用记录更正改小（需求验收场景 6；API 造数 +
+	// 计划详情使用列表更正入口 → 更正页预览 → 确认 → v2 / 分配联动 / 留痕）
+	test("T-CORR-004: 使用更正改小 → 入口 → 预览 → 确认 → v2 / 分配联动 / 留痕", async ({
+		page,
+	}) => {
+		logger.log("action", "info", "开始：使用更正改小全流程");
+		logger.setupPageListeners(page);
+
+		const user = await seedRegisterAndLogin(`corr-usage-${Date.now()}`);
+		await seedOnboarding(user.accessToken, "CNY");
+		// 造数：CAD 计划（分配 3,000）→ 买入 7,800（汇率 1，lot 7,800@1）→ 使用 800（耗 800@1）
+		const planId = await seedPlanWithAllocation(user.accessToken, "CAD", "3000");
+		await seedTransaction(user.accessToken, "CAD", "7800");
+		const usage = await seedUsage(user.accessToken, planId, "800");
+		await injectLoginCookie(page.context(), user.accessToken, BASE_URL);
+
+		// 计划详情 → 使用列表 → 更正入口（MVP-F0-3 新增 usage-correction-entry）
+		await page.goto(`${BASE_URL}/plans/${planId}`);
+		await page.waitForLoadState("networkidle");
+		await expect(page.getByTestId("usage-correction-entry").first()).toBeVisible({
+			timeout: 15000,
+		});
+		await saveScreenshot(page, "11-correction", "T-CORR-004-01-usage-list");
+		await page.getByTestId("usage-correction-entry").first().click();
+		await page.waitForURL(/\/corrections\/new\?targetType=USAGE/, {
+			timeout: 30000,
+		});
+		await page.waitForLoadState("networkidle");
+
+		// 填写：金额改小 800 → 500；原因必填
+		await page.fill("#correction-使用金额", "500");
+		await page.fill("#correction-reason", "使用金额多记了 300");
+		await saveScreenshot(page, "11-correction", "T-CORR-004-02-form");
+
+		// 查看影响 → 确认
+		await page.click('[data-testid="correction-preview-button"]');
+		await page.waitForLoadState("networkidle");
+		await saveScreenshot(page, "11-correction", "T-CORR-004-03-preview");
+		await page.click('[data-testid="correction-confirm-button"]');
+
+		// API 侧断言：记录 v2 / 金额 500 / 成本重算 / 留痕 APPLIED
+		const usageRes = await localFetch(
+			buildApiUrl(API_URL, `/api/plans/${planId}/usages`),
+			{ headers: { Authorization: `Bearer ${user.accessToken}` } },
+		);
+		const usageJson = (await usageRes.json()) as {
+			data: {
+				items: Array<{ id: string; amount: string; cost: string }>;
+			};
+		};
+		const updated = usageJson.data.items.find((item) => item.id === usage.id);
+		expect(updated?.amount).toBe("500.0000");
+		// 成本 = 500 × 1 = 500（改小后按批次重算；造数汇率为 1）
+		expect(updated?.cost).toBe("500.0000");
+		const correctionRes = await localFetch(
+			buildApiUrl(
+				API_URL,
+				`/api/corrections?targetType=USAGE&targetId=${usage.id}`,
+			),
+			{ headers: { Authorization: `Bearer ${user.accessToken}` } },
+		);
+		const correctionJson = (await correctionRes.json()) as {
+			data: {
+				items: Array<{ status: string; targetType: string; reason: string }>;
+			};
+		};
+		expect(correctionJson.data.items[0]?.status).toBe("APPLIED");
+		expect(correctionJson.data.items[0]?.targetType).toBe("USAGE");
+		expect(correctionJson.data.items[0]?.reason).toContain("使用金额多记了 300");
+		// 版本断言：target 接口返回当前内容含 version = 2（乐观基准）
+		const targetRes = await localFetch(
+			buildApiUrl(
+				API_URL,
+				`/api/corrections/target?targetType=USAGE&targetId=${usage.id}`,
+			),
+			{ headers: { Authorization: `Bearer ${user.accessToken}` } },
+		);
+		const targetJson = (await targetRes.json()) as {
+			data: { target: { version: number; amount: string } };
+		};
+		expect(targetJson.data.target.version).toBe(2);
+		expect(targetJson.data.target.amount).toBe("500.0000");
+		await saveScreenshot(page, "11-correction", "T-CORR-004-04-applied");
+		logger.log("action", "info", "✓ 使用金额 500 / v2 / APPLIED 留痕");
+
+		await logger.saveToFile();
 	});
 });

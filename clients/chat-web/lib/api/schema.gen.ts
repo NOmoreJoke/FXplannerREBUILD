@@ -752,7 +752,7 @@ export interface paths {
         put?: never;
         /**
          * 影响预览（只读重放）
-         * @description 只读重放受影响币种账本（UTC+8 日 → 初始<买入<使用 → 首录顺序确定性重放），返回前后对比、余额/成本影响、缺口与拦截明细；不落任何业务行。V1/V2/V3 类拦截以 blockers 返回 200（blockers 非空 = 不能提交）；参数/待确定项/报价缺失类直接 400。USAGE 目标依赖 M7，落地前返回 400 CORRECTION_TARGET_TYPE_UNAVAILABLE。
+         * @description 只读重放受影响币种账本（UTC+8 日 → 初始<买入<使用 → 首录顺序确定性重放），返回前后对比、余额/成本影响、缺口与拦截明细；不落任何业务行。V1/V2/V3 类拦截以 blockers 返回 200（blockers 非空 = 不能提交）；参数/待确定项/报价缺失类直接 400。USAGE 目标于 MVP-F0-3 起支持（改金额/改日期；V4 矩阵拦截以 CORRECTION_NOT_ALLOWED 返回）。
          */
         post: operations["CorrectionController_preview"];
         delete?: never;
@@ -3282,7 +3282,7 @@ export interface components {
         };
         CorrectionRequestDto: {
             /**
-             * @description 更正目标类型（USAGE 依赖 M7，落地前返回 400 CORRECTION_TARGET_TYPE_UNAVAILABLE）
+             * @description 更正目标类型（TRANSACTION / USAGE / INITIAL_HOLDING；USAGE 自 MVP-F0-3 起支持改金额与改日期）
              * @example TRANSACTION
              * @enum {string}
              */
@@ -4916,7 +4916,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description 参数非法（INVALID_CORRECTION_PARAMS）/ 待确定项拦截（CORRECTION_NOT_ALLOWED）/ 原时点报价不可得（RATE_QUOTE_UNAVAILABLE）/ USAGE 依赖未就绪（CORRECTION_TARGET_TYPE_UNAVAILABLE） */
+            /** @description 参数非法（INVALID_CORRECTION_PARAMS）/ 待确定项拦截（CORRECTION_NOT_ALLOWED）/ 原时点报价不可得（RATE_QUOTE_UNAVAILABLE） */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -5015,7 +5015,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description 参数非法（INVALID_CORRECTION_PARAMS）/ 待确定项拦截（CORRECTION_NOT_ALLOWED）/ 报价不可得（RATE_QUOTE_UNAVAILABLE）/ USAGE 依赖未就绪（CORRECTION_TARGET_TYPE_UNAVAILABLE） */
+            /** @description 参数非法（INVALID_CORRECTION_PARAMS）/ 待确定项拦截（CORRECTION_NOT_ALLOWED）/ 报价不可得（RATE_QUOTE_UNAVAILABLE） */
             400: {
                 headers: {
                     [name: string]: unknown;
