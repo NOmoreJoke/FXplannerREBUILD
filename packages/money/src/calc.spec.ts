@@ -40,6 +40,15 @@ describe("assertValidRate（汇率有效性）", () => {
 			InvalidRateError,
 		);
 	});
+
+	it("无法解析的汇率返回 InvalidRateError 及其错误码", () => {
+		expect(() => assertValidRate("0.00000001x")).toThrow(
+			expect.objectContaining({
+				constructor: InvalidRateError,
+				code: "MONEY_INVALID_RATE",
+			}),
+		);
+	});
 });
 
 describe("finalAmountOf（金额 × 汇率，最终舍一次）", () => {

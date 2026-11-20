@@ -57,6 +57,15 @@ describe("assertNotRoundToZero（正数舍 0 拦截）", () => {
 		expect(() => assertNotRoundToZero("0.5", 0)).not.toThrow();
 		expect(() => assertNotRoundToZero("0.01", 2)).not.toThrow();
 	});
+
+	it("舍零校验对无法解析的金额返回 InvalidAmountError 及其错误码", () => {
+		expect(() => assertNotRoundToZero("0.005x", 2)).toThrow(
+			expect.objectContaining({
+				constructor: InvalidAmountError,
+				code: "MONEY_INVALID_AMOUNT",
+			}),
+		);
+	});
 });
 
 describe("assertPositiveAmount（金额有效性）", () => {
@@ -99,6 +108,15 @@ describe("assertAmountLimit（单笔上限）", () => {
 		expect(() => assertAmountLimit(Number.NaN)).toThrow(InvalidAmountError);
 		expect(() => assertAmountLimit(Number.POSITIVE_INFINITY)).toThrow(
 			InvalidAmountError,
+		);
+	});
+
+	it("上限校验对无法解析的金额返回 InvalidAmountError 及其错误码", () => {
+		expect(() => assertAmountLimit("99999999999.99x")).toThrow(
+			expect.objectContaining({
+				constructor: InvalidAmountError,
+				code: "MONEY_INVALID_AMOUNT",
+			}),
 		);
 	});
 });
