@@ -2,18 +2,11 @@ import { BadGatewayException } from "@nestjs/common";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RatePairUnsupportedException } from "../../src/rate/rate.errors";
 import { RateProvider } from "../../src/rate/rate.provider";
+import { jsonResponse } from "../helpers/rate-source-fixtures";
 
 // 本文件验证 frankfurter 行为（= M1.2 语义回归）：门面构造时读取 env，
 // 切到降级单源模式避免多源路由将 CAD/USD 等币对指向农行真实接口；断言不变。
 process.env.RATE_SOURCE = "frankfurter";
-
-function response(body: unknown, status = 200): Response {
-	return {
-		ok: status >= 200 && status < 300,
-		status,
-		json: vi.fn().mockResolvedValue(body),
-	} as unknown as Response;
-}
 
 describe("RateProvider", () => {
 	afterEach(() => {
@@ -25,7 +18,7 @@ describe("RateProvider", () => {
 		const fetchMock = vi
 			.fn()
 			.mockResolvedValue(
-				response({ date: "2026-08-03", rates: { USD: "0.7300123456" } }),
+				jsonResponse({ date: "2026-08-03", rates: { USD: "0.7300123456" } }),
 			);
 		vi.stubGlobal("fetch", fetchMock);
 
@@ -50,7 +43,7 @@ describe("RateProvider", () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn().mockResolvedValue(
-				response({
+				jsonResponse({
 					rates: {
 						"2026-08-03": { CNY: "7.2500" },
 						"2026-08-01": { CNY: "7.2000" },
@@ -76,7 +69,7 @@ describe("RateProvider", () => {
 	it("数据源 404 → RatePairUnsupportedException（422 语义）", async () => {
 		vi.stubGlobal(
 			"fetch",
-			vi.fn().mockResolvedValue(response({ message: "not found" }, 404)),
+			vi.fn().mockResolvedValue(jsonResponse({ message: "not found" }, 404)),
 		);
 
 		await expect(
@@ -89,7 +82,7 @@ describe("RateProvider", () => {
 
 	it("批量请求一次外呼、URL 携带全部目标且共享同一报价时点", async () => {
 		const fetchMock = vi.fn().mockResolvedValue(
-			response({
+			jsonResponse({
 				date: "2026-08-03",
 				rates: { CNY: "0.1391", JPY: "0.0067" },
 			}),
@@ -124,7 +117,7 @@ describe("RateProvider", () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn().mockResolvedValue(
-				response({
+				jsonResponse({
 					date: "2026-08-03",
 					rates: { CNY: "0.1391" }, // 无 TWD：ECB 不提供新台币
 				}),
@@ -141,7 +134,7 @@ describe("RateProvider", () => {
 	});
 
 	it("供应商非 2xx 响应统一转为 BadGatewayException（单目标与批量同语义）", async () => {
-		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({}, 503)));
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({}, 503)));
 
 		await expect(
 			new RateProvider().fetchLatest("EUR", "USD"),

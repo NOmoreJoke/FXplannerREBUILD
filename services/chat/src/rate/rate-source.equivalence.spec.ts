@@ -9,7 +9,10 @@
  * 二次取倒数（0.015625）或方向翻转（0.125）在此断言下全部暴露。
  */
 import { describe, expect, it } from "vitest";
+import Decimal from "decimal.js";
+import fc from "fast-check";
 import {
+	ERAPI_SAMPLE_UNIX,
 	erApiLatestBody,
 	frankfurterLatestBody,
 	jsonResponse,
@@ -68,4 +71,42 @@ describe("三源同币对方向等价（MVP-F0-1 统一口径）", () => {
 		expect(erApiBatch.quotes.USD.raw).toBe(ERAPI_RAW);
 		expect(frankfurterBatch.quotes.USD.raw).toBe(FRANKFURTER_RAW);
 	});
+});
+
+it("原始 JSON 数字与独立十进制倒数一致，两个 latest 都保留原始词元", async () => {
+	const Theory = Decimal.clone({ precision: 64 });
+	await fc.assert(
+		fc.asyncProperty(
+			fc.integer({ min: 1, max: 2048 }),
+			fc.bigInt({ min: 0n, max: 999_999_999_999_999_999n }),
+			fc.integer({ min: -8, max: 5 }),
+			async (integer, fraction, exponent) => {
+				const coefficient = `${integer}.${String(fraction).padStart(18, "0")}`;
+				const literal = exponent === 0 ? coefficient : `${coefficient}e${exponent}`;
+				const expected = new Theory(1).div(literal).toFixed(10, Decimal.ROUND_HALF_UP);
+				const rates = `{"USD":${literal}}`;
+				const erApi = new ErApiSource({
+					fetchImpl: async () => new Response(
+						`{"time_last_update_unix":${ERAPI_SAMPLE_UNIX},"rates":${rates}}`,
+					),
+				});
+				const frankfurter = new FrankfurterSource({
+					fetchImpl: async (url) => new Response(String(url).includes("/latest?")
+						? `{"date":"2026-09-15","rates":${rates}}`
+						: `{"rates":{"2026-09-15":${rates}}}`),
+				});
+
+				const [erApiBatch, frankfurterBatch, history] = await Promise.all([
+					erApi.fetchLatestBatch("CNY", ["USD"]),
+					frankfurter.fetchLatestBatch("CNY", ["USD"]),
+					frankfurter.fetchHistory("CNY", "USD", "2026-09-15", "2026-09-16"),
+				]);
+				for (const batch of [erApiBatch, frankfurterBatch]) {
+					expect(batch.quotes.USD).toMatchObject({ raw: literal, rate: expected });
+				}
+				expect(history.map(({ rate }) => rate)).toEqual([expected]);
+			},
+		),
+		{ numRuns: 100 },
+	);
 });

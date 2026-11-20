@@ -40,9 +40,18 @@ describe("invertQuoteRate 固定夹具（FX-01 方向锁定）", () => {
 		expect(invertQuoteRate("0.2", "CNY", "XXX")).toBe("5.0000000000");
 	});
 
-	it("number 入参经 String 归一后与字符串同结果（JSON 数值无精度引入）", () => {
+	it("已有 JS number 按其十进制表示取倒数", () => {
 		expect(invertQuoteRate(4.7567, "CNY", "TWD")).toBe("0.2102297812");
 		expect(invertQuoteRate(0.2, "CNY", "XXX")).toBe("5.0000000000");
+	});
+
+	it("JSON 数字词元支持指数，并在超大指数分配前报告范围错误", () => {
+		expect(invertQuoteRate({ numberToken: "2e+10" }, "CNY", "TWD")).toBe("0.0000000001");
+		expect(invertQuoteRate({ numberToken: "2e-10" }, "CNY", "TWD")).toBe("5000000000.0000000000");
+		expect(() => invertQuoteRate({ numberToken: "1e+99999999999999999999" }, "CNY", "TWD"))
+			.toThrowError(/舍入为 0/);
+		expect(() => invertQuoteRate({ numberToken: "1e-99999999999999999999" }, "CNY", "TWD"))
+			.toThrowError(/超出落库范围/);
 	});
 
 	it("边界保留：落库范围内极大/极小牌价正确取倒数", () => {

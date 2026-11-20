@@ -1,6 +1,7 @@
 import { BadGatewayException } from "@nestjs/common";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	ERAPI_SAMPLE_UNIX,
 	erApiLatestBody,
 	jsonResponse,
 } from "../../test/helpers/rate-source-fixtures";
@@ -50,6 +51,24 @@ describe("ErApiSource（TWD 补充源）", () => {
 		expect(batch.quotes.TWD.observedAt.toISOString()).toBe(
 			"2026-09-15T00:00:00.000Z",
 		);
+	});
+
+	it.each([
+		["2048.0000000000001", "0.0004882812"],
+		["0.0000002", "5000000.0000000000"],
+		["2.00E-7", "5000000.0000000000"],
+		['"4.502300"', "0.2221087000"],
+	])("原始 JSON 报价 %s 精确取倒数并保留审计值", async (literal, expected) => {
+		const fetchImpl = async () => new Response(
+			`{"result":"success","time_last_update_unix":${ERAPI_SAMPLE_UNIX},"rates":{"TWD":${literal}}}`,
+		);
+		const batch = await new ErApiSource({ fetchImpl }).fetchLatestBatch("CNY", ["TWD"]);
+
+		expect(batch.quotes.TWD).toEqual({
+			rate: expected,
+			raw: literal.replaceAll('"', ""),
+			observedAt: new Date(ERAPI_SAMPLE_UNIX * 1000),
+		});
 	});
 
 	it("result 非 success → 502", async () => {

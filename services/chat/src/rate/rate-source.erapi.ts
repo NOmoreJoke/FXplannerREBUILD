@@ -3,8 +3,8 @@ import {
 	ERAPI_RATE_URL,
 	RATE_CLOCK_SKEW_TOLERANCE_MS,
 } from "./rate.constants";
-import { invertQuoteRate } from "./rate-invert";
 import { DEFAULT_RATE_PROVIDER_TIMEOUT_MS } from "./rate-source.frankfurter";
+import { parseRateResponse } from "./rate-source-json";
 import type {
 	RateBatchQuote,
 	RateHistoryPoint,
@@ -49,7 +49,7 @@ export class ErApiSource implements RateSource {
 		base: string,
 		targets: string[],
 	): Promise<RateBatchQuote> {
-		const response = await this.request<ErApiLatestResponse>(
+		const { data: response, readQuote } = await this.request(
 			`${ERAPI_RATE_URL}/latest/${encodeURIComponent(base)}`,
 		);
 		if (response.result !== undefined && response.result !== "success") {
@@ -61,12 +61,8 @@ export class ErApiSource implements RateSource {
 
 		const quotes: Record<string, RatePairQuote> = {};
 		for (const target of targets) {
-			const raw = response.rates?.[target];
-			if (raw === undefined) continue; // 缺目标币种 → 币对不支持（由调用方标记）
-			// 上游「1 base = raw target」→ 取倒数为「1 target = X base」；
-			// 零/负/非法/归零/超范围统一由 invertQuoteRate 抛 502（无效牌价）
-			const rate = invertQuoteRate(raw, base, target);
-			quotes[target] = { rate, observedAt, raw: String(raw) };
+			const quote = readQuote(response.rates, base, target);
+			if (quote) quotes[target] = { ...quote, observedAt };
 		}
 		return { source: this.source, quotes };
 	}
@@ -99,7 +95,7 @@ export class ErApiSource implements RateSource {
 		return observedAt;
 	}
 
-	private async request<TResponse>(url: string): Promise<TResponse> {
+	private async request(url: string) {
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -115,7 +111,7 @@ export class ErApiSource implements RateSource {
 				throw new BadGatewayException(`er-api 汇率源响应状态 ${response.status}`);
 			}
 
-			return (await response.json()) as TResponse;
+			return parseRateResponse<ErApiLatestResponse>(await response.text());
 		} catch (error) {
 			if (error instanceof BadGatewayException) {
 				throw error;

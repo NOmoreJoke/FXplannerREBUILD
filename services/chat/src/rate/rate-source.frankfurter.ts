@@ -1,7 +1,7 @@
 import { BadGatewayException } from "@nestjs/common";
 import { FRANKFURTER_RATE_URL } from "./rate.constants";
-import { invertQuoteRate } from "./rate-invert";
 import { RatePairUnsupportedException } from "./rate.errors";
+import { parseRateResponse } from "./rate-source-json";
 import type {
 	RateBatchQuote,
 	RateHistoryPoint,
@@ -55,7 +55,7 @@ export class FrankfurterSource implements RateSource {
 		targets: string[],
 	): Promise<RateBatchQuote> {
 		const targetsParam = targets.join(",");
-		const response = await this.request<FrankfurterLatestResponse>(
+		const { data: response, readQuote } = await this.request<FrankfurterLatestResponse>(
 			`${FRANKFURTER_RATE_URL}/latest?from=${encodeURIComponent(base)}&to=${encodeURIComponent(targetsParam)}`,
 			base,
 			targetsParam,
@@ -64,14 +64,8 @@ export class FrankfurterSource implements RateSource {
 		const observedAt = this.parseDate(response.date);
 		const quotes: Record<string, RatePairQuote> = {};
 		for (const target of targets) {
-			const rawRate = response.rates?.[target];
-			if (rawRate !== undefined) {
-				quotes[target] = {
-					rate: invertQuoteRate(rawRate, base, target),
-					observedAt,
-					raw: String(rawRate),
-				};
-			}
+			const quote = readQuote(response.rates, base, target);
+			if (quote) quotes[target] = { ...quote, observedAt };
 		}
 		return { source: this.source, quotes };
 	}
@@ -82,7 +76,7 @@ export class FrankfurterSource implements RateSource {
 		start: string,
 		end: string,
 	): Promise<RateHistoryPoint[]> {
-		const response = await this.request<FrankfurterHistoryResponse>(
+		const { data: response, readQuote } = await this.request<FrankfurterHistoryResponse>(
 			`${FRANKFURTER_RATE_URL}/${encodeURIComponent(start)}..${encodeURIComponent(end)}?from=${encodeURIComponent(base)}&to=${encodeURIComponent(target)}`,
 			base,
 			target,
@@ -91,13 +85,12 @@ export class FrankfurterSource implements RateSource {
 		return Object.entries(response.rates ?? {})
 			.sort(([left], [right]) => left.localeCompare(right))
 			.flatMap(([date, rates]) => {
-				const rawRate = rates[target];
-				if (rawRate === undefined) return [];
+				const quote = readQuote(rates, base, target);
+				if (quote === undefined) return [];
 
 				return [
 					{
-						// 上游「1 base = raw target」→ 取倒数（FX-01：仅转换一次）
-						rate: invertQuoteRate(rawRate, base, target),
+						rate: quote.rate,
 						observedAt: this.parseDate(date),
 					},
 				];
@@ -108,7 +101,7 @@ export class FrankfurterSource implements RateSource {
 		url: string,
 		base: string,
 		target: string,
-	): Promise<TResponse> {
+	) {
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -128,7 +121,7 @@ export class FrankfurterSource implements RateSource {
 				throw new RateSourceHttpError(response.status);
 			}
 
-			return (await response.json()) as TResponse;
+			return parseRateResponse<TResponse>(await response.text());
 		} catch (error) {
 			if (error instanceof RatePairUnsupportedException) {
 				throw error;

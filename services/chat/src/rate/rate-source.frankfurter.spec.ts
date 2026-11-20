@@ -62,6 +62,41 @@ describe("FrankfurterSource（MYR + 整体降级单源）", () => {
 		expect(points[0].observedAt.toISOString()).toBe("2026-08-01T00:00:00.000Z");
 	});
 
+	it("latest 保留 JSON 数字和字符串的原值，包括末尾零", async () => {
+		const fetchImpl = async () => new Response(
+			'{"amount":1.00,"date":"2026-08-03","rates":{"USD":2048.0000000000001,"JPY":0.000000200,"MYR":"2.000"}}',
+		);
+		const batch = await new FrankfurterSource({ fetchImpl }).fetchLatestBatch(
+			"CAD",
+			["USD", "JPY", "MYR"],
+		);
+		const observedAt = new Date("2026-08-03T00:00:00.000Z");
+
+		expect(batch.quotes).toEqual({
+			USD: { rate: "0.0004882812", raw: "2048.0000000000001", observedAt },
+			JPY: { rate: "5000000.0000000000", raw: "0.000000200", observedAt },
+			MYR: { rate: "0.5000000000", raw: "2.000", observedAt },
+		});
+	});
+
+	it("history 从原始 JSON 精确读取每天的数字和字符串报价", async () => {
+		const fetchImpl = async () => new Response(
+			'{"rates":{"2026-08-03":{"CNY":2048.0000000000001},"2026-08-01":{"CNY":0.0000002},"2026-08-02":{"CNY":"7.2000"}}}',
+		);
+		const points = await new FrankfurterSource({ fetchImpl }).fetchHistory(
+			"USD",
+			"CNY",
+			"2026-08-01",
+			"2026-08-03",
+		);
+
+		expect(points).toEqual([
+			{ rate: "5000000.0000000000", observedAt: new Date("2026-08-01T00:00:00.000Z") },
+			{ rate: "0.1388888889", observedAt: new Date("2026-08-02T00:00:00.000Z") },
+			{ rate: "0.0004882812", observedAt: new Date("2026-08-03T00:00:00.000Z") },
+		]);
+	});
+
 	it("date 缺失 / 非法日期 / 不存在的日历日期 → 502（不得回落系统时间或静默归一化，FX-01）", async () => {
 		const missing = okFetch({ rates: { USD: "0.7300123456" } });
 		await expect(

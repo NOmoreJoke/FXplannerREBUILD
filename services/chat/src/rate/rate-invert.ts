@@ -13,8 +13,9 @@ import { BadGatewayException } from "@nestjs/common";
  * 零 / 负 / 非法字符串 / 舍入归零 / 超出落库范围 → 源异常（502 语义）。
  */
 
-/** 上游报价文本白名单：trim 后非负十进制有限小数（禁科学计数法 / 符号；首尾空白容忍） */
+/** 上游字符串报价白名单：trim 后非负十进制有限小数（禁科学计数法 / 符号） */
 const RAW_RATE_PATTERN = /^\d+(?:\.\d+)?$/;
+const JSON_RATE_PATTERN = /^(\d+(?:\.\d+)?)(?:[eE]([+-]?\d+))?$/;
 
 /** exchange_rates.rate 表精度：Decimal(20,10) → 10 位小数、至多 10 位整数 */
 const INVERTED_RATE_SCALE = 10;
@@ -42,27 +43,45 @@ function formatFixedPoint(value: bigint, scale: number): string {
 /**
  * 「1 base = raw target」→「1 target = X base」：一次取倒数，HALF_UP 到 10 位小数。
  *
- * @param raw 上游原始报价（string 优先；number 经 String 归一，JSON 短表示无精度引入）
+ * @param raw 上游字符串、已有 JS 数值，或从原始 JSON 提取的数字词元
  * @param base 报价基准币（审计/报错文案）
  * @param target 报价目标币（审计/报错文案）
  * @returns 固定 10 位小数的定点字符串（可直接落库 Decimal(20,10)）
  */
 export function invertQuoteRate(
-	raw: string | number,
+	raw: string | number | { numberToken: string },
 	base: string,
 	target: string,
 ): string {
-	const text = String(raw).trim();
-	if (!RAW_RATE_PATTERN.test(text)) {
+	let coefficient: string;
+	let exponent = 0;
+	if (typeof raw === "object") {
+		const match = raw.numberToken.match(JSON_RATE_PATTERN);
+		if (!match) failInvalid(base, target);
+		coefficient = match[1];
+		exponent = Number(match[2] ?? "0");
+	} else {
+		coefficient = String(raw).trim();
+		if (!RAW_RATE_PATTERN.test(coefficient)) failInvalid(base, target);
+	}
+
+	const dotIndex = coefficient.indexOf(".");
+	const fractionLength = dotIndex === -1 ? 0 : coefficient.length - dotIndex - 1;
+	const scale = fractionLength - exponent;
+	const significantDigits = coefficient.replace(".", "").replace(/^0+/, "");
+	if (!significantDigits) {
 		failInvalid(base, target);
 	}
 
-	const dotIndex = text.indexOf(".");
-	const scale = dotIndex === -1 ? 0 : text.length - dotIndex - 1;
-	const digits = BigInt(text.replace(".", ""));
-	if (digits === 0n) {
-		failInvalid(base, target);
+	// Reject exponents that put the reciprocal outside storage precision before
+	// allocating powers of ten. Adjacent decades still need the exact HALF_UP check.
+	if (scale < significantDigits.length - MAX_INTEGER_DIGITS - 1) {
+		failRange(base, target, "舍入为 0");
 	}
+	if (scale >= significantDigits.length + MAX_INTEGER_DIGITS) {
+		failRange(base, target, "超出落库范围");
+	}
+	const digits = BigInt(significantDigits);
 
 	// 1/raw = 10^scale / digits；定标到 10 位小数后做一次 HALF_UP（全整数运算，无浮点）
 	const numerator = 10n ** BigInt(scale + INVERTED_RATE_SCALE);
