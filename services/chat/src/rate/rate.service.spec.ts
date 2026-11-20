@@ -1379,6 +1379,54 @@ describe("RateService.getHistory 参考层合并（er-api 路由币对）", () =
 			expect(second.data_points).toEqual(first.data_points);
 		});
 
+	it("跨 UTC 日在 TTL 边界清除过期区间，保留新窗口缓存和单飞", async () => {
+		const { service, prisma, provider } = build();
+		prisma.exchangeRate.findMany.mockResolvedValue([rowAt("2026-11-18")]);
+		provider.fetchHistory.mockResolvedValue([]);
+		provider.fetchReferenceSeries
+			.mockResolvedValue([
+				{ rate: "0.21", observedAt: new Date("2026-11-17T00:00:00.000Z") },
+			])
+			.mockRejectedValueOnce(new Error("reference down"));
+
+		vi.setSystemTime(new Date("2026-11-19T23:55:00.000Z"));
+		await service.getHistory("CNY", "TWD", 30);
+		await service.getHistory("CNY", "TWD", 7);
+		const priorDayKeys = [
+			"CNY|TWD|2026-10-20|2026-11-19",
+			"CNY|TWD|2026-11-12|2026-11-19",
+		];
+		const currentKey = "CNY|TWD|2026-11-13|2026-11-20";
+
+		vi.setSystemTime(new Date("2026-11-20T00:04:59.999Z"));
+		const [first, joined] = await Promise.all([
+			service.getHistory("CNY", "TWD", 7),
+			service.getHistory("CNY", "TWD", 7),
+		]);
+		expect(joined).toEqual(first);
+		expect(first.data_points).toContainEqual({
+			date: "2026-11-17",
+			rate: "0.21",
+			source: "frankfurter-v2-reference",
+		});
+		expect(provider.fetchReferenceSeries).toHaveBeenCalledTimes(3);
+		expect(provider.fetchReferenceSeries).toHaveBeenLastCalledWith(
+			"CNY",
+			"TWD",
+			"2026-11-13",
+			"2026-11-20",
+		);
+		expect([...service["referenceCache"].keys()]).toEqual([
+			...priorDayKeys,
+			currentKey,
+		]);
+
+		vi.setSystemTime(new Date("2026-11-20T00:05:00.000Z"));
+		expect(await service.getHistory("CNY", "TWD", 7)).toEqual(first);
+		expect(provider.fetchReferenceSeries).toHaveBeenCalledTimes(3);
+		expect([...service["referenceCache"].keys()]).toEqual([currentKey]);
+	});
+
 		it("同区间并发 3 请求：参考序列单飞合并为 1 次外呼", async () => {
 			const { service, prisma, provider } = build();
 			const localRow = rowAt("2026-11-13");

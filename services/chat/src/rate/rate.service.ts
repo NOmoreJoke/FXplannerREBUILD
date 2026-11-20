@@ -455,8 +455,13 @@ export class RateService {
     end: Date,
   ): Promise<RateHistoryPoint[]> {
     const rangeKey = `${pairKey}|${this.formatDate(start)}|${this.formatDate(end)}`;
+    // 日期滚动后旧区间不再被查询，读取任一区间时统一淘汰过期条目。
+    const now = Date.now();
+    for (const [key, entry] of this.referenceCache) {
+      if (entry.expiresAt <= now) this.referenceCache.delete(key);
+    }
     const cached = this.referenceCache.get(rangeKey);
-    if (cached && Date.now() < cached.expiresAt) {
+    if (cached) {
       return cached.points;
     }
 
