@@ -4,6 +4,8 @@ import { ThrottlerGuard } from "@nestjs/throttler";
 import { Test, type TestingModuleBuilder } from "@nestjs/testing";
 import request from "supertest";
 import openapi from "../../../../clients/chat-web/lib/api/openapi.json";
+import { mergeSeries } from "../../../../clients/chat-web/components/business/market/merge-series";
+import { createRateTool } from "../../src/ai/tools/rate-tool";
 import { createTestApp, type TestContext } from "../helpers/test-app";
 import {
 	afterAll,
@@ -1152,7 +1154,7 @@ describe("RateController（接口）", () => {
 			}
 		});
 
-		it("W4-02 TWD 日级图表保留当日 ErApi 快照，每日唯一且排除未来观测", async () => {
+		it("W4-02 / W4-07 TWD 日桶保留当日本地快照，API、AI 与图表使用同一参考价", async () => {
 			const now = new Date("2026-11-19T02:00:00.000Z");
 			const pair = { base: "USD", quote: "TWD" };
 			const stub = createRateSourceFetchStub({
@@ -1160,8 +1162,11 @@ describe("RateController（接口）", () => {
 					jsonResponse({
 						rates: [
 							{ date: "2026-11-13", ...pair, rate: "4.7567" },
+							{ date: "2026-11-15", ...pair, rate: "2" },
 							{ date: "2026-11-15", ...pair, rate: "4.7569" },
+							{ date: "2026-11-15", ...pair, rate: "4" },
 							{ date: "2026-11-19", ...pair, rate: "4.7571" },
+							{ date: "2026-11-19", ...pair, rate: "2" },
 						],
 					}),
 			});
@@ -1195,7 +1200,8 @@ describe("RateController（接口）", () => {
 					.get("/api/rates/history?base=USD&target=TWD&period=7")
 					.expect(200);
 
-				expect(res.body.data.data_points).toEqual([
+				const points = res.body.data.data_points;
+				expect(points).toEqual([
 					{ date: "2026-11-12", rate: "32.2", source: "er-api" },
 					{ date: "2026-11-13", rate: "32.1", source: "er-api" },
 					{
@@ -1206,6 +1212,23 @@ describe("RateController（接口）", () => {
 					{ date: "2026-11-19", rate: "32", source: "er-api" },
 				]);
 				expect(res.body.data.current_rate).toBe("32");
+
+				const summary = await createRateTool(twdApp.get(RateService)).invoke({
+					mode: "history",
+					base: "USD",
+					target: "TWD",
+					period: 7,
+				});
+				expect(summary).toContain("4 个数据点，其中 1 个数据点为参考价");
+				expect(summary).toContain("区间最高 2026-11-12 = 32.2（原来源报价：er-api）");
+				expect(summary).toContain("区间最低 2026-11-15 = 0.2102209422（参考价：frankfurter v2 参考序列）");
+				expect(mergeSeries([{ currency: "TWD", points }])).toEqual([
+					{ date: "2026-11-12", TWD: 32.2 },
+					{ date: "2026-11-13", TWD: 32.1 },
+					{ date: "2026-11-15", TWD: 0.2102209422 },
+					{ date: "2026-11-19", TWD: 32 },
+				]);
+
 				expect(stub).toHaveBeenCalledOnce();
 				const [url] = stub.mock.calls[0];
 				const params = new URL(String(url)).searchParams;

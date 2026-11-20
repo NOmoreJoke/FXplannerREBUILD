@@ -1303,6 +1303,30 @@ describe("RateService.getHistory 参考层合并（er-api 路由币对）", () =
 		expect(result.current_rate).toBe("32.0600000000");
 	});
 
+	it.each([false, true])("W4-07 同日参考价取精确较小值（反转上游顺序=%s）", async (reverse) => {
+		const { service, prisma, provider } = build();
+		prisma.exchangeRate.findMany.mockResolvedValue([]);
+		provider.fetchHistory.mockResolvedValue([]);
+		const reference = [
+			{ rate: "9999999999.1234567890", observedAt: new Date("2026-11-15") },
+			{ rate: "10.0000000000", observedAt: new Date("2026-11-12") },
+			{ rate: "9999999999.1234567891", observedAt: new Date("2026-11-15") },
+			{ rate: "2.0000000000", observedAt: new Date("2026-11-12") },
+			{ rate: "2.0000000000", observedAt: new Date("2026-11-12") },
+		];
+		provider.fetchReferenceSeries.mockResolvedValue(
+			reverse ? reference.toReversed() : reference,
+		);
+
+		const result = await service.getHistory("CNY", "TWD", 7);
+
+		expect(result.data_points).toEqual([
+			{ date: "2026-11-12", rate: "2.0000000000", source: "frankfurter-v2-reference" },
+			{ date: "2026-11-15", rate: "9999999999.1234567890", source: "frankfurter-v2-reference" },
+		]);
+		expect(result.current_rate).toBe("9999999999.1234567890");
+	});
+
 	it("非 er-api 路由（frankfurter/abc）→ 不取参考序列（v1-only 回归保留）", async () => {
 		const { service, prisma, provider } = build();
 		provider.sourceForPair.mockReturnValue("frankfurter");

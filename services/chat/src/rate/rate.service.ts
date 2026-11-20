@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { utc8DayStart } from '../transaction/transaction-calculator';
 import {
@@ -419,21 +420,23 @@ export class RateService {
     );
   }
 
-  /** 每个 UTC 日期保留最后观测的本地行，v2 参考点只补空桶。 */
+  /** 每个 UTC 日期优先保留最后观测的本地行，其次使用 v2 日级参考点。 */
   private mergeReferencePoints(
     localPoints: HistoryRow[],
     reference: RateHistoryPoint[],
   ): HistoryRow[] {
     const byDate = new Map<string, HistoryRow>();
-    // 两条本地查询均按 observedAt 升序。
-    for (const point of localPoints) {
-      byDate.set(this.formatDate(point.observedAt), point);
-    }
+    // v2 仅提供日期。同日冲突取归一化汇率的十进制较小值。
     for (const point of reference) {
       const date = this.formatDate(point.observedAt);
-      if (!byDate.has(date)) {
+      const previous = byDate.get(date);
+      if (!previous || new Prisma.Decimal(point.rate).lt(previous.rate.toString())) {
         byDate.set(date, { ...point, source: REFERENCE_RATE_SOURCE });
       }
+    }
+    // 本地查询按 observedAt 升序，最新快照覆盖同日参考点及更早的本地快照。
+    for (const point of localPoints) {
+      byDate.set(this.formatDate(point.observedAt), point);
     }
     return [...byDate.values()].sort(
       (left, right) => left.observedAt.getTime() - right.observedAt.getTime(),
