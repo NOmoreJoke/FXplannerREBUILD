@@ -1,5 +1,6 @@
 import { test, expect } from "../fixtures/auto-screenshot";
 import { TestLogger } from "../helpers/logger";
+import { selectCadPlanCurrency } from "../helpers/plan-form";
 import { saveScreenshot } from "../helpers/save-screenshot";
 import {
 	injectLoginCookie,
@@ -39,22 +40,8 @@ test.describe("【换汇计划模块】创建 / 列表 / 详情 / 筛选", () =>
 		await page.waitForLoadState("networkidle");
 		await saveScreenshot(page, "03-plan", "T-PLAN-001-01-new-page");
 
-		// 目标名称
+		await selectCadPlanCurrency(page);
 		await page.fill("#plan-name", "E2E 换汇计划");
-
-		// 目标币种：radix Select 先确认下拉真实展开（hydration/焦点偶发吞点击），再 typeahead 选 CAD
-		const currencyTrigger = page.locator('[aria-label="目标币种"]');
-		const listbox = page.locator('[role="listbox"]');
-		for (let i = 0; i < 3; i += 1) {
-			await currencyTrigger.click();
-			if (await listbox.isVisible().catch(() => false)) break;
-			await currencyTrigger.press("Enter");
-			if (await listbox.isVisible().catch(() => false)) break;
-			await page.waitForTimeout(500);
-		}
-		await expect(listbox).toBeVisible();
-		await page.keyboard.type("CAD", { delay: 60 });
-		await page.keyboard.press("Enter");
 
 		// 净到账金额 / 用途日期 / 提前天数 / 计入已有外币
 		await page.fill("#plan-target-amount", "10000");

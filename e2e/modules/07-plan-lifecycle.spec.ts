@@ -1,5 +1,6 @@
 import { test, expect } from "../fixtures/auto-screenshot";
 import { TestLogger } from "../helpers/logger";
+import { selectCadPlanCurrency } from "../helpers/plan-form";
 import { saveScreenshot } from "../helpers/save-screenshot";
 import {
 	completePlanViaApi,
@@ -64,20 +65,9 @@ test.describe("【换汇计划生命周期】新建 / 调目标 / 调分配 / �
 		await page.waitForURL(`${BASE_URL}/plans/new`);
 		await saveScreenshot(page, "07-plan-lifecycle", "T-PLAN-LC-001-01-entry");
 
-		// 填表创建（对齐 03-plan T-PLAN-001 填法，含 Select 焦点偶发吞点击重试）
+		// 填表创建
+		await selectCadPlanCurrency(page);
 		await page.fill("#plan-name", "生命周期计划");
-		const currencyTrigger = page.locator('[aria-label="目标币种"]');
-		const listbox = page.locator('[role="listbox"]');
-		for (let i = 0; i < 3; i += 1) {
-			await currencyTrigger.click();
-			if (await listbox.isVisible().catch(() => false)) break;
-			await currencyTrigger.press("Enter");
-			if (await listbox.isVisible().catch(() => false)) break;
-			await page.waitForTimeout(500);
-		}
-		await expect(listbox).toBeVisible();
-		await page.keyboard.type("CAD", { delay: 60 });
-		await page.keyboard.press("Enter");
 		await page.fill("#plan-target-amount", "10000");
 		await page.fill("#plan-expect-use-date", "2030-02-15");
 		await page.fill("#plan-prep-lead-days", "3");
