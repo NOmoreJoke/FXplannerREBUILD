@@ -7,7 +7,7 @@ import {
 	useRateHistory,
 	type MarketPeriod,
 } from "./use-rate-history";
-import { ratesApi } from "@/lib/api/rates";
+import { ratesApi, REFERENCE_RATE_SOURCE } from "@/lib/api/rates";
 import { ApiError } from "@/lib/api/client";
 import type { RateHistoryData } from "@/lib/api/rates";
 import type React from "react";
@@ -49,17 +49,17 @@ const historyData = (
 	current_rate: points.at(-1)?.[1] ?? null,
 });
 
-const createWrapper = () => {
-	const queryClient = new QueryClient({
+const createWrapper = (
+	queryClient = new QueryClient({
 		defaultOptions: {
 			queries: { retry: false, gcTime: 0 },
 			mutations: { retry: false },
 		},
-	});
-	return ({ children }: { children: React.ReactNode }) => (
+	}),
+) =>
+	({ children }: { children: React.ReactNode }) => (
 		<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 	);
-};
 
 async function advance(ms: number) {
 	await act(async () => {
@@ -69,7 +69,7 @@ async function advance(ms: number) {
 
 beforeEach(() => {
 	vi.useFakeTimers();
-	vi.clearAllMocks();
+	vi.resetAllMocks();
 });
 
 afterEach(() => {
@@ -131,35 +131,87 @@ describe("useRateHistory", () => {
 		expect(result.current.isAllUnavailable).toBe(false);
 	});
 
-	it("含 v2 参考价数据点：series.referenceCount 按来源标注计数（MVP-F0-2 C2 展示区分）", async () => {
-		vi.mocked(ratesApi.history).mockImplementation((_base, target) =>
-			Promise.resolve({
-				base: "CNY",
-				target,
-				period: 7,
+	it("重查失败时保留图表的参考价计数，换为纯本地或清空序列后归零", async () => {
+		const localPoint = { date: "2026-02-11", rate: "0.2103", source: "er-api" };
+		const localHistory: RateHistoryData = {
+			base: "CNY",
+			target: "TWD",
+			period: 365,
+			data_points: [localPoint],
+			current_rate: localPoint.rate,
+		};
+		vi.mocked(ratesApi.history)
+			.mockResolvedValueOnce({
+				...localHistory,
 				data_points: [
 					{
 						date: "2026-02-10",
 						rate: "0.2102297812",
-						source: "frankfurter-v2-reference",
+						source: REFERENCE_RATE_SOURCE,
 					},
-					{ date: "2026-02-11", rate: "0.2103", source: "er-api" },
+					localPoint,
 				],
-				current_rate: "0.2103",
-			} as RateHistoryData),
-		);
+			})
+			.mockRejectedValueOnce(new ApiError("数据源不可用", 502))
+			.mockResolvedValueOnce(localHistory)
+			.mockResolvedValue({
+				...localHistory,
+				data_points: [],
+				current_rate: null,
+			});
 
+		const queryClient = new QueryClient();
 		const { result } = renderHook(
-			() => useRateHistory({ base: "CNY", targets: ["TWD"], period: 7 }),
-			{ wrapper: createWrapper() },
+			() => useRateHistory({ base: "CNY", targets: ["TWD"], period: 365 }),
+			{ wrapper: createWrapper(queryClient) },
 		);
+		const refetchHistory = async () => {
+			await act(async () => {
+				await queryClient.invalidateQueries({
+					queryKey: buildRateHistoryQueryKey("CNY", "TWD", 365),
+					exact: true,
+				});
+			});
+			await advance(0);
+		};
 		await advance(0);
 
+		const mixedRows = [
+			{ date: "2026-02-10", TWD: 0.2102297812 },
+			{ date: "2026-02-11", TWD: 0.2103 },
+		];
+		expect(result.current.rows).toEqual(mixedRows);
 		expect(result.current.series[0]).toMatchObject({
 			currency: "TWD",
 			status: "success",
 			referenceCount: 1,
 		});
+
+		await refetchHistory();
+		expect(result.current.rows).toEqual(mixedRows);
+		expect(result.current.series[0]).toMatchObject({
+			status: "error",
+			errorMessage: "数据源不可用",
+			referenceCount: 1,
+		});
+		expect(result.current.isAllUnavailable).toBe(false);
+
+		await refetchHistory();
+		expect(result.current.rows).toEqual([{ date: "2026-02-11", TWD: 0.2103 }]);
+		expect(result.current.series[0]).toMatchObject({
+			status: "success",
+			errorMessage: null,
+			referenceCount: 0,
+		});
+
+		await refetchHistory();
+		expect(result.current.rows).toBeNull();
+		expect(result.current.series[0]).toMatchObject({
+			status: "empty",
+			referenceCount: 0,
+		});
+		expect(result.current.isAllUnavailable).toBe(true);
+		expect(ratesApi.history).toHaveBeenCalledTimes(4);
 	});
 
 	it("单币种失败隔离：某币种 422 失败不影响其余币种出图，失败项 status=error", async () => {

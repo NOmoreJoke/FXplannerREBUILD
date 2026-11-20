@@ -39,7 +39,7 @@ export interface CurrencySeriesState {
 	startDate: string | null;
 	/** 失败摘要（error 时提供，供空态聚合展示） */
 	errorMessage: string | null;
-	/** 参考价数据点数量（source=frankfurter-v2-reference；MVP-F0-2 C2 展示区分用） */
+	/** 图表数据中的参考价点数量，包含重查失败后仍展示的缓存点 */
 	referenceCount: number;
 }
 
@@ -57,7 +57,7 @@ export interface UseRateHistoryParams {
 export interface UseRateHistoryResult {
 	/** 各币种状态（顺序与入参 targets 一致） */
 	series: CurrencySeriesEntry[];
-	/** 合并后的图表行数据（仅成功且非空币种参与；无任何可用序列时 null） */
+	/** 合并后的图表行数据（非空缓存序列参与；无任何可用序列时 null） */
 	rows: MergedRateRow[] | null;
 	/** 任一币种首次加载中（rows 为 null 时面板显示整幅加载态） */
 	isLoading: boolean;
@@ -131,16 +131,20 @@ export function useRateHistory(
 					referenceCount: 0,
 				};
 			}
+			const points = query.data?.data_points ?? [];
+			// React Query 重查失败时会保留上次的数据，图表仍绘制这些点。
+			const referenceCount = points.filter(
+				(point) => point.source === REFERENCE_RATE_SOURCE,
+			).length;
 			if (query.error) {
 				return {
 					currency,
 					status: "error",
 					startDate: null,
 					errorMessage: toErrorMessage(query.error),
-					referenceCount: 0,
+					referenceCount,
 				};
 			}
-			const points = query.data?.data_points ?? [];
 			if (points.length === 0) {
 				return {
 					currency,
@@ -155,10 +159,7 @@ export function useRateHistory(
 				status: "success",
 				startDate: points[0].date,
 				errorMessage: null,
-				// 参考价数据点计数（MVP-F0-2 C2：图表须区分参考价与原来源报价）
-				referenceCount: points.filter(
-					(point) => point.source === REFERENCE_RATE_SOURCE,
-				).length,
+				referenceCount,
 			};
 		});
 		// queries 数组元素引用稳定；targetsKey 表达 targets 依赖（数组字面量每次 render 新建）

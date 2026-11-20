@@ -15,6 +15,7 @@ import { injectLoginCookie, seedAccountScenario } from "../helpers/api-seeder";
  * - T-MKT-005: 失败隔离 + 部分序列——单币种 422 置灰「暂无数据」不拖垮整页；
  *              部分序列 → 图表下方标注「数据自 YYYY-MM-DD 起」
  * - T-MKT-006: 空态——全部无数据 → 空态 + 失败摘要 + 重试按钮，重试再次发请求
+ * - T-MKT-007: 重查失败——保留已绘制的参考曲线和来源说明，同时显示失败提示
  *
  * 数据源 stub：后端 FRANKFURTER_RATE_URL 为硬编码常量（无 URL 注入点），按任务书
  * 「E2E 数据源注入 frankfurter stub」语义在 Playwright 网络层拦截 /rates/history，
@@ -30,8 +31,13 @@ const BASE_URL = process.env.CORS_ORIGIN || "http://localhost:3001";
 
 // ── 受控序列 stub ──────────────────────────────────────────────────────────
 
-/** 单币种数据形态：normal 完整 / gapped 中段缺口 / partial 部分序列 / empty 空 / unsupported 422 */
-type StubKind = "normal" | "gapped" | "partial" | "empty" | "unsupported";
+type StubKind =
+	| "normal"
+	| "gapped"
+	| "partial"
+	| "mixed-reference"
+	| "empty"
+	| "unsupported";
 
 interface StubTarget {
 	kind: StubKind;
@@ -83,7 +89,7 @@ const businessDays = (startIso: string, endIso: string): string[] => {
 function buildPoints(
 	period: number,
 	spec: StubTarget,
-): Array<{ date: string; rate: string }> {
+): Array<{ date: string; rate: string; source?: string }> {
 	if (spec.kind === "empty") return [];
 	const todayIso = isoDate(new Date());
 	const span =
@@ -97,6 +103,9 @@ function buildPoints(
 	return dates.map((date, index) => ({
 		date,
 		rate: (base + (index % 5) * 0.0002).toFixed(4),
+		...(spec.kind === "mixed-reference" && {
+			source: index === 0 ? "frankfurter-v2-reference" : "er-api",
+		}),
 	}));
 }
 
@@ -406,5 +415,48 @@ test.describe("【汇率行情】菜单 / 档位 / 多币种 / 空态", () => {
 		await expect(page.getByTestId("market-chart-empty")).toBeVisible();
 
 		await logger.saveToFile();
+	});
+
+	test("T-MKT-007: 重查失败时保留已绘制的参考曲线与来源说明", async ({
+		page,
+	}) => {
+		const targets: Record<string, StubTarget> = {
+			TWD: { kind: "mixed-reference", base: 4.2 },
+		};
+		const stub = await installMarketStub(page, { targets });
+		await openMarket(page, seed.accessToken);
+		await page.getByTestId("period-365").click();
+		await addCurrency(page, "TWD");
+
+		const panel = page.getByTestId("market-chart-panel");
+		const note = panel.getByTestId("market-chart-reference-note");
+		const curves = panel.locator(".recharts-line-curve");
+		await expect(note).toBeVisible();
+		await expect(note).toContainText(/TWD.*frankfurter v2/);
+		await expect(curves).toHaveCount(2);
+
+		// 另一档只返回原来源报价，不应沿用上一档的参考价说明。
+		targets.TWD = { kind: "normal", base: 4.2 };
+		await page.getByTestId("period-7").click();
+		await expect
+			.poll(() =>
+				stub.calls.some(({ target, period }) => target === "TWD" && period === 7),
+			)
+			.toBe(true);
+		await expect(curves).toHaveCount(2);
+		await expect(note).toHaveCount(0);
+
+		// 调整浏览器时间使一年档数据过期，同时保留缓存回收计时器。
+		await page.clock.setFixedTime(new Date(Date.now() + 11 * 60_000));
+		targets.TWD = { kind: "unsupported" };
+		await page.getByTestId("period-365").click();
+		await expect(panel.getByText("TWD 暂无数据")).toBeVisible();
+		await expect(curves).toHaveCount(2);
+		await expect(note).toBeVisible();
+		await expect(note).toContainText(/TWD.*frankfurter v2/);
+
+		await page.getByRole("button", { name: "移除 TWD" }).click();
+		await expect(curves).toHaveCount(1);
+		await expect(note).toHaveCount(0);
 	});
 });
