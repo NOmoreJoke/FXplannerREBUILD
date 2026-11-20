@@ -1482,6 +1482,13 @@ export interface components {
              */
             current_rate: string | null;
         };
+        RateHistoryEnvelopeDto: {
+            /** @enum {boolean} */
+            success: true;
+            data: components["schemas"]["RateHistoryResponseDto"];
+            /** @example 历史汇率查询成功 */
+            message: string;
+        };
         AccountSummaryDto: {
             /**
              * @description 币种代码（ISO 4217）
@@ -3868,7 +3875,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RateHistoryResponseDto"];
+                    "application/json": components["schemas"]["RateHistoryEnvelopeDto"];
                 };
             };
         };

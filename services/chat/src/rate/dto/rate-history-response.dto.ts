@@ -60,3 +60,14 @@ export class RateHistoryResponseDto {
 	})
 	current_rate!: string | null;
 }
+
+export class RateHistoryEnvelopeDto {
+	@ApiProperty({ type: Boolean, enum: [true] })
+	success!: true;
+
+	@ApiProperty({ type: RateHistoryResponseDto })
+	data!: RateHistoryResponseDto;
+
+	@ApiProperty({ type: String, example: "历史汇率查询成功" })
+	message!: string;
+}

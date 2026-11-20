@@ -1,5 +1,5 @@
 import { apiClient } from "@/lib/api/client";
-import type { components } from "@/lib/api/schema.gen";
+import type { components, paths } from "@/lib/api/schema.gen";
 
 type Schemas = components["schemas"];
 
@@ -20,8 +20,9 @@ export type LatestRateGroupResponse = Schemas["LatestRateGroupResponseDto"];
  */
 export type RateHistoryPoint = Schemas["RateHistoryPointDto"];
 
-/** history 响应 data（后端 RateHistoryResponseDto，generate:api 生成） */
-export type RateHistoryData = Schemas["RateHistoryResponseDto"];
+/** apiClient 解包后的历史序列，类型取自 GET /api/rates/history 的 200 响应。 */
+export type RateHistoryData =
+	paths["/api/rates/history"]["get"]["responses"][200]["content"]["application/json"]["data"];
 
 /** 图表参考价来源标识（与后端 REFERENCE_RATE_SOURCE 常量同值；展示层据此区分参考价） */
 export const REFERENCE_RATE_SOURCE = "frankfurter-v2-reference";

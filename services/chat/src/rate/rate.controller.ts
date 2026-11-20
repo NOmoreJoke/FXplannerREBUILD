@@ -34,11 +34,11 @@ import {
   RateErrorDto,
 } from './dto/rate-latest.dto';
 import { RateHistoryDto } from './dto/rate-history.dto';
-import { RateHistoryResponseDto } from './dto/rate-history-response.dto';
+import { RateHistoryEnvelopeDto } from './dto/rate-history-response.dto';
 import { RateService } from './rate.service';
 
 @ApiTags('Rate')
-@ApiExtraModels(LatestRateResponseDto, LatestRateGroupResponseDto, RateHistoryResponseDto)
+@ApiExtraModels(LatestRateResponseDto, LatestRateGroupResponseDto)
 @Controller('rates')
 export class RateController {
   constructor(
@@ -137,7 +137,7 @@ export class RateController {
   })
   @ApiOkResponse({
     description: '历史序列（base/target/period/data_points/current_rate）；逐点含可选 source 来源标注',
-    schema: { $ref: getSchemaPath(RateHistoryResponseDto) },
+    type: RateHistoryEnvelopeDto,
   })
   @ApiQuery({
     name: 'base',
@@ -173,7 +173,7 @@ export class RateController {
       }),
     )
     dto: RateHistoryDto,
-  ) {
+  ): Promise<RateHistoryEnvelopeDto> {
     const data = await this.rateService.getHistory(dto.base, dto.target, dto.period);
     return {
       success: true,

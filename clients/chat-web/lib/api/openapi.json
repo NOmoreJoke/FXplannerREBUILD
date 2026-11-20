@@ -586,7 +586,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RateHistoryResponseDto"
+                  "$ref": "#/components/schemas/RateHistoryEnvelopeDto"
                 }
               }
             }
@@ -3565,6 +3565,29 @@
           "period",
           "data_points",
           "current_rate"
+        ]
+      },
+      "RateHistoryEnvelopeDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/RateHistoryResponseDto"
+          },
+          "message": {
+            "type": "string",
+            "example": "历史汇率查询成功"
+          }
+        },
+        "required": [
+          "success",
+          "data",
+          "message"
         ]
       },
       "AccountSummaryDto": {

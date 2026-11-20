@@ -1,7 +1,9 @@
 import { type INestApplication, ValidationPipe } from "@nestjs/common";
+import { SwaggerModule } from "@nestjs/swagger";
 import { ThrottlerGuard } from "@nestjs/throttler";
 import { Test, type TestingModuleBuilder } from "@nestjs/testing";
 import request from "supertest";
+import openapi from "../../../../clients/chat-web/lib/api/openapi.json";
 import { createTestApp, type TestContext } from "../helpers/test-app";
 import {
 	afterAll,
@@ -12,6 +14,7 @@ import {
 	it,
 	vi,
 } from "vitest";
+import { createSwaggerConfig } from "../../src/config/swagger";
 import {
 	ABC_RATE_URL,
 	ERAPI_RATE_URL,
@@ -1211,6 +1214,50 @@ describe("RateController（接口）", () => {
 					"2026-11-19",
 				]);
 				expect(await prisma.exchangeRate.count({ where: pair })).toBe(7);
+				expect(res.body).toMatchObject({
+					success: true, message: "历史汇率查询成功",
+					data: { base: "USD", target: "TWD", period: 7, current_rate: "32" },
+				});
+				const live = SwaggerModule.createDocument(realApp, createSwaggerConfig());
+				const path = "/api/rates/history";
+				const response = openapi.paths[path].get.responses["200"];
+				const schema = response.content["application/json"].schema;
+				const {
+					RateHistoryEnvelopeDto,
+					RateHistoryResponseDto,
+					RateHistoryPointDto,
+				} = openapi.components.schemas;
+
+				expect(live.paths[path]?.get?.responses["200"]).toEqual(response);
+				for (const name of [
+					"RateHistoryEnvelopeDto",
+					"RateHistoryResponseDto",
+					"RateHistoryPointDto",
+				] as const) {
+					expect(live.components?.schemas?.[name]).toEqual(
+						openapi.components.schemas[name],
+					);
+				}
+				expect(schema).toEqual({
+					$ref: "#/components/schemas/RateHistoryEnvelopeDto",
+				});
+				expect(RateHistoryEnvelopeDto.properties).toEqual({
+					success: { type: "boolean", enum: [true] },
+					data: { $ref: "#/components/schemas/RateHistoryResponseDto" },
+					message: expect.objectContaining({ type: "string" }),
+				});
+				expect(Object.keys(res.body).sort()).toEqual(
+					[...RateHistoryEnvelopeDto.required].sort(),
+				);
+				expect(Object.keys(res.body.data).sort()).toEqual(
+					[...RateHistoryResponseDto.required].sort(),
+				);
+				expect(RateHistoryResponseDto.properties.data_points).toMatchObject({
+					type: "array",
+					items: { $ref: "#/components/schemas/RateHistoryPointDto" },
+				});
+				expect(RateHistoryPointDto.properties.source.type).toBe("string");
+				expect(RateHistoryPointDto.required).not.toContain("source");
 			} finally {
 				vi.useRealTimers();
 				await twdApp.close();
