@@ -670,7 +670,7 @@ describe("RateController（接口）", () => {
 
 		it("Frankfurter 舍入为零：强制刷新返回 502，既有有效报价仍可从缓存读取", async () => {
 			const previous = await ctx.prisma.exchangeRate.create({
-				data: { ...pair, observedAt, rate: "1.6388069485", source: "frankfurter" },
+				data: { ...pair, observedAt, rate: "1.6388069485", source: "frankfurter", latestConfirmedAt: new Date() },
 			});
 			routes.frankfurter = () =>
 				jsonResponse(frankfurterLatestBody("2026-09-15", { MYR: "500000000" }));
@@ -793,7 +793,8 @@ describe("RateController（接口）", () => {
 				expect(rows).toHaveLength(1);
 				expect(rows[0].id).toBe(previous.id);
 				expect(rows[0].sellRate?.toFixed(10)).toBe(sellRate);
-				expect(rows[0].createdAt.getTime()).toBeGreaterThan(previous.createdAt.getTime());
+				expect(rows[0].createdAt).toEqual(previous.createdAt);
+				expect(rows[0].latestConfirmedAt!.getTime()).toBeGreaterThan(previous.createdAt.getTime());
 			}
 		});
 	});

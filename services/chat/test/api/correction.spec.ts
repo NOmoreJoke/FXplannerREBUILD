@@ -44,6 +44,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 	let app: INestApplication;
 	let ctx: TestContext;
 	const extraUserIds: string[] = [];
+	const extraRateRowIds: string[] = [];
 
 	beforeAll(async () => {
 		ctx = await createTestApp();
@@ -69,6 +70,9 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 					where: { usageId: { in: usages.map((usage) => usage.id) } },
 				});
 				await cleanupUser(ctx.prisma, userId);
+			}
+			if (extraRateRowIds.length) {
+				await ctx.prisma.exchangeRate.deleteMany({ where: { id: { in: extraRateRowIds } } });
 			}
 		} finally {
 			await app?.close();
