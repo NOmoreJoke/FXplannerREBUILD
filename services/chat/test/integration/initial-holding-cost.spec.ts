@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import "reflect-metadata";
 import type { INestApplication } from "@nestjs/common";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -63,6 +64,7 @@ describe("初始持仓成本口径（集成）", () => {
 				quote,
 				rate,
 				source: "er-api",
+				canonicalWriteId: randomUUID(),
 				observedAt: now,
 				latestConfirmedAt: now,
 			},

@@ -46,6 +46,7 @@ describe("RateService", () => {
 		exchangeRate: {
 			findFirst: ReturnType<typeof vi.fn>;
 			findMany: ReturnType<typeof vi.fn>;
+			findUniqueOrThrow: ReturnType<typeof vi.fn>;
 			upsert: ReturnType<typeof vi.fn>;
 			createMany: ReturnType<typeof vi.fn>;
 		};
@@ -85,6 +86,7 @@ describe("RateService", () => {
 			exchangeRate: {
 				findFirst: vi.fn(),
 				findMany: vi.fn(),
+				findUniqueOrThrow: vi.fn(),
 				upsert: vi.fn(),
 				createMany: vi.fn(),
 			},
@@ -226,11 +228,14 @@ describe("RateService", () => {
 				source: "frankfurter",
 				observedAt: LAST_FRIDAY,
 				latestConfirmedAt: new Date(T0),
+				canonicalWriteId: expect.any(String),
 			},
 			update: {
 				rate: "0.7300000000",
 				source: "frankfurter",
 				latestConfirmedAt: new Date(T0),
+				canonicalWriteId: expect.any(String),
+				sellRate: null,
 			},
 		});
 		// observedAt 保持报价所属日（不因确认变为今天），窗口却已重置
@@ -416,11 +421,14 @@ describe("RateService", () => {
 				source: "identity",
 				observedAt: new Date(T0),
 				latestConfirmedAt: new Date(T0),
+				canonicalWriteId: expect.any(String),
 			},
 			update: {
 				rate: "1",
 				source: "identity",
 				latestConfirmedAt: new Date(T0),
+				canonicalWriteId: expect.any(String),
+				sellRate: null,
 			},
 		});
 		expect(result).toMatchObject({
@@ -615,13 +623,16 @@ describe("RateService", () => {
 				async (rateTicks, sellTicks) => {
 					const rate = storagePrice(rateTicks);
 					const sellRate = sellTicks === undefined ? undefined : storagePrice(sellTicks);
+					const row = mkRow("USD", {
+						rate: decimal(rate),
+						sellRate: sellRate === undefined ? null : decimal(sellRate),
+					});
 					prisma.exchangeRate.upsert.mockClear();
-					prisma.exchangeRate.upsert.mockResolvedValue(
-						mkRow("USD", {
-							rate: decimal(rate),
-							sellRate: sellRate === undefined ? null : decimal(sellRate),
-						}),
-					);
+					prisma.exchangeRate.createMany
+						.mockClear()
+						.mockResolvedValue({ count: 1 });
+					prisma.exchangeRate.findUniqueOrThrow.mockResolvedValue(row);
+					prisma.exchangeRate.upsert.mockResolvedValue(row);
 					provider.fetchLatestBatch.mockResolvedValue({
 						source: "abc",
 						quotes: { USD: { rate, sellRate, observedAt: LAST_FRIDAY } },
@@ -633,13 +644,19 @@ describe("RateService", () => {
 					if (rateUnits === 0 || sellUnits === 0) {
 						await expect(result).rejects.toBeInstanceOf(RateSourceUnavailableException);
 						expect(prisma.exchangeRate.upsert).not.toHaveBeenCalled();
+						expect(prisma.exchangeRate.createMany).not.toHaveBeenCalled();
 					} else {
 						await expect(result).resolves.toMatchObject({
 							rate: `${rateUnits}e-8`,
 							...(sellUnits === undefined ? {} : { sellRate: `${sellUnits}e-8` }),
 							fresh: true,
 						});
-						expect(prisma.exchangeRate.upsert).toHaveBeenCalledTimes(1);
+						expect(prisma.exchangeRate.upsert).toHaveBeenCalledTimes(
+							sellRate === undefined ? 0 : 1,
+						);
+						expect(prisma.exchangeRate.createMany).toHaveBeenCalledTimes(
+							sellRate === undefined ? 1 : 0,
+						);
 					}
 				},
 			),
@@ -795,6 +812,7 @@ describe("RateService", () => {
 					rate: "7.2000000000",
 					source: "frankfurter",
 					observedAt: firstObservedAt,
+					canonicalWriteId: expect.any(String),
 				},
 				{
 					base: "USD",
@@ -802,6 +820,7 @@ describe("RateService", () => {
 					rate: "7.2500000000",
 					source: "frankfurter",
 					observedAt: secondObservedAt,
+					canonicalWriteId: expect.any(String),
 				},
 			],
 			skipDuplicates: true,
@@ -978,20 +997,21 @@ describe("RateService", () => {
 		expect(result.sellRate).toBe("6.72531");
 	});
 
-	it("无卖出价的报价不触碰 sell_rate 列：upsert 不含 sellRate 键，响应不含 sellRate 键", async () => {
+it("首次写入缺省卖出价的 ABC 报价，落库和响应均无卖出价", async () => {
 		prisma.exchangeRate.findMany.mockResolvedValue([]);
 		provider.fetchLatestBatch.mockResolvedValue(
 			mkBatch({ USD: "6.7105500000" }, "abc", ABC_OBSERVED_AT),
 		);
+	prisma.exchangeRate.createMany.mockResolvedValue({ count: 1 });
+	prisma.exchangeRate.findUniqueOrThrow.mockResolvedValue(mkRow("USD", {
+		base: "CNY", source: "abc", rate: decimal("6.7105500000"), sellRate: null,
+	}));
 
 		const result = (await service.getLatest("CNY")) as LatestRateResponse;
 
-		const upsertArg = prisma.exchangeRate.upsert.mock.calls[0][0] as {
-			create: Record<string, unknown>;
-			update: Record<string, unknown>;
-		};
-		expect(upsertArg.create).not.toHaveProperty("sellRate");
-		expect(upsertArg.update).not.toHaveProperty("sellRate");
+	const { data } = prisma.exchangeRate.createMany.mock.calls[0][0];
+	expect(data).not.toHaveProperty("sellRate");
+	expect(data).toMatchObject({ source: "abc", canonicalWriteId: expect.any(String) });
 		expect("sellRate" in result).toBe(false);
 	});
 
@@ -1060,13 +1080,15 @@ describe("RateService.findQuoteAt 原时点取价（MVP-F0-2 按源粒度）", (
 	);
 
 	function build() {
+		const exchangeRate = {
+			findFirst: vi.fn(),
+			findMany: vi.fn(),
+			upsert: vi.fn(),
+			createMany: vi.fn(({ data }: { data: unknown[] }) => ({ count: data.length })),
+		};
 		const prisma = {
-			exchangeRate: {
-				findFirst: vi.fn(),
-				findMany: vi.fn(),
-				upsert: vi.fn(),
-				createMany: vi.fn(),
-			},
+			exchangeRate,
+			$transaction: (run: (tx: { exchangeRate: typeof exchangeRate }) => unknown) => run({ exchangeRate }),
 		};
 		const provider = {
 			fetchLatest: vi.fn(),

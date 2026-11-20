@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { type INestApplication, ValidationPipe } from "@nestjs/common";
 import { SwaggerModule } from "@nestjs/swagger";
 import { ThrottlerGuard } from "@nestjs/throttler";
@@ -550,6 +551,7 @@ describe("RateController（接口）", () => {
 						quote: "TWD",
 						rate: "4.4823000000",
 						source: "er-api",
+						canonicalWriteId: randomUUID(),
 						observedAt: new Date("2026-02-13T00:00:00.000Z"),
 					},
 				});
@@ -670,7 +672,7 @@ describe("RateController（接口）", () => {
 
 		it("Frankfurter 舍入为零：强制刷新返回 502，既有有效报价仍可从缓存读取", async () => {
 			const previous = await ctx.prisma.exchangeRate.create({
-				data: { ...pair, observedAt, rate: "1.6388069485", source: "frankfurter", latestConfirmedAt: new Date() },
+				data: { ...pair, observedAt, rate: "1.6388069485", source: "frankfurter", latestConfirmedAt: new Date(), canonicalWriteId: randomUUID() },
 			});
 			routes.frankfurter = () =>
 				jsonResponse(frankfurterLatestBody("2026-09-15", { MYR: "500000000" }));
@@ -733,7 +735,8 @@ describe("RateController（接口）", () => {
 				data: {
 					...pair,
 					observedAt,
-					createdAt: new Date(Date.now() - minutes * 60_000),
+					latestConfirmedAt: new Date(Date.now() - minutes * 60_000),
+					canonicalWriteId: randomUUID(),
 					rate: "0.0000000020",
 					source: "frankfurter",
 				},
@@ -1199,6 +1202,7 @@ describe("RateController（接口）", () => {
 						...pair,
 						rate,
 						source: "er-api",
+						canonicalWriteId: randomUUID(),
 						observedAt: new Date(time),
 					})),
 				});

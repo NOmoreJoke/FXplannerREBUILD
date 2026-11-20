@@ -7,14 +7,14 @@
  *
  * 分类规则（底稿 §3.1/§3）：
  * - ErApi 候选：source=er-api 且 quote=TWD 且非恒等（底稿 §3.1 限定范围）；
- *   方向可证的前提 = 停写窗口内全库 er-api 行均为旧方向写入（人类停写后
- *   执行）+ 人工核对冻结 ID 白名单圈选（approvedCandidateIds）；
+ *   来源和币对只限定候选范围，是否为旧方向由人工逐行核对并圈入冻结 ID
+ *   白名单（approvedCandidateIds）；
  * - Frankfurter 候选：source=frankfurter 且非恒等 → 同样原位转换；
  *   批序 ErApi 先行、Frankfurter 随后，全部候选在同一计划事务内执行；
  * - 排除：abc（百外币单位原生方向正确）、identity（恒等价 1）、未知来源；
  * - 冲突行单列不放行：sellRate 非空（仅 ABC 应有，非空即来源语义冲突）、
  *   rate ≤ 0 / 非法 / 舍入后为 0 / 超出 Decimal(20,10) 落库范围；
- * - 数值 = 1 的行：转换前后相同，仍按清单状态判定通过（更新条件原值匹配）。
+ * - 数值 = 1 的行：保留汇率值，圈选后仍登记当前行的方向证据。
  */
 import { createHash } from "node:crypto";
 import { invertQuoteRate } from "./rate-invert";
@@ -307,6 +307,7 @@ export interface MigrationTx {
 			observedAt: Date;
 			createdAt: Date;
 			migrationOwnerId: string | null;
+			canonicalWriteId: null;
 		};
 		data: { rate: string; migrationOwnerId: string | null };
 	}): Promise<{ count: number }>;
@@ -321,6 +322,7 @@ export interface MigrationTx {
 		observedAt: Date;
 		createdAt: Date;
 		migrationOwnerId: string | null;
+		canonicalWriteId: string | null;
 	} | null>;
 }
 
@@ -342,13 +344,15 @@ export interface MigrationBatchSummary {
 export interface MigrationExecution {
 	inventoryId: string;
 	mode: "invert" | "verify-inverted" | "rollback" | "verify-rolled-back";
+	/** v1 完成记录从未认领数值不变的行，只按原规则核对。 */
+	legacyReceipt?: boolean;
 }
 
-/** 首次执行要求全字段和行归属均命中。复跑与数值不变的行只读核对。 */
+/** 首次执行要求全字段和行归属均命中，且当前行未按正确方向回源。 */
 export async function executeMigrationBatches(
 	tx: MigrationTx,
 	candidates: FrozenCandidate[],
-	{ inventoryId, mode }: MigrationExecution,
+	{ inventoryId, mode, legacyReceipt = false }: MigrationExecution,
 ): Promise<MigrationBatchSummary> {
 	const summary: MigrationBatchSummary = { converted: 0, alreadyDone: 0 };
 	const reverse = mode === "rollback" || mode === "verify-rolled-back";
@@ -359,14 +363,16 @@ export async function executeMigrationBatches(
 		const { row } = candidate;
 		const fromRate = reverse ? candidate.expectedRate : candidate.originalRate;
 		const toRate = reverse ? candidate.originalRate : candidate.expectedRate;
-		const noChange = normalizeDecimalText(fromRate) === normalizeDecimalText(toRate);
-		const migrationOwnerId = expectOwned && !noChange ? inventoryId : null;
+		const legacyNoop = legacyReceipt &&
+			normalizeDecimalText(fromRate) === normalizeDecimalText(toRate);
+		const migrationOwnerId = expectOwned && !legacyNoop ? inventoryId : null;
 
-		if (verifyOnly || noChange) {
+		if (verifyOnly || legacyNoop) {
 			const existing = await tx.findUnique({ where: { id: row.id } });
 			if (
 				existing === null ||
 				existing.migrationOwnerId !== migrationOwnerId ||
+				existing.canonicalWriteId !== null ||
 				normalizeDecimalText(existing.rate) !== normalizeDecimalText(toRate) ||
 				!frozenRowMatchesExceptRate(existing, row)
 			) {
@@ -387,6 +393,7 @@ export async function executeMigrationBatches(
 				observedAt: new Date(row.observedAt),
 				createdAt: new Date(row.createdAt),
 				migrationOwnerId,
+				canonicalWriteId: null,
 			},
 			data: { rate: toRate, migrationOwnerId: reverse ? null : inventoryId },
 		});

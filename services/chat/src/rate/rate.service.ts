@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { roundRateTo8 } from '@fxplanner-new/money';
 import {
   BadRequestException,
@@ -5,7 +6,7 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, type ExchangeRate } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { utc8DayStart } from '../transaction/transaction-calculator';
 import {
@@ -55,7 +56,7 @@ interface QuoteToPersist {
   base: string;
   target: string;
   rate: string;
-  /** 现汇卖出价（仅 abc 源；缺省时 upsert 不触碰该列，避免洗掉同行已有值） */
+  /** 现汇卖出价（仅 ABC 源；缺省时保留同键已有的 ABC 卖出价） */
   sellRate?: string;
   source: string;
   observedAt: Date;
@@ -64,6 +65,17 @@ interface QuoteToPersist {
 
 type GroupResult = Map<string, LatestQuoteData | LatestQuoteError>;
 type LatestQuoteMode = 'swr' | 'fresh-only' | 'force-refresh';
+
+/** ABC 和恒等源的历史口径已知，其余行须有当前行版本的回源或迁移证据。 */
+const ABC_SOURCE = 'abc';
+const NATIVE_DIRECTION_SOURCES = [ABC_SOURCE, IDENTITY_RATE_SOURCE];
+const TRUSTED_DIRECTION: Prisma.ExchangeRateWhereInput = {
+  OR: [
+    { source: { in: NATIVE_DIRECTION_SOURCES } },
+    { canonicalWriteId: { not: null } },
+    { migrationOwnerId: { not: null } },
+  ],
+};
 
 /**
  * 历史回源负缓存 TTL：回源后仍不完整的币对 10 分钟内不再重试回源
@@ -237,7 +249,7 @@ export class RateService {
    *   未命中按最多 7 个 UTC+8 自然日有限回看（节假日/停更场景；未来点一律排除）；
    * - frankfurter 等仅日期源：date 零点只是日期表示，无法证明原时点可用 → 不参与
    *   原时点入账（上层保留 RATE_QUOTE_UNAVAILABLE）；
-   * - 本地皆无则按当前路由源 fetchHistory 回补当日历史后重查（skipDuplicates 幂等；
+   * - 本地皆无则按当前路由源 fetchHistory 回补当日历史后重查（保留方向已证的同行；
    *   er-api 免费档无历史端点返回空数组，回补只对具备真实历史的源产生可用行）；
    * - 仍无 → 返回 null，上层抛 400 RATE_QUOTE_UNAVAILABLE。严禁伪造 observedAt。
    * 方向与采用价口径与 onboarding 取价一致（sellRate ?? rate，1 外币 = X 本位币）。
@@ -264,6 +276,7 @@ export class RateService {
           base: baseCurrency,
           quote: currencyCode,
           source: { in: [...REALTIME_QUOTE_SOURCES] },
+          ...TRUSTED_DIRECTION,
           observedAt: { gt: realtimeWindowStart, lte: at },
         },
         orderBy: { observedAt: 'desc' },
@@ -274,6 +287,7 @@ export class RateService {
           base: baseCurrency,
           quote: currencyCode,
           source: { in: [...DAILY_QUOTE_SOURCES] },
+          ...TRUSTED_DIRECTION,
           observedAt: { gte: lookbackStart, lte: at },
         },
         orderBy: { observedAt: 'desc' },
@@ -284,7 +298,7 @@ export class RateService {
       row = await findDaily();
     }
     if (!row) {
-      // 本地无合格报价：回补当日历史后重查（与 getHistory 同一落库通道，skipDuplicates 幂等）
+      // 本地无合格报价：回补当日历史后重查（与 getHistory 同一落库通道）
       const dayStart = utc8DayStart(at);
       try {
         const fetched = await this.provider.fetchHistory(
@@ -293,18 +307,7 @@ export class RateService {
           this.formatDate(dayStart),
           this.formatDate(at),
         );
-        if (fetched.length > 0) {
-          await this.prisma.exchangeRate.createMany({
-            data: fetched.map((point) => ({
-              base: baseCurrency,
-              quote: currencyCode,
-              rate: point.rate,
-              source: this.provider.sourceForPair(baseCurrency, currencyCode),
-              observedAt: point.observedAt,
-            })),
-            skipDuplicates: true,
-          });
-        }
+        await this.persistHistory(baseCurrency, currencyCode, fetched);
       } catch {
         // 数据源不可用：不阻断失败路径，按「无合格报价」处理（返回 null）
       }
@@ -337,6 +340,7 @@ export class RateService {
       where: {
         base: normalizedBase,
         quote: normalizedTarget,
+        ...TRUSTED_DIRECTION,
         observedAt: { gte: start, lte: usesReferenceLayer ? now : end },
       },
       orderBy: { observedAt: 'asc' as const },
@@ -381,18 +385,7 @@ export class RateService {
       );
     }
 
-    if (fetched.length > 0) {
-      await this.prisma.exchangeRate.createMany({
-        data: fetched.map((point) => ({
-          base: normalizedBase,
-          quote: normalizedTarget,
-          rate: point.rate,
-          source: routedSource,
-          observedAt: point.observedAt,
-        })),
-        skipDuplicates: true,
-      });
-    }
+    await this.persistHistory(normalizedBase, normalizedTarget, fetched);
 
     const saved = await this.prisma.exchangeRate.findMany(historyQuery);
     const savedComplete = this.isHistoryCacheComplete(saved, start, end);
@@ -623,7 +616,7 @@ export class RateService {
     if (quotes.length === 0) return latest;
 
     const rows = await this.prisma.exchangeRate.findMany({
-      where: { base, quote: { in: quotes } },
+      where: { base, quote: { in: quotes }, ...TRUSTED_DIRECTION },
       orderBy: { observedAt: 'desc' },
     });
     for (const row of rows) {
@@ -876,8 +869,7 @@ export class RateService {
 
   /**
    * 最新取价成功时同时写入原值与确认时间，保留首次入库时间。
-   * sellRate 仅在有值时写入（create 与 update 同步落 sell_rate 列；缺省不触碰该列，
-   * 避免无卖出价的源/恒等报价洗掉同行既有值）。
+   * ABC 缺省卖出价时仅保留同源同行的卖出价。其他来源刷新时清除历史同行的卖出价。
    */
   private async persistQuote(
     quote: QuoteToPersist,
@@ -887,19 +879,14 @@ export class RateService {
     if (this.publishablePrices(rate, sellRate) === undefined) {
       return this.unavailableError(lastObservedAt);
     }
-    const sellRateField = sellRate !== undefined ? { sellRate } : {};
-    const writeQuote = async ({ exchangeRate }: Pick<PrismaService, 'exchangeRate'>) => {
-      const row = await exchangeRate.upsert({
-        where: {
-          base_quote_observedAt: { base, quote: target, observedAt },
-        },
-        create: { base, quote: target, rate, source, observedAt, latestConfirmedAt: confirmedAt, ...sellRateField },
-        update: { rate, source, latestConfirmedAt: confirmedAt, ...sellRateField },
-      });
-      const prices = this.publishablePrices(
-        row.rate.toString(),
-        row.sellRate?.toString(),
-      );
+    const canonicalWriteId = randomUUID();
+    const where = { base_quote_observedAt: { base, quote: target, observedAt } };
+    const create = {
+      base, quote: target, rate, source, observedAt, canonicalWriteId,
+      latestConfirmedAt: confirmedAt, ...(sellRate !== undefined ? { sellRate } : {}),
+    };
+    const toPublishable = (row: Pick<ExchangeRate, 'rate' | 'sellRate' | 'source' | 'observedAt' | 'latestConfirmedAt'>): LatestQuoteData => {
+      const prices = this.publishablePrices(row.rate.toString(), row.sellRate?.toString());
       if (prices === undefined) throw new RateSourceUnavailableException(lastObservedAt);
       return {
         ...prices,
@@ -909,16 +896,86 @@ export class RateService {
       };
     };
     try {
-      // 缺省卖出价会保留同行既有值，须在提交前确认实际保留的价格可发布。
-      return await (sellRate === undefined
-        ? this.prisma.$transaction(writeQuote)
-        : writeQuote(this.prisma));
+      if (source === ABC_SOURCE && sellRate === undefined) {
+        return await this.prisma.$transaction(async (tx) => {
+          const inserted = await tx.exchangeRate.createMany({ data: create, skipDuplicates: true });
+          if (inserted.count === 1) {
+            return toPublishable(await tx.exchangeRate.findUniqueOrThrow({ where }));
+          }
+
+          // 保留同源卖出价时，在写事务提交前验证发布精度。
+          const [updated] = await tx.$queryRaw<Array<Pick<ExchangeRate, 'rate' | 'sellRate' | 'source' | 'observedAt' | 'latestConfirmedAt'>>>`
+            UPDATE "exchange_rates"
+            SET "rate" = ${rate}::decimal(20,10), "source" = ${source},
+                "latest_confirmed_at" = ${confirmedAt.toISOString()}::timestamp(3),
+                "canonical_write_id" = ${canonicalWriteId}::uuid,
+                "sell_rate" = CASE WHEN "source" = ${ABC_SOURCE} THEN "sell_rate" ELSE NULL END
+            WHERE "base" = ${base} AND "quote" = ${target}
+              AND "observed_at" = ${observedAt.toISOString()}::timestamp(3)
+            RETURNING "rate", "sell_rate" AS "sellRate", "source",
+                      "observed_at" AS "observedAt", "latest_confirmed_at" AS "latestConfirmedAt"
+          `;
+          return toPublishable(updated ?? await tx.exchangeRate.create({ data: create }));
+        });
+      }
+
+      return toPublishable(await this.prisma.exchangeRate.upsert({
+        where,
+        create,
+        update: {
+          rate, source, latestConfirmedAt: confirmedAt, canonicalWriteId,
+          sellRate: sellRate ?? null,
+        },
+      }));
     } catch (error) {
       if (error instanceof RateSourceUnavailableException) {
         return this.unavailableError(lastObservedAt);
       }
       throw error;
     }
+  }
+
+  /** 用同键新报价修复未知方向的行。可信的同行仍沿用历史回补的跳过语义。 */
+  private async persistHistory(
+    base: string,
+    quote: string,
+    points: RateHistoryPoint[],
+  ): Promise<void> {
+    if (points.length === 0) return;
+    const source = base === quote
+      ? IDENTITY_RATE_SOURCE
+      : this.provider.sourceForPair(base, quote);
+    const canonicalWriteId = randomUUID();
+    const rates = new Map<number, string>();
+    for (const { observedAt, rate } of points) {
+      const time = observedAt.getTime();
+      if (!rates.has(time)) rates.set(time, rate);
+    }
+    const data = [...rates]
+      .sort(([a], [b]) => a - b)
+      .map(([time, rate]) => ({
+        base, quote, rate, source, observedAt: new Date(time), canonicalWriteId,
+      }));
+
+    await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.exchangeRate.createMany({ data, skipDuplicates: true });
+      if (count === data.length) return;
+
+      // 冲突行按最新行版本重新检查资格。一次批量更新覆盖 365 天档，避免逐行往返。
+      const replacements = data.map(({ observedAt, rate }) =>
+        Prisma.sql`(${observedAt.toISOString()}::timestamp(3), ${rate}::decimal(20,10))`,
+      );
+      await tx.$executeRaw`
+        UPDATE "exchange_rates" AS cached
+        SET "rate" = incoming.rate, "sell_rate" = NULL, "source" = ${source},
+            "canonical_write_id" = ${canonicalWriteId}::uuid, "latest_confirmed_at" = NULL
+        FROM (VALUES ${Prisma.join(replacements)}) AS incoming(observed_at, rate)
+        WHERE cached.base = ${base} AND cached.quote = ${quote}
+          AND cached.observed_at = incoming.observed_at
+          AND cached.canonical_write_id IS NULL AND cached.migration_owner_id IS NULL
+          AND cached.source NOT IN (${Prisma.join(NATIVE_DIRECTION_SOURCES)})
+      `;
+    });
   }
 
   private unsupportedError(base: string, target: string): LatestQuoteError {

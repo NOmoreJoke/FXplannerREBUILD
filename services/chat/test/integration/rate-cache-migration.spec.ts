@@ -1,8 +1,18 @@
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PrismaService } from "../../src/prisma/prisma.service";
 import type { MigrationPlan } from "../../src/rate/rate-migration-plan";
+import { RateProvider } from "../../src/rate/rate.provider";
+import { RateService } from "../../src/rate/rate.service";
+import {
+	createRateSourceFetchStub,
+	erApiLatestBody,
+	frankfurterTimeSeriesBody,
+	jsonResponse,
+	parseFrankfurterTimeSeriesRange,
+} from "../helpers/rate-source-fixtures";
 
 interface Inventory {
 	inventoryId?: string;
@@ -56,9 +66,10 @@ describe("旧汇率缓存 CLI 与 PostgreSQL 完成记录", () => {
 
 	async function seed(
 		base: string, quote: string, source: string, rate: string, sellRate?: string,
+		at = observedAt, confirmedAt = createdAt,
 	) {
 		const row = await prisma.exchangeRate.create({
-			data: { base, quote, source, rate, sellRate, observedAt, createdAt },
+			data: { base, quote, source, rate, sellRate, observedAt: at, createdAt: confirmedAt },
 		});
 		fixtureIds.push(row.id);
 		return row.id;
@@ -79,6 +90,7 @@ describe("旧汇率缓存 CLI 与 PostgreSQL 完成记录", () => {
 	});
 
 	afterEach(async () => {
+		vi.useRealTimers();
 		await prisma.exchangeRate.deleteMany({ where: { id: { in: fixtureIds } } });
 		await prisma.rateCacheMigrationReceipt.deleteMany({
 			where: { id: { in: inventoryIds } },
@@ -244,13 +256,238 @@ describe("旧汇率缓存 CLI 与 PostgreSQL 完成记录", () => {
 		expect(await snapshot()).toEqual(before);
 	});
 
-	it("数值不变的圈选只记录完成状态", async () => {
+	it("数值不变的圈选也获得归属，回滚撤销方向证据", async () => {
+		const before = await snapshot();
+		inventory.approvedCandidateIds = [noChange];
+		check(run("invert", inventory), 0, /转换 1，幂等复跑已达成 0/);
+		const unchanged = await prisma.exchangeRate.findUniqueOrThrow({ where: { id: noChange } });
+		expect(unchanged.rate.toString()).toBe("1");
+		expect(unchanged.migrationOwnerId).toBe(inventory.inventoryId);
+		check(run("invert", inventory), 0, /转换 0，幂等复跑已达成 1/);
+		expect(await receipt()).not.toBeNull();
+		check(run("rollback", inventory), 0, /转换 1，幂等复跑已达成 0/);
+		expect((await receipt())?.rolledBackAt).toBeInstanceOf(Date);
+		expect(await snapshot()).toEqual(before);
+	});
+
+	it("已提交的 v1 清单沿用旧版核对和回滚，无凭据的数值不变行保持未认领", async () => {
+		const candidate = inventory.plan.candidates.find(({ row }) => row.id === noChange)!;
+		const { row, batch, originalRate, expectedRate } = candidate;
+		const scope = [[
+			row.id, row.base, row.quote, row.source, row.sellRate, row.observedAt,
+			row.createdAt, batch, originalRate, expectedRate,
+		]];
+		const scopeChecksum = createHash("sha256")
+			.update(JSON.stringify(["rate-cache-migration/v1", scope]))
+			.digest("hex");
+		await prisma.rateCacheMigrationReceipt.create({
+			data: { id: inventory.inventoryId!, scopeChecksum },
+		});
 		const before = await snapshot();
 		inventory.approvedCandidateIds = [noChange];
 		check(run("invert", inventory), 0, /转换 0，幂等复跑已达成 1/);
-		expect(await receipt()).not.toBeNull();
 		check(run("rollback", inventory), 0, /转换 0，幂等复跑已达成 1/);
 		expect((await receipt())?.rolledBackAt).toBeInstanceOf(Date);
 		expect(await snapshot()).toEqual(before);
+	});
+
+	function utcDay(daysAgo: number) {
+		const day = new Date();
+		day.setUTCHours(0, 0, 0, 0);
+		day.setUTCDate(day.getUTCDate() - daysAgo);
+		return day;
+	}
+
+	const dateOnly = (timestamp: Date) => timestamp.toISOString().slice(0, 10);
+
+	it("混合同币对的 latest、SWR、history 和日级原时点只读有方向证据的版本", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const base = "SGD";
+		const quote = "TWD";
+		const oldAt = utcDay(1);
+		const currentAt = utcDay(3);
+		const approved = await seed(base, quote, "er-api", "0.625", undefined, oldAt, new Date());
+		const unknown = await seed(base, quote, "er-api", "1.6", undefined, utcDay(2));
+		const abcAt = utcDay(2);
+		await seed("SGD", "HKD", "abc", "0.2", "0.21", abcAt, new Date());
+		await seed(base, base, "identity", "1", undefined, abcAt, new Date());
+
+		let available = false;
+		const upstream = createRateSourceFetchStub({
+			erApi: () => available
+				? jsonResponse(erApiLatestBody({ TWD: "0.625" }, currentAt.getTime() / 1000))
+				: new Response(null, { status: 503 }),
+		});
+		const rates = new RateService(prisma as PrismaService, new RateProvider(undefined, upstream));
+		try {
+			await expect(rates.getLatest(base, [quote])).rejects.toMatchObject({ status: 502 });
+			expect((await rates.getHistory(base, quote, 7)).data_points).toEqual([]);
+			expect(await rates.findQuoteAt(base, quote, oldAt)).toBeNull();
+			expect(await rates.getLatest(base, ["HKD"])).toMatchObject({ rate: "0.2", sellRate: "0.21" });
+			expect(await rates.getLatest(base, [base])).toMatchObject({ rate: "1", source: "identity" });
+			expect(await rates.findQuoteAt(base, "HKD", abcAt)).toMatchObject({ rate: "0.2", sellRate: "0.21" });
+
+			available = true;
+			expect(await rates.getLatest(base, [quote])).toMatchObject({ rate: "1.6", fresh: true });
+			const firstWrite = await prisma.exchangeRate.findUniqueOrThrow({
+				where: { base_quote_observedAt: { base, quote, observedAt: currentAt } },
+			});
+			fixtureIds.push(firstWrite.id);
+			expect(firstWrite.canonicalWriteId).toEqual(expect.any(String));
+			expect(await rates.getLatest(base, [quote], true)).toMatchObject({ rate: "1.6", fresh: true });
+			const written = await prisma.exchangeRate.findUniqueOrThrow({ where: { id: firstWrite.id } });
+			expect(written.canonicalWriteId).toEqual(expect.any(String));
+			expect(written.canonicalWriteId).not.toBe(firstWrite.canonicalWriteId);
+
+			available = false;
+			expect(await rates.getLatest(base, [quote])).toMatchObject({
+				rate: "1.6", observedAt: currentAt.toISOString(), fresh: true,
+			});
+			expect(written.latestConfirmedAt).toBeInstanceOf(Date);
+			const staleBoundary = written.latestConfirmedAt!.getTime() + 300_000;
+			const stale = vi.spyOn(Date, "now").mockReturnValue(staleBoundary);
+			try {
+				expect(await rates.getLatest(base, [quote])).toMatchObject({
+					rate: "1.6", observedAt: currentAt.toISOString(), fresh: false,
+				});
+			} finally {
+				stale.mockRestore();
+			}
+			const currentPoint = { date: dateOnly(currentAt), rate: "1.6", source: "er-api" };
+			const migratedPoint = { date: dateOnly(oldAt), rate: "1.6", source: "er-api" };
+			expect((await rates.getHistory(base, quote, 7)).data_points).toEqual([currentPoint]);
+			// 新行超过 5 分钟仍可用于日级回看，方向未知的较新行不能优先。
+			expect(await rates.findQuoteAt(base, quote, oldAt)).toMatchObject({
+				rate: "1.6", observedAt: currentAt,
+			});
+
+			const frozen = run("inventory");
+			check(frozen, 0, /盘点完成/);
+			const approvedInventory: Inventory = JSON.parse(frozen.stdout);
+			inventoryIds.push(approvedInventory.inventoryId!);
+			const candidateIds = approvedInventory.plan.candidates.map(({ row }) => row.id);
+			expect(candidateIds).toContain(approved);
+			expect(candidateIds).toContain(unknown);
+			expect(candidateIds).not.toContain(written.id);
+			approvedInventory.approvedCandidateIds = [approved];
+			check(run("invert", approvedInventory), 0, /转换 1，幂等复跑已达成 0/);
+			const afterApply = await snapshot();
+			expect(await rates.getLatest(base, [quote])).toMatchObject({
+				rate: "1.6", observedAt: currentAt.toISOString(), fresh: true,
+			});
+			const migrated = await prisma.exchangeRate.findUniqueOrThrow({ where: { id: approved } });
+			expect(migrated).toMatchObject({
+				migrationOwnerId: approvedInventory.inventoryId,
+				latestConfirmedAt: null,
+			});
+			const staleAfterMigration = vi.spyOn(Date, "now").mockReturnValue(staleBoundary);
+			try {
+				expect(await rates.getLatest(base, [quote])).toMatchObject({
+					rate: "1.6", observedAt: currentAt.toISOString(), fresh: false,
+				});
+			} finally {
+				staleAfterMigration.mockRestore();
+			}
+			expect((await rates.getHistory(base, quote, 7)).data_points).toEqual([currentPoint, migratedPoint]);
+			expect(await rates.findQuoteAt(base, quote, oldAt)).toMatchObject({ rate: "1.6", observedAt: oldAt });
+			check(run("invert", approvedInventory), 0, /转换 0，幂等复跑已达成 1/);
+			expect(await snapshot()).toEqual(afterApply);
+			check(run("rollback", approvedInventory), 0, /转换 1，幂等复跑已达成 0/);
+			expect((await rates.getHistory(base, quote, 7)).data_points).toEqual([currentPoint]);
+			expect(await rates.findQuoteAt(base, quote, oldAt)).toMatchObject({ rate: "1.6", observedAt: currentAt });
+		} finally {
+			await prisma.exchangeRate.deleteMany({ where: { base, quote } });
+		}
+	});
+
+	it("原时点和图表的回补修复无证同键，保留有证点及日期级限制", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const base = "CAD";
+		const quote = "MYR";
+		const prior = utcDay(2);
+		const recent = utcDay(1);
+		const today = utcDay(0);
+		const priorId = await seed(base, quote, "frankfurter", "0.625", undefined, prior);
+		const recentId = await seed(base, quote, "frankfurter", "0.5", undefined, recent);
+		const upstream = createRateSourceFetchStub({
+			frankfurter: (href) => {
+				const range = parseFrankfurterTimeSeriesRange(href);
+				if (!range) return new Response(null, { status: 503 });
+				const values = [
+					[dateOnly(prior), range.end === dateOnly(prior) ? "0.625" : "0.25"],
+					[dateOnly(recent), "0.5"],
+					[dateOnly(today), "2.5"],
+				];
+				return jsonResponse(frankfurterTimeSeriesBody(Object.fromEntries(
+					values.filter(([day]) => day >= range.start && day <= range.end)
+						.map(([day, raw]) => [day, { [quote]: raw }]),
+				)));
+			},
+		});
+		const rates = new RateService(prisma as PrismaService, new RateProvider(undefined, upstream));
+		try {
+			expect(await rates.findQuoteAt(base, quote, prior)).toBeNull();
+			const refreshed = await prisma.exchangeRate.findUniqueOrThrow({ where: { id: priorId } });
+			expect(refreshed.rate.toString()).toBe("1.6");
+			expect(refreshed.canonicalWriteId).toEqual(expect.any(String));
+			const history = await rates.getHistory(base, quote, 7);
+			expect(history.data_points.map(({ date, rate }) => [date, rate])).toEqual([
+				[dateOnly(prior), "1.6"], [dateOnly(recent), "2"], [dateOnly(today), "0.4"],
+			]);
+			const saved = await prisma.exchangeRate.findMany({ where: { base, quote }, orderBy: { observedAt: "asc" } });
+			expect(saved.map(({ rate }) => rate.toString())).toEqual(["1.6", "2", "0.4"]);
+			expect(saved[0]).toEqual(refreshed);
+			expect(saved[1]).toMatchObject({ id: recentId, canonicalWriteId: expect.any(String) });
+			expect(saved[2].canonicalWriteId).toEqual(expect.any(String));
+			// 模拟旧版写入者覆盖当前行，即使值相等，旧方向证据也不可继承。
+			await prisma.exchangeRate.update({ where: { id: saved[2].id }, data: { rate: "0.4" } });
+			expect((await prisma.exchangeRate.findUniqueOrThrow({ where: { id: saved[2].id } })).canonicalWriteId).toBeNull();
+			expect((await rates.getHistory(base, quote, 7)).data_points.map(({ rate }) => rate)).toEqual(["1.6", "2"]);
+		} finally {
+			await prisma.exchangeRate.deleteMany({ where: { base, quote } });
+		}
+	});
+
+	it("冻结后同值的可信写入使旧清单失效，CLI 不会二次取倒数", async () => {
+		await prisma.exchangeRate.update({ where: { id: a }, data: { canonicalWriteId: randomUUID() } });
+		const before = await snapshot();
+		check(run("invert", inventory), 1, /条件未命中/);
+		expect(await receipt()).toBeNull();
+		expect(await snapshot()).toEqual(before);
+	});
+
+	it("ABC 同键回源缺卖出价时清除旧非 ABC 价格，保留同源 ABC 卖出价", async () => {
+		const base = "CNY";
+		const quote = "EUR";
+		const at = new Date(Date.now() - 60_000);
+		const legacyId = await seed(base, quote, "frankfurter", "0.625", "0.63", at);
+		let sellPrice: string | undefined;
+		const upstream = createRateSourceFetchStub({
+			abc: () => jsonResponse({
+				ErrorCode: "0",
+				Data: { Table: [{
+					CurrName: "欧元(EUR)", BenchMarkPrice: "160",
+					PublishTime: at.toISOString(), SellPrice: sellPrice,
+				}] },
+			}),
+		});
+		const fromAbc = () => new RateService(prisma as PrismaService, new RateProvider(undefined, upstream));
+
+		const switched = fromAbc();
+		expect(await switched.findQuoteAt(base, quote, at)).toBeNull();
+		const latest = await switched.getLatest(base, [quote], true);
+		expect(latest).toMatchObject({ rate: "1.6", source: "abc" });
+		expect(latest).not.toHaveProperty("sellRate");
+		const saved = await prisma.exchangeRate.findUniqueOrThrow({ where: { id: legacyId } });
+		expect(saved).toMatchObject({ source: "abc", sellRate: null, canonicalWriteId: expect.any(String) });
+		const originalTime = await switched.findQuoteAt(base, quote, at);
+		expect(originalTime).toMatchObject({ rate: "1.6", source: "abc" });
+		expect(originalTime).not.toHaveProperty("sellRate");
+
+		sellPrice = "161";
+		expect(await fromAbc().getLatest(base, [quote], true)).toMatchObject({ sellRate: "1.61" });
+		sellPrice = undefined;
+		expect(await fromAbc().getLatest(base, [quote], true)).toMatchObject({ sellRate: "1.61" });
+		expect(await switched.findQuoteAt(base, quote, at)).toMatchObject({ sellRate: "1.61" });
 	});
 });

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import "reflect-metadata";
 import type { INestApplication } from "@nestjs/common";
 import { utc8DayStart } from "../../src/transaction/transaction-calculator";
@@ -123,6 +124,7 @@ describe("OnboardingController（e2e）", () => {
 				quote,
 				rate,
 				source: "er-api",
+				canonicalWriteId: randomUUID(),
 				observedAt: now,
 				latestConfirmedAt: latestConfirmedAt ?? now,
 			},
@@ -149,6 +151,7 @@ describe("OnboardingController（e2e）", () => {
 				quote,
 				rate,
 				source: "er-api",
+				canonicalWriteId: randomUUID(),
 				observedAt,
 				latestConfirmedAt: new Date(Date.now() - ageMs),
 			},

@@ -318,7 +318,10 @@ describe("verifyFrozenPlan 全量防篡改与人工圈选", () => {
 });
 
 const inventoryId = "fce2fa96-a93e-4de9-a821-83df7ab83829";
-type TestRow = InventoryRow & { migrationOwnerId?: string | null };
+type TestRow = InventoryRow & {
+	migrationOwnerId?: string | null;
+	canonicalWriteId?: string | null;
+};
 
 /** 内存假事务：记录全部条件（逐字段零差异断言用）；updateMany 按【全字段】匹配评估；
  * findUnique 返回全冻结字段（无指数十进制文本和 Date 对象） */
@@ -342,7 +345,8 @@ function makeFakeTx(rows: Map<string, TestRow>): MigrationTx & {
 				row.sellRate === args.where.sellRate &&
 				row.observedAt === observedAtIso &&
 				row.createdAt === createdAtIso &&
-				(row.migrationOwnerId ?? null) === args.where.migrationOwnerId;
+				(row.migrationOwnerId ?? null) === args.where.migrationOwnerId &&
+				(row.canonicalWriteId ?? null) === args.where.canonicalWriteId;
 			if (!match) return { count: 0 };
 			rows.set(row.id, { ...row, ...args.data });
 			return { count: 1 };
@@ -359,6 +363,7 @@ function makeFakeTx(rows: Map<string, TestRow>): MigrationTx & {
 				observedAt: new Date(row.observedAt),
 				createdAt: new Date(row.createdAt),
 				migrationOwnerId: row.migrationOwnerId ?? null,
+				canonicalWriteId: row.canonicalWriteId ?? null,
 			};
 		},
 	};
@@ -395,6 +400,7 @@ describe("executeMigrationBatches 可执行差分（FX-06 可执行化）", () =
 			observedAt: new Date("2026-09-15T00:00:00.000Z"),
 			createdAt: new Date("2026-09-15T00:02:00.000Z"),
 			migrationOwnerId: null,
+			canonicalWriteId: null,
 		});
 	});
 
@@ -487,7 +493,7 @@ describe("executeMigrationBatches 可执行差分（FX-06 可执行化）", () =
 		});
 	});
 
-	it("No-op 行（rate=1）：不执行 UPDATE，全字段核对通过 → alreadyDone（复跑更新数恒 0）", async () => {
+it("数值不变的行也取得方向证据，复跑仍为零写入", async () => {
 		const plan = deriveMigrationPlan([rowOf({ id: "cmwnoop", rate: "1.0000000000" })]);
 		const rows = new Map([
 			["cmwnoop", rowOf({ id: "cmwnoop", rate: "1.0000000000" })],
@@ -499,9 +505,13 @@ describe("executeMigrationBatches 可执行差分（FX-06 可执行化）", () =
 			mode: "invert",
 		});
 
-		expect(summary).toEqual({ converted: 0, alreadyDone: 1 });
-		// 不产生任何 UPDATE 条件（rate 1 → 1 不执行）
-		expect(tx.conditions).toHaveLength(0);
+	expect(summary).toEqual({ converted: 1, alreadyDone: 0 });
+	expect(rows.get("cmwnoop")).toMatchObject({ rate: "1.0000000000", migrationOwnerId: inventoryId });
+	expect(await executeMigrationBatches(tx, plan.candidates, {
+		inventoryId,
+		mode: "verify-inverted",
+	})).toEqual({ converted: 0, alreadyDone: 1 });
+	expect(tx.conditions).toHaveLength(1);
 	});
 
 	it("No-op 行字段漂移 → 全字段核对不通过 → 抛错中止", async () => {

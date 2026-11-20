@@ -90,7 +90,7 @@ export async function verifyTargetFingerprint(
 }
 
 /** verifyFrozenPlan 已将圈选集合归一为按 id 排列的重算候选。 */
-function checksumOfApprovedScope(plan: MigrationPlan): string {
+function checksumOfApprovedScope(plan: MigrationPlan, version: "v1" | "v2"): string {
 	const scope = plan.candidates.map(({ row, batch, originalRate, expectedRate }) => [
 		row.id,
 		row.base,
@@ -104,7 +104,7 @@ function checksumOfApprovedScope(plan: MigrationPlan): string {
 		expectedRate,
 	]);
 	return createHash("sha256")
-		.update(JSON.stringify(["rate-cache-migration/v1", scope]))
+		.update(JSON.stringify([`rate-cache-migration/${version}`, scope]))
 		.digest("hex");
 }
 
@@ -128,8 +128,10 @@ export async function executeFrozenPlan(
 	reverse: boolean,
 ) {
 	const receipts = tx.rateCacheMigrationReceipt;
-	const scopeChecksum = checksumOfApprovedScope(plan);
+	const scopeChecksum = checksumOfApprovedScope(plan, "v2");
 	const receipt = await receipts.findUnique({ where: { id: inventoryId } });
+	const legacyReceipt = receipt !== null && receipt.scopeChecksum !== scopeChecksum &&
+		receipt.scopeChecksum === checksumOfApprovedScope(plan, "v1");
 	let mode: MigrationExecution["mode"];
 	if (receipt === null) {
 		if (reverse) {
@@ -138,7 +140,7 @@ export async function executeFrozenPlan(
 		await receipts.create({ data: { id: inventoryId, scopeChecksum } });
 		mode = "invert";
 	} else {
-		if (receipt.scopeChecksum !== scopeChecksum) {
+		if (receipt.scopeChecksum !== scopeChecksum && !legacyReceipt) {
 			throw new Error("清单圈选或冻结字段与已提交迁移记录不一致");
 		}
 		if (receipt.rolledBackAt !== null && !reverse) {
@@ -165,6 +167,7 @@ export async function executeFrozenPlan(
 	const summary = await executePlanBatches(migrationTx, plan, {
 		inventoryId,
 		mode,
+		legacyReceipt,
 	});
 	if (mode === "rollback") {
 		await receipts.update({

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
 import { AIMessage, type BaseMessage } from "@langchain/core/messages";
@@ -581,6 +582,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 				source: "er-api",
 				observedAt: now,
 				latestConfirmedAt: now,
+				canonicalWriteId: randomUUID(),
 			},
 		});
 
@@ -640,7 +642,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		const localPoints = [
 			{ ...pair, observedAt: start, rate: "0.22", source: "er-api" },
 			{ ...pair, observedAt: low, rate: "0.2", source: "er-api" },
-		];
+		].map((point) => ({ ...point, canonicalWriteId: randomUUID() }));
 		await prisma.exchangeRate.createMany({ data: localPoints });
 		const reference = vi.spyOn(app.get(RateProvider), "fetchReferenceSeries")
 			.mockResolvedValue([

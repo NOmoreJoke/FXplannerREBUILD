@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 /**
  * 更正与日志接口测试（corrections 技术方案 §8.2，场景 1~24）。
  * 数值锚定 doc 14 例 10/11/12 与 doc 15 FIFO 例。常规交易日期相对今天构造，
@@ -869,6 +870,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 					base: "CNY",
 					quote: "TWD",
 					source: "er-api",
+					canonicalWriteId: randomUUID(),
 				})),
 				select: { id: true },
 			});
@@ -1068,6 +1070,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 					quote: "TWD",
 					rate: "0.21",
 					source: "er-api",
+					canonicalWriteId: randomUUID(),
 					observedAt,
 				},
 			});
@@ -1110,6 +1113,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 				quote: "TWD",
 				rate: "0.23",
 				source: "er-api",
+				canonicalWriteId: randomUUID(),
 				observedAt: eligibleAt,
 			},
 		});

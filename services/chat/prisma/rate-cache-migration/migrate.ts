@@ -9,7 +9,7 @@
  *
  * 命令（在 services/chat 下运行）：
  *   bun run prisma/rate-cache-migration/migrate.ts inventory
- *       只读盘点：全表扫描 exchange_rates → 派生冻结清单（候选/冲突/排除 +
+ *       只读盘点：读取 exchange_rates 未标记行 → 派生冻结清单（候选/冲突/排除 +
  *       校验和）以 JSON 打印到 stdout（人类重定向落盘）。不产生任何 DB 写入
  *       （底稿 §3 步骤 1）。
  *   bun run prisma/rate-cache-migration/migrate.ts invert [--apply --confirm-backup-target] < frozen.json
@@ -137,6 +137,7 @@ async function main(): Promise<void> {
 					prisma.$executeRaw`SET TRANSACTION READ ONLY`,
 					queryTargetIdentity(prisma, connection),
 					prisma.exchangeRate.findMany({
+						where: { canonicalWriteId: null, migrationOwnerId: null },
 						select: {
 							id: true,
 							base: true,

@@ -6,7 +6,7 @@
 
 ## 做什么
 
-- `inventory`：只读盘点全表，按底稿 §3.1 分类（ErApi/Frankfurter 候选、
+- `inventory`：只读盘点缺失方向证据的行，按底稿 §3.1 分类（ErApi/Frankfurter 候选、
   ABC/identity 排除、sellRate 非空与非法/归零/越界冲突行单列），
   在同一只读事务中读取目标副本指纹和汇率行，为清单生成唯一的 `inventoryId`，
   将 JSON 输出到 **stdout**（人类重定向落盘）。
@@ -42,7 +42,8 @@ PrismaClient 与 `src/rate/rate-invert` 取倒数口径，保证转换期望值�
 
 ## 运行（在 services/chat 下）
 
-先在备份副本应用 Prisma 迁移 `20261120090000_rate_cache_migration_receipt`。
+先在备份副本应用 Prisma 迁移 `20261120090000_rate_cache_migration_receipt`
+和 `20261120091000_rate_cache_canonical_write`。
 盘点后，人工核对并填入 `approvedCandidateIds`，保留原始的 `inventoryId`
 与 `targetFingerprint` 供转换、复跑与回滚使用。
 
@@ -75,8 +76,8 @@ bun run prisma/rate-cache-migration/migrate.ts rollback --apply --confirm-backup
   旧版 5 秒期限两次触发超时。新期限下验收检查全量转换、复跑、回退及
   最后一条 Frankfurter 记录漂移后的全表一致性。生产备份副本的候选量与耗时待实测。
 - 首次 `invert --apply` 锁定 `inventoryId` 对应的圈选集合、全冻结字段和目标值。
-  数据库完成记录与实际改写行上的归属标记同事务提交。数值不变的候选只核对，
-  也纳入圈选校验和。
+  数据库完成记录与全部圈选行上的归属标记同事务提交。数值为 1 的圈选行保留原值，
+  同样登记并计入转换数。已提交的 v1 完成记录沿用原核对方式，其数值不变的行仍无归属。
 - 候选范围按底稿 §3.1 冻结：ErApi 仅 quote=TWD 的非恒等行（其余 ErApi 行
   一律冲突单列不放行）；Frankfurter 按实际曾写币对；ABC/identity 排除；
   方向证据以冻结 ID 白名单（清单 JSON）承载，人工核对后方可执行；
@@ -89,6 +90,18 @@ bun run prisma/rate-cache-migration/migrate.ts rollback --apply --confirm-backup
   重新盘点并取得新清单。并发事务冲突时，使用原清单复跑核对已提交状态。
 - 缺少目标指纹的旧清单仅可用于 dry-run。新版写入须在确认后的目标副本重新盘点。
   需要恢复由旧清单转换的行时，使用原备份恢复。
+
+## 应用读写
+
+- 最新、陈旧回显、图表和原时点在数据库查询中排除方向无证的行。ABC 和恒等
+  源的历史方向已知，可以继续使用。er-api / frankfurter 的无证行留存供盘点，
+  仅凭数值或时间无法确认方向。日期级 frankfurter 仍不用于原时点。
+- 正确方向回源写入时产生新的 `canonical_write_id`。普通旧版写入不会沿用前一
+  行版本的标记。已有回源或迁移证据的行不进入新圈选，冻结后取得新标记的行也
+  无法命中转换条件。历史回补可用真实同键报价修复无证行，并保留同键已证报价。
+- ABC 缺卖出价时只保留同键已有的 ABC 卖出价。跨源回源会清除遗留卖出价。
+- CLI 回滚同时恢复原汇率和无证状态。部署切换时应停旧版读写，先应用 DDL，再启用
+  新版服务。旧版读取代码仍会取到无证行，恢复旧版时必须隔离该缓存流量。
 
 ## 旧版演练记录（2026-11-19/20 夜间，本地测试库真实 CUID 行）
 
