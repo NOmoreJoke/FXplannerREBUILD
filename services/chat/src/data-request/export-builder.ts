@@ -10,6 +10,7 @@
  * - 尚未形成的数据注明为空（表头 + 「（无）」注记行）；
  * - 不含验证码、登录凭证或任何他人数据。
  */
+import Decimal from "decimal.js";
 import { getCurrency, roundToCurrency } from "@fxplanner-new/money";
 
 // ─────────────────────────────────────────────────────────────
@@ -234,15 +235,20 @@ export interface ExportEntry {
 	content: string;
 }
 
-/** 使用成本列：一笔使用分摊到多个成本批次的成本合计（先进先出消耗口径） */
+/** 使用成本列：一笔使用分摊到多个成本批次的成本合计（先进先出消耗口径）。
+ * Decimal 累加（MVP-F0-4）：原生 Number 累加在多批次分摊下存在浮点尾差，
+ * 导出为审计账本，必须与账本口径逐位一致 */
 export function usageCostOf(
 	usageId: string,
 	allocations: ExportUsageLotAllocationRow[],
 ): string {
 	const total = allocations
 		.filter((row) => row.usageId === usageId)
-		.reduce((sum, row) => sum + Number(row.cost), 0);
-	return String(total);
+		.reduce(
+			(sum, row) => sum.add(new Decimal(row.cost)),
+			new Decimal(0),
+		);
+	return total.toFixed(4);
 }
 
 /**
@@ -364,9 +370,11 @@ export function buildExportEntries(data: ExportBundleData): ExportEntry[] {
 					data.transactions.map((row) => [
 						row.id,
 						row.currencyCode,
+						// 数量 = 外币精度（JPY/KRW 0 位）；本金/手续费 = 本位币精度（2 位），
+						// 不可沿用外币 currencyCode（MVP-F0-4：JPY 买入时 CNY 本金曾被截为 0 位）
 						formatAmount(row.quantity, row.currencyCode),
-						formatAmount(row.principalAmount, row.currencyCode),
-						formatFee(row.feeAmount, row.currencyCode),
+						formatAmount(row.principalAmount, data.settings?.baseCurrency ?? "CNY"),
+						formatFee(row.feeAmount, data.settings?.baseCurrency ?? "CNY"),
 						row.exchangeRate,
 						row.rateSource,
 						formatDateTime(row.rateObservedAt),

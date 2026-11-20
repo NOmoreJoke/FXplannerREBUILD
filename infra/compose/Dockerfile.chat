@@ -59,5 +59,10 @@ WORKDIR /app/services/chat
 ARG API_PORT=4001
 ENV API_PORT=${API_PORT}
 EXPOSE ${API_PORT}
+# 数据请求导出目录（MVP-F0-4）：compose.prod.yaml 挂载 fxplanner-exports:/data/exports
+# 并注入 DATA_EXPORT_DIR；本地兜底目录为进程 cwd 下的 data-exports。切 USER bun 前
+# 预建并 chown，否则容器内导出 EACCES。命名卷首挂载时继承镜像目录属主。
+RUN mkdir -p /data/exports /app/services/chat/data-exports \
+ && chown -R bun:bun /data/exports /app/services/chat/data-exports
 USER bun
 CMD ["bun", "run", "dist/main.js"]

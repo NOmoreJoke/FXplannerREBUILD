@@ -71,15 +71,77 @@ describe("export-builder 基础格式化", () => {
 		expect(formatFee("12.345", "USD")).toBe("12.35"); // half-up
 	});
 
-	it("使用成本 = 分摊成本批次之和", () => {
+	it("使用成本 = 分摊成本批次之和（Decimal 累加，4 位定点字符串）", () => {
 		const allocations = [
 			{ id: "a1", usageId: "u1", lotId: "l1", quantity: "1", cost: "30.50" },
 			{ id: "a2", usageId: "u1", lotId: "l2", quantity: "1", cost: "19.50" },
 			{ id: "a3", usageId: "u2", lotId: "l1", quantity: "1", cost: "99" },
 		];
-		expect(usageCostOf("u1", allocations)).toBe("50");
-		expect(usageCostOf("u2", allocations)).toBe("99");
-		expect(usageCostOf("u-none", allocations)).toBe("0");
+		expect(usageCostOf("u1", allocations)).toBe("50.0000");
+		expect(usageCostOf("u2", allocations)).toBe("99.0000");
+		expect(usageCostOf("u-none", allocations)).toBe("0.0000");
+	});
+
+	it("使用成本 Decimal 累加无浮点尾差（Number 累加在 0.1×10 场景产生 0.9999…）", () => {
+		// 0.1 + 0.1 × 9 的 Number 累加 = 0.9999999999999999；Decimal 逐位精确
+		const allocations = Array.from({ length: 10 }, (_, index) => ({
+			id: `a${index}`,
+			usageId: "u-drift",
+			lotId: `l${index}`,
+			quantity: "0.1",
+			cost: "0.1",
+		}));
+		// Number 参照（证明该夹具确实暴露浮点尾差，防同义反复）
+		const numberSum = allocations.reduce(
+			(sum, row) => sum + Number(row.cost),
+			0,
+		);
+		expect(numberSum).not.toBe(1);
+		// Decimal 内核逐位一致
+		expect(usageCostOf("u-drift", allocations)).toBe("1.0000");
+	});
+});
+
+describe("export-builder CSV 本位币精度（MVP-F0-4）", () => {
+	it("JPY 买入交易 + CNY 本位币：数量 0 位、本金/手续费 2 位（不沿用外币精度）", () => {
+		const data = bundleData({
+			settings: {
+				baseCurrency: "CNY",
+				locale: "zh-CN",
+				region: "CN",
+				prepPreference: "balanced",
+				reminderEnabled: true,
+				ledgerStartedAt: T0,
+				createdAt: T0,
+				updatedAt: T0,
+			},
+			transactions: [
+				{
+					id: "tx-jpy",
+					currencyCode: "JPY",
+					quantity: "100000",
+					principalAmount: "6500.5",
+					feeAmount: "65.005",
+					exchangeRate: "0.06500500",
+					rateSource: "abc",
+					rateObservedAt: T0,
+					planId: null,
+					transactedAt: T0,
+					version: 1,
+					createdAt: T0,
+				},
+			],
+		});
+		const entries = buildExportEntries(data);
+		const txEntry = entries.find(
+			(entry) => entry.path === "04-transactions.csv",
+		)!;
+		// 数量列 = JPY 0 位（100000）；本金 = CNY 2 位（6500.50）；
+		// 手续费 = CNY 2 位（65.005 half-up → 65.01），非 JPY 0 位截断（6501）
+		expect(txEntry.content).toContain("100000");
+		expect(txEntry.content).toContain(",6500.50,");
+		expect(txEntry.content).toContain(",65.01,");
+		expect(txEntry.content).not.toContain("6501"); // 排除 0 位 half-up 形态
 	});
 });
 
