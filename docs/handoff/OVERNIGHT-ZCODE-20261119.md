@@ -19,8 +19,8 @@
 | W3 | C1·日级取价（getLatest fresh/validUntil + findQuoteAt 日级回看） | `feat/f0-w3-daily-quote-window` | W2 | ✅ 完成（`2bf93cc`，PR #4） |
 | W4 | C2·TWD 图表（Frankfurter v2 隔离） | `feat/f0-w4-twd-chart-v2` | W3 | ✅ 完成（`4290fd2`，PR #5） |
 | W5 | B2·迁移脚本（幂等转换/回滚，演练受限标注） | `feat/f0-w5-cache-migration-scripts` | W4 | ✅ 完成（`9565475`，PR #6） |
-| W6 | D·USAGE 闭环（共享 FIFO 内核 + 移除挡板 + T-CORR-004） | `feat/f0-w6-usage-correction-fifo` | W5 | 进行中 |
-| W7 | E·导出（Dockerfile 权限 + CSV 精度 + Decimal 累加） | `feat/f0-w7-export-precision` | W6 | 待做 |
+| W6 | D·USAGE 闭环（共享 FIFO 内核 + 移除挡板 + T-CORR-004） | `feat/f0-w6-usage-correction-fifo` | W5 | ✅ 完成（`1735c08`，PR #7） |
+| W7 | E·导出（Dockerfile 权限 + CSV 精度 + Decimal 累加） | `feat/f0-w7-export-precision` | W6 | ✅ 完成（`da907b7`，PR #8） |
 | W8 | F1-1 findLatestRows 数据库端常数行 | `feat/f1-w8-latest-rows-query` | W7 | 待做 |
 | W9 | F1-2 DataRequestLockGuard 查询合并 | `feat/f1-w9-lock-guard-merge` | W8 | 待做 |
 | W10 | F1-3 前端降噪 + QueryKey 工厂 | `feat/f1-w10-query-dedup-keys` | W9 | 待做 |
@@ -156,10 +156,49 @@ alreadyDone 全字段核对、No-op 复跑 0 更新、事务契约文档、断�
 断言、重复主键拒绝、运行时结构校验 → PASS（0 [Important]）。本切片为
 对抗审强度最高的分支，多轮发现均为真实设计缺口（非吹毛求疵）。
 
+## W6 · USAGE 闭环 ✅（commit `1735c08`，draft PR #7）
+
+改动：DEBT-02 共享 FIFO 内核 consumeLotsInFifoOrder（增量/重放共用，
+fast-check 属性锁定）+ DEBT-01 USAGE 闭环完整接线（evaluateUsage 的
+V0/V4/computeAllocationDelta、persistUsageCorrection 含 PlanChangeLog、
+delta-aware V2 重算 collectUsageAllocationConflict）+ plans 行锁消除生命周期
+竞态 + getTarget USAGE 分支 + E2E T-CORR-004 恢复（usage-correction-entry）+
+README/审查报告 USAGE 🟡→✅。环境事件：发现本机 PG 被其他 agent 会话的
+vitest 共享（外来查询曾污染 pg 观察），已如实记录；PG 重启清场后复跑。
+
+验证实测：typecheck 0 error、unit 485（含 usage property spec）、api 289
+（correction 27 用例含 #11~#16 真实闭环 + #15-2 双计划挤占 409 回归）、
+integration 54、infra、web(Node24) 232 全绿；#6 并发锁序回归连续 3 次
+7/7 稳定。L3 未运行（人类未启 dev 服务）。
+
+对抗审：codex `gpt-5.6-terra` 十三轮。关键闭环：delta-aware V2（改大挤占
+不再错杀）、计划行锁竞态、并发测试观察方式三轮迭代（pg_stat_activity 逐
+PID 轮询因环境敏感移除，改为持锁窗口 + settle 标志 + 静态锁序审查——按
+熔断条款显式移除并记录，非 skip）、getTarget USAGE 分支 500、
+beforeSnapshot.amountBefore 错值、契约注释过期语义。最终 **PASS（0
+[Important]）**；遗留 [Nit] 双计划 supplement 409 回归已补（#15-2）。
+
+## W7 · 导出修复 ✅（commit `da907b7`，draft PR #8）
+
+改动：Dockerfile.chat USER bun 前预建 /data/exports 与
+/app/services/chat/data-exports 并 chown bun:bun（compose.prod 挂载
+fxplanner-exports:/data/exports，命名卷首挂继承镜像属主）；export-builder
+买入 CSV 的 principalAmount/feeAmount 改本位币精度（JPY 买入不再截断 CNY
+金额，数量列保持外币精度）；usageCostOf 改 Decimal 累加消除浮点尾差
+（4 位定点返回，decimal.js 移入 dependencies）；测试含浮点尾差夹具
+（Number 参照断言防同义反复）与 JPY/CNY CSV 精度测试。
+验证实测：unit 487（export-builder 16/16）、typecheck/lint 全绿；
+Docker 实测通过——以 runner 阶段完全一致语句构建探针镜像，bun 用户写
+/data/exports（命名卷首挂+复挂）与 data-exports 全通过（属主 bun:bun，
+探针镜像与卷已清理；完整镜像构建留待 CI/人工）。
+对抗审：codex `gpt-5.6-terra` 一轮 PASS（0 [Important]；2 Nit——decimal.js
+依赖归位、夹具贴合接口——已处置）。
+
 ## 下一分支预告
 
-W6（D·USAGE 闭环）将基于本分支切 `feat/f0-w6-usage-correction-fifo`：
-共享 FIFO 消耗纯函数内核（ledger-replay 与 usage-calculator 双实现差分收敛）、
-移除 correction.service 的 USAGE 挡板（load/evaluate/apply、baseVersion
-乐观锁、同事务重放零副作用、同日 FIFO 排序保护——OVERNIGHT-ZCODE-20261103
-B1 教训）、取消 e2e T-CORR-004 skip（L3 需人类启服，交接注明复跑命令）。
+MVP-F0 四切片（B/C/D/E）全部完成。F1/F2（W8–W12，对应 Goal #2 的
+切片 1–5）按 `docs/handoff/GOAL-2-MVP-F1-F2-REFACTOR-20261119.md` 继续：
+F1-1 findLatestRows 常数行查询 → F1-2 DataRequestLockGuard 查询合并 →
+F1-3 前端降噪 + QueryKey 工厂 → F2-1 影子 DTO 清零 → F2-2 ESLint
+observe + 依赖清理。注意：F1/F2 的 Goal #2 前置门要求 F0 合入 dev 后启动；
+本夜间批次全部为叠栈 draft PR（#2→#3→#4→#5→#6→#7→#8），待人工按序审合。
