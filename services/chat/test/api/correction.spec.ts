@@ -19,6 +19,8 @@ import {
 } from "../helpers/test-app";
 import { ensureOnboarded } from "../helpers/onboarding-helper";
 import { RateProvider } from "../../src/rate/rate.provider";
+import { utc8DayStart } from "../../src/transaction/transaction-calculator";
+import type { UsageDto } from "../../src/usage/dto/usage.dto";
 import {
 	seedInitialHolding,
 	seedPlanWithAllocationRow,
@@ -731,9 +733,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		label: string,
 		overrides: {
 			planStatus?: string;
-			u1Amount?: string;
-			u2Amount?: string;
-			planAllocated?: string;
+			crossLotUsage?: boolean;
 		} = {},
 	): Promise<{ user: TestUser; planId: string; u1Id: string; u2Id: string }> {
 		const user = await newUser(label);
@@ -783,27 +783,32 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			userId: user.userId,
 			targetCurrency: "TWD",
 			targetAmount: "10000",
-			allocatedAmount: overrides.planAllocated ?? "3000",
+			allocatedAmount: overrides.crossLotUsage ? "4000" : "3000",
 			status: overrides.planStatus,
 		});
+		const u1Amount = overrides.crossLotUsage ? "800" : "1200";
 		const u1Id = await seedUsageRecord(ctx.prisma, {
 			userId: user.userId,
 			planId,
 			currencyCode: "TWD",
-			amount: overrides.u1Amount ?? "1200",
+			amount: u1Amount,
 			usedAt: at(12),
-			allocations: [{ lotId: initialLot.id, quantity: overrides.u1Amount ?? "1200" }],
+			allocations: [{ lotId: initialLot.id, quantity: u1Amount }],
 		});
 		const u2Id = await seedUsageRecord(ctx.prisma, {
 			userId: user.userId,
 			planId,
 			currencyCode: "TWD",
-			amount: overrides.u2Amount ?? "800",
+			amount: overrides.crossLotUsage ? "2500" : "800",
 			usedAt: at(18),
-			allocations: [{ lotId: initialLot.id, quantity: overrides.u2Amount ?? "800" }],
+			allocations: overrides.crossLotUsage
+				? [
+					{ lotId: initialLot.id, quantity: "1200" },
+					{ lotId: lotA.id, quantity: "1000" },
+					{ lotId: lotB.id, quantity: "300" },
+				]
+				: [{ lotId: initialLot.id, quantity: "800" }],
 		});
-		void lotA;
-		void lotB;
 		return { user, planId, u1Id, u2Id };
 	}
 
@@ -1121,7 +1126,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 	it("#13 USAGE 改日期：重放次序对调 → 成本与分摊跨批次重排（u1 400 → 6,200、u2 10,300 → 4,500）", async () => {
 		const { user, u1Id, u2Id } = await seedUsageScenario(
 			"corr-usage-reschedule",
-			{ u1Amount: "800", u2Amount: "2500", planAllocated: "4000" },
+			{ crossLotUsage: true },
 		);
 		const dayStart = utc8DayStart(new Date());
 		const before = await ctx.prisma.usageRecord.findUniqueOrThrow({
@@ -1130,7 +1135,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		// 改日期到 20:00 UTC+8（晚于 u2 18:00 → 重放次序对调）。
 		// 种子三批成本异构（INITIAL 2,000@0.5 / A 1,000@7 / B 1,000@9）：
 		// 改序前：u1@12:00 耗 INITIAL 800（400）；u2@18:00 耗 INITIAL 1,200（600）
-		// + A 1,000（7,000）+ B 300（2,700）= 11,300。
+		// + A 1,000（7,000）+ B 300（2,700）= 10,300。
 		// 改序后：u2@18:00 先耗 INITIAL 2,000（1,000）+ A 500（3,500）= 4,500；
 		// u1@20:00 耗 A 剩余 500（3,500）+ B 300（2,700）= 6,200 —— 真实跨批次重排。
 		const newUsedAt = new Date(dayStart.getTime() + 20 * 3_600_000);
@@ -1216,6 +1221,150 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			{ sourceType: "INITIAL", quantity: "2000.0000" },
 			{ sourceType: "PURCHASE", quantity: "500.0000" },
 		]);
+	});
+
+	it("W6-05 跨日倒序补录：预览与 APPLIED 快照逐笔对照已入账及更正后的使用成本", async () => {
+		const user = await newUser("corr-usage-backdated-cost");
+		const server = app.getHttpServer();
+		const auth = bearer(user.accessToken);
+		for (const [days, rate] of [[8, 7], [7, 8]] as const) {
+			await request(server)
+				.post("/api/transactions")
+				.set(auth)
+				.send({
+					currencyCode: "USD",
+					principalAmount: String(rate * 100),
+					exchangeRate: String(rate),
+					quantity: "100",
+					transactedAt: daysAgo(days).toISOString(),
+				})
+				.expect(201);
+		}
+		const { planId } = await seedPlanWithAllocationRow(ctx.prisma, {
+			userId: user.userId,
+			targetCurrency: "USD",
+			targetAmount: "200",
+			allocatedAmount: "200",
+		});
+		const usagePath = `/api/plans/${planId}/usages`;
+		const late = await request(server)
+			.post(usagePath)
+			.set(auth)
+			.send({ amount: "80", usedAt: daysAgo(2).toISOString() })
+			.expect(201);
+		const early = await request(server)
+			.post(usagePath)
+			.set(auth)
+			.send({ amount: "70", usedAt: daysAgo(4).toISOString() })
+			.expect(201);
+		const { id: lateId, version: lateVersion } = late.body.data.usage as UsageDto;
+		const { id: earlyId } = early.body.data.usage as UsageDto;
+		const readCosts = async () => {
+			const list = await request(server).get(usagePath).set(auth).expect(200);
+			return new Map(
+				(list.body.data.items as UsageDto[]).map(({ id, cost }) => [id, cost]),
+			);
+		};
+		const postedBefore = await readCosts();
+		// 入账以录入顺序耗用。晚笔 80×7，早笔 20×7 + 50×8。
+		expect(postedBefore).toEqual(
+			new Map([
+				[lateId, "560.0000"],
+				[earlyId, "540.0000"],
+			]),
+		);
+
+		const payload = {
+			targetType: "USAGE",
+			targetId: lateId,
+			baseVersion: lateVersion,
+			reason: "核对后较晚的实际用量为 60",
+			changes: { amount: "60" },
+		};
+		const preview = await request(server)
+			.post("/api/corrections/preview")
+			.set(auth)
+			.send(payload)
+			.expect(200);
+		expect(preview.body.data.blockers).toEqual([]);
+		// 更正后日期重放。早笔 70×7，晚笔 30×7 + 30×8。
+		const expectedCosts = [
+			{
+				usageId: earlyId,
+				costBefore: postedBefore.get(earlyId),
+				costAfter: "490.0000",
+			},
+			{
+				usageId: lateId,
+				costBefore: postedBefore.get(lateId),
+				costAfter: "450.0000",
+			},
+		];
+		expect(preview.body.data.impacts.costs).toEqual(expectedCosts);
+		expect(await readCosts()).toEqual(postedBefore);
+
+		const applied = await request(server)
+			.post("/api/corrections")
+			.set(auth)
+			.send(payload)
+			.expect(201);
+		expect(applied.body.data).toMatchObject({ status: "APPLIED", targetVersion: 2 });
+		const postedAfter = await readCosts();
+		expect(postedAfter).toEqual(
+			new Map(expectedCosts.map(({ usageId, costAfter }) => [usageId, costAfter])),
+		);
+
+		const log = await request(server)
+			.get("/api/corrections")
+			.query({ targetType: "USAGE", targetId: lateId })
+			.set(auth)
+			.expect(200);
+		expect(log.body.data.items).toMatchObject([
+			{
+				id: applied.body.data.correctionId,
+				status: "APPLIED",
+				beforeSnapshot: { impacts: { costs: expectedCosts } },
+				afterSnapshot: { impacts: { costs: expectedCosts } },
+			},
+		]);
+	});
+
+	it("W6-05 历史使用无分摊：预览与 APPLIED 快照的原成本为 null", async () => {
+		const user = await newUser("corr-usage-missing-cost");
+		const { usageId } = await seedPurchaseWithUsage({
+			user,
+			trades: [{ at: daysAgo(7), principal: "700", quantity: "100" }],
+			usageAmount: "40",
+			usageAt: daysAgo(4),
+		});
+		// 模拟存量记录缺失分摊明细，其余账本事实仍存在。
+		await ctx.prisma.usageLotAllocation.deleteMany({ where: { usageId } });
+		const payload = {
+			targetType: "USAGE",
+			targetId: usageId,
+			baseVersion: 1,
+			reason: "核对后实际用量为 30",
+			changes: { amount: "30" },
+		};
+		const expectedCosts = [{ usageId, costBefore: null, costAfter: "210.0000" }];
+		const preview = await request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send(payload)
+			.expect(200);
+		expect(preview.body.data.impacts.costs).toEqual(expectedCosts);
+		const applied = await request(app.getHttpServer())
+			.post("/api/corrections")
+			.set(bearer(user.accessToken))
+			.send(payload)
+			.expect(201);
+		const correction = await ctx.prisma.correction.findUniqueOrThrow({
+			where: { id: applied.body.data.correctionId },
+		});
+		expect(correction).toMatchObject({
+			status: "APPLIED",
+			beforeSnapshot: { impacts: { costs: expectedCosts } },
+		});
 	});
 
 	it("#14 V4 矩阵：改 0 与 CANCELLED 计划 → 400 CORRECTION_NOT_ALLOWED", async () => {

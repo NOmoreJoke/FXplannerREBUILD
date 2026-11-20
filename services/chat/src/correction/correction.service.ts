@@ -165,6 +165,7 @@ type CorrectionDb = Pick<
 	| "initialHolding"
 	| "transaction"
 	| "usageRecord"
+	| "usageLotAllocation"
 	| "plan"
 	| "planAllocation"
 	| "userSettings"
@@ -601,6 +602,7 @@ export class CorrectionService {
 	 * 变更解析（V0）→ V4 计划状态矩阵（改 0/超目标/COMPLETED/CANCELLED，400）→
 	 * 计划分配调整量（computeAllocationDelta，doc 14 例 02~05）→ 受影响币种
 	 * 重放（before/after 各一次，usageVariant 应用拟变更）→ V1/V2/V3 收集为 failures。
+	 * 更正前成本按已入账分摊汇总，更正后成本来自重放。
 	 * 计划分配一致性在重放层之外显式校验（V2'：补分配不超计划目标池）。
 	 */
 	private async evaluateUsage(
@@ -687,11 +689,17 @@ export class CorrectionService {
 
 		const affectedCurrencies = [originalUsage.currencyCode];
 		const context = await this.loadLedgerContexts(db, userId, affectedCurrencies);
+		// 倒序补录时，按日期重放可能重新分配批次。原成本以账本已存的分摊为准。
+		const ledger = context.get(originalUsage.currencyCode)!;
+		const postedCosts = await db.usageLotAllocation.groupBy({
+			by: ["usageId"],
+			where: { usageId: { in: ledger.usageRecords.map((usage) => usage.id) } },
+			_sum: { cost: true },
+		});
 
 		const beforeReplays = new Map<string, ReplayResult>();
 		const afterReplays = new Map<string, ReplayResult>();
 		for (const currencyCode of affectedCurrencies) {
-			const ledger = context.get(currencyCode)!;
 			beforeReplays.set(
 				currencyCode,
 				this.replayCurrency(
@@ -757,7 +765,7 @@ export class CorrectionService {
 				before: beforeReplays.get(currencyCode)!.finalBalance,
 				after: afterReplays.get(currencyCode)!.finalBalance,
 			})),
-			costsBefore: collectUsageCosts(beforeReplays),
+			costsBefore: new Map(postedCosts.map(({ usageId, _sum }) => [usageId, _sum.cost])),
 			costsAfter: collectUsageCosts(afterReplays),
 			warnings: buildFeeWarnings(afterReplays),
 			failures: this.collectReplayFailures(
