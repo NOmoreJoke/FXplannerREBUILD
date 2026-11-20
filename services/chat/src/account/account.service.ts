@@ -147,25 +147,31 @@ export class AccountService {
 		currencyCodeRaw: string,
 	): Promise<AccountPlanAllocationListDto> {
 		const currencyCode = this.normalizeCurrency(currencyCodeRaw);
-		const [account, plans] = await Promise.all([
-			this.prisma.account.findUnique({
-				where: { userId_currencyCode: { userId, currencyCode } },
-			}),
-			this.prisma.plan.findMany({
-				where: { userId, targetCurrency: currencyCode },
-				orderBy: { createdAt: "asc" },
-				select: { id: true, name: true, status: true },
-			}),
-		]);
-		if (!account) {
-			throw new AccountNotFoundException();
-		}
-		const allocations =
-			plans.length > 0
-				? await this.prisma.planAllocation.findMany({
-						where: { planId: { in: plans.map((plan) => plan.id) } },
-					})
-				: [];
+		// 取消计划会在同一事务中更新状态和分配额，读取也必须使用同一快照。
+		const { plans, allocations } = await this.prisma.$transaction(
+			async (tx) => {
+				const account = await tx.account.findUnique({
+					where: { userId_currencyCode: { userId, currencyCode } },
+					select: { id: true },
+				});
+				if (!account) {
+					throw new AccountNotFoundException();
+				}
+				const plans = await tx.plan.findMany({
+					where: { userId, targetCurrency: currencyCode },
+					orderBy: { createdAt: "asc" },
+					select: { id: true, name: true, status: true },
+				});
+				const allocations =
+					plans.length > 0
+						? await tx.planAllocation.findMany({
+								where: { planId: { in: plans.map((plan) => plan.id) } },
+							})
+						: [];
+				return { plans, allocations };
+			},
+			{ isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+		);
 		const allocationByPlanId = new Map(
 			allocations.map((allocation) => [allocation.planId, allocation]),
 		);

@@ -465,4 +465,58 @@ describe("AccountController（接口）", () => {
 		const res = await getAllocations(userOther, "CAD").expect(404);
 		expect(res.body.code).toBe("ACCOUNT_NOT_FOUND");
 	});
+
+	it("#19 读取计划后并发取消：分配明细保持同一数据库快照", async () => {
+		const currency = "EUR";
+		const user = userAllocView;
+		await ensureAccount(ctx.prisma, user.userId, currency, "10000");
+		const planId = await seedPlanWithAllocation(ctx.prisma, user.userId, {
+			targetCurrency: currency,
+			name: "并发取消计划",
+			allocatedAmount: "6000.1250",
+			usedAmount: "2000.0101",
+		});
+		planAllocViewIds.push(planId);
+		const beforeCancellation = {
+			planId,
+			planName: "并发取消计划",
+			planStatus: "ACTIVE",
+			amount: "6000.1250",
+			usedAmount: "2000.0101",
+			remainingAllocation: "4000.1149",
+		};
+
+		// 真实 Plan 查询返回后，等取消接口完成提交，再让分配请求继续读取。
+		let cancelPending = true;
+		ctx.prisma.$use(async (params, next) => {
+			const result = await next(params);
+			if (
+				cancelPending &&
+				params.model === "Plan" &&
+				params.action === "findMany" &&
+				params.args.where?.userId === user.userId &&
+				params.args.where?.targetCurrency === currency
+			) {
+				cancelPending = false;
+				await cancelPlan(user, planId).expect(200);
+			}
+			return result;
+		});
+
+		const overlappingRead = await getAllocations(user, currency).expect(200);
+		expect(cancelPending).toBe(false);
+		expect(overlappingRead.body.data).toEqual({ items: [beforeCancellation] });
+
+		const laterRead = await getAllocations(user, currency).expect(200);
+		expect(laterRead.body.data).toEqual({
+			items: [
+				{
+					...beforeCancellation,
+					planStatus: "CANCELLED",
+					amount: "2000.0101",
+					remainingAllocation: "0.0000",
+				},
+			],
+		});
+	});
 });
