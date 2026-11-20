@@ -57,11 +57,13 @@ export class UsageLotShortageError extends UsageCalcError {
 /** FIFO 排序入参的批次内存形态（CostLot 行的字段拷贝，不含模型实例） */
 export interface FifoLotInput {
 	id: string;
+	sourceId: string;
 	/** INITIAL / PURCHASE */
 	sourceType: string;
 	remainingQty: Prisma.Decimal;
 	unitCost: Prisma.Decimal;
 	acquiredAt: Date;
+	/** 来源记录的首录时间，批次重建不影响排序 */
 	createdAt: Date;
 }
 
@@ -81,7 +83,7 @@ export interface FifoAllocationResult {
 
 /**
  * 账本序类型权重（docs/02:78）：INITIAL（初始持仓）= 0 先耗，PURCHASE = 1 后耗；
- * USAGE = 2 供重放引擎（ledger-replay）排使用事件（同刻时排在批次之后）。
+ * 同一业务日内，USAGE = 2 排在批次之后。
  * 未知 type 视为 PURCHASE（防御兜底，不阻断）。
  */
 const LEDGER_TYPE_ORDER: Record<string, number> = {
@@ -104,17 +106,17 @@ export interface LedgerOrderKey {
 
 /**
  * FIFO 排序权威比较器（§3.3 唯一实现，增量记账与更正重放共享，禁止另行复制）：
- * happenedAt/acquiredAt 精确时刻升序 → type（INITIAL 优先）→ createdAt 升序 → id 升序。
- * docs/02:78「同日先 INITIAL 后 PURCHASE」由同刻时的 type 层保证；
- * 同日不同时刻按真实时刻排（与增量记账取批次顺序严格一致，镜像测试锁定）。
+ * UTC+8 业务日升序 → INITIAL / PURCHASE / USAGE → 首录时间 → 来源记录 id。
  */
 export function compareLedgerEntries(
 	a: LedgerOrderKey,
 	b: LedgerOrderKey,
 ): number {
-	const byTime = a.happenedAt.getTime() - b.happenedAt.getTime();
-	if (byTime !== 0) {
-		return byTime;
+	const byDay =
+		utc8DayStart(a.happenedAt).getTime() -
+		utc8DayStart(b.happenedAt).getTime();
+	if (byDay !== 0) {
+		return byDay;
 	}
 	const orderA = LEDGER_TYPE_ORDER[a.type] ?? 1;
 	const orderB = LEDGER_TYPE_ORDER[b.type] ?? 1;
@@ -130,7 +132,7 @@ export function compareLedgerEntries(
 
 /**
  * FIFO 批次比较器（增量分摊入口；语义 = 权威比较器 compareLedgerEntries，
- * 字段名映射：acquiredAt → happenedAt、sourceType → type）。
+ * 字段名映射：acquiredAt → happenedAt、sourceType → type、sourceId → id）。
  */
 export function compareLots(a: FifoLotInput, b: FifoLotInput): number {
 	return compareLedgerEntries(
@@ -138,13 +140,13 @@ export function compareLots(a: FifoLotInput, b: FifoLotInput): number {
 			happenedAt: a.acquiredAt,
 			type: a.sourceType,
 			createdAt: a.createdAt,
-			id: a.id,
+			id: a.sourceId,
 		},
 		{
 			happenedAt: b.acquiredAt,
 			type: b.sourceType,
 			createdAt: b.createdAt,
-			id: b.id,
+			id: b.sourceId,
 		},
 	);
 }

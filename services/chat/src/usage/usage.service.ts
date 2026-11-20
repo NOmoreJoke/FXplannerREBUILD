@@ -21,6 +21,7 @@ import {
 	computeFundStatus,
 	UsageCalcError,
 	UsageLotShortageError,
+	type FifoLotInput,
 } from "./usage-calculator";
 import type {
 	CreateUsageRespDto,
@@ -237,14 +238,20 @@ export class UsageService {
 				},
 			});
 
-			// ④ FIFO 分摊：剩余批次全取（百条级，内存排序即可）→ 纯函数分摊
-			const lots = await tx.costLot.findMany({
-				where: {
-					userId,
-					currencyCode: context.currencyCode,
-					remainingQty: { gt: 0 },
-				},
-			});
+			// ④ 批次重建会刷新批次时间与 ID，FIFO 沿用来源记录的首录键。
+			const lots = await tx.$queryRaw<FifoLotInput[]>`
+				SELECT lot.id, lot.source_id AS "sourceId", lot.source_type AS "sourceType",
+					lot.remaining_qty AS "remainingQty", lot.unit_cost AS "unitCost",
+					lot.acquired_at AS "acquiredAt",
+					COALESCE(trade.created_at, holding.created_at, lot.created_at) AS "createdAt"
+				FROM cost_lots AS lot
+				LEFT JOIN transactions AS trade ON lot.source_type = 'PURCHASE'
+					AND trade.id = lot.source_id AND trade.user_id = lot.user_id
+				LEFT JOIN initial_holdings AS holding ON lot.source_type = 'INITIAL'
+					AND holding.id = lot.source_id AND holding.user_id = lot.user_id
+				WHERE lot.user_id = ${userId} AND lot.currency_code = ${context.currencyCode}
+					AND lot.remaining_qty > 0
+			`;
 			let totalCost: Prisma.Decimal;
 			let slices: {
 				lotId: string;
@@ -435,7 +442,7 @@ export class UsageService {
 		return amount;
 	}
 
-	/** 使用日期解析：有效 ISO 8601，保存精确时刻（与买入 transactedAt 原样存储口径一致） */
+	/** 保留提交的 ISO 8601 时刻，日界校验和 FIFO 排序按 UTC+8 业务日处理。 */
 	private parseUsedAt(value: string): Date {
 		const date = new Date(value);
 		if (Number.isNaN(date.getTime())) {
@@ -443,10 +450,6 @@ export class UsageService {
 				`使用日期必须是有效的 ISO 8601 日期，收到：${value}`,
 			);
 		}
-		// 禁止截断到日 0 点：FIFO 权威比较器（compareLedgerEntries）按精确时刻排序，
-		// 截断会把同日使用排到买入之前，更正账本重放误报资金不足并阻断合法更正
-		// （对抗审 B1）。上下界校验（assertUsedAtInRange）按 UTC+8 日历日窗口比较，
-		// 任意当日时刻原样通过；「不早于账本起点」为日粒度（当日任意时刻可补录）。
 		return date;
 	}
 

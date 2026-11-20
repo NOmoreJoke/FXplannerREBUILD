@@ -3,8 +3,7 @@
  *
  * 对单个币种按固定规则重排并重算全部成本与余额，纯内存计算、无 IO：
  * - 排序（BE-01 口径统一，fx-checkup 波次 2）：与 usage-calculator.compareLedgerEntries
- *   同一权威比较器（共享导出，禁止复制第二份）：happenedAt 精确时刻升序 →
- *   typeRank（INITIAL < PURCHASE < USAGE，同刻时批次先于使用）→ createdAt 升序 → id 兜底；
+ *   同一比较器：UTC+8 业务日升序 → INITIAL / PURCHASE / USAGE → 首录时间 → 来源记录 id；
  * - INITIAL/PURCHASE → 生成 CostLot：PURCHASE 的 unitCost = (principal + (fee ?? 0)) / quantity，
  *   fee=null 时按已录金额计算（doc 14 例 12：费用未完整 ≠ 按 0 完整）；INITIAL 沿用
  *   InitialHolding 的采用汇率/折算成本（与 onboarding 写入口径一致）；

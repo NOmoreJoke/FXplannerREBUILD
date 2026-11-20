@@ -418,7 +418,7 @@ describe("更正重放一致性（集成）", () => {
 		expect(balance.balance.toFixed(4)).toBe("2800.0000");
 	});
 
-	it("#6 B1 回归：同日买入与使用（UI 按 T00:00Z 提交）→ 使用原样存储不截断，重放无资金不足违规", async () => {
+	it("#6 B1 回归：同日买入时刻晚于使用，重放仍可用当天买入", async () => {
 		const user = await newUser("corr-it-sameday");
 
 		// 前端两处表单均按「所选日期 + T00:00:00.000Z」提交；今天（UTC+8 口径）
@@ -435,7 +435,7 @@ describe("更正重放一致性（集成）", () => {
 				principalAmount: "1000",
 				exchangeRate: "1",
 				quantity: "1000",
-				transactedAt: todayMidnightUtc,
+				transactedAt: todayMidnightUtc.replace("T00:", "T11:"),
 			})
 			.expect(201);
 
@@ -454,8 +454,7 @@ describe("更正重放一致性（集成）", () => {
 			})
 			.expect(201);
 
-		// 同日使用 500（UI 口径）：曾截断到 UTC+8 日 0 点（前一日 16:00Z），
-		// 使重放把使用排到买入之前 → 违规 → 更正被 blockers 阻断
+		// UI 按日期提交 UTC 0 点。当天 11:00Z 的买入应参与分摊。
 		await request(app.getHttpServer())
 			.post(`/api/plans/${plan.body.data.id}/usages`)
 			.set(bearer(user.accessToken))
@@ -468,8 +467,7 @@ describe("更正重放一致性（集成）", () => {
 		});
 		expect(usage.usedAt.toISOString()).toBe(todayMidnightUtc);
 
-		// fee 补录预览（不改日期，纯触发账本重放）：同刻 T00:00Z 下类型序
-		// 保证 PURCHASE(1) 先于 USAGE(2)，无资金不足违规
+		// fee 补录预览触发重放，同一业务日内买入先于使用。
 		const preview = await request(app.getHttpServer())
 			.post("/api/corrections/preview")
 			.set(bearer(user.accessToken))
@@ -483,6 +481,108 @@ describe("更正重放一致性（集成）", () => {
 			.expect(200);
 		expect(preview.body.data.blockers).toHaveLength(0);
 
+		await assertInvariants(ctx.prisma, user.userId);
+	});
+
+	it("#7 CLOSEOUT-01：同日按 10:00Z、09:00Z 逆序补录，两计划的成本与来源在更正后保持首录分摊", async () => {
+		const user = await newUser("corr-it-sameday-order");
+		const useDay = daysAgo(2).toISOString().slice(0, 10);
+		const laterDay = daysAgo(1).toISOString().slice(0, 10);
+		const api = request(app.getHttpServer());
+		const headers = bearer(user.accessToken);
+		const tradeIds: string[] = [];
+		for (const [day, hour, rate, principal] of [
+			[useDay, "07", "5", "500"],
+			[useDay, "08", "7", "700"],
+			[laterDay, "08", "5", "500"],
+		]) {
+			const trade = await api
+				.post("/api/transactions")
+				.set(headers)
+				.send({
+					currencyCode: "USD",
+					principalAmount: principal,
+					exchangeRate: rate,
+					quantity: "100",
+					transactedAt: `${day}T${hour}:00:00.000Z`,
+				})
+				.expect(201);
+			tradeIds.push(trade.body.data.id);
+		}
+
+		const usages = [];
+		for (const [hour, cost, tradeId] of [
+			["10", "500.0000", tradeIds[0]],
+			["09", "700.0000", tradeIds[1]],
+		]) {
+			const { planId } = await seedPlanWithAllocationRow(ctx.prisma, {
+				userId: user.userId,
+				targetCurrency: "USD",
+				targetAmount: "100",
+				allocatedAmount: "100",
+			});
+			const usedAt = `${useDay}T${hour}:00:00.000Z`;
+			const result = await api
+				.post(`/api/plans/${planId}/usages`)
+				.set(headers)
+				.send({ amount: "100", usedAt })
+				.expect(201);
+			expect(result.body.data.usage).toMatchObject({ usedAt, cost });
+			usages.push({
+				planId,
+				usageId: result.body.data.usage.id as string,
+				tradeId,
+				cost,
+			});
+		}
+
+		async function assertOriginalAllocations() {
+			const lots = await ctx.prisma.costLot.findMany({
+				where: { userId: user.userId },
+			});
+			const sources = new Map(lots.map((lot) => [lot.id, lot.sourceId]));
+			for (const { planId, usageId, tradeId, cost } of usages) {
+				const result = await api
+					.get(`/api/plans/${planId}/usages`)
+					.set(headers)
+					.expect(200);
+				expect(result.body.data.items).toEqual([
+					expect.objectContaining({ id: usageId, cost }),
+				]);
+				const allocations = await ctx.prisma.usageLotAllocation.findMany({
+					where: { usageId },
+				});
+				expect(
+					allocations.map((allocation) => ({
+						sourceId: sources.get(allocation.lotId),
+						quantity: allocation.quantity.toFixed(4),
+						cost: allocation.cost.toFixed(4),
+					})),
+				).toEqual([{ sourceId: tradeId, quantity: "100.0000", cost }]);
+			}
+		}
+
+		await assertOriginalAllocations();
+		const correction = {
+			targetType: "TRANSACTION",
+			targetId: tradeIds[2],
+			baseVersion: 1,
+			reason: "补录未被使用的买入手续费",
+			changes: { feeAmount: "10" },
+		};
+		const preview = await api
+			.post("/api/corrections/preview")
+			.set(headers)
+			.send(correction)
+			.expect(200);
+		expect(preview.body.data.blockers).toEqual([]);
+		const applied = await api
+			.post("/api/corrections")
+			.set(headers)
+			.send(correction)
+			.expect(201);
+		expect(applied.body.data).toMatchObject({ status: "APPLIED", targetVersion: 2 });
+		await assertOriginalAllocations();
 		await assertInvariants(ctx.prisma, user.userId);
 	});
 });

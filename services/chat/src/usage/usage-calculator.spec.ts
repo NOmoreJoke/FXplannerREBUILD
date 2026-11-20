@@ -25,6 +25,7 @@ const TS = (iso: string) => new Date(iso);
 /** 批次构造器（缺省 PURCHASE、remainingQty 100、unitCost 1，按需覆盖） */
 function lot(overrides: Partial<FifoLotInput> & { id: string }): FifoLotInput {
 	return {
+		sourceId: overrides.id,
 		sourceType: "PURCHASE",
 		remainingQty: D("100"),
 		unitCost: D("1"),
@@ -55,7 +56,7 @@ describe("compareLots（FIFO 排序键）", () => {
 		const initial = lot({
 			id: "a",
 			sourceType: "INITIAL",
-			acquiredAt: TS("2026-09-01T00:00:00.000Z"),
+			acquiredAt: TS("2026-09-01T10:00:00.000Z"),
 		});
 		const purchase = lot({
 			id: "b",
@@ -78,8 +79,8 @@ describe("compareLots（FIFO 排序键）", () => {
 	});
 
 	it("全键相同按 id 升序兜底（稳定排序）", () => {
-		const a = lot({ id: "a" });
-		const b = lot({ id: "b" });
+		const a = lot({ id: "z-lot", sourceId: "a-source" });
+		const b = lot({ id: "a-lot", sourceId: "b-source" });
 		expect(compareLots(a, b)).toBeLessThan(0);
 		expect(compareLots(b, a)).toBeGreaterThan(0);
 		expect(compareLots(a, { ...a })).toBe(0);
@@ -89,8 +90,7 @@ describe("compareLots（FIFO 排序键）", () => {
 /**
  * 权威共享比较器（BE-01 口径统一）：增量 compareLots 与重放
  * ledger-replay.compareEvents 均委托本函数（禁止第二份实现）。
- * 上述 compareLots 用例经委托路径已覆盖四层键；此处补齐
- * USAGE 层与「精确时刻（非日界）」语义——重放侧独有行为。
+ * 此处用不同时刻检验同日 USAGE 排序与 UTC+8 跨日边界。
  */
 describe("compareLedgerEntries（增量/重放共享权威比较器）", () => {
 	const entry = (over: {
@@ -105,31 +105,35 @@ describe("compareLedgerEntries（增量/重放共享权威比较器）", () => {
 		createdAt: over.createdAt ?? TS("2026-09-01T00:00:00.000Z"),
 	});
 
-	it("同日不同时刻按精确时刻排（非日界粗粒度）：10:00 先于 14:00", () => {
-		const morning = entry({
+	it("同一 UTC+8 业务日的使用按首录顺序，即使发生时刻逆序", () => {
+		const first = entry({
 			id: "a",
-			happenedAt: TS("2026-09-01T02:00:00.000Z"),
+			type: "USAGE",
+			happenedAt: TS("2026-09-01T10:00:00.000Z"),
+			createdAt: TS("2026-09-02T01:00:00.000Z"),
 		});
-		const afternoon = entry({
+		const second = entry({
 			id: "b",
-			happenedAt: TS("2026-09-01T06:00:00.000Z"),
+			type: "USAGE",
+			happenedAt: TS("2026-09-01T09:00:00.000Z"),
+			createdAt: TS("2026-09-02T02:00:00.000Z"),
 		});
-		expect(compareLedgerEntries(morning, afternoon)).toBeLessThan(0);
+		expect(compareLedgerEntries(first, second)).toBeLessThan(0);
+		expect(compareLedgerEntries(second, first)).toBeGreaterThan(0);
 	});
 
-	it("同刻时 INITIAL（批次）先于 USAGE（使用事件）——type 层含重放三型", () => {
-		const initial = entry({
-			id: "a",
-			happenedAt: TS("2026-09-01T02:00:00.000Z"),
-			type: "INITIAL",
-		});
+	it("同一 UTC 日内跨过 16:00Z 后，下一业务日的买入排在上一日使用之后", () => {
 		const usage = entry({
-			id: "b",
-			happenedAt: TS("2026-09-01T02:00:00.000Z"),
+			id: "a",
+			happenedAt: TS("2026-09-01T15:59:59.999Z"),
 			type: "USAGE",
 		});
-		expect(compareLedgerEntries(initial, usage)).toBeLessThan(0);
-		expect(compareLedgerEntries(usage, initial)).toBeGreaterThan(0);
+		const purchase = entry({
+			id: "b",
+			happenedAt: TS("2026-09-01T16:00:00.000Z"),
+		});
+		expect(compareLedgerEntries(usage, purchase)).toBeLessThan(0);
+		expect(compareLedgerEntries(purchase, usage)).toBeGreaterThan(0);
 	});
 
 	it("同刻同型按 createdAt → id 兜底（与 compareLots 全序一致）", () => {
