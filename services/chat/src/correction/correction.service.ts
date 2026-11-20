@@ -585,7 +585,7 @@ export class CorrectionService {
 			changes.currencyCode !== undefined &&
 			changes.currencyCode !== original.currencyCode;
 
-		// 币种更正（Should Have）：需要原确认时点之前 ≤ 5 分钟同源报价（doc 02:113），拿不到即拒
+		// 币种更正须取得原确认时点的合格报价，取价窗口由 RateService 按来源粒度处理。
 		let nextRate = original.rate;
 		let nextRawRate = original.rawRate;
 		let nextRateSource = original.rateSource;

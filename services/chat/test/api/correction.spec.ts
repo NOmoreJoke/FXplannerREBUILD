@@ -948,6 +948,180 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		}
 	});
 
+	it("#19 ABC：恰满 5 分钟返回 400 和实时窗口文案，晚 1 毫秒可提交", async () => {
+		const user = await newUser("corr-holding-currency");
+		const confirmedAt = new Date("2024-02-15T12:00:00+08:00");
+		const { holdingId } = await seedInitialHolding(ctx.prisma, {
+			userId: user.userId,
+			currencyCode: "USD",
+			amount: "1000",
+			rate: "7.2480000000",
+			cost: "7248.0000",
+			confirmedAt,
+		});
+		const before = await ctx.prisma.initialHolding.findUniqueOrThrow({
+			where: { id: holdingId },
+		});
+
+		const windowStart = new Date("2024-02-15T11:55:00+08:00");
+		const boundaryQuote = await ctx.prisma.exchangeRate.create({
+			data: {
+				base: "CNY",
+				quote: "CAD",
+				rate: "5.2900000000",
+				source: "abc",
+				observedAt: windowStart,
+			},
+		});
+		extraRateRowIds.push(boundaryQuote.id);
+		const payload = {
+			targetType: "INITIAL_HOLDING",
+			targetId: holdingId,
+			baseUpdatedAt: before.updatedAt.toISOString(),
+			reason: "当时持有的是加元",
+			changes: { currencyCode: "CAD" },
+		};
+		await request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send(payload)
+			.expect(400)
+			.expect((errorRes) => {
+				expect(errorRes.body.code).toBe("RATE_QUOTE_UNAVAILABLE");
+			expect(errorRes.body.message).toContain(
+				"实时报价的发布时间须距原确认时点不足 5 分钟",
+			);
+			});
+
+		const eligibleAt = new Date("2024-02-15T11:55:00.001+08:00");
+		const rateRow = await ctx.prisma.exchangeRate.create({
+			data: {
+				base: "CNY",
+				quote: "CAD",
+				rate: "5.3100000000",
+				source: "abc",
+				observedAt: eligibleAt,
+			},
+		});
+		extraRateRowIds.push(rateRow.id);
+
+		await request(app.getHttpServer())
+			.post("/api/corrections")
+			.set(bearer(user.accessToken))
+			.send(payload)
+			.expect(201);
+
+		const holding = await ctx.prisma.initialHolding.findUniqueOrThrow({
+			where: { id: holdingId },
+		});
+		expect(holding.currencyCode).toBe("CAD");
+		expect(holding.rate.toFixed(10)).toBe("5.3100000000");
+		expect(holding.rateSource).toBe("abc");
+		expect(holding.rateObservedAt).toEqual(eligibleAt);
+		expect(holding.cost.toFixed(4)).toBe("5310.0000"); // 1,000 × 5.31
+		// 旧 USD 批次移除、新 CAD 批次建立、账户各归其位
+		const usdLots = await ctx.prisma.costLot.findMany({
+			where: { userId: user.userId, currencyCode: "USD" },
+		});
+		expect(usdLots).toHaveLength(0);
+		const cadLot = await ctx.prisma.costLot.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "CAD" },
+		});
+		expect(cadLot.sourceId).toBe(holdingId);
+		const cadAccount = await ctx.prisma.account.findUniqueOrThrow({
+			where: {
+				userId_currencyCode: { userId: user.userId, currencyCode: "CAD" },
+			},
+		});
+		expect(cadAccount.balance.toFixed(4)).toBe("1000.0000");
+	});
+
+	it("#19-1 TWD：日级回看超界或晚于原时点返回 400 和日级文案，UTC+8 第 7 天零点可提交", async () => {
+		const user = await newUser("corr-twd-lookback");
+		const confirmedAt = new Date("2024-02-15T14:30:00+08:00");
+		const { holdingId } = await seedInitialHolding(ctx.prisma, {
+			userId: user.userId,
+			currencyCode: "USD",
+			amount: "1000",
+			rate: "7.2480000000",
+			cost: "7248.0000",
+			confirmedAt,
+		});
+		const before = await ctx.prisma.initialHolding.findUniqueOrThrow({
+			where: { id: holdingId },
+		});
+
+		for (const observedAt of [
+			new Date("2024-02-07T23:59:59.999+08:00"),
+			new Date("2024-02-15T14:30:00.001+08:00"),
+		]) {
+			const row = await ctx.prisma.exchangeRate.create({
+				data: {
+					base: "CNY",
+					quote: "TWD",
+					rate: "0.21",
+					source: "er-api",
+					observedAt,
+				},
+			});
+			extraRateRowIds.push(row.id);
+		}
+
+		const payload = {
+			targetType: "INITIAL_HOLDING",
+			targetId: holdingId,
+			baseUpdatedAt: before.updatedAt.toISOString(),
+			reason: "当时持有的是新台币",
+			changes: { currencyCode: "TWD" },
+		};
+		for (const endpoint of ["/api/corrections/preview", "/api/corrections"]) {
+			await request(app.getHttpServer())
+				.post(endpoint)
+				.set(bearer(user.accessToken))
+				.send(payload)
+				.expect(400)
+				.expect((errorRes) => {
+					expect(errorRes.body.code).toBe("RATE_QUOTE_UNAVAILABLE");
+					expect(errorRes.body.message).toContain("最迟在原确认时点发布");
+				expect(errorRes.body.message).toContain(
+					"日级报价按 UTC+8 同日优先、最多回看 7 个自然日",
+				);
+				});
+		}
+
+		expect(
+			await ctx.prisma.initialHolding.findUniqueOrThrow({ where: { id: holdingId } }),
+		).toEqual(before);
+		expect(
+			await ctx.prisma.correction.count({ where: { targetId: holdingId } }),
+		).toBe(0);
+
+		const eligibleAt = new Date("2024-02-08T00:00:00+08:00");
+		const rateRow = await ctx.prisma.exchangeRate.create({
+			data: {
+				base: "CNY",
+				quote: "TWD",
+				rate: "0.23",
+				source: "er-api",
+				observedAt: eligibleAt,
+			},
+		});
+		extraRateRowIds.push(rateRow.id);
+
+		await request(app.getHttpServer())
+			.post("/api/corrections")
+			.set(bearer(user.accessToken))
+			.send(payload)
+			.expect(201);
+
+		const holding = await ctx.prisma.initialHolding.findUniqueOrThrow({
+			where: { id: holdingId },
+		});
+		expect(holding.currencyCode).toBe("TWD");
+		expect(holding.rateSource).toBe("er-api");
+		expect(holding.rateObservedAt).toEqual(eligibleAt);
+	});
+
 	// ── #20 他人记录 ──
 	it("#20 他人记录 preview/apply/list/target 一律 404 CORRECTION_TARGET_NOT_FOUND", async () => {
 		const owner = await newUser("corr-owner");

@@ -22,6 +22,7 @@ import {
 	TransactionRoundToZeroException,
 } from "../transaction/transaction-calculator";
 import { assertUnitCostInRange } from "../account/account-calculator";
+import { DAILY_QUOTE_LOOKBACK_DAYS, QUOTE_TTL_MS } from "../rate/rate.constants";
 
 /** 更正目标类型（targetType；USAGE 依赖 M7，本期接口层降级拦截，方案 §10） */
 export type CorrectionTargetType = "TRANSACTION" | "USAGE" | "INITIAL_HOLDING";
@@ -66,7 +67,10 @@ export class RateQuoteUnavailableException extends HttpException {
 			{
 				code: "RATE_QUOTE_UNAVAILABLE",
 				message:
-					"无法取得原确认时点之前 5 分钟内的同源报价，暂不能更正币种；金额更正不受影响",
+					"无法取得原确认时点可用的报价。报价须有明确的发布时间，且最迟在原确认时点发布。" +
+					`实时报价的发布时间须距原确认时点不足 ${QUOTE_TTL_MS / 60_000} 分钟，` +
+					`日级报价按 UTC+8 同日优先、最多回看 ${DAILY_QUOTE_LOOKBACK_DAYS} 个自然日。` +
+					"暂不能更正币种，仍可更正金额。",
 			},
 			HttpStatus.BAD_REQUEST,
 		);
