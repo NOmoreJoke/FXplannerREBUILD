@@ -140,8 +140,9 @@ async function main(): Promise<void> {
 				base: row.base,
 				quote: row.quote,
 				source: row.source,
-				rate: row.rate.toString(),
-				sellRate: row.sellRate?.toString() ?? null,
+				// 无参数 toFixed 保留精确数值，并将小数展开为清单要求的十进制文本。
+				rate: row.rate.toFixed(),
+				sellRate: row.sellRate?.toFixed() ?? null,
 				observedAt: row.observedAt.toISOString(),
 				createdAt: row.createdAt.toISOString(),
 			}));

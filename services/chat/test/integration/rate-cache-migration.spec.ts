@@ -87,6 +87,44 @@ describe("旧汇率缓存 CLI 与 PostgreSQL 完成记录", () => {
 
 	afterAll(() => prisma.$disconnect());
 
+	it.each([
+		["0.00000001", "100000000", "100000000.0000000000"],
+		["100000000", "0.00000001", "0.0000000100"],
+	])("用同一份清单转换 %s → %s 并逐字段回滚", async (rate, inverted, expectedRate) => {
+		const id = await seed("HKD", "TWD", "er-api", rate);
+		const result = run("inventory");
+		check(result, 0, /盘点完成/);
+		const frozen: Inventory = JSON.parse(result.stdout);
+		expect(frozen.inventoryId).toBeDefined();
+		inventoryIds.push(frozen.inventoryId!);
+		expect(frozen.plan.conflicts).toEqual([]);
+		expect(frozen.plan.candidates).toContainEqual(
+			expect.objectContaining({
+				row: expect.objectContaining({ id, rate }),
+				originalRate: rate,
+				expectedRate,
+			}),
+		);
+		frozen.approvedCandidateIds = [id];
+
+		const before = await snapshot();
+		check(run("invert", frozen), 0, /转换 1，幂等复跑已达成 0/);
+		const applied = await snapshot();
+		expect(applied.find((row) => row.id === id)?.rate.toFixed()).toBe(inverted);
+		expect(applied).toEqual(before.map((row) => row.id === id ? {
+			...row,
+			rate: applied.find((candidate) => candidate.id === id)!.rate,
+			migrationOwnerId: frozen.inventoryId,
+		} : row));
+
+		check(run("invert", frozen), 0, /转换 0，幂等复跑已达成 1/);
+		expect(await snapshot()).toEqual(applied);
+		check(run("rollback", frozen), 0, /转换 1，幂等复跑已达成 0/);
+		expect(await snapshot()).toEqual(before);
+		check(run("rollback", frozen), 0, /转换 0，幂等复跑已达成 1/);
+		expect(await snapshot()).toEqual(before);
+	});
+
 	describe("已提交的圈选", () => {
 		let before: Awaited<ReturnType<typeof snapshot>>;
 		let applied: typeof before;

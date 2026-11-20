@@ -4,6 +4,7 @@ import {
 	executePlanBatches,
 	type MigrationExecution,
 	type MigrationPlan,
+	type MigrationTx,
 } from "../../src/rate/rate-migration-plan";
 
 /** verifyFrozenPlan 已将圈选集合归一为按 id 排列的重算候选。 */
@@ -68,7 +69,18 @@ export async function executeFrozenPlan(
 		}
 	}
 
-	const summary = await executePlanBatches(tx.exchangeRate, plan, {
+	const migrationTx: MigrationTx = {
+		updateMany: (args) => tx.exchangeRate.updateMany(args),
+		async findUnique({ where }) {
+			const row = await tx.exchangeRate.findUnique({ where });
+			return row && {
+				...row,
+				rate: row.rate.toFixed(),
+				sellRate: row.sellRate?.toFixed() ?? null,
+			};
+		},
+	};
+	const summary = await executePlanBatches(migrationTx, plan, {
 		inventoryId,
 		mode,
 	});

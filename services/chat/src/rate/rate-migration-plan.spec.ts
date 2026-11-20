@@ -103,6 +103,13 @@ describe("classifyInventoryRow 分类规则", () => {
 			expectedRate: "1.0000000000",
 		});
 	});
+
+	it("冻结清单中的科学计数法仍判为非法汇率", () => {
+		expect(classifyInventoryRow(rowOf({ rate: "1e-8" }))).toEqual({
+			kind: "conflict",
+			reason: "invalid-rate",
+		});
+	});
 });
 
 describe("deriveMigrationPlan 属性", () => {
@@ -314,7 +321,7 @@ const inventoryId = "fce2fa96-a93e-4de9-a821-83df7ab83829";
 type TestRow = InventoryRow & { migrationOwnerId?: string | null };
 
 /** 内存假事务：记录全部条件（逐字段零差异断言用）；updateMany 按【全字段】匹配评估；
- * findUnique 返回全冻结字段（Date 对象模拟 Prisma Decimal/DateTime 行为） */
+ * findUnique 返回全冻结字段（无指数十进制文本和 Date 对象） */
 function makeFakeTx(rows: Map<string, TestRow>): MigrationTx & {
 	conditions: Array<Record<string, unknown>>;
 } {
@@ -344,7 +351,7 @@ function makeFakeTx(rows: Map<string, TestRow>): MigrationTx & {
 			const row = rows.get(args.where.id);
 			if (!row) return null;
 			return {
-				rate: { toString: () => row.rate },
+				rate: row.rate,
 				base: row.base,
 				quote: row.quote,
 				source: row.source,
@@ -416,7 +423,7 @@ describe("executeMigrationBatches 可执行差分（FX-06 可执行化）", () =
 		const plan = deriveMigrationPlan([
 			rowOf({ id: "cmwx2", rate: "0.2000000000" }),
 		]);
-		// Prisma Decimal.toString() 去尾零：5.0000000000 落库读回 "5"
+		// Prisma Decimal.toFixed() 无参数时去尾零：5.0000000000 落库读回 "5"
 		const rows = new Map([
 			["cmwx2", {
 				...rowOf({ id: "cmwx2", rate: "5" }),

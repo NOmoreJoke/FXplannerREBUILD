@@ -28,7 +28,7 @@ export interface InventoryRow {
 	base: string;
 	quote: string;
 	source: string;
-	/** 原值（十进制字符串，来自 Decimal(20,10) 列的 toString） */
+	/** 原值（Decimal(20,10) 列的无指数十进制字符串） */
 	rate: string;
 	sellRate: string | null;
 	observedAt: string;
@@ -294,8 +294,7 @@ export function verifyFrozenPlan(
 	};
 }
 
-/** 迁移事务的最小接口（Prisma 事务客户端的结构子集，测试用内存假件实现；
- * rate/sellRate 以 { toString } 结构兼容 Prisma Decimal） */
+/** 迁移事务的最小接口。适配器把数据库小数读成无指数十进制文本。 */
 export interface MigrationTx {
 	updateMany(args: {
 		where: {
@@ -314,19 +313,18 @@ export interface MigrationTx {
 	findUnique(args: {
 		where: { id: string };
 	}): Promise<{
-		rate: { toString(): string };
+		rate: string;
 		base: string;
 		quote: string;
 		source: string;
-		sellRate: { toString(): string } | null;
+		sellRate: string | null;
 		observedAt: Date;
 		createdAt: Date;
 		migrationOwnerId: string | null;
 	} | null>;
 }
 
-/** Decimal 字符串数值归一（去尾零；"5.0000000000" → "5"、"0.500" → "0.5"）：
- * Prisma Decimal.toString() 会去尾零，幂等比对必须在归一化域进行 */
+/** 无指数十进制文本去尾零（"5.0000000000" → "5"、"0.500" → "0.5"），用于比较清单值与数据库读回值。 */
 export function normalizeDecimalText(text: string): string {
 	const trimmed = text.trim();
 	const dotIndex = trimmed.indexOf(".");
@@ -369,7 +367,7 @@ export async function executeMigrationBatches(
 			if (
 				existing === null ||
 				existing.migrationOwnerId !== migrationOwnerId ||
-				normalizeDecimalText(existing.rate.toString()) !== normalizeDecimalText(toRate) ||
+				normalizeDecimalText(existing.rate) !== normalizeDecimalText(toRate) ||
 				!frozenRowMatchesExceptRate(existing, row)
 			) {
 				throw new Error(`候选 id=${row.id} 行缺失、冻结字段漂移或迁移归属不匹配`);
@@ -441,26 +439,23 @@ export async function executePlanBatches(
 	return summary;
 }
 
-/** 除 rate（数值归一化域由调用方判定）外的全字段精确比对
- *（sellRate 经 toString 归一——Prisma Decimal | null） */
+/** 除 rate（由调用方比对）外的全字段精确比对 */
 function frozenRowMatchesExceptRate(
 	existing: {
 		base: string;
 		quote: string;
 		source: string;
-		sellRate: { toString(): string } | null;
+		sellRate: string | null;
 		observedAt: Date;
 		createdAt: Date;
 	},
 	row: InventoryRow,
 ): boolean {
-	const existingSellRate =
-		existing.sellRate === null ? null : existing.sellRate.toString();
 	return (
 		existing.base === row.base &&
 		existing.quote === row.quote &&
 		existing.source === row.source &&
-		existingSellRate === row.sellRate &&
+		existing.sellRate === row.sellRate &&
 		existing.observedAt.toISOString() === row.observedAt &&
 		existing.createdAt.toISOString() === row.createdAt
 	);
