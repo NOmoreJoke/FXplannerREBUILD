@@ -734,11 +734,12 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		overrides: {
 			planStatus?: string;
 			crossLotUsage?: boolean;
+			dayStart?: Date;
 		} = {},
 	): Promise<{ user: TestUser; planId: string; u1Id: string; u2Id: string }> {
 		const user = await newUser(label);
-		const dayStart = utc8DayStart(new Date());
-		const at = (hourUTC: number) => new Date(dayStart.getTime() + hourUTC * 3_600_000);
+		const dayStart = overrides.dayStart ?? utc8DayStart(new Date());
+		const at = (hour: number) => new Date(dayStart.getTime() + hour * 3_600_000);
 		const { holdingId } = await seedInitialHolding(ctx.prisma, {
 			userId: user.userId,
 			currencyCode: "TWD",
@@ -1196,22 +1197,22 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		}
 	});
 
-	it("#13 USAGE 改日期：重放次序对调 → 成本与分摊跨批次重排（u1 400 → 6,200、u2 10,300 → 4,500）", async () => {
+	it("#13 USAGE 跨业务日更正：成本与分摊跨批次重排（u1 400 → 6,200、u2 10,300 → 4,500）", async () => {
+		const dayStart = utc8DayStart(daysAgo(2));
 		const { user, u1Id, u2Id } = await seedUsageScenario(
 			"corr-usage-reschedule",
-			{ crossLotUsage: true },
+			{ crossLotUsage: true, dayStart },
 		);
-		const dayStart = utc8DayStart(new Date());
 		const before = await ctx.prisma.usageRecord.findUniqueOrThrow({
 			where: { id: u1Id },
 		});
-		// 改日期到 20:00 UTC+8（晚于 u2 18:00 → 重放次序对调）。
+		// 将 u1 移到下一业务日 20:00 UTC+8，原业务日的 u2 因此先重放。
 		// 种子三批成本异构（INITIAL 2,000@0.5 / A 1,000@7 / B 1,000@9）：
 		// 改序前：u1@12:00 耗 INITIAL 800（400）；u2@18:00 耗 INITIAL 1,200（600）
 		// + A 1,000（7,000）+ B 300（2,700）= 10,300。
 		// 改序后：u2@18:00 先耗 INITIAL 2,000（1,000）+ A 500（3,500）= 4,500；
-		// u1@20:00 耗 A 剩余 500（3,500）+ B 300（2,700）= 6,200 —— 真实跨批次重排。
-		const newUsedAt = new Date(dayStart.getTime() + 20 * 3_600_000);
+		// 次日 u1@20:00 耗 A 剩余 500（3,500）+ B 300（2,700）= 6,200。
+		const newUsedAt = new Date(dayStart.getTime() + (24 + 20) * 3_600_000);
 
 		const preview = await request(app.getHttpServer())
 			.post("/api/corrections/preview")
@@ -1234,7 +1235,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			),
 		);
 		expect(costs.get(u1Id)?.costBefore).toBe("400.0000");
-		// 改序后 u1@20:00 耗 A 剩余 500（3,500）+ B 300（2,700）= 6,200
+		// 改序后次日 u1@20:00 耗 A 剩余 500（3,500）+ B 300（2,700）= 6,200
 		expect(costs.get(u1Id)?.costAfter).toBe("6200.0000");
 		// 改序前 u2@18:00 耗 INITIAL 1,200（600）+ A 1,000（7,000）+ B 300（2,700）= 10,300
 		expect(costs.get(u2Id)?.costBefore).toBe("10300.0000");
@@ -1263,6 +1264,12 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			where: { planId: usage.planId },
 		});
 		expect(allocation.usedAmount.toFixed(4)).toBe("3300.0000");
+		const account = await ctx.prisma.account.findUniqueOrThrow({
+			where: {
+				userId_currencyCode: { userId: user.userId, currencyCode: "TWD" },
+			},
+		});
+		expect(account.balance.toFixed(4)).toBe("700.0000");
 		// 分摊跨批次重排断言：u1 改序后跨 A/B 两批（改序前仅 INITIAL 单批）
 		const u1Allocations = await ctx.prisma.usageLotAllocation.findMany({
 			where: { usageId: u1Id },
