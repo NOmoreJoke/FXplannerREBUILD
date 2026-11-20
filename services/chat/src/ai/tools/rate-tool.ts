@@ -1,7 +1,10 @@
 import { tool } from "@langchain/core/tools";
 import type { HttpException } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
+import type { RateHistoryPointDto } from "../../rate/dto/rate-history-response.dto";
 import {
+	IDENTITY_RATE_SOURCE,
 	isSupportedCurrency,
 	REFERENCE_RATE_SOURCE,
 	SUPPORTED_CURRENCIES,
@@ -59,6 +62,17 @@ const formatLatestQuote = (item: {
 	rate: string;
 	observedAt: string;
 }): string => `${item.target} = ${item.rate}（数据时间 ${item.observedAt}）`;
+
+function formatHistoryPoint({ date, rate, source }: RateHistoryPointDto): string {
+	const value = `${date} = ${rate}`;
+	if (source === REFERENCE_RATE_SOURCE) {
+		return `${value}（参考价：frankfurter v2 参考序列）`;
+	}
+	if (source === IDENTITY_RATE_SOURCE) {
+		return `${value}（恒等汇率：${source}）`;
+	}
+	return source ? `${value}（原来源报价：${source}）` : `${value}（来源未标注）`;
+}
 
 export function createRateTool(rateService: RateService) {
 	return tool(
@@ -155,19 +169,29 @@ export function createRateTool(rateService: RateService) {
 				if (points.length === 0) {
 					return `${base}/${target} 暂无历史数据，请如实告知用户该币对历史数据尚在积累中，禁止编造走势。`;
 				}
-				const rates = points.map((point) => Number(point.rate));
 				const first = points[0];
 				const last = points[points.length - 1];
-				// 来源区分（MVP-F0-2 C2）：参考价（frankfurter v2 参考序列）与原来源报价
-				// 必须在输出中显式区分，不得混为同源走势（realtime-rate 底稿 §2）
+				const initial = { point: first, rate: new Prisma.Decimal(first.rate) };
+				let highest = initial;
+				let lowest = initial;
+				// 按原始精度选出观测点。同值时保留按日期升序返回的第一个点。
+				for (const point of points.slice(1)) {
+					const rate = new Prisma.Decimal(point.rate);
+					if (rate.gt(highest.rate)) highest = { point, rate };
+					if (rate.lt(lowest.rate)) lowest = { point, rate };
+				}
+
 				const referenceCount = points.filter(
 					(point) => point.source === REFERENCE_RATE_SOURCE,
 				).length;
 				const referenceNote =
 					referenceCount > 0
-						? `其中 ${referenceCount} 个数据点为参考价（frankfurter v2 参考序列，非原来源报价）`
+						? `，其中 ${referenceCount} 个数据点为参考价（frankfurter v2 参考序列，非原来源报价）`
 						: "";
-				return `${base}/${target} 近 ${period} 天历史走势（${points.length} 个数据点${referenceNote ? `，${referenceNote}` : ""}）：起点 ${first.date} = ${first.rate}，终点 ${last.date} = ${last.rate}，区间最高 ${Math.max(...rates)}，区间最低 ${Math.min(...rates)}。回答时请注明数据时间范围${referenceNote ? "，并区分参考价与原来源报价" : ""}。`;
+				return `${base}/${target} 近 ${period} 天历史走势（${points.length} 个数据点${referenceNote}）：` +
+					`起点 ${formatHistoryPoint(first)}，终点 ${formatHistoryPoint(last)}，` +
+					`区间最高 ${formatHistoryPoint(highest.point)}，区间最低 ${formatHistoryPoint(lowest.point)}。` +
+					"回答时请注明数据时间范围，并逐项保留引用数据的观测日期及来源。";
 			} catch (error) {
 				return toToolErrorText(error);
 			}

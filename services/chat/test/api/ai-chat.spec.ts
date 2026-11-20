@@ -40,6 +40,7 @@ vi.mock("@nestjs/throttler", async (importOriginal) => {
 
 import { AI_LLM_FACTORY } from "../../src/ai/llm/llm-factory";
 import type { PrismaService } from "../../src/prisma/prisma.service";
+import { RateProvider } from "../../src/rate/rate.provider";
 
 // ────────────────────────── 脚本队列假模型（§8.2 装配①）──────────────────────────
 // 官方 FakeStreamingChatModel 的 responses 固定取 [0]，无法编排「tool_call 后再作答 /
@@ -255,6 +256,7 @@ const buildAiApp = async (
 		AI_PROVIDER_AIGYSD_ANTHROPIC_API_KEY: FAKE_LLM_KEYS.anthropic,
 		AI_PROVIDER_AIGYSD_GEMINI_API_KEY: FAKE_LLM_KEYS.gemini,
 		AI_DEFAULT_CHAT_MODEL: "gpt-4.1-mini",
+		RATE_SOURCE: "multi",
 		...overrides,
 	};
 	const saved: Record<string, string | undefined> = {};
@@ -623,6 +625,67 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		await prisma.exchangeRate.deleteMany({
 			where: { base: "CNY", quote: "USD" },
 		});
+	});
+
+	it("行情工具把混合序列中起点、终点及两个独立极值的来源回喂模型", async () => {
+		const today = new Date();
+		today.setUTCHours(0, 0, 0, 0);
+		const daysAgo = (days: number) => new Date(today.getTime() - days * 86_400_000);
+		const start = daysAgo(6);
+		const high = daysAgo(4);
+		const low = daysAgo(2);
+		const end = daysAgo(1);
+		const day = (date: Date) => date.toISOString().slice(0, 10);
+		const pair = { base: "CAD", quote: "TWD" };
+		const localPoints = [
+			{ ...pair, observedAt: start, rate: "0.22", source: "er-api" },
+			{ ...pair, observedAt: low, rate: "0.2", source: "er-api" },
+		];
+		await prisma.exchangeRate.createMany({ data: localPoints });
+		const reference = vi.spyOn(app.get(RateProvider), "fetchReferenceSeries")
+			.mockResolvedValue([
+				{ observedAt: high, rate: "0.25" },
+				{ observedAt: end, rate: "0.21" },
+			]);
+		try {
+			scriptHolder.steps = [
+				{
+					message: new AIMessage({
+						content: "",
+						tool_calls: [{
+							id: "call_history_sources",
+							name: "query_exchange_rate",
+							args: { mode: "history", base: "CAD", target: "TWD", period: 7 },
+						}],
+					}),
+				},
+				textReply("已查询七天内的汇率走势。"),
+			];
+			const res = await request(app.getHttpServer())
+				.post("/api/ai/conversations")
+				.set(bearer(user.accessToken))
+				.send({ content: "查询加元兑台币最近七天的汇率走势" })
+				.expect(200);
+			expect(parseSse(res.text).at(-1)?.event).toBe("done");
+			expect(reference).toHaveBeenCalledExactlyOnceWith(
+				"CAD", "TWD", expect.any(String), expect.any(String),
+			);
+
+			const toolMessage = scriptHolder.shared.captured[1]?.find(
+				(message) => message.getType() === "tool",
+			);
+			const summary = String(toolMessage?.content);
+			expect(summary).toContain("CAD/TWD 近 7 天历史走势（4 个数据点，其中 2 个数据点为参考价");
+			expect(summary).toContain(`起点 ${day(start)} = 0.22（原来源报价：er-api）`);
+			expect(summary).toContain(`终点 ${day(end)} = 0.21（参考价：frankfurter v2 参考序列）`);
+			expect(summary).toContain(`区间最高 ${day(high)} = 0.25（参考价：frankfurter v2 参考序列）`);
+			expect(summary).toContain(`区间最低 ${day(low)} = 0.2（原来源报价：er-api）`);
+		} finally {
+			reference.mockRestore();
+			await prisma.exchangeRate.deleteMany({
+				where: { ...pair, observedAt: { in: [start, low] } },
+			});
+		}
 	});
 
 	// ── 参数校验 ──

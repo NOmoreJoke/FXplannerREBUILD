@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import {
 	RatePairUnsupportedException,
@@ -29,8 +30,8 @@ const buildRateService = (
 		target: "USD",
 		period: 30,
 		data_points: [
-			{ date: "2026-01-15", rate: "7.15" },
-			{ date: "2026-02-13", rate: "7.12" },
+			{ date: "2026-01-15", rate: "7.15", source: "abc" },
+			{ date: "2026-02-13", rate: "7.12", source: "abc" },
 		],
 		current_rate: "7.12",
 	}));
@@ -185,31 +186,78 @@ describe("query_exchange_rate 工具", () => {
 		expect(result).toContain("暂无历史数据");
 	});
 
-	it("history 含参考价数据点：输出显式区分参考价与原来源报价（MVP-F0-2 C2 来源区分）", async () => {
+	it("history 固定日期和汇率，仅交换两个点的来源，起止与极值归属随之交换", async () => {
+		const dataPoints = [
+			{ date: "2026-02-12", rate: "0.2102297812", source: "frankfurter-v2-reference" },
+			{ date: "2026-02-13", rate: "0.2103", source: "er-api" },
+		];
+		const swappedPoints = [
+			{ ...dataPoints[0], source: dataPoints[1].source },
+			{ ...dataPoints[1], source: dataPoints[0].source },
+		];
+		const getHistory = vi.fn();
 		const rateService = buildRateService({
-			getHistory: vi.fn(async () => ({
-				base: "CNY",
-				target: "TWD",
-				period: 7,
-				data_points: [
-					{ date: "2026-02-12", rate: "0.2102297812", source: "frankfurter-v2-reference" },
-					{ date: "2026-02-13", rate: "0.2103", source: "er-api" },
-				],
-				current_rate: "0.2103",
-			})),
+			getHistory: getHistory
+				.mockResolvedValueOnce({ data_points: dataPoints })
+				.mockResolvedValueOnce({ data_points: swappedPoints }),
 		});
 		const tool = createRateTool(rateService);
-
-		const result = await tool.invoke({
-			mode: "history",
+		const input = {
+			mode: "history" as const,
 			base: "CNY",
 			target: "TWD",
 			period: 7,
-		});
+		};
+		const original = await tool.invoke(input);
+		const swapped = await tool.invoke(input);
 
-		expect(result).toContain("参考价");
-		expect(result).toContain("frankfurter v2 参考序列");
-		expect(result).toContain("1 个数据点为参考价");
+		expect(original).toContain("1 个数据点为参考价");
+		expect(swapped).toContain("1 个数据点为参考价");
+		for (const label of ["起点", "区间最低"]) {
+			expect(original).toContain(`${label} 2026-02-12 = 0.2102297812（参考价：frankfurter v2 参考序列）`);
+			expect(swapped).toContain(`${label} 2026-02-12 = 0.2102297812（原来源报价：er-api）`);
+		}
+		for (const label of ["终点", "区间最高"]) {
+			expect(original).toContain(`${label} 2026-02-13 = 0.2103（原来源报价：er-api）`);
+			expect(swapped).toContain(`${label} 2026-02-13 = 0.2103（参考价：frankfurter v2 参考序列）`);
+		}
+	});
+
+	it("history 按十进制精确取极值，并保留原始精度和来源", async () => {
+		await fc.assert(
+			fc.asyncProperty(fc.integer({ min: 100_000_000, max: 999_999_999 }), async (whole) => {
+				// 同一整数部分的相邻十位小数在 Number 下不可区分。
+				const low = `${whole}.0000000001`;
+				const high = `${whole}.0000000002`;
+				const tool = createRateTool(buildRateService({
+					getHistory: vi.fn(async () => ({
+						data_points: [
+							{ date: "2026-02-12", rate: low, source: "er-api" },
+							{ date: "2026-02-13", rate: high, source: "frankfurter-v2-reference" },
+						],
+					})),
+				}));
+				const result = await tool.invoke({ mode: "history", base: "USD", target: "TWD" });
+				expect(result).toContain(`区间最高 2026-02-13 = ${high}（参考价：frankfurter v2 参考序列）`);
+				expect(result).toContain(`区间最低 2026-02-12 = ${low}（原来源报价：er-api）`);
+			}),
+		);
+	});
+
+	it("history 同值极值取最早观测点，缺少来源时明确标注", async () => {
+		const tool = createRateTool(buildRateService({
+			getHistory: vi.fn(async () => ({
+				data_points: [
+					{ date: "2026-02-12", rate: "1.00" },
+					{ date: "2026-02-13", rate: "1", source: "er-api" },
+				],
+			})),
+		}));
+		const result = await tool.invoke({ mode: "history", base: "USD", target: "TWD" });
+		expect(result).toContain("起点 2026-02-12 = 1.00（来源未标注）");
+		expect(result).toContain("终点 2026-02-13 = 1（原来源报价：er-api）");
+		expect(result).toContain("区间最高 2026-02-12 = 1.00（来源未标注）");
+		expect(result).toContain("区间最低 2026-02-12 = 1.00（来源未标注）");
 	});
 
 	it("history 全部为原来源报价：不含参考价标注", async () => {
@@ -223,6 +271,8 @@ describe("query_exchange_rate 工具", () => {
 		});
 
 		expect(result).not.toContain("参考价");
+		expect(result).toContain("起点 2026-01-15 = 7.15（原来源报价：abc）");
+		expect(result).toContain("终点 2026-02-13 = 7.12（原来源报价：abc）");
 	});
 
 	it("数据源不可用（502）：错误文本回喂而非抛出", async () => {
