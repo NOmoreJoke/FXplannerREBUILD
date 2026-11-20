@@ -3,8 +3,7 @@ import { randomUUID } from "node:crypto";
  * 更正与日志接口测试（corrections 技术方案 §8.2，场景 1~24）。
  * 数值锚定 doc 14 例 10/11/12 与 doc 15 FIFO 例。常规交易日期相对今天构造，
  * 原时点取价用固定 UTC+8 日期。测试不修改系统时钟。
- * USAGE 更正场景（#11~#16）在 M7 接线前按方案 §10 降级断言 400
- * CORRECTION_TARGET_TYPE_UNAVAILABLE，M7 落地后恢复为原场景断言。
+ * USAGE 更正场景覆盖计划分配、资金来源、成本重放与拦截。
  */
 import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
@@ -223,6 +222,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		expect(data.impacts.balances).toEqual([
 			{ currencyCode: "USD", before: "1000.0000", after: "1000.0000" },
 		]);
+		expect(data.impacts.allocations).toEqual([]);
 		expect(data.impacts.blockers ?? data.blockers).toHaveLength(0);
 		expect(data.blockers).toHaveLength(0);
 	});
@@ -814,7 +814,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 	}
 
 	it("#11 USAGE 改小：预览 diff 与成本重算、apply 后记录/分配/余额/分摊全联动", async () => {
-		const { user, u1Id } = await seedUsageScenario("corr-usage-decrease");
+		const { user, planId, u1Id } = await seedUsageScenario("corr-usage-decrease");
 		const before = await ctx.prisma.usageRecord.findUniqueOrThrow({
 			where: { id: u1Id },
 		});
@@ -832,6 +832,22 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			.expect(200);
 		expect(preview.body.data.before.amount).toBe("1200.0000");
 		expect(preview.body.data.after.amount).toBe("800.0000");
+		expect(preview.body.data.impacts.allocations).toEqual([
+			{
+				planId,
+				currencyCode: "TWD",
+				amountBefore: "3000.0000",
+				amountAfter: "2600.0000",
+				usedBefore: "2000.0000",
+				usedAfter: "1600.0000",
+				remainingBefore: "1000.0000",
+				remainingAfter: "1000.0000",
+				fromPlan: "0.0000",
+				supplement: "0.0000",
+				usedFromRemaining: "0.0000",
+				unallocatedDelta: "400.0000",
+			},
+		]);
 		const u1CostBefore = preview.body.data.impacts.costs.find(
 			(cost: { usageId: string }) => cost.usageId === u1Id,
 		);
@@ -847,6 +863,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 				baseVersion: before.version,
 				reason: "使用金额多记了 400",
 				changes: { amount: "800.0000" },
+				expectedUsageImpact: preview.body.data.expectedUsageImpact,
 			})
 			.expect(201)
 			.expect((res) => {
@@ -882,6 +899,99 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		});
 		expect(allocations).toHaveLength(1);
 		expect(allocations[0].quantity.toFixed(4)).toBe("800.0000");
+	});
+
+	it("#12 USAGE 改大：预览展示原分配与补分配；确认后写 PlanChangeLog", async () => {
+		const { user, planId, u1Id } = await seedUsageScenario("corr-usage-increase");
+		const before = await ctx.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: u1Id },
+		});
+		const correction = {
+			targetType: "USAGE",
+			targetId: u1Id,
+			baseVersion: before.version,
+			reason: "使用金额少记了",
+			changes: { amount: "3000.0000" },
+		};
+
+		// 1,200 → 1,700：只用本计划剩余分配中的 500。
+		const planOnly = await request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send({ ...correction, changes: { amount: "1700.0000" } })
+			.expect(200);
+		expect(planOnly.body.data.blockers).toEqual([]);
+		expect(planOnly.body.data.impacts.allocations).toEqual([
+			{
+				planId,
+				currencyCode: "TWD",
+				amountBefore: "3000.0000",
+				amountAfter: "3000.0000",
+				usedBefore: "2000.0000",
+				usedAfter: "2500.0000",
+				remainingBefore: "1000.0000",
+				remainingAfter: "500.0000",
+				fromPlan: "500.0000",
+				supplement: "0.0000",
+				usedFromRemaining: "500.0000",
+				unallocatedDelta: "0.0000",
+			},
+		]);
+
+		// 1,200 → 3,000（diff 1,800 > 剩余分配 1,000 → 补分配 800；分配 3,000+800=3,800 ≤ 目标）
+		const mixed = await request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send(correction)
+			.expect(200);
+		expect(mixed.body.data.blockers).toEqual([]);
+		expect(mixed.body.data.impacts.allocations).toEqual([
+			{
+				planId,
+				currencyCode: "TWD",
+				amountBefore: "3000.0000",
+				amountAfter: "3800.0000",
+				usedBefore: "2000.0000",
+				usedAfter: "3800.0000",
+				remainingBefore: "1000.0000",
+				remainingAfter: "0.0000",
+				fromPlan: "1000.0000",
+				supplement: "800.0000",
+				usedFromRemaining: "1000.0000",
+				unallocatedDelta: "-800.0000",
+			},
+		]);
+		const allocationAfterPreview =
+			await ctx.prisma.planAllocation.findUniqueOrThrow({ where: { planId } });
+		expect(allocationAfterPreview.amount.toFixed(4)).toBe("3000.0000");
+		expect(allocationAfterPreview.usedAmount.toFixed(4)).toBe("2000.0000");
+		expect(
+			await ctx.prisma.correction.count({ where: { targetId: u1Id } }),
+		).toBe(0);
+
+		await request(app.getHttpServer())
+			.post("/api/corrections")
+			.set(bearer(user.accessToken))
+			.send({ ...correction, expectedUsageImpact: mixed.body.data.expectedUsageImpact })
+			.expect(201);
+		const allocation = await ctx.prisma.planAllocation.findUniqueOrThrow({
+			where: { planId },
+		});
+		expect(allocation.amount.toFixed(4)).toBe("3800.0000");
+		expect(allocation.usedAmount.toFixed(4)).toBe("3800.0000");
+		const changeLogs = await ctx.prisma.planChangeLog.findMany({
+			where: { planId, changeType: "ALLOCATION_ADJUSTED" },
+		});
+		expect(changeLogs).toMatchObject([{
+			beforeSnapshot: { amountBefore: "1200.0000" },
+			afterSnapshot: { amountAfter: "3000.0000", supplement: "800.0000" },
+		}]);
+		const account = await ctx.prisma.account.findUniqueOrThrow({
+			where: {
+				userId_currencyCode: { userId: user.userId, currencyCode: "TWD" },
+			},
+		});
+		expect(account.balance.toFixed(4)).toBe("200.0000");
 	});
 
 	it.each([
@@ -1018,7 +1128,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			const rejected = await request(server)
 				.post("/api/corrections")
 				.set(auth)
-				.send(body)
+				.send({ ...body, expectedUsageImpact: preview.body.data.expectedUsageImpact })
 				.expect(409);
 			expect(rejected.body).toMatchObject(conflict);
 			expect(await readBusinessRows()).toEqual(before);
@@ -1038,7 +1148,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		const applied = await request(server)
 			.post("/api/corrections")
 			.set(auth)
-			.send(body)
+			.send({ ...body, expectedUsageImpact: preview.body.data.expectedUsageImpact })
 			.expect(201);
 		expect(applied.body.data).toMatchObject({
 			status: "APPLIED",
@@ -1107,16 +1217,23 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		const correctionIds: string[] = [];
 
 		for (const step of corrections) {
+			const payload = {
+				targetType: "USAGE",
+				targetId: u1Id,
+				baseVersion: step.baseVersion,
+				reason: `更正使用金额至 ${step.amountAfter}`,
+				changes: { amount: step.amountAfter },
+			};
+			const auth = bearer(user.accessToken);
+			const preview = await request(app.getHttpServer())
+				.post("/api/corrections/preview")
+				.set(auth)
+				.send(payload)
+				.expect(200);
 			const result = await request(app.getHttpServer())
 				.post("/api/corrections")
-				.set(bearer(user.accessToken))
-				.send({
-					targetType: "USAGE",
-					targetId: u1Id,
-					baseVersion: step.baseVersion,
-					reason: `更正使用金额至 ${step.amountAfter}`,
-					changes: { amount: step.amountAfter },
-				})
+				.set(auth)
+				.send({ ...payload, expectedUsageImpact: preview.body.data.expectedUsageImpact })
 				.expect(201);
 			expect(result.body.data.targetVersion).toBe(step.baseVersion + 1);
 			correctionIds.push(result.body.data.correctionId);
@@ -1197,6 +1314,110 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		}
 	});
 
+	it("W6-03 同计划另记使用改变资金来源：旧确认零写入，重新预览后可提交", async () => {
+		const { user, planId, u1Id, u2Id } = await seedUsageScenario("corr-usage-impact");
+		const { userId, accessToken } = user;
+		const prisma = ctx.prisma;
+		const payload = {
+			targetType: "USAGE",
+			targetId: u1Id,
+			baseVersion: 1,
+			reason: "使用金额少记了 800",
+			changes: { amount: "2000" },
+		};
+		const preview = () => request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(accessToken))
+			.send(payload)
+			.expect(200);
+		const apply = (body: typeof payload & { expectedUsageImpact?: string }) =>
+			request(app.getHttpServer())
+				.post("/api/corrections")
+				.set(bearer(accessToken))
+				.send(body);
+		const readRows = (addedId: string) => Promise.all([
+			prisma.usageRecord.findMany({ where: { userId }, orderBy: { id: "asc" } }),
+			prisma.plan.findUniqueOrThrow({ where: { id: planId } }),
+			prisma.planAllocation.findUniqueOrThrow({ where: { planId } }),
+			prisma.account.findMany({ where: { userId }, orderBy: { id: "asc" } }),
+			prisma.costLot.findMany({ where: { userId }, orderBy: { id: "asc" } }),
+			prisma.usageLotAllocation.findMany({ orderBy: { id: "asc" }, where: {
+				usageId: { in: [u1Id, u2Id, addedId] },
+			} }),
+			prisma.planChangeLog.findMany({ where: { planId }, orderBy: { id: "asc" } }),
+			prisma.correction.findMany({ where: { userId }, orderBy: { id: "asc" } }),
+		]);
+
+		const initial = (await preview()).body.data;
+		expect(initial.blockers).toEqual([]);
+		expect(initial.impacts.allocations).toEqual([{
+			planId,
+			currencyCode: "TWD",
+			amountBefore: "3000.0000",
+			amountAfter: "3000.0000",
+			usedBefore: "2000.0000",
+			usedAfter: "2800.0000",
+			fromPlan: "800.0000",
+			supplement: "0.0000",
+			remainingBefore: "1000.0000",
+			remainingAfter: "200.0000",
+			usedFromRemaining: "800.0000",
+			unallocatedDelta: "0.0000",
+		}]);
+		expect(initial.expectedUsageImpact).toMatch(/^[a-f0-9]{64}$/);
+
+		const added = await request(app.getHttpServer())
+			.post(`/api/plans/${planId}/usages`)
+			.set(bearer(accessToken))
+			.send({ amount: "500", usedAt: new Date().toISOString() })
+			.expect(201);
+		const addedId: string = added.body.data.usage.id;
+		expect(addedId).toEqual(expect.any(String));
+		const beforeStaleApply = await readRows(addedId);
+		expect(beforeStaleApply[0].find((usage) => usage.id === u1Id)?.version).toBe(1);
+		await apply({ ...payload, expectedUsageImpact: initial.expectedUsageImpact })
+			.expect(409)
+			.expect((res) => {
+				expect(res.body.code).toBe("CORRECTION_TARGET_CHANGED");
+				expect(res.body.message).toContain("重新查看影响");
+			});
+		expect(await readRows(addedId)).toEqual(beforeStaleApply);
+
+		const refreshed = (await preview()).body.data;
+		expect(refreshed.blockers).toEqual([]);
+		expect(refreshed.expectedUsageImpact).not.toBe(initial.expectedUsageImpact);
+		expect(refreshed.impacts.allocations).toEqual([{
+			...initial.impacts.allocations[0],
+			amountAfter: "3300.0000",
+			usedBefore: "2500.0000",
+			usedAfter: "3300.0000",
+			fromPlan: "500.0000",
+			supplement: "300.0000",
+			remainingBefore: "500.0000",
+			remainingAfter: "0.0000",
+			usedFromRemaining: "500.0000",
+			unallocatedDelta: "-300.0000",
+		}]);
+		await apply(payload).expect(409);
+		await apply({
+			...payload,
+			changes: { amount: "2100" },
+			expectedUsageImpact: refreshed.expectedUsageImpact,
+		}).expect(409);
+		expect(await readRows(addedId)).toEqual(beforeStaleApply);
+
+		const accepted = await apply({ ...payload, expectedUsageImpact: refreshed.expectedUsageImpact })
+			.expect(201);
+		expect(accepted.body.data.targetVersion).toBe(2);
+		const [usages, , allocation, , , , changes, corrections] = await readRows(addedId);
+		expect(usages.find((usage) => usage.id === u1Id)?.amount.toFixed(4)).toBe("2000.0000");
+		expect(allocation.amount.toFixed(4)).toBe("3300.0000");
+		expect(allocation.usedAmount.toFixed(4)).toBe("3300.0000");
+		expect(changes).toHaveLength(1);
+		expect(changes[0].afterSnapshot).toMatchObject({ supplement: "300.0000" });
+		expect(corrections.map((entry) => entry.status)).toEqual(["APPLIED"]);
+	});
+
 	it("#13 USAGE 跨业务日更正：成本与分摊跨批次重排（u1 400 → 6,200、u2 10,300 → 4,500）", async () => {
 		const dayStart = utc8DayStart(daysAgo(2));
 		const { user, u1Id, u2Id } = await seedUsageScenario(
@@ -1225,6 +1446,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 				changes: { usedAt: newUsedAt.toISOString() },
 			})
 			.expect(200);
+		expect(preview.body.data.impacts.allocations).toEqual([]);
 		const costs = new Map(
 			preview.body.data.impacts.costs.map(
 				(cost: {
@@ -1251,6 +1473,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 				baseVersion: before.version,
 				reason: "使用日期记错了",
 				changes: { usedAt: newUsedAt.toISOString() },
+				expectedUsageImpact: preview.body.data.expectedUsageImpact,
 			})
 			.expect(201);
 
@@ -1386,7 +1609,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		const applied = await request(server)
 			.post("/api/corrections")
 			.set(auth)
-			.send(payload)
+			.send({ ...payload, expectedUsageImpact: preview.body.data.expectedUsageImpact })
 			.expect(201);
 		expect(applied.body.data).toMatchObject({ status: "APPLIED", targetVersion: 2 });
 		const postedAfter = await readCosts();
@@ -1436,7 +1659,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		const applied = await request(app.getHttpServer())
 			.post("/api/corrections")
 			.set(bearer(user.accessToken))
-			.send(payload)
+			.send({ ...payload, expectedUsageImpact: preview.body.data.expectedUsageImpact })
 			.expect(201);
 		const correction = await ctx.prisma.correction.findUniqueOrThrow({
 			where: { id: applied.body.data.correctionId },
@@ -1515,15 +1738,25 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			where: { id: u1Id },
 		});
 		// 1,200 → 4,000：重放后 u2 18:00 时点无批次可耗 → V3 缺口 800
+		const payload = {
+			targetType: "USAGE",
+			targetId: u1Id,
+			baseVersion: before.version,
+			reason: "金额记大了导致历史缺口",
+			changes: { amount: "4000.0000" },
+		};
+		const preview = await request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send(payload)
+			.expect(200);
+		expect(preview.body.data.blockers[0].code).toBe("CORRECTION_HISTORICAL_SHORTFALL");
 		await request(app.getHttpServer())
 			.post("/api/corrections")
 			.set(bearer(user.accessToken))
 			.send({
-				targetType: "USAGE",
-				targetId: u1Id,
-				baseVersion: before.version,
-				reason: "金额记大了导致历史缺口",
-				changes: { amount: "4000.0000" },
+				...payload,
+				expectedUsageImpact: preview.body.data.expectedUsageImpact,
 			})
 			.expect(409)
 			.expect((errorRes) => {
@@ -1810,7 +2043,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			const applied = await request(app.getHttpServer())
 				.post("/api/corrections")
 				.set(bearer(user.accessToken))
-				.send(payload)
+				.send({ ...payload, previewQuoteKey: preview.body.data.holdingQuote.confirmationKey })
 				.expect(201);
 			expect(applied.body.data.status).toBe("APPLIED");
 			const after = await ledgerSnapshot();
@@ -1900,10 +2133,21 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		});
 		extraRateRowIds.push(rateRow.id);
 
+		const preview = await request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send(payload)
+			.expect(200);
+		expect(preview.body.data.holdingQuote).toMatchObject({
+			rate: "5.31000000",
+			source: "abc",
+			observedAt: eligibleAt.toISOString(),
+		});
+
 		await request(app.getHttpServer())
 			.post("/api/corrections")
 			.set(bearer(user.accessToken))
-			.send(payload)
+			.send({ ...payload, previewQuoteKey: preview.body.data.holdingQuote.confirmationKey })
 			.expect(201);
 
 		const holding = await ctx.prisma.initialHolding.findUniqueOrThrow({
@@ -1929,6 +2173,106 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			},
 		});
 		expect(cadAccount.balance.toFixed(4)).toBe("1000.0000");
+	});
+
+	it.each([
+		{ change: "price", days: 20, data: { sellRate: "0.23" }, rate: "0.23000000", rawRate: "0.2300000000", source: "abc", cost: "230.0000" },
+		{ change: "source", days: 30, data: { source: "er-api", sellRate: null, rate: "0.21", canonicalWriteId: randomUUID() }, rate: "0.21000000", rawRate: "0.2100000000", source: "er-api", cost: "210.0000" },
+		{ change: "raw-price", days: 40, data: { sellRate: "0.2100000001" }, rate: "0.21000000", rawRate: "0.2100000001", source: "abc", cost: "210.0000" },
+	])("FX-05: $change changed at the same quote timestamp, rejects stale confirmation without writes", async ({
+		change, days, data, rate, rawRate, source, cost,
+	}) => {
+		const user = await newUser(`corr-quote-${change}`);
+		const userWhere = { userId: user.userId };
+		const confirmedAt = new Date(utc8DayStart(daysAgo(days)).getTime() + 10 * 3_600_000);
+		const { holdingId } = await seedInitialHolding(ctx.prisma, {
+			...userWhere,
+			currencyCode: "USD",
+			amount: "1000",
+			rate: "7.2480000000",
+			cost: "7248.0000",
+			confirmedAt,
+		});
+		const observedAt = new Date(confirmedAt.getTime() - 60_000);
+		const quoteWhere = { base: "CNY", quote: "THB", observedAt };
+		const initialQuote = await ctx.prisma.exchangeRate.create({
+			data: { ...quoteWhere, rate: "0.20", sellRate: "0.21", source: "abc" },
+		});
+		extraRateRowIds.push(initialQuote.id);
+
+		const holdingWhere = { id: holdingId };
+		const ledgerState = () => Promise.all([
+			ctx.prisma.initialHolding.findUniqueOrThrow({ where: holdingWhere }),
+			ctx.prisma.account.findMany({ where: userWhere, orderBy: { id: "asc" } }),
+			ctx.prisma.costLot.findMany({ where: userWhere, orderBy: { id: "asc" } }),
+			ctx.prisma.correction.findMany({ where: userWhere, orderBy: { id: "asc" } }),
+		] as const);
+		const before = await ledgerState();
+		const payload = {
+			targetType: "INITIAL_HOLDING",
+			targetId: holdingId,
+			baseUpdatedAt: before[0].updatedAt.toISOString(),
+			reason: "当时持有的是泰铢",
+			changes: { currencyCode: "THB" },
+		};
+		const preview = () => request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send(payload)
+			.expect(200);
+		const apply = (previewQuoteKey?: string) => request(app.getHttpServer())
+			.post("/api/corrections")
+			.set(bearer(user.accessToken))
+			.send({ ...payload, previewQuoteKey });
+		const first = (await preview()).body.data;
+		expect(first.after.cost).toBe("210.0000");
+		expect(first.holdingQuote).toMatchObject({
+			rate: "0.21000000",
+			rawRate: "0.2100000000",
+			source: "abc",
+			observedAt: observedAt.toISOString(),
+		});
+		expect(first.blockers).toEqual([]);
+
+		const expectQuoteConflict = async (key?: string) => {
+			const rejected = await apply(key).expect(409);
+			expect(rejected.body.code).toBe("CORRECTION_QUOTE_CHANGED");
+			expect(await ledgerState()).toEqual(before);
+		};
+		await expectQuoteConflict(); // 尚未确认任何报价
+
+		const revised = await ctx.prisma.exchangeRate.update({
+			where: { base_quote_observedAt: quoteWhere },
+			data,
+		});
+		await expectQuoteConflict(first.holdingQuote.confirmationKey);
+		expect(await ctx.prisma.exchangeRate.findUnique({ where: { id: revised.id } })).toEqual(revised);
+
+		const second = (await preview()).body.data;
+		expect(second.holdingQuote.confirmationKey).not.toBe(first.holdingQuote.confirmationKey);
+		expect(second.holdingQuote).toMatchObject({
+			rate, rawRate, source, observedAt: observedAt.toISOString(),
+		});
+		expect(second.after.cost).toBe(cost);
+		const receipt = await apply(second.holdingQuote.confirmationKey).expect(201);
+		expect(receipt.body.data.status).toBe("APPLIED");
+		const holding = await ctx.prisma.initialHolding.findUniqueOrThrow({ where: holdingWhere });
+		expect(holding.currencyCode).toBe("THB");
+		expect(holding.rate.toFixed(8)).toBe(rate);
+		expect(holding.rawRate.toFixed(10)).toBe(rawRate);
+		expect(holding.rateSource).toBe(source);
+		expect(holding.rateObservedAt).toEqual(observedAt);
+		expect(holding.cost.toFixed(4)).toBe(cost);
+
+		await apply(second.holdingQuote.confirmationKey).expect(409).expect((response) => {
+			expect(response.body.code).toBe("CORRECTION_TARGET_CHANGED");
+		});
+		const audit = await ctx.prisma.correction.findMany({ where: userWhere });
+		expect(audit).toHaveLength(1);
+		expect(audit[0]).toMatchObject({
+			status: "APPLIED",
+			afterSnapshot: { target: { rateSource: source, rawRate, cost } },
+		});
 	});
 
 	it("#19-1 TWD：日级回看超界或晚于原时点返回 400 和日级文案，UTC+8 第 7 天零点可提交", async () => {
@@ -2005,10 +2349,21 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		});
 		extraRateRowIds.push(rateRow.id);
 
+		const preview = await request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send(payload)
+			.expect(200);
+		expect(preview.body.data.holdingQuote).toMatchObject({
+			rate: "0.23000000",
+			source: "er-api",
+			observedAt: eligibleAt.toISOString(),
+		});
+
 		await request(app.getHttpServer())
 			.post("/api/corrections")
 			.set(bearer(user.accessToken))
-			.send(payload)
+			.send({ ...payload, previewQuoteKey: preview.body.data.holdingQuote.confirmationKey })
 			.expect(201);
 
 		const holding = await ctx.prisma.initialHolding.findUniqueOrThrow({

@@ -776,7 +776,7 @@ export interface paths {
         put?: never;
         /**
          * 提交更正（事务）
-         * @description 事务内：受影响币种账户行锁（按币种码排序防死锁）→ baseVersion/baseUpdatedAt 乐观校验（409 CORRECTION_TARGET_CHANGED）→ 新鲜数据重放复核（V1 资金缺口 / V2 分配冲突 / V3 历史时点缺口 → 409 且零变化）→ 目标行 update + version+1 → 重建 CostLot/UsageLotAllocation → 余额 = 重放终态 → Correction(APPLIED) 留痕。复核不通过时独立事务尽力写 FAILED 尝试留痕（含拟改内容与失败原因），原数据零变化。
+         * @description 事务内锁定受影响币种账户并重算。USAGE 须确认本次影响，初始持仓改币种须确认预览报价。版本或使用影响失配返回 409 CORRECTION_TARGET_CHANGED，报价失配返回 409 CORRECTION_QUOTE_CHANGED，均须重新预览。校验通过后重放账本并写入 APPLIED；资金、分配或历史缺口拒绝时，业务数据零变化，另写 FAILED 尝试留痕。
          */
         post: operations["CorrectionController_apply"];
         delete?: never;
@@ -2973,6 +2973,21 @@ export interface components {
              */
             message: string;
         };
+        CorrectionHoldingQuoteDto: {
+            /** @description 提交时原样回传的报价确认键 */
+            confirmationKey: string;
+            /** @description 重算成本采用的汇率（8 位小数） */
+            rate: string;
+            /** @description 舍入前的原始采用价（10 位小数） */
+            rawRate: string;
+            /**
+             * @description 报价来源
+             * @example abc
+             */
+            source: string;
+            /** @description 报价观测时间（ISO 8601） */
+            observedAt: string;
+        };
         CorrectionDiffItemDto: {
             /**
              * @description 字段名
@@ -3043,6 +3058,30 @@ export interface components {
              * @example 400.0000
              */
             usedAfter: string;
+            /** @description 增额中由原计划分配承担的金额（4 位） */
+            fromPlan: string;
+            /** @description 增额中从未分配余额补入的金额（4 位） */
+            supplement: string;
+            /**
+             * @description 更正前的计划剩余分配（4 位）
+             * @example 200.0000
+             */
+            remainingBefore: string;
+            /**
+             * @description 更正后的计划剩余分配（4 位）
+             * @example 0.0000
+             */
+            remainingAfter: string;
+            /**
+             * @description 增加的用量中来自本计划原有剩余分配的金额（4 位）
+             * @example 200.0000
+             */
+            usedFromRemaining: string;
+            /**
+             * @description 未分配余额变动（4 位）：正值为返还，负值为补入本计划并立即使用
+             * @example -100.0000
+             */
+            unallocatedDelta: string;
         };
         CorrectionCostImpactDto: {
             /**
@@ -3064,7 +3103,7 @@ export interface components {
         CorrectionImpactSummaryDto: {
             /** @description 余额影响（受影响币种） */
             balances: components["schemas"]["CorrectionBalanceImpactDto"][];
-            /** @description 计划分配影响（使用改小/改大时，本期为空数组） */
+            /** @description 使用金额更正的计划分配及资金来源影响；其他更正为空数组 */
             allocations: components["schemas"]["CorrectionAllocationImpactDto"][];
             /** @description 使用成本影响（受影响币种内每笔使用） */
             costs: components["schemas"]["CorrectionCostImpactDto"][];
@@ -3128,12 +3167,16 @@ export interface components {
             after: {
                 [key: string]: unknown;
             };
+            /** @description 初始持仓改币种采用的历史报价及确认键，仅改币种时返回 */
+            holdingQuote?: components["schemas"]["CorrectionHoldingQuoteDto"];
             /** @description 逐字段前后对比（仅列发生变化且有展示语义的字段） */
             diff: components["schemas"]["CorrectionDiffItemDto"][];
             /** @description 影响面汇总 */
             impacts: components["schemas"]["CorrectionImpactSummaryDto"];
             /** @description 拦截明细（非空 = 不能提交，确认按钮应禁用） */
             blockers: components["schemas"]["CorrectionBlockerDto"][];
+            /** @description USAGE 预览的影响指纹，提交时原样传回 */
+            expectedUsageImpact?: string;
         };
         CorrectionApplyResultDto: {
             /**
@@ -3304,11 +3347,15 @@ export interface components {
              * @example 1
              */
             baseVersion?: number;
+            /** @description USAGE 提交必填，传回影响预览返回的 expectedUsageImpact */
+            expectedUsageImpact?: string;
             /**
              * @description 乐观校验基准更新时间（INITIAL_HOLDING 用，无 version 列；preview 时所读到的目标 updatedAt）
              * @example 2026-09-20T12:00:00.000Z
              */
             baseUpdatedAt?: string;
+            /** @description 初始持仓改币种时，从影响预览的 holdingQuote.confirmationKey 原样提交；其他更正无需传入 */
+            previewQuoteKey?: string;
             /**
              * @description 修改原因（必填；失败尝试亦留痕该原因）
              * @example 手续费实际为 20 港元，当时漏填
@@ -3323,7 +3370,7 @@ export interface components {
              * @example CORRECTION_HISTORICAL_SHORTFALL
              * @enum {string}
              */
-            code: "CORRECTION_TARGET_NOT_FOUND" | "INVALID_CORRECTION_PARAMS" | "CORRECTION_NOT_ALLOWED" | "RATE_QUOTE_UNAVAILABLE" | "CORRECTION_TARGET_TYPE_UNAVAILABLE" | "CORRECTION_TARGET_CHANGED" | "CORRECTION_INSUFFICIENT_FUNDS" | "CORRECTION_ALLOCATION_CONFLICT" | "CORRECTION_HISTORICAL_SHORTFALL";
+            code: "CORRECTION_TARGET_NOT_FOUND" | "INVALID_CORRECTION_PARAMS" | "CORRECTION_NOT_ALLOWED" | "RATE_QUOTE_UNAVAILABLE" | "CORRECTION_QUOTE_CHANGED" | "CORRECTION_TARGET_TYPE_UNAVAILABLE" | "CORRECTION_TARGET_CHANGED" | "CORRECTION_INSUFFICIENT_FUNDS" | "CORRECTION_ALLOCATION_CONFLICT" | "CORRECTION_HISTORICAL_SHORTFALL";
             /**
              * @description 错误描述（面向用户展示）
              * @example 更正后历史使用发生时同币种资金不足，不能提交
@@ -5043,7 +5090,7 @@ export interface operations {
                     "application/json": components["schemas"]["CorrectionErrorDto"];
                 };
             };
-            /** @description 乐观校验失配（CORRECTION_TARGET_CHANGED）/ 资金缺口（CORRECTION_INSUFFICIENT_FUNDS）/ 分配冲突（CORRECTION_ALLOCATION_CONFLICT）/ 历史时点缺口（CORRECTION_HISTORICAL_SHORTFALL） */
+            /** @description 版本或使用影响失配（CORRECTION_TARGET_CHANGED）/ 报价确认键缺失或失配（CORRECTION_QUOTE_CHANGED）/ 资金缺口（CORRECTION_INSUFFICIENT_FUNDS）/ 分配冲突（CORRECTION_ALLOCATION_CONFLICT）/ 历史时点缺口（CORRECTION_HISTORICAL_SHORTFALL） */
             409: {
                 headers: {
                     [name: string]: unknown;

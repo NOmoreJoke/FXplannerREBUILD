@@ -18,8 +18,7 @@ import type {
  * 关键分支：
  * - 原因必填：客户端先拦（后端 V0 同口径权威校验）；
  * - blockers 非空：确认按钮禁用（服务端为权威防线，客户端仅隐藏无效提交）；
- * - apply 409 CORRECTION_TARGET_CHANGED：预览后数据已变 → 自动用最新数据重新预览
- *   （方案 §5.4 ②：前端引导重新预览而非静默沿用）；
+ * - apply 409 CORRECTION_TARGET_CHANGED：重新加载目标并提示重新查看影响，USAGE 同时清除旧预览；
  * - apply 400/409 业务拦截（V1~V4）：submitError 展示 code + message，
  *   预览结果失效需重新查看影响。
  *
@@ -189,7 +188,7 @@ export function buildCorrectionChanges(
 	return provided.length > 0 ? changes : null;
 }
 
-/** 更正表单状态机（目标加载 + 变更收集 + preview/apply + 409 自动重新预览） */
+/** 更正表单状态机（目标加载 + 变更收集 + preview/apply + 409 重新预览提示） */
 export function useCorrectionForm(
 	targetType: CorrectionTargetType,
 	targetId: string,
@@ -296,7 +295,7 @@ export function useCorrectionForm(
 		}
 	}, [errors, form, targetType, targetId, target, loadTarget]);
 
-	/** 确认提交（事务）；409 TARGET_CHANGED 时自动重新预览引导再次确认 */
+	/** 确认提交。预览中的报价或资金来源失效时，要求用户重新预览。 */
 	const confirm =
 		useCallback(async (): Promise<CorrectionApplyResult | null> => {
 			if (
@@ -319,26 +318,45 @@ export function useCorrectionForm(
 					targetId,
 					reason: form.reason.trim(),
 					changes,
+					...(targetType === "USAGE"
+						? { expectedUsageImpact: preview.expectedUsageImpact }
+						: {}),
 					...(targetType === "INITIAL_HOLDING"
 						? {
 								baseUpdatedAt:
 									(target?.target.updatedAt as string) ?? undefined,
+								...(preview.holdingQuote
+									? { previewQuoteKey: preview.holdingQuote.confirmationKey }
+									: {}),
 							}
 						: { baseVersion: (target?.target.version as number) ?? undefined }),
 				});
 				return result;
 			} catch (error) {
 				const code = error instanceof ApiError ? error.code : undefined;
+				if (code === "CORRECTION_QUOTE_CHANGED" ||
+					(code === "RATE_QUOTE_UNAVAILABLE" && preview.holdingQuote)
+				) {
+					setPreview(null);
+					setSubmitError({
+						code,
+						message: code === "CORRECTION_QUOTE_CHANGED"
+							? "历史报价已变动，请重新查看影响并确认。"
+							: "原时点的历史报价暂不可用，请重新查看影响。",
+					});
+					return null;
+				}
 				setSubmitError({
 					code,
 					message:
-						code === "CORRECTION_TARGET_CHANGED"
+						code === "CORRECTION_TARGET_CHANGED" && targetType !== "USAGE"
 							? "该记录已被其他修改更新，已为您重新加载，请重新查看影响后再提交"
 							: error instanceof ApiError
 								? error.message
 								: "提交失败，请稍后重试",
 				});
 				if (code === "CORRECTION_TARGET_CHANGED") {
+					if (targetType === "USAGE") setPreview(null);
 					setStale(true);
 					await loadTarget();
 				}

@@ -101,7 +101,7 @@ export class CorrectionController {
 	@ApiOperation({
 		summary: "提交更正（事务）",
 		description:
-			"事务内：受影响币种账户行锁（按币种码排序防死锁）→ baseVersion/baseUpdatedAt 乐观校验（409 CORRECTION_TARGET_CHANGED）→ 新鲜数据重放复核（V1 资金缺口 / V2 分配冲突 / V3 历史时点缺口 → 409 且零变化）→ 目标行 update + version+1 → 重建 CostLot/UsageLotAllocation → 余额 = 重放终态 → Correction(APPLIED) 留痕。复核不通过时独立事务尽力写 FAILED 尝试留痕（含拟改内容与失败原因），原数据零变化。",
+			"事务内锁定受影响币种账户并重算。USAGE 须确认本次影响，初始持仓改币种须确认预览报价。版本或使用影响失配返回 409 CORRECTION_TARGET_CHANGED，报价失配返回 409 CORRECTION_QUOTE_CHANGED，均须重新预览。校验通过后重放账本并写入 APPLIED；资金、分配或历史缺口拒绝时，业务数据零变化，另写 FAILED 尝试留痕。",
 	})
 	@ApiBody({ type: CorrectionRequestDto })
 	@ApiResponse({
@@ -126,7 +126,7 @@ export class CorrectionController {
 	})
 	@ApiConflictResponse({
 		description:
-			"乐观校验失配（CORRECTION_TARGET_CHANGED）/ 资金缺口（CORRECTION_INSUFFICIENT_FUNDS）/ 分配冲突（CORRECTION_ALLOCATION_CONFLICT）/ 历史时点缺口（CORRECTION_HISTORICAL_SHORTFALL）",
+			"版本或使用影响失配（CORRECTION_TARGET_CHANGED）/ 报价确认键缺失或失配（CORRECTION_QUOTE_CHANGED）/ 资金缺口（CORRECTION_INSUFFICIENT_FUNDS）/ 分配冲突（CORRECTION_ALLOCATION_CONFLICT）/ 历史时点缺口（CORRECTION_HISTORICAL_SHORTFALL）",
 		type: CorrectionErrorDto,
 	})
 	async apply(@CurrentUser() user: User, @Body() dto: CorrectionRequestDto) {

@@ -73,10 +73,10 @@ const previewFixture: CorrectionPreview = {
 	blockers: [],
 };
 
-async function setup() {
-	mockedTarget.mockResolvedValue(targetFixture);
+async function setup(target = targetFixture) {
+	mockedTarget.mockResolvedValue(target);
 	const { result } = renderHook(() =>
-		useCorrectionForm("TRANSACTION", "txn-1"),
+		useCorrectionForm(target.targetType, target.targetId),
 	);
 	await act(async () => {
 		await result.current.loadTarget();
@@ -195,6 +195,144 @@ describe("useCorrectionForm", () => {
 		expect(result.current.stale).toBe(true);
 		// 自动重新加载目标（乐观基准刷新到 version 2）
 		expect(mockedTarget).toHaveBeenCalledTimes(2);
+	});
+
+	it.each([
+		[409, "CORRECTION_QUOTE_CHANGED"],
+		[400, "RATE_QUOTE_UNAVAILABLE"],
+	] as const)("初始持仓提交 %i %s：清除旧报价，重新预览后才能确认", async (status, code) => {
+		const baseUpdatedAt = "2026-09-20T12:00:00.000Z";
+		mockedTarget.mockResolvedValueOnce({
+			targetType: "INITIAL_HOLDING",
+			targetId: "holding-1",
+			target: { currencyCode: "USD", amount: "1000.0000", updatedAt: baseUpdatedAt },
+		});
+		const { result } = renderHook(() =>
+			useCorrectionForm("INITIAL_HOLDING", "holding-1"),
+		);
+		await act(async () => {
+			await result.current.loadTarget();
+		});
+		act(() => {
+			result.current.setField("reason", "当时持有的是泰铢");
+			result.current.setField("currencyCode", "THB");
+		});
+		const firstPreview: CorrectionPreview = {
+			...previewFixture,
+			targetType: "INITIAL_HOLDING",
+			targetId: "holding-1",
+			holdingQuote: {
+				confirmationKey: "old-key",
+				rate: "0.21000000",
+				rawRate: "0.2100000000",
+				source: "abc",
+				observedAt: baseUpdatedAt,
+			},
+		};
+		mockedPreview.mockResolvedValueOnce(firstPreview);
+		await act(async () => {
+			await result.current.runPreview();
+		});
+		mockedApply.mockRejectedValueOnce(new ApiError("报价需重新预览", status, code));
+		await act(async () => {
+			await result.current.confirm();
+		});
+		expect(mockedApply).toHaveBeenLastCalledWith(expect.objectContaining({
+			baseUpdatedAt,
+			previewQuoteKey: "old-key",
+		}));
+		expect(result.current.preview).toBeNull();
+		expect(result.current.submitError?.message).toContain("重新查看影响");
+		expect(mockedTarget).toHaveBeenCalledTimes(1);
+		expect(await result.current.confirm()).toBeNull();
+		expect(mockedApply).toHaveBeenCalledTimes(1);
+
+		mockedPreview.mockResolvedValueOnce({
+			...firstPreview,
+			holdingQuote: {
+				...firstPreview.holdingQuote!,
+				confirmationKey: "new-key",
+				rate: "0.23000000",
+				rawRate: "0.2300000000",
+			},
+		});
+		await act(async () => {
+			await result.current.runPreview();
+		});
+		expect(mockedPreview).toHaveBeenLastCalledWith({
+			targetType: "INITIAL_HOLDING",
+			targetId: "holding-1",
+			baseUpdatedAt,
+			reason: "当时持有的是泰铢",
+			changes: { currencyCode: "THB" },
+		});
+		expect(mockedApply).toHaveBeenCalledTimes(1);
+		mockedApply.mockResolvedValueOnce({
+			correctionId: "c1",
+			status: "APPLIED",
+			targetType: "INITIAL_HOLDING",
+			targetId: "holding-1",
+			targetVersion: null,
+			createdAt: baseUpdatedAt,
+		});
+		const applied = await act(async () => result.current.confirm());
+		expect(applied?.status).toBe("APPLIED");
+		expect(mockedApply).toHaveBeenLastCalledWith(expect.objectContaining({
+			previewQuoteKey: "new-key",
+		}));
+	});
+
+	it("USAGE 只提交当前预览的影响指纹，资金来源冲突后须再次预览确认", async () => {
+		const { result } = await setup({
+			targetType: "USAGE",
+			targetId: "usage-1",
+			target: { version: 1 },
+		});
+		act(() => {
+			result.current.setField("amount", "2000");
+			result.current.setField("reason", "补录使用金额");
+		});
+		const usagePreview: CorrectionPreview = {
+			...previewFixture,
+			targetType: "USAGE",
+			targetId: "usage-1",
+			expectedUsageImpact: "before",
+		};
+		mockedPreview.mockResolvedValueOnce(usagePreview);
+		await act(async () => { await result.current.runPreview(); });
+		mockedApply.mockRejectedValueOnce(
+			new ApiError("影响已变化，请重新查看影响", 409, "CORRECTION_TARGET_CHANGED"),
+		);
+		expect(await act(async () => result.current.confirm())).toBeNull();
+		expect(mockedApply).toHaveBeenNthCalledWith(1, {
+			targetType: "USAGE",
+			targetId: "usage-1",
+			baseVersion: 1,
+			reason: "补录使用金额",
+			changes: { amount: "2000" },
+			expectedUsageImpact: "before",
+		});
+		expect(result.current.preview).toBeNull();
+		expect(result.current.submitError?.message).toContain("重新查看影响");
+		expect(await act(async () => result.current.confirm())).toBeNull();
+		expect(mockedApply).toHaveBeenCalledTimes(1);
+
+		mockedPreview.mockResolvedValueOnce({ ...usagePreview, expectedUsageImpact: "after" });
+		await act(async () => { await result.current.runPreview(); });
+		expect(mockedApply).toHaveBeenCalledTimes(1);
+		mockedApply.mockResolvedValueOnce({
+			correctionId: "correction-1",
+			status: "APPLIED",
+			targetType: "USAGE",
+			targetId: "usage-1",
+			targetVersion: 2,
+			createdAt: "2026-09-20T12:00:00.000Z",
+		});
+		const accepted = await act(async () => result.current.confirm());
+		expect(accepted?.status).toBe("APPLIED");
+		expect(mockedApply).toHaveBeenNthCalledWith(2, expect.objectContaining({
+			expectedUsageImpact: "after",
+		}));
 	});
 
 	it("提交中防重复点击：applying 期间 confirm 直接返回 null", async () => {

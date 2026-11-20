@@ -6,6 +6,7 @@ import {
 	Logger,
 } from "@nestjs/common";
 import { finalAmountOf, getCurrency, roundRateTo8 } from "@fxplanner-new/money";
+import { createHash } from "node:crypto";
 import {
 	Prisma,
 	type InitialHolding,
@@ -29,8 +30,10 @@ import {
 	type UsageAllocationDelta,
 } from "./correction-calculator";
 import type {
+	CorrectionAllocationImpactDto,
 	CorrectionApplyResultDto,
 	CorrectionBlockerDetailDto,
+	CorrectionHoldingQuoteDto,
 	CorrectionListDto,
 	CorrectionPreviewDto,
 	CorrectionRequestDto,
@@ -51,11 +54,11 @@ export class CorrectionTargetNotFoundException extends HttpException {
 
 /** 乐观校验失配：预览后目标已被其他修改更新（409，前端据此引导重新预览，方案 §5.4 ②） */
 export class CorrectionTargetChangedException extends HttpException {
-	constructor() {
+	constructor(message = "该记录已被其他修改更新，请重新查看影响后再提交") {
 		super(
 			{
 				code: "CORRECTION_TARGET_CHANGED",
-				message: "该记录已被其他修改更新，请重新查看影响后再提交",
+				message,
 			},
 			HttpStatus.CONFLICT,
 		);
@@ -197,6 +200,7 @@ interface Evaluation {
 		allocationUsedAmount: Prisma.Decimal;
 	} | null;
 	after: Record<string, unknown>;
+	holdingQuote?: CorrectionHoldingQuoteDto;
 	diff: Array<{ field: string; before: string | null; after: string | null; display: string }>;
 	balances: Array<{ currencyCode: string; before: Prisma.Decimal; after: Prisma.Decimal }>;
 	costsBefore: Map<string, Prisma.Decimal | null>;
@@ -223,6 +227,7 @@ interface UsageAllocationAudit {
 
 /** 列表分页大小（个人工具量级，固定值防深翻页） */
 const PAGE_SIZE = 20;
+const USAGE_IMPACT_CHANGED = "使用更正的影响已变化或缺少确认，请重新查看影响后再提交";
 
 @Injectable()
 export class CorrectionService {
@@ -243,12 +248,24 @@ export class CorrectionService {
 		dto: CorrectionRequestDto,
 	): Promise<CorrectionPreviewDto> {
 		this.assertSupportedTargetType(dto.targetType);
-		const evaluation = await this.evaluate(this.prisma, userId, dto);
+		if (dto.targetType === "USAGE") {
+			const evaluation = await this.prisma.$transaction(
+				(tx) => this.evaluate(tx, userId, dto, "preview"),
+				{ isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+			);
+			const preview = this.buildPreview(evaluation);
+			return { ...preview, expectedUsageImpact: this.usageImpactFingerprint(dto, preview) };
+		}
+		return this.buildPreview(await this.evaluate(this.prisma, userId, dto, "preview"));
+	}
+
+	private buildPreview(evaluation: Evaluation): CorrectionPreviewDto {
 		return {
 			targetType: evaluation.targetType,
 			targetId: evaluation.targetId,
 			before: evaluation.before,
 			after: evaluation.after,
+			...(evaluation.holdingQuote ? { holdingQuote: evaluation.holdingQuote } : {}),
 			diff: evaluation.diff,
 			impacts: {
 				balances: evaluation.balances.map((balance) => ({
@@ -256,7 +273,7 @@ export class CorrectionService {
 					before: balance.before.toFixed(4),
 					after: balance.after.toFixed(4),
 				})),
-				allocations: [], // 使用改小/改大的分配影响随 M7 接线启用（方案 §5.2）
+				allocations: serializeAllocationImpacts(evaluation),
 				costs: [...evaluation.costsAfter.entries()].map(([usageId, costAfter]) => ({
 					usageId,
 					costBefore: serializeCostOrNull(evaluation.costsBefore.get(usageId)),
@@ -270,6 +287,13 @@ export class CorrectionService {
 				details: failure.details,
 			})),
 		};
+	}
+
+	/** 同一序列化结果用于展示与确认，避免显示口径和事务校验漂移。 */
+	private usageImpactFingerprint(dto: CorrectionRequestDto, preview: CorrectionPreviewDto): string {
+		return createHash("sha256")
+			.update(JSON.stringify([dto.reason.trim(), preview]))
+			.digest("hex");
 	}
 
 	/**
@@ -296,6 +320,10 @@ export class CorrectionService {
 				this.applyInTransaction(tx, userId, dto, beforeTarget),
 			);
 		} catch (error) {
+			// V4 已令此前的 USAGE 预览失效。预览本身遇到 V4 仍返回原业务原因。
+			if (dto.targetType === "USAGE" && error instanceof CorrectionNotAllowedException) {
+				throw new CorrectionTargetChangedException(USAGE_IMPACT_CHANGED);
+			}
 			// 复核不通过（V1~V4 类业务拦截）：主事务已回滚，独立事务尽力写 FAILED 尝试留痕
 			// （doc 09:76-84「失败也保存尝试记录」；留痕失败仅记日志，不影响错误响应）
 			if (error instanceof HttpException && this.isReplayRejection(error)) {
@@ -402,9 +430,22 @@ export class CorrectionService {
 		// ② 事务内重读目标 + 乐观校验（预览后数据已变 → 409，前端引导重新预览，doc 10:11）
 		const locked = await this.loadTarget(tx, userId, dto.targetType, dto.targetId);
 		this.assertOptimisticMatch(dto, locked);
+		if (locked.type === "USAGE") {
+			if (!dto.expectedUsageImpact) {
+				throw new CorrectionTargetChangedException(USAGE_IMPACT_CHANGED);
+			}
+			// 记使用与更正共用账户锁。修改/取消计划先锁计划再改分配，因此还需锁计划行。
+			await tx.$queryRaw`SELECT id FROM plans WHERE id = ${locked.usage!.planId} FOR NO KEY UPDATE`;
+		}
 
 		// ③ 新鲜数据完整重放 + V0~V4（与 preview 同一套计算，所见即所存）
-		const evaluation = await this.evaluate(tx, userId, dto);
+		const evaluation = await this.evaluate(tx, userId, dto, "apply");
+		if (
+			evaluation.targetType === "USAGE" &&
+			dto.expectedUsageImpact !== this.usageImpactFingerprint(dto, this.buildPreview(evaluation))
+		) {
+			throw new CorrectionTargetChangedException(USAGE_IMPACT_CHANGED);
+		}
 		if (evaluation.failures.length > 0) {
 			throw this.failuresToException(evaluation.failures);
 		}
@@ -472,6 +513,7 @@ export class CorrectionService {
 		db: CorrectionDb,
 		userId: string,
 		dto: CorrectionRequestDto,
+		mode: "preview" | "apply",
 	): Promise<Evaluation> {
 		const target = await this.loadTarget(db, userId, dto.targetType, dto.targetId);
 		this.assertOptimisticMatch(dto, target);
@@ -488,7 +530,7 @@ export class CorrectionService {
 		if (dto.targetType === "USAGE") {
 			return this.evaluateUsage(db, userId, dto, target.usage!, settings);
 		}
-		return this.evaluateHolding(db, userId, dto, target.holding!, settings);
+		return this.evaluateHolding(db, userId, dto, target.holding!, settings, mode);
 	}
 
 	/** 交易更正评估：变更解析 → 受影响币种重放（改币种时两币种各自全量）→ 校验 → 影响面 */
@@ -803,6 +845,7 @@ export class CorrectionService {
 		dto: CorrectionRequestDto,
 		original: InitialHolding,
 		settings: { baseCurrency: string; ledgerStartedAt: Date | null } | null,
+		mode: "preview" | "apply",
 	): Promise<Evaluation> {
 		const changes = parseCorrectionChanges(dto.changes as Record<string, unknown>, {
 			targetType: "INITIAL_HOLDING",
@@ -827,17 +870,21 @@ export class CorrectionService {
 		const baseCurrency = settings?.baseCurrency;
 		const baseDecimalPlaces =
 			(baseCurrency ? getCurrency(baseCurrency)?.decimalPlaces : undefined) ?? 2;
-		const currencyChanged =
-			changes.currencyCode !== undefined &&
-			changes.currencyCode !== original.currencyCode;
+		const nextCode = changes.currencyCode ?? original.currencyCode;
+		const currencyChanged = nextCode !== original.currencyCode;
+
+		const affectedCurrencies = currencyChanged
+			? [original.currencyCode, nextCode]
+			: [original.currencyCode];
+		const context = await this.loadLedgerContexts(db, userId, affectedCurrencies);
 
 		// 币种更正须取得原确认时点的合格报价，取价窗口由 RateService 按来源粒度处理。
 		let nextRate = original.rate;
 		let nextRawRate = original.rawRate;
 		let nextRateSource = original.rateSource;
 		let nextRateObservedAt = original.rateObservedAt;
+		let holdingQuote: CorrectionHoldingQuoteDto | undefined;
 		if (currencyChanged) {
-			const nextCode = changes.currencyCode!;
 			if (!baseCurrency) {
 				throw new CorrectionInvalidParamsException(
 					"尚未完成首次设置，无法更正初始持仓币种",
@@ -846,19 +893,17 @@ export class CorrectionService {
 			if (nextCode === baseCurrency) {
 				throw new CorrectionNotAllowedException("初始持仓币种不能与本位币相同");
 			}
-			const existing = await db.initialHolding.findFirst({
-				where: { userId, currencyCode: nextCode },
-				select: { id: true },
-			});
-			if (existing) {
+			if (context.get(nextCode)!.initialHoldings.length > 0) {
 				throw new CorrectionInvalidParamsException(
 					"该币种已有初始记录；请在对应币种账户的初始记录中发起更正",
 				);
 			}
+			// 取价放在所有账本读取之后，提交仅查缓存，重放和落库使用同一份已确认报价。
 			const quote = await this.rateService.findQuoteAt(
 				baseCurrency,
 				nextCode,
 				original.confirmedAt,
+				{ backfill: mode === "preview" },
 			);
 			if (!quote) {
 				throw new RateQuoteUnavailableException();
@@ -868,6 +913,34 @@ export class CorrectionService {
 			nextRawRate = new Prisma.Decimal(adopted);
 			nextRateSource = quote.source;
 			nextRateObservedAt = quote.observedAt;
+			const rawRate = nextRawRate.toFixed(10);
+			const observedAt = nextRateObservedAt.toISOString();
+			const confirmationKey = createHash("sha256")
+				.update(JSON.stringify([
+					original.id,
+					baseCurrency,
+					nextCode,
+					rawRate,
+					nextRateSource,
+					observedAt,
+				]))
+				.digest("hex");
+			if (mode === "apply" && dto.previewQuoteKey !== confirmationKey) {
+				throw new HttpException(
+					{
+						code: "CORRECTION_QUOTE_CHANGED",
+						message: "请重新查看影响并确认当前报价",
+					},
+					HttpStatus.CONFLICT,
+				);
+			}
+			holdingQuote = {
+				confirmationKey,
+				rate: nextRate.toFixed(8),
+				rawRate,
+				source: nextRateSource,
+				observedAt,
+			};
 		}
 
 		// 沿用（或新取）报价重算折算成本：金额更正不用今天的行情（验收场景 12），改 0 成本归 0
@@ -877,7 +950,7 @@ export class CorrectionService {
 		const effective: EffectiveHolding = {
 			id: original.id,
 			userId,
-			currencyCode: changes.currencyCode ?? original.currencyCode,
+			currencyCode: nextCode,
 			amount: nextAmount,
 			rate: nextRate,
 			rawRate: nextRawRate,
@@ -888,11 +961,6 @@ export class CorrectionService {
 			createdAt: original.createdAt,
 			updatedAt: original.updatedAt,
 		};
-
-		const affectedCurrencies = currencyChanged
-			? [original.currencyCode, changes.currencyCode!]
-			: [original.currencyCode];
-		const context = await this.loadLedgerContexts(db, userId, affectedCurrencies);
 
 		const beforeReplays = new Map<string, ReplayResult>();
 		const afterReplays = new Map<string, ReplayResult>();
@@ -940,6 +1008,7 @@ export class CorrectionService {
 			usageAllocationDelta: null,
 			usagePlan: null,
 			after: this.serializeHolding(effective),
+			holdingQuote,
 			diff: this.holdingDiff(this.toEffectiveHolding(original), effective),
 			balances: affectedCurrencies.map((currencyCode) => ({
 				currencyCode,
@@ -1817,6 +1886,42 @@ export class CorrectionService {
 }
 
 // ────────────────────────── 模块级辅助（无状态）──────────────────────────
+
+/** 用提交同一份调整量展示计划变化与来源。 */
+function serializeAllocationImpacts({
+	afterUsage,
+	usageAllocationDelta: delta,
+	usagePlan,
+}: Evaluation): CorrectionAllocationImpactDto[] {
+	if (!afterUsage || !delta || !usagePlan || delta.usedAmountDelta.isZero()) {
+		return [];
+	}
+
+	const { planId, allocationAmount, allocationUsedAmount } = usagePlan;
+	const amountAfter = allocationAmount.add(delta.amountDelta);
+	const usedAfter = allocationUsedAmount.add(delta.usedAmountDelta);
+	const usedFromRemaining = delta.usedAmountDelta.isPositive()
+		? delta.usedAmountDelta.sub(delta.supplement).toFixed(4)
+		: "0.0000";
+
+	return [
+		{
+			planId,
+			currencyCode: afterUsage.currencyCode,
+			amountBefore: allocationAmount.toFixed(4),
+			amountAfter: amountAfter.toFixed(4),
+			usedBefore: allocationUsedAmount.toFixed(4),
+			usedAfter: usedAfter.toFixed(4),
+			remainingBefore: allocationAmount.sub(allocationUsedAmount).toFixed(4),
+			remainingAfter: amountAfter.sub(usedAfter).toFixed(4),
+			fromPlan: usedFromRemaining,
+			supplement: delta.supplement.toFixed(4),
+			usedFromRemaining,
+			// 剩余分配已反映在计划内，未分配余额只承担分配总额的反向变化。
+			unallocatedDelta: delta.amountDelta.negated().toFixed(4),
+		},
+	];
+}
 
 /** 汇总重放结果中每笔使用成本（usageId → cost；无使用的币种自然为空 Map） */
 function collectUsageCosts(

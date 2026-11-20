@@ -1205,6 +1205,15 @@ describe("RateService.findQuoteAt 原时点取价（MVP-F0-2 按源粒度）", (
 		expect(quote).toBeNull();
 	});
 
+	it("仅查缓存未命中时，不请求数据源或回补落库", async () => {
+		const { service, prisma, provider } = build();
+		prisma.exchangeRate.findFirst.mockResolvedValue(null);
+
+		expect(await service.findQuoteAt("CNY", "USD", AT, { backfill: false })).toBeNull();
+		expect(provider.fetchHistory).not.toHaveBeenCalled();
+		expect(prisma.exchangeRate.createMany).not.toHaveBeenCalled();
+	});
+
 	it("回补行为与结果一致：frankfurter 历史点以 sourceForPair 来源落库（供图表），但原时点重查仍为 null——回补不伪造原时点可用性", async () => {
 		const { service, prisma, provider } = build();
 		prisma.exchangeRate.findFirst.mockResolvedValue(null);

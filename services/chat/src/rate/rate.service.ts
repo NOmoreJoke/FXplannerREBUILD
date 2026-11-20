@@ -258,6 +258,7 @@ export class RateService {
     baseCurrency: string,
     currencyCode: string,
     at: Date,
+    { backfill = true }: { backfill?: boolean } = {},
   ): Promise<{
     rate: string;
     sellRate?: string;
@@ -297,7 +298,7 @@ export class RateService {
     if (!row) {
       row = await findDaily();
     }
-    if (!row) {
+    if (!row && backfill) {
       // 本地无合格报价：回补当日历史后重查（与 getHistory 同一落库通道）
       const dayStart = utc8DayStart(at);
       try {

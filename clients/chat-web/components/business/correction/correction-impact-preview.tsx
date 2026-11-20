@@ -6,10 +6,7 @@ import type { CorrectionPreview } from "@/lib/api/contract";
 /**
  * 影响预览段（corrections 技术方案 §6「correction-impact-preview」）
  *
- * 三段展示：
- * - 逐字段前后对比（diff.display 原样渲染，含「未知 → 20.0000」语义）；
- * - 余额/成本影响（金额字符串原样渲染，禁止千分位/精度裁剪）；
- * - blockers 拦截明细（非空 = 不能提交：缺口日期与金额、受影响计划）。
+ * 展示逐字段变更、余额、资金来源、成本和拦截原因。
  */
 
 export interface CorrectionImpactPreviewProps {
@@ -20,6 +17,7 @@ export function CorrectionImpactPreview({
 	preview,
 }: CorrectionImpactPreviewProps) {
 	const hasBlockers = preview.blockers.length > 0;
+	const quote = preview.holdingQuote;
 	return (
 		<section className="space-y-4 rounded-2xl border border-border bg-white p-6">
 			<h2 className="text-base font-bold text-foreground">影响预览</h2>
@@ -79,6 +77,23 @@ export function CorrectionImpactPreview({
 				</div>
 			)}
 
+			{quote && (
+				<div>
+					<h3 className="text-sm font-semibold text-foreground">采用的历史报价</h3>
+					<p className="mt-2 text-sm text-ink-600 tabular-nums">
+						{quote.rate}
+						{quote.rawRate !== `${quote.rate}00` && `（原始报价 ${quote.rawRate}）`}
+						{" · 来源 "}{quote.source}{" · "}
+						<time dateTime={quote.observedAt}>
+							{new Date(quote.observedAt).toLocaleString("zh-CN", {
+								timeZone: "Asia/Shanghai",
+								hour12: false,
+							})}（UTC+8）
+						</time>
+					</p>
+				</div>
+			)}
+
 			{preview.impacts.balances.length > 0 && (
 				<div>
 					<h3 className="text-sm font-semibold text-foreground">余额变化</h3>
@@ -89,6 +104,48 @@ export function CorrectionImpactPreview({
 							</li>
 						))}
 					</ul>
+				</div>
+			)}
+
+			{preview.impacts.allocations.length > 0 && (
+				<div>
+					<h3 className="text-sm font-semibold text-foreground">
+						本计划与资金来源
+					</h3>
+					{preview.impacts.allocations.map((allocation) => {
+						const { currencyCode, unallocatedDelta } = allocation;
+						const isSupplement = unallocatedDelta.startsWith("-");
+						const isReturn = !isSupplement && unallocatedDelta !== "0.0000";
+						return (
+							<ul
+								key={allocation.planId}
+								className="mt-2 space-y-1 text-sm text-ink-600 tabular-nums"
+							>
+								<li>
+									本计划分配总额 {allocation.amountBefore} →{" "}
+									{allocation.amountAfter} {currencyCode}
+								</li>
+								<li>
+									本计划累计已使用 {allocation.usedBefore} →{" "}
+									{allocation.usedAfter} {currencyCode}
+								</li>
+								<li>
+									本计划剩余分配 {allocation.remainingBefore} →{" "}
+									{allocation.remainingAfter} {currencyCode}
+								</li>
+								{allocation.usedFromRemaining !== "0.0000" && (
+									<li>
+										从本计划剩余分配使用 {allocation.usedFromRemaining} {currencyCode}
+									</li>
+								)}
+								<li>
+									未分配余额 {isReturn ? "+" : ""}{unallocatedDelta} {currencyCode}
+									{isSupplement && "（补入本计划并使用）"}
+									{isReturn && "（收到返还）"}
+								</li>
+							</ul>
+						);
+					})}
 				</div>
 			)}
 

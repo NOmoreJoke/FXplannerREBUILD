@@ -299,6 +299,7 @@ describe("更正重放一致性（集成）", () => {
 				baseVersion: before.version,
 				reason: "使用金额少记了 800",
 				changes: { amount: "2000" },
+				expectedUsageImpact: preview.body.data.expectedUsageImpact,
 			})
 			.expect(201);
 
@@ -374,16 +375,23 @@ describe("更正重放一致性（集成）", () => {
 		});
 
 		try {
+			const payload = {
+				targetType: "USAGE",
+				targetId: usageId,
+				baseVersion: 1,
+				reason: "补分配写日志后模拟中断",
+				changes: { amount: "2000" },
+			};
+			const auth = bearer(user.accessToken);
+			const preview = await request(app.getHttpServer())
+				.post("/api/corrections/preview")
+				.set(auth)
+				.send(payload)
+				.expect(200);
 			await request(app.getHttpServer())
 				.post("/api/corrections")
-				.set(bearer(user.accessToken))
-				.send({
-					targetType: "USAGE",
-					targetId: usageId,
-					baseVersion: 1,
-					reason: "补分配写日志后模拟中断",
-					changes: { amount: "2000" },
-				})
+				.set(auth)
+				.send({ ...payload, expectedUsageImpact: preview.body.data.expectedUsageImpact })
 				.expect(500);
 		} finally {
 			injectFailure = false;
@@ -708,12 +716,31 @@ describe("更正重放一致性（集成）", () => {
 	});
 
 	// 真实账户行锁固定竞争。旧写序会先占住分配，再阻塞于账户 UPDATE。
-	it("#6 锁序回归：记录使用先等账户行锁，分配仍可锁定，放行后更正与使用均成功", { timeout: 20_000 }, async () => {
+	it("#6 锁序回归：记录使用先等账户行锁，分配仍可锁定，放行后按新预览更正", { timeout: 20_000 }, async () => {
 		const user = await newUser("corr-it-concurrent-locks");
 		const { planId, usageId } = await seedFullLedger(user, "1500");
 		const usageBefore = await ctx.prisma.usageRecord.findUniqueOrThrow({
 			where: { id: usageId },
 		});
+
+		const payload = {
+			targetType: "USAGE",
+			targetId: usageId,
+			baseVersion: usageBefore.version,
+			reason: "并发锁序回归：使用金额改小",
+			changes: { amount: "800" },
+		};
+		const auth = bearer(user.accessToken);
+		const preview = () => request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(auth)
+			.send(payload)
+			.expect(200);
+		const confirm = (expectedUsageImpact: string) => request(app.getHttpServer())
+			.post("/api/corrections")
+			.set(auth)
+			.send({ ...payload, expectedUsageImpact });
+		const initial = await preview();
 
 		// 持锁与观察使用独立连接池，应用连接可同时服务两个写入事务。
 		const locks = new PrismaClient();
@@ -763,17 +790,7 @@ describe("更正重放一致性（集成）", () => {
 					WHERE plan_id = ${planId}
 					FOR UPDATE NOWAIT`).resolves.toEqual([{ planId }]);
 
-				correctionRequest = request(app.getHttpServer())
-					.post("/api/corrections")
-					.set(bearer(user.accessToken))
-					.send({
-						targetType: "USAGE",
-						targetId: usageId,
-						baseVersion: usageBefore.version,
-						reason: "并发锁序回归：使用金额改小",
-						changes: { amount: "800" },
-					})
-					.then((res) => res);
+				correctionRequest = confirm(initial.body.data.expectedUsageImpact).then((res) => res);
 				void correctionRequest.catch(() => {});
 
 				// 排在 usage 后的更正可能直接等待 holder，也可能等待 usage 排队持有的锁。
@@ -791,7 +808,94 @@ describe("更正重放一致性（集成）", () => {
 			await locks.$disconnect();
 		}
 		await expect(usageRequest).resolves.toMatchObject({ status: 201 });
-		await expect(correctionRequest).resolves.toMatchObject({ status: 201 });
+		await expect(correctionRequest).resolves.toMatchObject({
+			status: 409,
+			body: { code: "CORRECTION_TARGET_CHANGED" },
+		});
+		expect(await ctx.prisma.correction.count({ where: { userId: user.userId } })).toBe(0);
+		const refreshed = await preview();
+		expect(refreshed.body.data.expectedUsageImpact).not.toBe(initial.body.data.expectedUsageImpact);
+		await confirm(refreshed.body.data.expectedUsageImpact).expect(201);
+
+		// 确定性终态（与串行顺序无关）
+		const usages = await ctx.prisma.usageRecord.findMany({
+			where: { userId: user.userId },
+			orderBy: { amount: "asc" },
+		});
+		expect(usages.map((usage) => usage.amount.toFixed(4))).toEqual([
+			"300.0000",
+			"800.0000",
+		]);
+		const correctedUsage = usages.find((usage) => usage.id === usageId);
+		expect(correctedUsage?.amount.toFixed(4)).toBe("800.0000");
+		expect(correctedUsage?.version).toBe(usageBefore.version + 1);
+		const allocation = await ctx.prisma.planAllocation.findUniqueOrThrow({
+			where: { planId },
+		});
+		expect(allocation.usedAmount.toFixed(4)).toBe("1100.0000");
+		expect(allocation.amount.toFixed(4)).toBe("1100.0000");
+		const account = await ctx.prisma.account.findUniqueOrThrow({
+			where: {
+				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
+			},
+		});
+		expect(account.balance.toFixed(4)).toBe("1900.0000");
+		await assertInvariants(ctx.prisma, user.userId);
+		const corrections = await ctx.prisma.correction.findMany({
+			where: { userId: user.userId, targetType: "USAGE" },
+		});
+		expect(corrections).toHaveLength(1);
+		expect(corrections[0]).toMatchObject({ targetId: usageId, status: "APPLIED" });
+	});
+	// #6-2 更正与新增使用按账户锁串行化。若新增先提交，更正需确认新的预览。
+	it("#6-2 并发更正与记使用：影响有变化须重新确认，分配/余额变更无丢失", async () => {
+		const user = await newUser("corr-it-concurrent-flows");
+		const { planId, usageId } = await seedFullLedger(user, "1500");
+		const usageBefore = await ctx.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: usageId },
+		});
+
+		const payload = {
+			targetType: "USAGE",
+			targetId: usageId,
+			baseVersion: usageBefore.version,
+			reason: "并发锁序回归：使用金额改小",
+			changes: { amount: "800" },
+		};
+		const preview = () => request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(bearer(user.accessToken))
+			.send(payload)
+			.expect(200);
+		const confirm = (expectedUsageImpact: string) => request(app.getHttpServer())
+			.post("/api/corrections")
+			.set(bearer(user.accessToken))
+			.send({ ...payload, expectedUsageImpact });
+		const initial = await preview();
+		const correctionPromise = confirm(initial.body.data.expectedUsageImpact);
+		const usageCreatePromise = request(app.getHttpServer())
+			.post(`/api/plans/${planId}/usages`)
+			.set(bearer(user.accessToken))
+			.send({
+				amount: "300",
+				usedAt: daysAgo(0).toISOString(),
+				remark: "并发锁序回归",
+			});
+
+		const [correctionRes, usageRes] = await Promise.all([
+			correctionPromise,
+			usageCreatePromise,
+		]);
+		expect(usageRes.status).toBe(201);
+		if (correctionRes.status === 409) {
+			expect(correctionRes.body.code).toBe("CORRECTION_TARGET_CHANGED");
+			expect(await ctx.prisma.correction.count({ where: { userId: user.userId } })).toBe(0);
+			const refreshed = await preview();
+			expect(refreshed.body.data.expectedUsageImpact).not.toBe(initial.body.data.expectedUsageImpact);
+			await confirm(refreshed.body.data.expectedUsageImpact).expect(201);
+		} else {
+			expect(correctionRes.status).toBe(201);
+		}
 
 		// 确定性终态（与串行顺序无关）
 		const usages = await ctx.prisma.usageRecord.findMany({

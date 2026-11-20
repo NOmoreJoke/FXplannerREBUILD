@@ -34,6 +34,7 @@ export const CORRECTION_ERROR_CODES = [
 	"INVALID_CORRECTION_PARAMS",
 	"CORRECTION_NOT_ALLOWED",
 	"RATE_QUOTE_UNAVAILABLE",
+	"CORRECTION_QUOTE_CHANGED",
 	"CORRECTION_TARGET_TYPE_UNAVAILABLE",
 	"CORRECTION_TARGET_CHANGED",
 	"CORRECTION_INSUFFICIENT_FUNDS",
@@ -156,6 +157,15 @@ export class CorrectionRequestDto {
 	baseVersion?: number;
 
 	@ApiProperty({
+		description: "USAGE 提交必填，传回影响预览返回的 expectedUsageImpact",
+		type: String,
+		required: false,
+	})
+	@IsOptional()
+	@IsString({ message: "expectedUsageImpact 必须是字符串" })
+	expectedUsageImpact?: string;
+
+	@ApiProperty({
 		description:
 			"乐观校验基准更新时间（INITIAL_HOLDING 用，无 version 列；preview 时所读到的目标 updatedAt）",
 		example: "2026-09-20T12:00:00.000Z",
@@ -166,6 +176,16 @@ export class CorrectionRequestDto {
 	@IsString({ message: "baseUpdatedAt 必须是字符串" })
 	@IsISO8601({}, { message: "baseUpdatedAt 必须是有效的 ISO 8601 时间戳" })
 	baseUpdatedAt?: string;
+
+	@ApiProperty({
+		description:
+			"初始持仓改币种时，从影响预览的 holdingQuote.confirmationKey 原样提交；其他更正无需传入",
+		type: String,
+		required: false,
+	})
+	@IsOptional()
+	@IsString({ message: "previewQuoteKey 必须是字符串" })
+	previewQuoteKey?: string;
 
 	@ApiProperty({
 		description: "修改原因（必填；失败尝试亦留痕该原因）",
@@ -238,7 +258,7 @@ export class CorrectionBalanceImpactDto {
 	after!: string;
 }
 
-/** 计划分配影响（使用改小/改大时；本期 USAGE 降级后为预留结构） */
+/** 使用金额更正对本计划分配与未分配资金的影响 */
 export class CorrectionAllocationImpactDto {
 	@ApiProperty({ description: "计划 ID", example: "cmb1...", type: String })
 	planId!: string;
@@ -273,6 +293,40 @@ export class CorrectionAllocationImpactDto {
 		type: String,
 	})
 	usedAfter!: string;
+
+	@ApiProperty({ description: "增额中由原计划分配承担的金额（4 位）", type: String })
+	fromPlan!: string;
+
+	@ApiProperty({ description: "增额中从未分配余额补入的金额（4 位）", type: String })
+	supplement!: string;
+
+	@ApiProperty({
+		description: "更正前的计划剩余分配（4 位）",
+		example: "200.0000",
+		type: String,
+	})
+	remainingBefore!: string;
+
+	@ApiProperty({
+		description: "更正后的计划剩余分配（4 位）",
+		example: "0.0000",
+		type: String,
+	})
+	remainingAfter!: string;
+
+	@ApiProperty({
+		description: "增加的用量中来自本计划原有剩余分配的金额（4 位）",
+		example: "200.0000",
+		type: String,
+	})
+	usedFromRemaining!: string;
+
+	@ApiProperty({
+		description: "未分配余额变动（4 位）：正值为返还，负值为补入本计划并立即使用",
+		example: "-100.0000",
+		type: String,
+	})
+	unallocatedDelta!: string;
 }
 
 /** 使用成本影响（受影响币种内每笔使用的成本前后；含「无使用记录」时空数组） */
@@ -361,7 +415,7 @@ export class CorrectionBlockerDto {
 	details!: CorrectionBlockerDetailDto[];
 }
 
-/** 影响面汇总（balances/costs 受影响币种维度；allocations 随 M7 接线启用） */
+/** 余额、计划分配与使用成本的影响汇总 */
 export class CorrectionImpactSummaryDto {
 	@ApiProperty({
 		description: "余额影响（受影响币种）",
@@ -370,7 +424,7 @@ export class CorrectionImpactSummaryDto {
 	balances!: CorrectionBalanceImpactDto[];
 
 	@ApiProperty({
-		description: "计划分配影响（使用改小/改大时，本期为空数组）",
+		description: "使用金额更正的计划分配及资金来源影响；其他更正为空数组",
 		type: [CorrectionAllocationImpactDto],
 	})
 	allocations!: CorrectionAllocationImpactDto[];
@@ -386,6 +440,24 @@ export class CorrectionImpactSummaryDto {
 		type: [String],
 	})
 	warnings!: string[];
+}
+
+/** 初始持仓改币种时用于重算成本的历史报价。 */
+export class CorrectionHoldingQuoteDto {
+	@ApiProperty({ description: "提交时原样回传的报价确认键", type: String })
+	confirmationKey!: string;
+
+	@ApiProperty({ description: "重算成本采用的汇率（8 位小数）", type: String })
+	rate!: string;
+
+	@ApiProperty({ description: "舍入前的原始采用价（10 位小数）", type: String })
+	rawRate!: string;
+
+	@ApiProperty({ description: "报价来源", example: "abc", type: String })
+	source!: string;
+
+	@ApiProperty({ description: "报价观测时间（ISO 8601）", type: String })
+	observedAt!: string;
 }
 
 /** 影响预览响应（方案 §6.1：前后对比 + 余额/分配/成本影响 + 拦截明细） */
@@ -421,6 +493,13 @@ export class CorrectionPreviewDto {
 	after!: Record<string, unknown>;
 
 	@ApiProperty({
+		description: "初始持仓改币种采用的历史报价及确认键，仅改币种时返回",
+		type: CorrectionHoldingQuoteDto,
+		required: false,
+	})
+	holdingQuote?: CorrectionHoldingQuoteDto;
+
+	@ApiProperty({
 		description: "逐字段前后对比（仅列发生变化且有展示语义的字段）",
 		type: [CorrectionDiffItemDto],
 	})
@@ -434,6 +513,13 @@ export class CorrectionPreviewDto {
 		type: [CorrectionBlockerDto],
 	})
 	blockers!: CorrectionBlockerDto[];
+
+	@ApiProperty({
+		description: "USAGE 预览的影响指纹，提交时原样传回",
+		type: String,
+		required: false,
+	})
+	expectedUsageImpact?: string;
 }
 
 /** apply 响应（方案 §6.2） */

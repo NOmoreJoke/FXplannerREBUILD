@@ -19,19 +19,21 @@ const scenarios = [
 		usages: [["550", 2]], audits: ["APPLIED"],
 	},
 	{
-		name: "先下调分配再更正，本次按新分配补足",
+		name: "先下调分配再更正，重新确认后按新分配补足",
 		operations: ["adjust", "correct"],
-		statuses: [200, 201],
+		statuses: [200, 409],
+		rejection: "CORRECTION_TARGET_CHANGED",
+		reconfirm: true,
 		planStatus: "ACTIVE", allocated: "550", used: "550", balance: "450",
 		usages: [["550", 2]], audits: ["APPLIED"],
 	},
 	{
 		name: "先取消再更正",
 		operations: ["cancel", "correct"],
-		statuses: [200, 400],
-		rejection: "CORRECTION_NOT_ALLOWED",
+		statuses: [200, 409],
+		rejection: "CORRECTION_TARGET_CHANGED",
 		planStatus: "CANCELLED", allocated: "400", used: "400", balance: "600",
-		usages: [["400", 1]], audits: ["FAILED"],
+		usages: [["400", 1]], audits: [],
 	},
 	{
 		name: "先更正再取消，保留更正后的已用",
@@ -64,9 +66,11 @@ const scenarios = [
 		usages: [["550", 2]], audits: ["APPLIED"],
 	},
 	{
-		name: "先记录使用再更正，按最新已用补分配",
+		name: "先记录使用再更正，重新确认后按最新已用补分配",
 		operations: ["use", "correct"],
-		statuses: [201, 201],
+		statuses: [201, 409],
+		rejection: "CORRECTION_TARGET_CHANGED",
+		reconfirm: true,
 		planStatus: "ACTIVE", allocated: "650", used: "650", balance: "350",
 		usages: [["550", 2], ["100", 1]], audits: ["APPLIED"],
 	},
@@ -140,14 +144,21 @@ describe("计划与账本写入串行化（W6-02）", () => {
 		const plan = await prisma.plan.findUniqueOrThrow({
 			where: { id: created.body.data.id },
 		});
+		const correction = {
+			targetType: "USAGE",
+			targetId: initialUsage.body.data.usage.id,
+			baseVersion: 1,
+			reason: "按实际使用更正",
+			changes: { amount: "550" },
+		};
+		const preview = () => http.post("/api/corrections/preview").set(auth).send(correction);
+		const confirm = (expectedUsageImpact: string) =>
+			http.post("/api/corrections").set(auth).send({ ...correction, expectedUsageImpact });
+		const initial = scenario.operations.some((operation) => operation === "correct")
+			? (await preview().expect(200)).body.data
+			: undefined;
 		const operations = {
-			correct: async () => http.post("/api/corrections").set(auth).send({
-				targetType: "USAGE",
-				targetId: initialUsage.body.data.usage.id,
-				baseVersion: 1,
-				reason: "按实际使用更正",
-				changes: { amount: "550" },
-			}),
+			correct: async () => confirm(initial.expectedUsageImpact),
 			adjust: async () => http.patch(planPath).set(auth).send({
 				expectedUpdatedAt: plan.updatedAt.toISOString(),
 				newAllocAmount: "400",
@@ -169,6 +180,16 @@ describe("计划与账本写入串行化（W6-02）", () => {
 		if ("rejection" in scenario) {
 			expect(second.body.code).toBe(scenario.rejection);
 		}
+		if ("reconfirm" in scenario) {
+			expect(await prisma.correction.count({ where: { userId: user.userId } })).toBe(0);
+			const refreshed = (await preview().expect(200)).body.data;
+			expect(refreshed.expectedUsageImpact).not.toBe(initial.expectedUsageImpact);
+			await confirm(refreshed.expectedUsageImpact).expect(201);
+		}
+		if (scenario.name === "先取消再更正") {
+			const invalid = await preview().expect(400);
+			expect(invalid.body.code).toBe("CORRECTION_NOT_ALLOWED");
+		}
 
 		const [persistedPlan, allocation, account, lots, usages, corrections] = await Promise.all([
 			prisma.plan.findUniqueOrThrow({ where: { id: plan.id } }),
@@ -188,8 +209,5 @@ describe("计划与账本写入串行化（W6-02）", () => {
 		expect(lots._sum.remainingQty?.toString()).toBe(scenario.balance);
 		expect(usages.map((usage) => [usage.amount.toString(), usage.version])).toEqual(scenario.usages);
 		expect(corrections.map((correction) => correction.status)).toEqual(scenario.audits);
-		if (scenario.name === "先取消再更正") {
-			expect(corrections[0].failReason).toContain("[CORRECTION_NOT_ALLOWED]");
-		}
 	});
 });

@@ -15,6 +15,7 @@
 
 import { buildApiUrl, localFetch, resolveApiBase } from "./api-url";
 import { TEST_PASSWORD } from "./test-credentials";
+import type { components } from "../../clients/chat-web/lib/api/schema.gen";
 
 const API_URL = resolveApiBase(process.env.API_URL, "http://localhost:4001");
 
@@ -311,7 +312,7 @@ export async function seedUsage(
 	planId: string,
 	amount: string,
 ): Promise<{ id: string; cost: string }> {
-	const data = await api<{ id: string; cost: string }>(
+	const { usage } = await api<components["schemas"]["CreateUsageRespDto"]>(
 		`/api/plans/${planId}/usages`,
 		{
 			method: "POST",
@@ -319,7 +320,7 @@ export async function seedUsage(
 			body: { amount, usedAt: nowIso() },
 		},
 	);
-	return data;
+	return usage;
 }
 
 /** 将 accessToken 注入浏览器上下文（前端以 cookie 为唯一登录态事实来源） */

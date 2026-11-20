@@ -39,7 +39,10 @@ function targetDetailPath(
 			typeof target.currencyCode === "string" ? target.currencyCode : "";
 		return `/accounts/${code}`;
 	}
-	return "/home"; // USAGE 随 M7 落地接入使用详情
+	const planId = target.planId;
+	return typeof planId === "string" && planId !== ""
+		? `/plans/${encodeURIComponent(planId)}`
+		: "/plans";
 }
 
 export default function CorrectionNewPage() {
@@ -105,6 +108,11 @@ export default function CorrectionNewPage() {
 	}
 
 	const original = form.target.target;
+	const detailPath = targetDetailPath(
+		form.target.targetType,
+		form.target.targetId,
+		original,
+	);
 	const hasBlockers = (form.preview?.blockers.length ?? 0) > 0;
 	const canSubmit =
 		form.preview !== null && !hasBlockers && !form.applying && !form.previewing;
@@ -113,16 +121,14 @@ export default function CorrectionNewPage() {
 		const result = await form.confirm();
 		if (result) {
 			// 成功 → 跳回目标详情（版本历史在详情页可见）
-			window.location.href = targetDetailPath(
-				form.target!.targetType,
-				form.target!.targetId,
-				form.target!.target,
-			);
+			window.location.href = detailPath;
 		}
 	};
 
 	return (
-		<PageShell>
+		<PageShell
+			planPath={form.target.targetType === "USAGE" ? detailPath : undefined}
+		>
 			<div className="mx-auto max-w-3xl space-y-6">
 				<header>
 					<h1 className="text-xl font-bold text-foreground">
@@ -160,7 +166,9 @@ export default function CorrectionNewPage() {
 						role="alert"
 					>
 						<CircleAlert className="size-4 shrink-0 text-cream-300" />
-						该记录刚被其他修改更新，已为您重新加载最新内容，请重新查看影响后再提交。
+						{form.target.targetType === "USAGE"
+							? "请重新查看影响，确认最新预览后再提交。"
+							: "该记录刚被其他修改更新，已为您重新加载最新内容，请重新查看影响后再提交。"}
 					</p>
 				) : null}
 
@@ -195,11 +203,7 @@ export default function CorrectionNewPage() {
 						{form.applying ? "正在提交…" : "确认更正"}
 					</Button>
 					<Link
-						href={targetDetailPath(
-							form.target.targetType,
-							form.target.targetId,
-							original,
-						)}
+					href={detailPath}
 						className="text-sm text-muted-foreground hover:text-foreground"
 					>
 						取消
@@ -281,15 +285,21 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
 	);
 }
 
-function PageShell({ children }: { children: React.ReactNode }) {
+function PageShell({
+	children,
+	planPath,
+}: {
+	children: React.ReactNode;
+	planPath?: string;
+}) {
 	return (
 		<div className="mx-auto max-w-5xl px-8 py-6">
 			<Link
-				href="/home"
+				href={planPath ?? "/home"}
 				className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 			>
 				<ArrowLeft className="size-4" />
-				返回首页
+				{planPath ? "返回计划" : "返回首页"}
 			</Link>
 			<div className="mt-4">{children}</div>
 		</div>
