@@ -37,6 +37,9 @@ import {
 } from "../../src/rate/rate-migration-plan";
 import { executeFrozenPlan, requireInventoryId } from "./execute";
 
+// 全计划逐行条件更新，幂等复跑还要读取未命中的行。给两批共享一个有限预算。
+const MIGRATION_TRANSACTION_TIMEOUT_MS = 30_000;
+
 interface FrozenInventory {
 	inventoryId?: string;
 	generatedAt: string;
@@ -113,7 +116,9 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 
-	const prisma = new PrismaClient();
+	const prisma = new PrismaClient({
+		transactionOptions: { timeout: MIGRATION_TRANSACTION_TIMEOUT_MS },
+	});
 	try {
 		if (command === "inventory") {
 			// 只读盘点：全表扫描（exchange_rates 体量有限：日更少量行 × 币对）

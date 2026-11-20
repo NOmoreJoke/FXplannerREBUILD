@@ -54,6 +54,12 @@ bun run prisma/rate-cache-migration/migrate.ts rollback --apply --confirm-backup
 
 ## 幂等、复跑与防漂移
 
+- `invert --apply` 和 `rollback --apply` 的全计划事务期限为 30 秒，
+  从事务开始计时，两批共用这个预算。超过期限会回滚整个计划，可从同一份冻结清单复跑。
+- 本地 PostgreSQL 双源演练使用两组 Frankfurter 365 天窗口工作日点和一组
+  ErApi 30 天日快照（552 条圈选候选）。在每条实际更新受控增加 10 ms 的情况下，
+  旧版 5 秒期限两次触发超时。新期限下验收检查全量转换、复跑、回退及
+  最后一条 Frankfurter 记录漂移后的全表一致性。生产备份副本的候选量与耗时待实测。
 - 首次 `invert --apply` 锁定 `inventoryId` 对应的圈选集合、全冻结字段和目标值。
   数据库完成记录与实际改写行上的归属标记同事务提交。数值不变的候选只核对，
   也纳入圈选校验和。
