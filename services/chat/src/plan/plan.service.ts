@@ -7,6 +7,7 @@ import {
 import { getCurrency } from "@fxplanner-new/money";
 import type { Plan, PlanAllocation } from "@prisma/client";
 import { Prisma } from "@prisma/client";
+import { lockLedgerAccounts, lockPlanAccount } from "../prisma/ledger-write-lock";
 import { PrismaService } from "../prisma/prisma.service";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
 import type {
@@ -232,6 +233,7 @@ export class PlanService {
 				: new Prisma.Decimal(0);
 
 		return this.prisma.$transaction(async (tx) => {
+			await lockLedgerAccounts(tx, userId, [params.targetCurrency]);
 			// ① 事务内重检（READ COMMITTED 下读到其他事务已提交的最新余额/分配）
 			const caps = await this.computeCaps(
 				tx,
@@ -482,7 +484,7 @@ export class PlanService {
 
 	/**
 	 * 提交修改 / 重新开启（PATCH /api/plans/:id，§3.2 时序）：
-	 * $transaction 内——
+	 * $transaction 内先锁定计划所属的币种，再读取状态和资金面——
 	 * ① 条件更新（WHERE id + userId + updatedAt = expected）原子完成乐观锁检查与行锁获取，
 	 *    行数 = 0 → 409 PLAN_STATE_CHANGED（写 status 原值仅为驱动 @updatedAt 跳变 + 取锁）
 	 * ② 事务内重算重校验：重读分配/账户/他计划分配（链路 a 防线：预览结果不作为提交依据），
@@ -504,7 +506,13 @@ export class PlanService {
 		);
 
 		await this.prisma.$transaction(async (tx) => {
-			const current = await this.loadAdjustContext(tx, userId, planId);
+			if (!(await lockPlanAccount(tx, userId, planId))) {
+				throw new PlanNotFoundException();
+			}
+			const current = await tx.plan.findFirst({ where: { id: planId, userId } });
+			if (!current) {
+				throw new PlanNotFoundException();
+			}
 
 			// ① 条件更新 = 乐观锁检查 + 行锁获取（原子；检查与写入合并为单条语句）
 			const checkpoint = await tx.plan.updateMany({
@@ -513,7 +521,7 @@ export class PlanService {
 					userId,
 					updatedAt: expectedUpdatedAt,
 				},
-				data: { status: current.plan.status },
+				data: { status: current.status },
 			});
 			if (checkpoint.count === 0) {
 				throw new PlanStateConflictException();
@@ -614,10 +622,7 @@ export class PlanService {
 	 */
 	async complete(userId: string, planId: string): Promise<PlanDetailDto> {
 		await this.prisma.$transaction(async (tx) => {
-			const plan = await tx.plan.findFirst({
-				where: { id: planId, userId },
-			});
-			if (!plan) {
+			if (!(await lockPlanAccount(tx, userId, planId))) {
 				throw new PlanNotFoundException();
 			}
 			const updated = await tx.plan.updateMany({
@@ -679,10 +684,7 @@ export class PlanService {
 	 */
 	async cancel(userId: string, planId: string): Promise<PlanDetailDto> {
 		await this.prisma.$transaction(async (tx) => {
-			const plan = await tx.plan.findFirst({
-				where: { id: planId, userId },
-			});
-			if (!plan) {
+			if (!(await lockPlanAccount(tx, userId, planId))) {
 				throw new PlanNotFoundException();
 			}
 			const updated = await tx.plan.updateMany({

@@ -12,6 +12,7 @@ import {
 	type Transaction as TransactionModel,
 	type UsageRecord,
 } from "@prisma/client";
+import { lockLedgerAccounts } from "../prisma/ledger-write-lock";
 import { PrismaService } from "../prisma/prisma.service";
 import { RateService } from "../rate/rate.service";
 import { replayCurrencyLedger, type LedgerEvent, type ReplayResult } from "./ledger-replay";
@@ -262,7 +263,7 @@ export class CorrectionService {
 
 	/**
 	 * 提交更正（POST /api/corrections，方案 §5.4 事务编排）：
-	 * ① 受影响币种 Account 行取行锁（按币种码排序防死锁）→ ② 重读目标比对 baseVersion →
+	 * ① 锁定受影响币种及其账户行 → ② 重读目标比对 baseVersion →
 	 * ③ 新鲜数据重放 + V0~V4（复核不通过：主事务回滚 + 独立事务 FAILED 留痕，尽力而为）→
 	 * ④ 目标行 update + version+1 → ⑤ 删除受影响币种 CostLot/UsageLotAllocation 后按重放结果重建 →
 	 * ⑥ Account.balance = finalBalance → ⑦ Correction(status=APPLIED) 留痕。任一失败全部回滚。
@@ -385,7 +386,7 @@ export class CorrectionService {
 		// ① 行锁范围按「目标当前币种 + 拟改新币种」解析（按币种码排序防死锁）
 		const fresh = await this.loadTarget(tx, userId, dto.targetType, dto.targetId);
 		const affectedCurrencies = this.resolveAffectedCurrencies(dto.targetType, fresh, dto.changes);
-		await this.lockAccountRows(tx, userId, affectedCurrencies);
+		await lockLedgerAccounts(tx, userId, affectedCurrencies);
 
 		// ② 事务内重读目标 + 乐观校验（预览后数据已变 → 409，前端引导重新预览，doc 10:11）
 		const locked = await this.loadTarget(tx, userId, dto.targetType, dto.targetId);
@@ -1254,16 +1255,6 @@ export class CorrectionService {
 				},
 			});
 		}
-	}
-
-	/** 受影响币种账户行锁（SELECT ... FOR UPDATE，按币种码排序防死锁，方案 §5.4 ①） */
-	private async lockAccountRows(
-		tx: Prisma.TransactionClient,
-		userId: string,
-		currencyCodes: string[],
-	): Promise<void> {
-		const sorted = [...new Set(currencyCodes)].sort();
-		await tx.$queryRaw`SELECT id FROM accounts WHERE user_id = ${userId} AND currency_code IN (${Prisma.join(sorted)}) FOR UPDATE`;
 	}
 
 	/** FAILED 尝试留痕（独立事务，尽力而为；方案 §5.4：失败也保存尝试记录） */

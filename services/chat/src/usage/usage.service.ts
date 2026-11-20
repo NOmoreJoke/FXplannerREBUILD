@@ -7,6 +7,7 @@ import {
 } from "@nestjs/common";
 import { getCurrency } from "@fxplanner-new/money";
 import { Prisma } from "@prisma/client";
+import { lockPlanAccount } from "../prisma/ledger-write-lock";
 import { PrismaService } from "../prisma/prisma.service";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
 import {
@@ -147,8 +148,8 @@ export class UsageService {
 
 	/**
 	 * 记录使用（POST /api/plans/:id/usages，方案 §3.1 五步事务）：
-	 * 事务外装载与校验（失败不进事务）→ 交互式事务——
-	 * ⓪ Account 行锁（FOR UPDATE；与更正 apply 锁序统一，防倒序死锁）
+	 * 交互式事务——
+	 * ⓪ 锁定计划所属币种及账户行，再确认计划仍为 ACTIVE
 	 * ① $executeRaw 条件扣分配（WHERE used + amt <= amount，列间比较单语句原子）
 	 * ② account.updateMany 条件扣余额（WHERE balance >= amt）
 	 * ③ usageRecord.create（version = 1）
@@ -163,31 +164,20 @@ export class UsageService {
 		planId: string,
 		dto: CreateUsageDto,
 	): Promise<CreateUsageRespDto> {
-		// 事务外：归属/状态/币种/账本起点装载（404/409 不进事务）
-		const context = await this.loadPlanContext(userId, planId);
-		// 事务外：入参规范化与合法性校验（400 不进事务）
-		const amount = this.parseUsageAmount(dto.amount, context.decimalPlaces);
-		const usedAt = this.parseUsedAt(dto.usedAt);
-		try {
-			assertUsedAtInRange(usedAt, new Date(), context.ledgerStartedAt);
-		} catch (error) {
-			// 领域错误（UsageCalcError）→ HTTP 400 INVALID_USAGE_PARAMS（§4.3 契约）
-			if (error instanceof UsageCalcError) {
-				throw new UsageInvalidParamsException(error.message);
-			}
-			throw error;
-		}
-		const remark = this.parseRemark(dto.remark);
-
 		const result = await this.prisma.$transaction(async (tx) => {
-			// ⓪ 账户行锁（MVP-F0-3 锁序统一）：先锁 Account 再动 PlanAllocation——
-			// 与更正 apply 的锁序（lockAccountRows → persistUsageCorrection）一致，
-			// 消除「更正先锁账户后改分配 / 记录使用先改分配后扣账户」的倒序死锁窗口
-			//（同用户同币种并发时在此串行化）。行锁后重读分配现状（条件更新基于最新已提交行）。
-			await tx.$queryRaw`
-				SELECT id FROM accounts
-				WHERE user_id = ${userId} AND currency_code = ${context.currencyCode}
-				FOR UPDATE`;
+			const context = await this.loadPlanContext(tx, userId, planId);
+			const amount = this.parseUsageAmount(dto.amount, context.decimalPlaces);
+			const usedAt = this.parseUsedAt(dto.usedAt);
+			try {
+				assertUsedAtInRange(usedAt, new Date(), context.ledgerStartedAt);
+			} catch (error) {
+				if (error instanceof UsageCalcError) {
+					throw new UsageInvalidParamsException(error.message);
+				}
+				throw error;
+			}
+			const remark = this.parseRemark(dto.remark);
+
 			// ① 条件扣分配：列间比较（used + amt <= amount）Prisma updateMany 无法表达，
 			// 单条 UPDATE 原子完成「检查 + 扣减」；updated_at 手动刷新（绕过 @updatedAt）
 			const allocationUpdated = await tx.$executeRaw`
@@ -373,13 +363,17 @@ export class UsageService {
 	// ────────────────────────── 私有辅助 ──────────────────────────
 
 	/**
-	 * 事务外装载计划上下文（§3.1 loadPlanContext）：
+	 * 事务内装载计划上下文（§3.1 loadPlanContext）：
 	 * BE-03 防线：未建账（无 UserSettings）409 优先于计划 404（未建账用户必然无计划，
 	 * 409 引导去 /onboarding 而非泄露 404；与 plan/transaction 写入口一致）→
-	 * 归属 404 防枚举 → 状态闸门（仅 ACTIVE）→ 币种精度 → 账本起点。
+	 * 归属 404 防枚举 → 锁定所属币种及账户行 → 状态闸门（仅 ACTIVE）→ 币种精度。
 	 */
-	private async loadPlanContext(userId: string, planId: string) {
-		const settings = await this.prisma.userSettings.findUnique({
+	private async loadPlanContext(
+		tx: Prisma.TransactionClient,
+		userId: string,
+		planId: string,
+	) {
+		const settings = await tx.userSettings.findUnique({
 			where: { userId },
 			select: { ledgerStartedAt: true },
 		});
@@ -388,7 +382,10 @@ export class UsageService {
 				"尚未完成首次设置，请先前往 /onboarding 完成建账后再记录使用",
 			);
 		}
-		const plan = await this.prisma.plan.findFirst({
+		if (!(await lockPlanAccount(tx, userId, planId))) {
+			throw new UsagePlanNotFoundException();
+		}
+		const plan = await tx.plan.findFirst({
 			where: { id: planId, userId },
 		});
 		if (!plan) {
