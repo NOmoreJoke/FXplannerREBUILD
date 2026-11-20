@@ -566,17 +566,19 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 	// ── 工具环：RateService 被调、tool 帧出现、查询结果回喂（§8.2 行 5）──
 
 	it("假模型发起 tool_call：RateService 被调、tool 帧 start/end 出现、ToolMessage 含查询结果、最终回复 done（§8.2 行 5）", async () => {
-		// 预置行情行（observedAt=当前时间避开 5 分钟 TTL 触发回源，装配约定④）
+		// 预置刚经 latest 确认的报价，让工具命中缓存。
 		await prisma.exchangeRate.deleteMany({
 			where: { base: "CNY", quote: "USD" },
 		});
+		const now = new Date();
 		await prisma.exchangeRate.create({
 			data: {
 				base: "CNY",
 				quote: "USD",
 				rate: "7.1200000000",
 				source: "er-api",
-				observedAt: new Date(),
+				observedAt: now,
+				latestConfirmedAt: now,
 			},
 		});
 

@@ -31,7 +31,7 @@ const mkRow = (quote: string, overrides: Record<string, unknown> = {}) => ({
 	rate: decimal("0.7300000000"),
 	source: "frankfurter",
 	observedAt: LAST_FRIDAY,
-	createdAt: minutesBefore(1),
+	latestConfirmedAt: minutesBefore(1),
 	...overrides,
 });
 
@@ -100,6 +100,7 @@ describe("RateService", () => {
 					rate: string;
 					source: string;
 					observedAt: Date;
+					latestConfirmedAt: Date;
 				};
 			}) =>
 				Promise.resolve({
@@ -109,7 +110,7 @@ describe("RateService", () => {
 					rate: decimal(create.rate),
 					source: create.source,
 					observedAt: create.observedAt,
-					createdAt: new Date(T0),
+					latestConfirmedAt: create.latestConfirmedAt,
 				}),
 		);
 		provider = {
@@ -155,7 +156,7 @@ describe("RateService", () => {
 
 	it("窗口内命中数据库报价：不外呼、不落库，validUntil = 确认时间 + 5 分钟", async () => {
 		prisma.exchangeRate.findMany.mockResolvedValue([
-			mkRow("USD", { createdAt: minutesBefore(1) }),
+			mkRow("USD", { latestConfirmedAt: minutesBefore(1) }),
 		]);
 
 		const result = (await service.getLatest("CAD")) as LatestRateResponse;
@@ -176,7 +177,7 @@ describe("RateService", () => {
 
 	it("恰好满 5 分钟视为过期（严格小于）：立即回显旧值（fresh=false），后台异步回源", async () => {
 		prisma.exchangeRate.findMany.mockResolvedValue([
-			mkRow("USD", { createdAt: minutesBefore(5) }),
+			mkRow("USD", { latestConfirmedAt: minutesBefore(5) }),
 		]);
 		provider.fetchLatestBatch.mockResolvedValue(
 			mkBatch({ USD: "0.7300000000" }),
@@ -193,10 +194,10 @@ describe("RateService", () => {
 		});
 	});
 
-	it("refresh=true 过期缓存同步回源：observedAt 不变，update 分支刷新 createdAt 重置窗口", async () => {
+	it("refresh=true 过期缓存同步回源：observedAt 不变，update 分支刷新 latestConfirmedAt 重置窗口", async () => {
 		prisma.exchangeRate.findMany.mockResolvedValue([
 			mkRow("USD", {
-				createdAt: minutesBefore(6),
+				latestConfirmedAt: minutesBefore(6),
 				observedAt: LAST_FRIDAY,
 			}),
 		]);
@@ -224,11 +225,12 @@ describe("RateService", () => {
 				rate: "0.7300000000",
 				source: "frankfurter",
 				observedAt: LAST_FRIDAY,
+				latestConfirmedAt: new Date(T0),
 			},
 			update: {
 				rate: "0.7300000000",
 				source: "frankfurter",
-				createdAt: new Date(T0), // 最后确认时间物化为 createdAt，窗口重置
+				latestConfirmedAt: new Date(T0),
 			},
 		});
 		// observedAt 保持报价所属日（不因确认变为今天），窗口却已重置
@@ -239,7 +241,7 @@ describe("RateService", () => {
 
 	it("refresh=true 忽略新鲜缓存强制回源", async () => {
 		prisma.exchangeRate.findMany.mockResolvedValue([
-			mkRow("USD", { createdAt: minutesBefore(0.1) }),
+			mkRow("USD", { latestConfirmedAt: minutesBefore(0.1) }),
 		]);
 		provider.fetchLatestBatch.mockResolvedValue(
 			mkBatch({ USD: "0.7400000000" }),
@@ -257,7 +259,7 @@ describe("RateService", () => {
 
 	it("SWR 陈旧回显：后台回源落库重置窗口，二次查询命中新窗口不再外呼", async () => {
 		prisma.exchangeRate.findMany.mockResolvedValue([
-			mkRow("USD", { createdAt: minutesBefore(30) }),
+			mkRow("USD", { latestConfirmedAt: minutesBefore(30) }),
 		]);
 		provider.fetchLatestBatch.mockResolvedValue(
 			mkBatch({ USD: "0.7400000000" }),
@@ -267,20 +269,20 @@ describe("RateService", () => {
 		expect(stale.rate).toBe("0.73");
 		expect(stale.fresh).toBe(false);
 
-		// 后台回源完成：upsert 落库且 createdAt = now（窗口重置）
+		// 后台回源完成：upsert 落库且 latestConfirmedAt = now（窗口重置）
 		await vi.waitFor(() => {
 			expect(prisma.exchangeRate.upsert).toHaveBeenCalledTimes(1);
 		});
 		const upsertArg = prisma.exchangeRate.upsert.mock.calls[0][0] as {
-			update: { createdAt: Date };
+			update: { latestConfirmedAt: Date };
 		};
-		expect(upsertArg.update.createdAt).toEqual(new Date(T0));
+		expect(upsertArg.update.latestConfirmedAt).toEqual(new Date(T0));
 
 		// 二次查询：窗口已重置 → 命中缓存拿新值，不再外呼
 		provider.fetchLatestBatch.mockClear();
 		prisma.exchangeRate.findMany.mockResolvedValue([
 			mkRow("USD", {
-				createdAt: new Date(T0),
+				latestConfirmedAt: new Date(T0),
 				rate: decimal("0.7400000000"),
 			}),
 		]);
@@ -292,7 +294,7 @@ describe("RateService", () => {
 
 	it("SWR 后台刷新失败：响应不受影响（旧值已返回），失败被吞掉不产生 unhandled rejection", async () => {
 		prisma.exchangeRate.findMany.mockResolvedValue([
-			mkRow("USD", { createdAt: minutesBefore(30) }),
+			mkRow("USD", { latestConfirmedAt: minutesBefore(30) }),
 		]);
 		provider.fetchLatestBatch.mockRejectedValue(new Error("源超时"));
 
@@ -305,6 +307,40 @@ describe("RateService", () => {
 		await vi.waitFor(() => {
 			expect(provider.fetchLatestBatch).toHaveBeenCalledTimes(1);
 		});
+	});
+
+	it("刚写入的历史行只作 SWR 陈旧回显，报价有效期已经结束", async () => {
+		prisma.exchangeRate.findMany.mockResolvedValue([
+			mkRow("USD", { createdAt: T0, latestConfirmedAt: null }),
+		]);
+		provider.fetchLatestBatch.mockRejectedValue(new Error("provider unavailable"));
+
+		const result = (await service.getLatest("CAD")) as LatestRateResponse;
+
+		expect(result).toMatchObject({ rate: "0.73", fresh: false });
+		expect(Date.parse(result.validUntil)).toBeLessThanOrEqual(T0.getTime());
+		expect(provider.fetchLatestBatch).toHaveBeenCalledTimes(1);
+		expect(prisma.exchangeRate.upsert).not.toHaveBeenCalled();
+	});
+
+	it("较新的历史观测不会挡住仍在窗口内的已确认报价", async () => {
+		prisma.exchangeRate.findMany.mockResolvedValue([
+			mkRow("USD", {
+				observedAt: T0,
+				rate: decimal("0.80"),
+				latestConfirmedAt: null,
+			}),
+			mkRow("USD"),
+		]);
+
+		const result = (await service.getLatest("CAD")) as LatestRateResponse;
+
+		expect(result).toMatchObject({
+			rate: "0.73",
+			observedAt: LAST_FRIDAY.toISOString(),
+			fresh: true,
+		});
+		expect(provider.fetchLatestBatch).not.toHaveBeenCalled();
 	});
 
 	it("超窗且库内缺目标（冷启动）：同步回源等待，不回显不完整组", async () => {
@@ -323,8 +359,8 @@ describe("RateService", () => {
 
 	it("多目标超窗回显：组内全部返回旧值（保序、fresh=false），后台一次批量外呼", async () => {
 		prisma.exchangeRate.findMany.mockResolvedValue([
-			mkRow("USD", { createdAt: minutesBefore(30) }),
-			mkRow("JPY", { createdAt: minutesBefore(30) }),
+			mkRow("USD", { latestConfirmedAt: minutesBefore(30) }),
+			mkRow("JPY", { latestConfirmedAt: minutesBefore(30) }),
 		]);
 		provider.fetchLatestBatch.mockResolvedValue(
 			mkBatch({ USD: "0.7400000000", JPY: "0.0480000000" }),
@@ -368,11 +404,12 @@ describe("RateService", () => {
 				rate: "1",
 				source: "identity",
 				observedAt: new Date(T0),
+				latestConfirmedAt: new Date(T0),
 			},
 			update: {
 				rate: "1",
 				source: "identity",
-				createdAt: new Date(T0),
+				latestConfirmedAt: new Date(T0),
 			},
 		});
 		expect(result).toMatchObject({
@@ -518,7 +555,7 @@ describe("RateService", () => {
 		// SWR 后：refresh=false 超窗回显旧值不再上抱 502；502+lastObservedAt 语义
 		// 收窄至强制回源路径（确认页锁数/手动刷新）
 		prisma.exchangeRate.findMany.mockResolvedValue([
-			mkRow("USD", { createdAt: minutesBefore(6) }),
+			mkRow("USD", { latestConfirmedAt: minutesBefore(6) }),
 		]);
 		provider.fetchLatestBatch.mockRejectedValue(new Error("upstream 500"));
 
@@ -623,7 +660,7 @@ describe("RateService", () => {
 
 	it("多目标数据源不可用：错误逐项下沉（各自 lastObservedAt），HTTP 整体 200", async () => {
 		prisma.exchangeRate.findMany.mockResolvedValue([
-			mkRow("CNY", { createdAt: minutesBefore(6) }), // CNY 有历史报价
+			mkRow("CNY", { latestConfirmedAt: minutesBefore(6) }), // CNY 有历史报价
 		]);
 		provider.fetchLatestBatch.mockRejectedValue(new Error("upstream 500"));
 
@@ -650,7 +687,7 @@ describe("RateService", () => {
 
 	it("并发同键请求单飞：provider 只被调用一次，落库每组目标各一次", async () => {
 		prisma.exchangeRate.findMany.mockResolvedValue([
-			mkRow("USD", { createdAt: minutesBefore(6) }),
+			mkRow("USD", { latestConfirmedAt: minutesBefore(6) }),
 		]);
 		let resolveBatch!: (value: unknown) => void;
 		provider.fetchLatestBatch.mockReturnValue(
@@ -842,8 +879,8 @@ describe("RateService", () => {
 			sellRate?: string;
 			source: string;
 			observedAt: Date;
+			latestConfirmedAt: Date;
 		};
-		update?: { createdAt?: Date };
 	};
 	const mockUpsertEchoesCreate = () => {
 		prisma.exchangeRate.upsert.mockImplementation((args: UpsertArgs) =>
@@ -857,7 +894,7 @@ describe("RateService", () => {
 					: {}),
 				source: args.create.source,
 				observedAt: args.create.observedAt,
-				createdAt: args.update?.createdAt ?? new Date(T0),
+				latestConfirmedAt: args.create.latestConfirmedAt,
 			}),
 		);
 	};

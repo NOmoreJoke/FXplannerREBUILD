@@ -37,7 +37,7 @@ vi.mock("@nestjs/throttler", async (importOriginal) => {
  *   sourceType=INITIAL 标记承载，收益模块未上线，断言验证标记存在；
  * - 本位币锁定不变式：建账后 PATCH /settings（白名单剥离）baseCurrency 与建账时一致（§6-c）。
  *
- * 报价造数：直接插 fresh ExchangeRate 行（createdAt=now、observedAt=now → getLatest
+ * 报价造数：直接插 fresh ExchangeRate 行（latestConfirmedAt=now → getLatest
  * 缓存命中），RateProvider 注入拒绝外呼的 fetch stub，报价与外呼完全解耦。
  */
 describe("初始持仓成本口径（集成）", () => {
@@ -56,8 +56,16 @@ describe("初始持仓成本口径（集成）", () => {
 	/** 造 fresh 报价行（先清理币对历史行，防其他用例/回源残留的 observedAt 更晚行抢先） */
 	async function seedRate(base: string, quote: string, rate: string) {
 		await ctx.prisma.exchangeRate.deleteMany({ where: { base, quote } });
+		const now = new Date();
 		const row = await ctx.prisma.exchangeRate.create({
-			data: { base, quote, rate, source: "er-api", observedAt: new Date() },
+			data: {
+				base,
+				quote,
+				rate,
+				source: "er-api",
+				observedAt: now,
+				latestConfirmedAt: now,
+			},
 		});
 		createdRateIds.push(row.id);
 	}

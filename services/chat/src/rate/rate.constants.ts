@@ -80,10 +80,8 @@ export function resolveRateSourceMode(
 /**
  * 报价有效期：5 分钟（doc 02/05）。
  *
- * 窗口基准 =「最后一次向数据源确认这份报价的时间」。方案 §2 原定物化为
- * ExchangeRate.updatedAt，但 schema 冻结且该列实际不存在，等价落点为 createdAt：
- * upsert 的 update 分支在回源成功时显式刷新 createdAt = now（窗口重置），
- * 缓存命中绝不触碰（不重置）——防「刷新洗白」三条规则不变。
+ * 窗口基准为 ExchangeRate.latestConfirmedAt。最新取价成功时写入，
+ * 缓存命中与历史回补均不重置窗口。
  * 判断用严格小于：恰好满 5 分钟视为过期。
  */
 export const QUOTE_TTL_MS = 5 * 60 * 1000;

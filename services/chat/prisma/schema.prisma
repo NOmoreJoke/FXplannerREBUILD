@@ -35,17 +35,19 @@ model User {
 }
 
 model ExchangeRate {
-  id         String   @id @default(cuid())
-  base       String
-  quote      String
-  rate       Decimal  @db.Decimal(20, 10)
+  id                String    @id @default(cuid())
+  base              String
+  quote             String
+  rate              Decimal   @db.Decimal(20, 10)
   /// 现汇卖出价（1 外币单位 = X 本位币；仅 abc 源填充，百外币单位已换算）；NULL = 该源无卖出价，录入场景回退 rate
-  sellRate   Decimal? @db.Decimal(20, 10) @map("sell_rate")
-  source     String
-  observedAt DateTime @map("observed_at")
-  createdAt  DateTime @default(now()) @map("created_at")
+  sellRate          Decimal?  @db.Decimal(20, 10) @map("sell_rate")
+  source            String
+  observedAt        DateTime  @map("observed_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  /// 仅最新取价成功时写入；历史和无法确认来源的存量行保持 NULL。
+  latestConfirmedAt DateTime? @map("latest_confirmed_at")
   /// 当前行版本的缓存迁移归属，普通更新会清除此标记。
-  migrationOwnerId String? @db.Uuid @map("migration_owner_id")
+  migrationOwnerId  String?   @db.Uuid @map("migration_owner_id")
 
   @@unique([base, quote, observedAt])
   @@index([base, quote, observedAt])

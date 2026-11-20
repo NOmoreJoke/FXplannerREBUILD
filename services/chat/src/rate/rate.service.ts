@@ -26,14 +26,14 @@ import {
 } from './rate.errors';
 import { RateProvider, type RateHistoryPoint } from './rate.provider';
 
-/** 项级成功数据：confirmedAt = 最后一次确认时间（窗口基准） */
+/** 项级报价数据：confirmedAt 为最新确认时间，历史行只可陈旧回显 */
 interface LatestQuoteData {
   rate: string;
   /** 现汇卖出价（仅 abc 源有值；缺省 = 无卖出价，录入场景回退 rate） */
   sellRate?: string;
   source: string;
   observedAt: Date;
-  confirmedAt: Date;
+  confirmedAt: Date | null;
 }
 
 /** 项级错误（多目标时下沉到 items，不拖垮同组；doc 05：绝不返回过期报价/0/手填价） */
@@ -146,10 +146,8 @@ export class RateService {
   /**
    * 最新报价：批量 targets、5 分钟有效期窗口、单飞回源、陈旧回显（SWR）。
    *
-   * - 窗口基准 = ExchangeRate.createdAt 物化的「最后确认时间」：回源成功（update 分支）
-   *   显式刷新 createdAt = now → 窗口重置；缓存命中/陈旧回显绝不触碰 → 不重置
-   *   （方案 §2.2 裁决，schema 冻结下 updatedAt 语义的等价落点）；
-   * - fresh = now < createdAt + 5min（严格小于，恰好满 5 分钟过期）；
+   * - 窗口基准为最新取价确认时间 latestConfirmedAt，历史回补和缓存读取不刷新窗口；
+   * - 仅已确认且 now < latestConfirmedAt + 5min 的报价为 fresh；
    * - 同币种恒等报价 rate="1" 本地生成不外呼；
    * - refresh=false 以八位精度下仍为正数的缓存报价执行三档决策（changes/rate-stale-echo-fix/技术方案.md §3.1）：
    *   ① 全部目标窗口内 → 命中返回；② 全部目标有行但超窗 → 立即回显旧值
@@ -168,8 +166,8 @@ export class RateService {
     );
     const now = Date.now();
     const allFresh = requested.every((target) => {
-      const quote = cached.get(target);
-      return quote !== undefined && now < quote.confirmedAt.getTime() + QUOTE_TTL_MS;
+      const confirmedAt = cached.get(target)?.confirmedAt;
+      return confirmedAt != null && now < confirmedAt.getTime() + QUOTE_TTL_MS;
     });
 
     let group: GroupResult;
@@ -177,7 +175,7 @@ export class RateService {
       group = cached;
     } else if (!refresh && requested.every((target) => cached.has(target))) {
       // SWR 陈旧回显：库内齐但超窗 → 先用旧值响应（不阻塞），后台异步回源落库；
-      // 回源成功经 upsert 刷新 createdAt 重置窗口，前端轮询自然拿到新值
+      // 回源成功刷新最新确认时间，前端轮询可拿到新值。
       group = cached;
       this.kickBackgroundRefresh(
         normalizedBase,
@@ -621,7 +619,7 @@ export class RateService {
     return normalized;
   }
 
-  /** 每个币对取 observedAt 最新且可发布的报价，供窗口和 lastObservedAt 使用。 */
+  /** 优先选择最近观测的已确认、可发布报价。历史点仅用于陈旧回显。 */
   private async findLatestPublishableQuotes(
     base: string,
     quotes: string[],
@@ -634,7 +632,9 @@ export class RateService {
       orderBy: { observedAt: 'desc' },
     });
     for (const row of rows) {
-      if (latest.has(row.quote)) continue;
+      const selected = latest.get(row.quote);
+      if (selected !== undefined &&
+          (selected.confirmedAt !== null || row.latestConfirmedAt === null)) continue;
       const prices = this.publishablePrices(
         row.rate.toString(),
         row.sellRate?.toString(),
@@ -644,7 +644,7 @@ export class RateService {
         ...prices,
         source: row.source,
         observedAt: row.observedAt,
-        confirmedAt: row.createdAt,
+        confirmedAt: row.latestConfirmedAt,
       });
     }
     return latest;
@@ -713,7 +713,7 @@ export class RateService {
 
   /**
    * 整组回源：外部币种一次批量外呼（同一时点），恒等币种本地生成；
-   * 逐币对 upsert 落库（原值 rate + createdAt 刷新 = 窗口重置）。
+   * 逐币对 upsert 同时写入原始报价与最新确认时间。
    */
   private async refreshGroup(
     base: string,
@@ -721,18 +721,17 @@ export class RateService {
     externalTargets: string[],
     cached: Map<string, LatestQuoteData>,
   ): Promise<GroupResult> {
-    const confirmedAt = new Date();
     const results: GroupResult = new Map();
     const groupObservedAt = await this.refreshExternalTargets(
       base,
       requested,
       externalTargets,
       cached,
-      confirmedAt,
       results,
     );
 
     // 恒等项（target === base）：数学事实，本地生成不外呼；落库方式与普通报价一致
+    const confirmedAt = new Date();
     for (const target of requested) {
       if (target !== base || results.has(target)) continue;
       results.set(
@@ -759,7 +758,6 @@ export class RateService {
     requested: string[],
     externalTargets: string[],
     cached: Map<string, LatestQuoteData>,
-    confirmedAt: Date,
     results: GroupResult,
   ): Promise<Date | undefined> {
     if (externalTargets.length === 0) return undefined;
@@ -767,6 +765,7 @@ export class RateService {
     let groupObservedAt: Date | undefined;
     try {
       const batch = await this.provider.fetchLatestBatch(base, externalTargets);
+      const confirmedAt = new Date();
       for (const target of externalTargets) {
         const lastObservedAt = cached.get(target)?.observedAt ?? null;
         // 多源部分失败：该源币对 502 下沉，不拖垮同组其余币对
@@ -813,7 +812,7 @@ export class RateService {
         // 降级逐个单查：坏币种标记 422，好币种照常落库，不拖垮同组
         await Promise.all(
           externalTargets.map((target) =>
-            this.refreshSingleExternal(base, target, cached, confirmedAt, results),
+            this.refreshSingleExternal(base, target, cached, results),
           ),
         );
       } else if (requested.length === 1) {
@@ -847,7 +846,6 @@ export class RateService {
     base: string,
     target: string,
     cached: Map<string, LatestQuoteData>,
-    confirmedAt: Date,
     results: GroupResult,
   ): Promise<void> {
     const lastObservedAt = cached.get(target)?.observedAt ?? null;
@@ -863,7 +861,7 @@ export class RateService {
             ...(quote.sellRate !== undefined ? { sellRate: quote.sellRate } : {}),
             source: quote.source,
             observedAt: quote.observedAt,
-            confirmedAt,
+            confirmedAt: new Date(),
           },
           lastObservedAt,
         ),
@@ -882,7 +880,7 @@ export class RateService {
   }
 
   /**
-   * 落库原值；update 分支显式刷新 createdAt = 最后确认时间（窗口重置，仅回源成功发生）。
+   * 最新取价成功时同时写入原值与确认时间，保留首次入库时间。
    * sellRate 仅在有值时写入（create 与 update 同步落 sell_rate 列；缺省不触碰该列，
    * 避免无卖出价的源/恒等报价洗掉同行既有值）。
    */
@@ -900,8 +898,8 @@ export class RateService {
         where: {
           base_quote_observedAt: { base, quote: target, observedAt },
         },
-        create: { base, quote: target, rate, source, observedAt, ...sellRateField },
-        update: { rate, source, createdAt: confirmedAt, ...sellRateField },
+        create: { base, quote: target, rate, source, observedAt, latestConfirmedAt: confirmedAt, ...sellRateField },
+        update: { rate, source, latestConfirmedAt: confirmedAt, ...sellRateField },
       });
       const prices = this.publishablePrices(
         row.rate.toString(),
@@ -912,7 +910,7 @@ export class RateService {
         ...prices,
         source: row.source,
         observedAt: row.observedAt,
-        confirmedAt: row.createdAt,
+        confirmedAt: row.latestConfirmedAt,
       };
     };
     try {
@@ -965,7 +963,10 @@ export class RateService {
     if ('code' in entry) {
       return { target, error: entry };
     }
-    const validUntil = new Date(entry.confirmedAt.getTime() + QUOTE_TTL_MS);
+    // 历史行没有有效期，使用已过期的固定时间维持 validUntil 的 ISO 日期契约。
+    const validUntil = new Date(
+      entry.confirmedAt ? entry.confirmedAt.getTime() + QUOTE_TTL_MS : 0,
+    );
     return {
       target,
       rate: entry.rate,
@@ -973,7 +974,7 @@ export class RateService {
       source: entry.source,
       observedAt: entry.observedAt.toISOString(),
       validUntil: validUntil.toISOString(),
-      fresh: Date.now() < validUntil.getTime(),
+      fresh: entry.confirmedAt !== null && Date.now() < validUntil.getTime(),
     };
   }
 

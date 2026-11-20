@@ -19,7 +19,9 @@ import {
 import {
 	erApiLatestBody,
 	frankfurterLatestBody,
+	frankfurterTimeSeriesBody,
 	jsonResponse,
+	parseFrankfurterTimeSeriesRange,
 } from "../helpers/rate-source-fixtures";
 
 // 关闭全局接口限流（先例：transaction.spec/plan.spec——APP_GUARD token 无法 override，只能 mock 类）
@@ -49,6 +51,10 @@ describe("OnboardingController（e2e）", () => {
 		prepPreference: "balanced",
 		reminderEnabled: true,
 	};
+	const frankfurterHistory = vi.fn<(url: string) => Promise<Response>>();
+	const frankfurterLatest = vi.fn(async (_url: string) =>
+		jsonResponse(frankfurterLatestBody("2026-09-15", { MYR: "0.6102" })),
+	);
 
 	beforeAll(async () => {
 		// 汇率外呼默认拒绝；仅 er-api 路由返回确定夹具（fresh 门控：陈旧回显 →
@@ -61,9 +67,9 @@ describe("OnboardingController（e2e）", () => {
 							return jsonResponse(erApiLatestBody({ TWD: "32.5431" }));
 						}
 						if (String(url).startsWith(FRANKFURTER_RATE_URL)) {
-							return jsonResponse(
-								frankfurterLatestBody("2026-09-15", { MYR: "0.6102" }),
-							);
+							return parseFrankfurterTimeSeriesRange(url)
+								? frankfurterHistory(url)
+								: frankfurterLatest(url);
 						}
 						throw new Error("onboarding.spec: 未预期的汇率数据源外呼");
 					}) as unknown as typeof fetch),
@@ -93,21 +99,29 @@ describe("OnboardingController（e2e）", () => {
 	});
 
 	/**
-	 * 造 fresh 报价行（createdAt=now、observedAt=now → getLatest 走缓存命中，无需外呼）。
+	 * 造刚经 latest 确认的报价行，getLatest 走缓存命中。
 	 * 先清理该币对历史行（其他用例/回源可能留有 observedAt 更晚的行，
-	 * findLatestRows 按 observedAt desc 取最新——不清理会被旧行抢先导致真实回源）。
+	 * findLatestRows 优先取 observedAt 最新的已确认行）。
 	 */
 	async function seedRate(base: string, quote: string, rate: string) {
 		await ctx.prisma.exchangeRate.deleteMany({ where: { base, quote } });
+		const now = new Date();
 		const row = await ctx.prisma.exchangeRate.create({
-			data: { base, quote, rate, source: "er-api", observedAt: new Date() },
+			data: {
+				base,
+				quote,
+				rate,
+				source: "er-api",
+				observedAt: now,
+				latestConfirmedAt: now,
+			},
 		});
 		createdRateIds.push(row.id);
 		return row;
 	}
 
 	/**
-	 * 造「陈旧回显」报价行：createdAt 强制回拨（过 5 分钟 validUntil 窗口），
+	 * 造「陈旧回显」报价行：最新确认时间已过 5 分钟 validUntil 窗口，
 	 * observedAt 保留真实日级发布时间（MVP-F0-2 fresh 门控用例；
 	 * 走 refresh=false 命中 SWR 陈旧回显分支，fresh=false）。
 	 */
@@ -126,7 +140,7 @@ describe("OnboardingController（e2e）", () => {
 				rate,
 				source: "er-api",
 				observedAt,
-				createdAt: new Date(Date.now() - ageMs),
+				latestConfirmedAt: new Date(Date.now() - ageMs),
 			},
 		});
 		createdRateIds.push(row.id);
@@ -666,6 +680,95 @@ describe("OnboardingController（e2e）", () => {
 			},
 		});
 		expect(cadAccount).toBeNull();
+	});
+
+	it("冷查 MYR 历史后补录：latest 失败时拒绝入账，确认同日新报价后采用 latest 价", async () => {
+		const pair = { base: "CNY", quote: "MYR" };
+		await ctx.prisma.exchangeRate.deleteMany({ where: pair });
+		const day = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+		const observedAt = `${day}T00:00:00.000Z`;
+		const created = await createTestUser(app, "onb-history-myr");
+		extraUserIds.push(created.userId);
+		const auth = bearer(created.accessToken);
+		await request(app.getHttpServer())
+			.post("/api/onboarding/consents")
+			.set(auth)
+			.send({ age18Confirmed: true, termsConfirmed: true })
+			.expect(201);
+		await request(app.getHttpServer())
+			.post("/api/onboarding/complete")
+			.set(auth)
+			.send(wizard)
+			.expect(201);
+
+		const backfill = () =>
+			request(app.getHttpServer())
+				.post("/api/onboarding/initial-holdings")
+				.set(auth)
+				.send({ holdings: [{ currencyCode: "MYR", amount: "100" }] });
+		frankfurterHistory
+			.mockClear()
+			.mockResolvedValueOnce(
+				jsonResponse(frankfurterTimeSeriesBody({ [day]: { MYR: "0.5" } })),
+			);
+		frankfurterLatest.mockClear();
+		try {
+			await request(app.getHttpServer())
+				.get("/api/rates/history?base=CNY&target=MYR&period=7")
+				.expect(200);
+			expect(frankfurterHistory).toHaveBeenCalledTimes(1);
+			expect(frankfurterLatest).not.toHaveBeenCalled();
+			const historyRow = await ctx.prisma.exchangeRate.findFirstOrThrow({
+				where: pair,
+			});
+			expect(historyRow.observedAt.toISOString()).toBe(observedAt);
+			expect(historyRow.rate.toFixed(8)).toBe("2.00000000");
+			expect(historyRow.latestConfirmedAt).toBeNull();
+
+			await frankfurterLatest.withImplementation(
+				async () => jsonResponse({ message: "latest unavailable" }, 503),
+				async () => {
+					const rejected = await backfill().expect(400);
+					expect(rejected.body.code).toBe("RATE_UNAVAILABLE");
+					expect(frankfurterLatest).toHaveBeenCalledWith(
+						`${FRANKFURTER_RATE_URL}/latest?from=CNY&to=MYR`,
+					);
+				},
+			);
+			const where = { userId: created.userId, currencyCode: "MYR" };
+			expect(await ctx.prisma.initialHolding.count({ where })).toBe(0);
+			expect(await ctx.prisma.costLot.count({ where })).toBe(0);
+			expect(await ctx.prisma.account.count({ where })).toBe(0);
+			const exchangeRateKey = { where: { id: historyRow.id } };
+			const failedRow = await ctx.prisma.exchangeRate.findUniqueOrThrow(exchangeRateKey);
+			expect(failedRow.latestConfirmedAt).toBeNull();
+
+			frankfurterLatest.mockClear();
+			await frankfurterLatest.withImplementation(
+				async () => jsonResponse(frankfurterLatestBody(day, { MYR: "0.8" })),
+				async () => {
+					await backfill().expect(201);
+					expect(frankfurterLatest).toHaveBeenCalled();
+				},
+			);
+			const holding = await ctx.prisma.initialHolding.findFirstOrThrow({ where });
+			expect(holding.rate.toFixed(8)).toBe("1.25000000");
+			expect(holding.rateSource).toBe("frankfurter");
+			expect(holding.rateObservedAt.toISOString()).toBe(observedAt);
+			expect(await ctx.prisma.exchangeRate.count({ where: pair })).toBe(1);
+			const confirmedRow = await ctx.prisma.exchangeRate.findUniqueOrThrow(exchangeRateKey);
+			expect(confirmedRow.createdAt).toEqual(historyRow.createdAt);
+			expect(confirmedRow.latestConfirmedAt).toBeInstanceOf(Date);
+
+			frankfurterLatest.mockClear();
+			const cached = await request(app.getHttpServer())
+				.get("/api/rates/latest/CNY?targets=MYR")
+				.expect(200);
+			expect(cached.body.data).toMatchObject({ rate: "1.25", observedAt, fresh: true });
+			expect(frankfurterLatest).not.toHaveBeenCalled();
+		} finally {
+			await ctx.prisma.exchangeRate.deleteMany({ where: pair });
+		}
 	});
 
 	it("prepPreference 非法枚举 → 400 @IsIn（与 settings PATCH 同字段校验对称，N5 回归）", async () => {
