@@ -7,7 +7,9 @@
  * 2026-09-17 周四、09-18 周五、09-19 周六、09-20 周日、09-21 周一、09-22 周二、
  * 2026-10-01 周四、2027-07-28 周三、2027-08-01 周日。
  */
+import { getCurrency } from "@fxplanner-new/money";
 import { Prisma } from "@prisma/client";
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
 	ScheduleBuildError,
@@ -135,6 +137,82 @@ describe("buildInstallments：R3 节奏配比 + R4 零头入尾批", () => {
 		expect(amountsOf(batches)).toEqual(["1333.33", "1333.33", "1333.34"]);
 		assertBatchInvariants(batches, dec("4000"));
 	});
+});
+
+describe.each([
+	["JPY", 0],
+	["KRW", 0],
+	["USD", 2],
+] as const)("buildInstallments：%s 分批金额守恒", (currency, decimalPlaces) => {
+	const friday = new Date("2026-09-18T00:00:00.000Z");
+	const monday = new Date("2026-09-21T00:00:00.000Z");
+
+	it.each([
+		["conservative", friday, [3n, 2n]],
+		["balanced", friday, [1n, 1n]],
+		["aggressive", friday, [2n, 3n]],
+		["conservative", monday, [5n, 3n, 2n]],
+		["balanced", monday, [1n, 1n, 1n]],
+		["aggressive", monday, [2n, 3n, 5n]],
+	] as const)(
+		"%s 截至 %s，前批向下取整且尾批吸收全部零头",
+		(pacePreference, latestPrepDate, weights) => {
+			const currencyInfo = getCurrency(currency);
+			expect(currencyInfo?.decimalPlaces).toBe(decimalPlaces);
+			const scale = 10 ** decimalPlaces;
+			const denominator = weights.reduce<bigint>(
+				(sum, weight) => sum + weight,
+				0n,
+			);
+
+			fc.assert(
+				fc.property(
+					fc.bigInt({ min: 1n, max: 1_000_000_000n }),
+					fc.bigInt({ min: 1n, max: denominator - 1n }),
+					fc.bigInt({ min: 0n, max: 1_000_000_000n }),
+					fc.bigInt({ min: 0n, max: 1_000_000_000n }),
+					(wholeShares, remainder, usedUnits, allocatedUnits) => {
+						// 最小货币单位下不能整除配比分母，每轮都走到零头分配。
+						const totalUnits = wholeShares * denominator + remainder;
+						const batches = build({
+							targetAmount: dec(String(totalUnits + usedUnits + allocatedUnits)).div(
+								scale,
+							),
+							usedAmount: dec(String(usedUnits)).div(scale),
+							allocatedAmount: dec(String(allocatedUnits)).div(scale),
+							decimalPlaces,
+							latestPrepDate,
+							pacePreference,
+						});
+						expect(batches).toHaveLength(weights.length);
+						const actualUnits = batches.map(({ amount }) => {
+							expect(amount.decimalPlaces()).toBeLessThanOrEqual(
+								decimalPlaces,
+							);
+							return BigInt(amount.mul(scale).toFixed());
+						});
+						expect(actualUnits.reduce((sum, units) => sum + units, 0n)).toBe(
+							totalUnits,
+						);
+
+						// 用整数商和余数独立算出各批下取整值及全部被舍弃的零头。
+						const shares = weights.map((weight) => totalUnits * weight);
+						const floored = shares.map((share) => share / denominator);
+						const discarded = shares.reduce(
+							(sum, share) => sum + (share % denominator),
+							0n,
+						);
+						const tailExtra = discarded / denominator;
+						expect(tailExtra).toBeGreaterThan(0n);
+						const tail = weights.length - 1;
+						expect(actualUnits.slice(0, tail)).toEqual(floored.slice(0, tail));
+						expect(actualUnits[tail]).toBe(floored[tail] + tailExtra);
+					},
+				),
+				{ seed: 20261120, numRuns: 100 },
+			);
+		},
+	);
 });
 
 // ────────────────────────── R1/R2：可安排日期与批次日期 ──────────────────────────
