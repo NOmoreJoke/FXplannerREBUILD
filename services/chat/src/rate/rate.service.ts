@@ -457,38 +457,38 @@ export class RateService {
       return cached.points;
     }
 
-    const existing = this.referenceInFlight.get(rangeKey);
-    if (existing) {
-      return existing.catch(() => []);
+    let promise = this.referenceInFlight.get(rangeKey);
+    if (!promise) {
+      promise = this.provider
+        .fetchReferenceSeries(
+          base,
+          target,
+          this.formatDate(start),
+          this.formatDate(end),
+        )
+        .catch((error: unknown): RateHistoryPoint[] => {
+          // 参考源不可用：不阻断图表，登记负缓存窗口（与 v1 同 TTL）
+          this.logger.debug(
+            `参考序列获取失败（${rangeKey}），窗口内按无参考点返回本地序列`,
+            error instanceof Error ? error.message : error,
+          );
+          return [];
+        })
+        .then((points) => {
+          // 在清除单飞前发布缓存，避免并发请求在交接时重复回源。
+          this.referenceCache.set(rangeKey, {
+            points,
+            expiresAt: Date.now() + HISTORY_NEGATIVE_CACHE_TTL_MS,
+          });
+          return points;
+        })
+        .finally(() => {
+          this.referenceInFlight.delete(rangeKey);
+        });
+      this.referenceInFlight.set(rangeKey, promise);
     }
 
-    const promise = this.provider
-      .fetchReferenceSeries(
-        base,
-        target,
-        this.formatDate(start),
-        this.formatDate(end),
-      )
-      .finally(() => {
-        this.referenceInFlight.delete(rangeKey);
-      });
-    this.referenceInFlight.set(rangeKey, promise);
-
-    let points: RateHistoryPoint[] = [];
-    try {
-      points = await promise;
-    } catch (error) {
-      // 参考源不可用：不阻断图表，登记负缓存窗口（与 v1 同 TTL）
-      this.logger.debug(
-        `参考序列获取失败（${rangeKey}），窗口内按无参考点返回本地序列`,
-        error instanceof Error ? error.message : error,
-      );
-    }
-    this.referenceCache.set(rangeKey, {
-      points,
-      expiresAt: Date.now() + HISTORY_NEGATIVE_CACHE_TTL_MS,
-    });
-    return points;
+    return promise;
   }
 
   /** 历史回源单飞：同币对进行中的 fetchHistory 复用给并发缺口请求，结束即清除（rate-chart 方案 §6） */

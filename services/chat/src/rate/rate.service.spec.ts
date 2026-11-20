@@ -1384,6 +1384,59 @@ describe("RateService.getHistory 参考层合并（er-api 路由币对）", () =
 			}
 		});
 
+		it("参考序列回源交接（W4-03）：交错请求复用成功结果，后续缓存命中", async () => {
+			const { service, prisma, provider } = build();
+			const localRows = [rowAt("2026-11-13")];
+			const referencePoints = [
+				{
+					rate: "0.2102297812",
+					observedAt: new Date("2026-11-12T00:00:00.000Z"),
+				},
+			];
+			let resolveReference!: (points: typeof referencePoints) => void;
+			const reference = new Promise<typeof referencePoints>((resolve) => {
+				resolveReference = resolve;
+			});
+			let resolveSavedRows!: (rows: typeof localRows) => void;
+			const savedRows = new Promise<typeof localRows>((resolve) => {
+				resolveSavedRows = resolve;
+			});
+			prisma.exchangeRate.findMany.mockResolvedValue(localRows);
+			provider.fetchHistory.mockResolvedValue([]);
+			provider.fetchReferenceSeries
+				.mockReturnValueOnce(reference)
+				.mockResolvedValue([]);
+
+			const first = service.getHistory("CNY", "TWD", 7);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(provider.fetchReferenceSeries).toHaveBeenCalledTimes(1);
+
+			prisma.exchangeRate.findMany
+				.mockResolvedValueOnce(localRows)
+				.mockReturnValueOnce(savedRows);
+			const second = service.getHistory("CNY", "TWD", 7);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(prisma.exchangeRate.findMany).toHaveBeenCalledTimes(4);
+
+			// 同步释放两个 Promise：第二次请求的查库续体紧跟首次回源的收尾微任务。
+			resolveReference(referencePoints);
+			resolveSavedRows(localRows);
+			const [firstResult, secondResult] = await Promise.all([first, second]);
+			const cachedResult = await service.getHistory("CNY", "TWD", 7);
+
+			expect(provider.fetchReferenceSeries).toHaveBeenCalledTimes(1);
+			expect(firstResult.data_points).toEqual([
+				{
+					date: "2026-11-12",
+					rate: "0.2102297812",
+					source: "frankfurter-v2-reference",
+				},
+				{ date: "2026-11-13", rate: "32.0000000000", source: "er-api" },
+			]);
+			expect(secondResult).toEqual(firstResult);
+			expect(cachedResult).toEqual(firstResult);
+		});
+
 		it("同币对不同区间（7 与 365）并发：按范围隔离，各自外呼（FX-03 并发区间）", async () => {
 			const { service, prisma, provider } = build();
 			const localRow = rowAt("2026-11-13");
