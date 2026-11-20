@@ -5,7 +5,7 @@
  * - 往返守恒（Round-trip）：本金→到账→反算汇率、到账→折算回本金，误差在量化界内；
  * - 不变量（Invariants）：分拆合计守恒（分片舍入合计与整笔舍入差 ≤ 1 个最小计价单位）；
  * - 幂等性（Idempotency）：汇率 8 位舍入重复执行结果稳定；
- * - 等价性（Equivalence）：与独立 64 位精度理论 oracle 逐位一致，杜绝 IEEE-754 漂移。
+ * - 等价性（Equivalence）：常规输入与 64 位精度对照，金额半级边界与 BigInt 有理数对照。
  *
  * 生成器全程以十进制字符串/整数分构造数值，任何一步都不经过 IEEE-754 中转。
  */
@@ -19,6 +19,21 @@ import { InvalidAmountError, InvalidRateError, RoundToZeroError } from "./errors
 /** 独立理论对照：64 位精度（实现为 32 位） */
 const THEORY = Decimal.clone({ precision: 64 });
 const HALF_UP = Decimal.ROUND_HALF_UP;
+
+const HALF_UNIT_OFFSETS = [-1n, 0n, 1n] as const;
+
+function fixedPoint(units: bigint, dp: number): string {
+	if (dp === 0) return units.toString();
+	const digits = units.toString().padStart(dp + 1, "0");
+	return `${digits.slice(0, -dp)}.${digits.slice(-dp)}`;
+}
+
+/** 将正数有理数（以结果的最小计价单位计）直接 HALF_UP 为整数。 */
+function halfUpUnits(numerator: bigint, denominator: bigint): bigint {
+	const whole = numerator / denominator;
+	const remainder = numerator % denominator;
+	return whole + (2n * remainder >= denominator ? 1n : 0n);
+}
 
 /** 正金额（整数分，≤ 1e10 元），转十进制字符串数值 */
 const fcMoney: fc.Arbitrary<Decimal> = fc
@@ -44,6 +59,47 @@ const fcFxPair: fc.Arbitrary<[Decimal, Decimal]> = fc
 	.filter(([principal, rate]) => principal.div(rate).gte(1));
 
 describe("finalAmountOf 属性（本金 × 汇率 → 到账本位币）", () => {
+	it("大额乘积略低于半分时保留原分位", () => {
+		expect(finalAmountOf("10000499999.99", "1.00000001", 2).toFixed(2)).toBe(
+			"10000500099.99",
+		);
+	});
+
+	it.each([0, 2] as const)(
+		"%i 位：大额乘积在半单位下方、正中、上方均只舍入一次",
+		(dp) => {
+			const minorScale = 10n ** BigInt(dp);
+			const rateScale = 100_000_000n;
+			const rateTicks = rateScale + 1n;
+			const rate = fixedPoint(rateTicks, 8);
+			const blocks = fc.bigInt({
+				min: (10_000_000_000n * minorScale) / rateScale,
+				max: (100_000_000_000n * minorScale) / rateScale - 1n,
+			});
+
+			fc.assert(
+				fc.property(blocks, (block) => {
+					for (const offset of HALF_UNIT_OFFSETS) {
+						// 乘以 1 + 1/1e8 后，乘积的分数部分由本金最小单位数对 1e8 的余数决定。
+						const principalUnits = block * rateScale + rateScale / 2n + offset;
+						const expectedUnits = halfUpUnits(
+							principalUnits * rateTicks,
+							rateScale,
+						);
+						const principal = fixedPoint(principalUnits, dp);
+						const expected = fixedPoint(expectedUnits, dp);
+						const actual = finalAmountOf(principal, rate, dp);
+						expect(
+							actual.eq(expected),
+							`${principal} × ${rate} 得 ${actual}，预期 ${expected}`,
+						).toBe(true);
+					}
+				}),
+				{ numRuns: 200 },
+			);
+		},
+	);
+
 	it("等价性：与 64 位精度理论值逐位一致；理论舍入为 0 时必须抛 RoundToZeroError", () => {
 		const property = fc.property(
 			fcMoney,
@@ -117,6 +173,46 @@ describe("finalAmountOf 属性（本金 × 汇率 → 到账本位币）", () =>
 });
 
 describe("receivedAmountOf 属性（本金 ÷ 汇率 → 到账外币）", () => {
+	it("高精度商略低于半分时保留原分位", () => {
+		expect(
+			receivedAmountOf("9045000000.0004", "9000000000.00039801", 2).toFixed(2),
+		).toBe("1.00");
+	});
+
+	it.each([0, 2] as const)(
+		"%i 位：大额本金的商在半单位下方、正中、上方均只舍入一次",
+		(dp) => {
+			const minorScale = 10n ** BigInt(dp);
+			const halfUnitDenominator = 2n * minorScale;
+			const rateSteps = fc.bigInt({
+				min: (4_000_000_000n * 10_000n) / halfUnitDenominator,
+				max: (9_999_999_999n * 10_000n) / halfUnitDenominator,
+			});
+			const lowerUnits = fc.bigInt({ min: minorScale, max: 10n * minorScale - 1n });
+
+			fc.assert(
+				fc.property(rateSteps, lowerUnits, (rateStep, lower) => {
+					// 4 位本金与 10 位汇率先构造精确的半单位商，再将除数移动一个报价单位。
+					const principalTicks = rateStep * (2n * lower + 1n);
+					const midpointRateTicks = rateStep * halfUnitDenominator * 1_000_000n;
+					const principal = fixedPoint(principalTicks, 4);
+					const numerator = principalTicks * 1_000_000n * minorScale;
+					for (const offset of HALF_UNIT_OFFSETS) {
+						const rateTicks = midpointRateTicks + offset;
+						const rate = fixedPoint(rateTicks, 10);
+						const expected = fixedPoint(halfUpUnits(numerator, rateTicks), dp);
+						const actual = receivedAmountOf(principal, rate, dp);
+						expect(
+							actual.eq(expected),
+							`${principal} ÷ ${rate} 得 ${actual}，预期 ${expected}`,
+						).toBe(true);
+					}
+				}),
+				{ numRuns: 200 },
+			);
+		},
+	);
+
 	it("等价性：与 64 位精度理论值逐位一致；理论舍入为 0 时必须抛 RoundToZeroError", () => {
 		const property = fc.property(
 			fcMoney,
