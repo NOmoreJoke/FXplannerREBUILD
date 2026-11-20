@@ -209,15 +209,56 @@ test.describe("【换汇计划生命周期】新建 / 调目标 / 调分配 / �
 		const user = await seedRegisterAndLogin("plan-lc-cancel");
 		await seedOnboarding(user.accessToken, "CNY");
 		await seedTransaction(user.accessToken, "USD", "10000");
+		const planName = "部分使用后取消的计划";
 		const planId = await seedPlanWithAllocation(
 			user.accessToken,
 			"USD",
 			"6000",
+			planName,
 		);
+		await seedUsage(user.accessToken, planId, "2000");
 
 		await injectLoginCookie(page.context(), user.accessToken, BASE_URL);
-		await page.goto(`${BASE_URL}/plans/${planId}`);
-		await page.waitForLoadState("networkidle");
+		const planPath = `/plans/${planId}`;
+		const accountUrl = `${BASE_URL}/accounts/USD`;
+		await page.goto(accountUrl);
+
+		const allocationSection = page.getByRole("region", { name: "按计划分配" });
+		const planRow = allocationSection.getByRole("row").filter({
+			has: page.getByRole("link", { name: planName, exact: true }),
+		});
+		const planLink = planRow.getByRole("link", { name: planName, exact: true });
+		const planCells = planRow.getByRole("cell");
+		const unallocatedTotal = allocationSection.getByRole("row").filter({
+			has: page.getByRole("cell", { name: "未分配余额", exact: true }),
+		});
+		const summaryCards = page.getByRole("region", { name: "账户金额概览" });
+		const unallocatedCard = summaryCards.locator('[data-slot="card"]').filter({
+			has: page.getByText("未分配余额", { exact: true }),
+		});
+		const allocatedCard = summaryCards.locator('[data-slot="card"]').filter({
+			has: page.getByText("已分配", { exact: true }),
+		});
+
+		// 已用 2,000，账户余额 8,000，仍分配 4,000，未分配 4,000。
+		await expect(planLink).toBeVisible();
+		await expect(planLink).toHaveAttribute("href", planPath);
+		await expect(planRow.getByText("进行中", { exact: true })).toBeVisible();
+		await expect(planCells.nth(1)).toHaveText("6000.0000");
+		await expect(planCells.nth(2)).toHaveText("2000.0000");
+		await expect(planCells.nth(3)).toHaveText("4000.0000");
+		await expect(
+			unallocatedTotal.getByRole("cell", { name: "4000.0000 USD", exact: true }),
+		).toBeVisible();
+		await expect(
+			unallocatedCard.getByText("4000.0000", { exact: true }),
+		).toBeVisible();
+		await expect(
+			allocatedCard.getByText("4000.0000", { exact: true }),
+		).toBeVisible();
+
+		await planLink.click();
+		await expect(page).toHaveURL(`${BASE_URL}${planPath}`);
 		await expect(page.getByText("目标币种 USD")).toBeVisible();
 
 		// 取消 → 二次确认
@@ -231,37 +272,39 @@ test.describe("【换汇计划生命周期】新建 / 调目标 / 调分配 / �
 			timeout: 10_000,
 		});
 		// 详情态：取消提示 + 修改记录保留「取消计划」
-		await expect(page.getByText(/计划已取消/).first()).toBeVisible();
-		await expect(page.getByText("取消计划", { exact: true }).first()).toBeVisible();
+		await expect(
+			page.getByText("暂无准备节点（计划已取消）", { exact: true }),
+		).toBeVisible();
+		const changeLog = page.locator("section").filter({
+			has: page.getByRole("heading", { name: "修改记录", exact: true }),
+		});
+		await expect(
+			changeLog.getByText("取消计划", { exact: true }),
+		).toBeVisible();
 		await saveScreenshot(page, "07-plan-lifecycle", "T-PLAN-LC-004-01-cancelled");
 
 		// 列表徽标：已取消
 		await page.goto(`${BASE_URL}/plans`);
-		await page.waitForLoadState("networkidle");
 		await expect(
 			page
-				.locator('a[href^="/plans/"]:not([href="/plans/new"])')
-				.first()
+				.locator(`a[href="${planPath}"]`)
 				.getByText("已取消", { exact: true }),
 		).toBeVisible();
 
-		// §2 账户分配视图：该计划行剩余 0、状态已取消；未分配余额恢复 10000（无使用 → amount 归 0 不出行）
-		await page.goto(`${BASE_URL}/accounts/USD`);
-		await page.waitForLoadState("networkidle");
-		const allocationSection = page.locator('section[aria-label="按计划分配"]');
-		await expect(allocationSection).toBeVisible();
-		// 取消且无使用：amount = used = 0 → 不产生明细行（全 0 行过滤）→ 空态文案
-		await expect(allocationSection.getByText("暂无计划分配该币种")).toBeVisible();
-		// 未分配余额恢复全额：锚定摘要区「未分配余额」卡（余额卡同为 10000.0000，勿混），
-		// 且已分配归零——两者共同证明释放（对抗审 m1）
-		const summaryCards = page.getByLabel("账户金额概览");
-		const unallocatedCard = summaryCards
-			.locator('[data-slot="card"]')
-			.filter({ hasText: "未分配余额" });
-		await expect(unallocatedCard.getByText("10000.0000")).toBeVisible();
-		const allocatedCard = summaryCards
-			.locator('[data-slot="card"]')
-			.filter({ hasText: "已分配" });
+		// 取消只释放剩余的 4,000；计划行保留已用金额，未分配余额升至 8,000。
+		await page.goto(accountUrl);
+		await expect(planLink).toBeVisible();
+		await expect(planLink).toHaveAttribute("href", planPath);
+		await expect(planRow.getByText("已取消", { exact: true })).toBeVisible();
+		await expect(planCells.nth(1)).toHaveText("2000.0000");
+		await expect(planCells.nth(2)).toHaveText("2000.0000");
+		await expect(planCells.nth(3)).toHaveText("0.0000");
+		await expect(
+			unallocatedTotal.getByRole("cell", { name: "8000.0000 USD", exact: true }),
+		).toBeVisible();
+		await expect(
+			unallocatedCard.getByText("8000.0000", { exact: true }),
+		).toBeVisible();
 		await expect(allocatedCard.getByText("0.0000", { exact: true })).toBeVisible();
 		await saveScreenshot(page, "07-plan-lifecycle", "T-PLAN-LC-004-02-account");
 		await logger.saveToFile();

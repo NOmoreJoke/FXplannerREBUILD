@@ -216,11 +216,13 @@ export async function seedPlanWithAllocation(
 	token: string,
 	targetCurrency: string,
 	allocatedAmount: string,
+	name?: string,
 ): Promise<string> {
 	const data = await api<{ id: string }>("/api/plans", {
 		method: "POST",
 		token,
 		body: {
+			name,
 			targetCurrency,
 			targetAmount: "10000",
 			expectUseDate: PLAN_EXPECT_USE_DATE,
