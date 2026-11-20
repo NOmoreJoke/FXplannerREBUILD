@@ -24,23 +24,33 @@ export function parseRateResponse<T>(text: string) {
 		return value;
 	}) as T;
 
+	const readField = (
+		record: RateTable | undefined,
+		field: string,
+		base: string,
+		target: string,
+	) => {
+		const value = record?.[field];
+		if (value === undefined) return undefined;
+		if (typeof value === "string") {
+			return { raw: value, rate: invertQuoteRate(value, base, target) };
+		}
+
+		const numberToken = record && numberTokens.get(record)?.get(field);
+		if (numberToken === undefined) {
+			throw new BadGatewayException(`汇率源返回了无效牌价: ${base} → ${target}`);
+		}
+		return {
+			raw: numberToken,
+			rate: invertQuoteRate({ numberToken }, base, target),
+		};
+	};
+
 	return {
 		data,
+		readField,
 		readQuote(rates: RateTable | undefined, base: string, target: string) {
-			const value = rates?.[target];
-			if (value === undefined) return undefined;
-			if (typeof value === "string") {
-				return { raw: value, rate: invertQuoteRate(value, base, target) };
-			}
-
-			const numberToken = rates && numberTokens.get(rates)?.get(target);
-			if (numberToken === undefined) {
-				throw new BadGatewayException(`汇率源返回了无效牌价: ${base} → ${target}`);
-			}
-			return {
-				raw: numberToken,
-				rate: invertQuoteRate({ numberToken }, base, target),
-			};
+			return readField(rates, target, base, target);
 		},
 	};
 }

@@ -3,8 +3,8 @@ import {
 	FRANKFURTER_V2_RATE_URL,
 	RATE_CLOCK_SKEW_TOLERANCE_MS,
 } from "./rate.constants";
-import { invertQuoteRate } from "./rate-invert";
 import { DEFAULT_RATE_PROVIDER_TIMEOUT_MS } from "./rate-source.frankfurter";
+import { parseRateResponse } from "./rate-source-json";
 import type { RateHistoryPoint } from "./rate-source";
 
 /**
@@ -52,11 +52,12 @@ export class FrankfurterV2Source {
 		start: string,
 		end: string,
 	): Promise<RateHistoryPoint[]> {
-		const response = await this.request<FrankfurterV2SeriesResponse>(
-			`${FRANKFURTER_V2_RATE_URL}/rates?base=${encodeURIComponent(base)}&quotes=${encodeURIComponent(target)}&from=${encodeURIComponent(start)}&to=${encodeURIComponent(end)}`,
-		);
+		const { data: response, readField } =
+			await this.request<FrankfurterV2SeriesResponse>(
+				`${FRANKFURTER_V2_RATE_URL}/rates?base=${encodeURIComponent(base)}&quotes=${encodeURIComponent(target)}&from=${encodeURIComponent(start)}&to=${encodeURIComponent(end)}`,
+			);
 
-		const rates = Array.isArray(response) ? response : response.rates;
+		const rates = Array.isArray(response) ? response : response?.rates;
 		const entries = this.normalizeRates(rates, base, target);
 		const startMs = this.parseDate(start, "区间起点").getTime();
 		const endMs = this.parseDate(end, "区间终点").getTime();
@@ -67,13 +68,15 @@ export class FrankfurterV2Source {
 				// 所有逐条记录先校验日期，即使币对不匹配或缺少币种字段（FX-01）。
 				observedAt: this.parseDate(entry.date, "参考序列"),
 				matchesPair: entry.matchesPair,
-				rawRate: entry.rate,
+				container: entry.container,
+				field: entry.field,
 			}))
-			.filter((entry) => entry.matchesPair && entry.rawRate !== undefined)
-			.map((entry) => ({
-				rate: invertQuoteRate(entry.rawRate as string | number, base, target),
-				observedAt: entry.observedAt,
-			}))
+			.filter((entry) => entry.matchesPair)
+			.flatMap((entry) => {
+				const quote = readField(entry.container, entry.field, base, target);
+				if (quote === undefined) return [];
+				return [{ rate: quote.rate, observedAt: entry.observedAt }];
+			})
 			.filter(
 				(point) =>
 					point.observedAt.getTime() >= startMs &&
@@ -90,25 +93,38 @@ export class FrankfurterV2Source {
 		raw: unknown,
 		base: string,
 		target: string,
-	): Array<{ date: unknown; rate: unknown; matchesPair: boolean }> {
+	): Array<{
+		date: unknown;
+		container: Record<string, unknown> | undefined;
+		field: string;
+		matchesPair: boolean;
+	}> {
 		if (Array.isArray(raw)) {
 			return raw.map((entry) => {
-				const record = entry as Record<string, unknown> | undefined;
+				const record =
+					entry !== null && typeof entry === "object"
+						? (entry as Record<string, unknown>)
+						: undefined;
 				return {
 					date: record?.date,
-					rate: record?.rate,
+					container: record,
+					field: "rate",
 					matchesPair: record?.base === base && record?.quote === target,
 				};
 			});
 		}
 		if (raw !== null && typeof raw === "object") {
-			return Object.entries(
-				raw as Record<string, Record<string, string | number>>,
-			).map(([date, rates]) => ({
-				date,
-				rate: (rates ?? {})[target],
-				matchesPair: true,
-			}));
+			return Object.entries(raw as Record<string, unknown>).map(
+				([date, rates]) => ({
+					date,
+					container:
+						rates !== null && typeof rates === "object"
+							? (rates as Record<string, unknown>)
+							: undefined,
+					field: target,
+					matchesPair: true,
+				}),
+			);
 		}
 		return [];
 	}
@@ -137,7 +153,7 @@ export class FrankfurterV2Source {
 		return date;
 	}
 
-	private async request<TResponse>(url: string): Promise<TResponse> {
+	private async request<TResponse>(url: string) {
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -152,7 +168,7 @@ export class FrankfurterV2Source {
 				throw new BadGatewayException(`参考序列响应状态 ${response.status}`);
 			}
 
-			return (await response.json()) as TResponse;
+			return parseRateResponse<TResponse>(await response.text());
 		} catch (error) {
 			if (error instanceof BadGatewayException) {
 				throw error;

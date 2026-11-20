@@ -54,6 +54,12 @@ describe("invertQuoteRate 固定夹具（FX-01 方向锁定）", () => {
 			.toThrowError(/超出落库范围/);
 	});
 
+	it("长小数尾零在求幂前剥离且不影响精度", () => {
+		expect(invertQuoteRate(`1.${"0".repeat(10_000)}`, "CNY", "TWD")).toBe(
+			"1.0000000000",
+		);
+	});
+
 	it("边界保留：落库范围内极大/极小牌价正确取倒数", () => {
 		// 1e10 的倒数 = 1e-10（Decimal(20,10) 最小非零精度，可落库）
 		expect(invertQuoteRate("10000000000", "CNY", "XXX")).toBe("0.0000000001");
@@ -124,12 +130,26 @@ describe("invertQuoteRate 属性", () => {
 });
 
 describe("invertQuoteRate 拒绝性（502 语义）", () => {
-	it("零 / 负数 / 非法字符串 / 科学计数法 → BadGatewayException（无效牌价）", () => {
-		for (const bad of ["0", "0.0000", "-3", "-0.01", "abc", "", "NaN", "Infinity", "1e-15"]) {
-			expect(() => invertQuoteRate(bad, "CNY", "TWD")).toThrowError(
+	it("零 / 负数 / 非法字符串 / 科学计数法 / 非法对象或空值 → BadGatewayException（无效牌价）", () => {
+		for (const bad of [
+			"0",
+			"0.0000",
+			"-3",
+			"-0.01",
+			"abc",
+			"",
+			"NaN",
+			"Infinity",
+			"1e-15",
+			null,
+			undefined,
+			{},
+			{ numberToken: 123 },
+		]) {
+			expect(() => invertQuoteRate(bad as never, "CNY", "TWD")).toThrowError(
 				BadGatewayException,
 			);
-			expect(() => invertQuoteRate(bad, "CNY", "TWD")).toThrowError(
+			expect(() => invertQuoteRate(bad as never, "CNY", "TWD")).toThrowError(
 				/无效牌价/,
 			);
 		}

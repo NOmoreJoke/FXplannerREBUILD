@@ -137,18 +137,42 @@ describe("FrankfurterV2Source（TWD 图表参考序列）", () => {
 		expect(points[0].rate).toBe("0.2102297812");
 	});
 
-	it("无效牌价（0/负/非法）→ 502（与既有源同语义）", async () => {
-		const fetchImpl = okFetch({
-			rates: [{ date: "2026-10-08", base: "CNY", quote: "TWD", rate: "0" }],
-		});
-		await expect(
-			new FrankfurterV2Source({ fetchImpl }).fetchReferenceSeries(
-				"CNY",
-				"TWD",
-				"2026-10-01",
-				"2026-10-14",
-			),
-		).rejects.toThrowError(BadGatewayException);
+	it("无效牌价（0/负/null/非法）→ 502（与既有源同语义，不抛 TypeError）", async () => {
+		for (const badRate of ["0", null, {}]) {
+			const fetchImpl = okFetch({
+				rates: [{ date: "2026-10-08", base: "CNY", quote: "TWD", rate: badRate }],
+			});
+			await expect(
+				new FrankfurterV2Source({ fetchImpl }).fetchReferenceSeries(
+					"CNY",
+					"TWD",
+					"2026-10-01",
+					"2026-10-14",
+				),
+			).rejects.toThrowError(BadGatewayException);
+		}
+	});
+
+	it("原始 JSON 极小科学计数法与超 15 位数字词元保留精确 BigInt 倒数", async () => {
+		const rawJson =
+			'[{"date":"2026-10-08","base":"CNY","quote":"TWD","rate":0.0000005},{"date":"2026-10-09","base":"CNY","quote":"TWD","rate":0.00000000020000000000000001}]';
+		const fetchImpl = vi.fn(
+			async () =>
+				new Response(rawJson, {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+		) as unknown as typeof fetch;
+		const points = await new FrankfurterV2Source({ fetchImpl }).fetchReferenceSeries(
+			"CNY",
+			"TWD",
+			"2026-10-01",
+			"2026-10-14",
+		);
+		expect(points).toEqual([
+			{ observedAt: new Date("2026-10-08T00:00:00Z"), rate: "2000000.0000000000" },
+			{ observedAt: new Date("2026-10-09T00:00:00Z"), rate: "4999999999.9999997500" },
+		]);
 	});
 
 	it("date 非法/不存在/未来 → 502（FX-01：不得回落系统时间，参考点越界拒绝）", async () => {

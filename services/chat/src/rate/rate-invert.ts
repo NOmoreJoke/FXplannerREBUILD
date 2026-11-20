@@ -55,23 +55,27 @@ export function invertQuoteRate(
 ): string {
 	let coefficient: string;
 	let exponent = 0;
-	if (typeof raw === "object") {
+	if (raw !== null && typeof raw === "object") {
+		if (typeof raw.numberToken !== "string") failInvalid(base, target);
 		const match = raw.numberToken.match(JSON_RATE_PATTERN);
 		if (!match) failInvalid(base, target);
 		coefficient = match[1];
 		exponent = Number(match[2] ?? "0");
 	} else {
+		if (typeof raw !== "string" && typeof raw !== "number") failInvalid(base, target);
 		coefficient = String(raw).trim();
 		if (!RAW_RATE_PATTERN.test(coefficient)) failInvalid(base, target);
 	}
 
 	const dotIndex = coefficient.indexOf(".");
 	const fractionLength = dotIndex === -1 ? 0 : coefficient.length - dotIndex - 1;
-	const scale = fractionLength - exponent;
-	const significantDigits = coefficient.replace(".", "").replace(/^0+/, "");
-	if (!significantDigits) {
+	const rawSignificant = coefficient.replace(".", "").replace(/^0+/, "");
+	if (!rawSignificant) {
 		failInvalid(base, target);
 	}
+	const significantDigits = rawSignificant.replace(/0+$/, "");
+	const trailingZeros = rawSignificant.length - significantDigits.length;
+	const scale = fractionLength - exponent - trailingZeros;
 
 	// Reject exponents that put the reciprocal outside storage precision before
 	// allocating powers of ten. Adjacent decades still need the exact HALF_UP check.
