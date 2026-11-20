@@ -55,20 +55,22 @@ describe("OnboardingController（e2e）", () => {
 		prepPreference: "balanced",
 		reminderEnabled: true,
 	};
+	const erApiLatest = vi.fn(async (_url: string) =>
+		jsonResponse(erApiLatestBody({ TWD: "32.5431" })),
+	);
 	const frankfurterHistory = vi.fn<(url: string) => Promise<Response>>();
 	const frankfurterLatest = vi.fn(async (_url: string) =>
 		jsonResponse(frankfurterLatestBody("2026-09-15", { MYR: "0.6102" })),
 	);
 
 	beforeAll(async () => {
-		// 汇率外呼默认拒绝；仅 er-api 路由返回确定夹具（fresh 门控：陈旧回显 →
-		// 同步回源用例，MVP-F0-2）。防止并行 spec 的真实回源行与网络抖动污染断言。
+		// 汇率外呼使用已知来源夹具，避免真实回源和网络抖动污染断言。
 		ctx = await createTestApp((builder) =>
 			builder.overrideProvider(RateProvider).useFactory({
 				factory: (timeoutMs: number) =>
 					new RateProvider(timeoutMs, (async (url: string) => {
 						if (String(url).startsWith(ERAPI_RATE_URL)) {
-							return jsonResponse(erApiLatestBody({ TWD: "32.5431" }));
+							return erApiLatest(url);
 						}
 						if (String(url).startsWith(FRANKFURTER_RATE_URL)) {
 							return parseFrankfurterTimeSeriesRange(url)
@@ -130,9 +132,8 @@ describe("OnboardingController（e2e）", () => {
 	}
 
 	/**
-	 * 造「陈旧回显」报价行：最新确认时间已过 5 分钟 validUntil 窗口，
-	 * observedAt 保留真实日级发布时间（MVP-F0-2 fresh 门控用例；
-	 * 走 refresh=false 命中 SWR 陈旧回显分支，fresh=false）。
+	 * 造过期报价行：最新确认时间已过 5 分钟 validUntil 窗口，
+	 * observedAt 保留来源的日级发布时间。
 	 */
 	async function seedStaleRate(
 		base: string,
@@ -336,10 +337,9 @@ describe("OnboardingController（e2e）", () => {
 		expect(balanceByCode.get("KRW")).toBe("100000.0000");
 	});
 
-	it("日级源陈旧回显 → 一次同步回源后入账（FX-04：observedAt 早于 5 分钟但刚获系统确认可入账）", async () => {
-		// TWD 路由 er-api：陈旧行（createdAt 已过 validUntil）→ SWR 回显 fresh=false
-		// → 同步刷新（er-api 夹具应答、upsert 刷新 createdAt）→ fresh=true → 入账
+	it("日级报价已过期 → 一次同步回源后入账（FX-04：刚获系统确认可入账）", async () => {
 		await seedStaleRate("CNY", "TWD", "32.0000000000");
+		erApiLatest.mockClear();
 		const created = await createTestUser(app, "onb-stale-refresh");
 		extraUserIds.push(created.userId);
 		await request(app.getHttpServer())
@@ -357,6 +357,7 @@ describe("OnboardingController（e2e）", () => {
 			})
 			.expect(201);
 		expect(res.body.data.settings.baseCurrency).toBe("CNY");
+		expect(erApiLatest).toHaveBeenCalledTimes(1);
 
 		// 采用夹具新报价（上游 1 CNY = 32.5431 TWD → 取倒数 1 TWD = 0.0307284801 CNY，
 		// 入账 8 位 0.03072848）；rateObservedAt 保留真实日级发布时间
@@ -370,17 +371,15 @@ describe("OnboardingController（e2e）", () => {
 		expect(holding.rateObservedAt.toISOString()).toBe(
 			"2026-09-15T00:00:00.000Z",
 		);
-		// 同步刷新后行的 createdAt 已回源刷新（下一次取价 fresh）
+		// 同步回源刷新系统确认时间。
 		const row = await ctx.prisma.exchangeRate.findFirstOrThrow({
 			where: { base: "CNY", quote: "TWD" },
 		});
-		expect(row.createdAt.getTime()).toBeGreaterThan(Date.now() - 60_000);
+		expect(row.latestConfirmedAt!.getTime()).toBeGreaterThan(Date.now() - 60_000);
 	});
 
-	it("恰过 validUntil（5 分钟+1 秒）且回源失败 → 400 RATE_UNAVAILABLE，整单回滚（FX-04 同步刷新失败拒绝）", async () => {
-		// USD 路由 abc（stub 拒绝外呼）：createdAt 恰过 5 分钟窗口 → SWR 回显 fresh=false
-		// → 同步刷新失败 → 拒绝（恰过边界，而非任意陈旧）
-		await seedStaleRate("CNY", "USD", "7.2480000000", new Date("2026-09-15T00:00:00.000Z"), 5 * 60_000 + 1_000);
+	it.each(["立即", "延迟"] as const)("恰过 validUntil，供应商%s返回首个 503 → 只请求一次且整单回滚", async (timing) => {
+		const stale = await seedStaleRate("CNY", "TWD", "0.03000000", new Date("2026-09-15T00:00:00.000Z"), 5 * 60_000 + 1_000);
 		const created = await createTestUser(app, "onb-stale-fail");
 		extraUserIds.push(created.userId);
 		await request(app.getHttpServer())
@@ -389,15 +388,34 @@ describe("OnboardingController（e2e）", () => {
 			.send({ age18Confirmed: true, termsConfirmed: true })
 			.expect(201);
 
-		const res = await request(app.getHttpServer())
+		const upstreamStarted = Promise.withResolvers<void>();
+		const upstreamRelease = Promise.withResolvers<void>();
+		// 仅首个请求失败。错误重试若发出，默认夹具会成功并暴露错误入账。
+		erApiLatest.mockClear().mockImplementationOnce(async () => {
+			upstreamStarted.resolve();
+			if (timing === "延迟") await upstreamRelease.promise;
+			return jsonResponse({ message: "latest unavailable" }, 503);
+		});
+		const response = request(app.getHttpServer())
 			.post("/api/onboarding/complete")
 			.set(bearer(created.accessToken))
 			.send({
 				...wizard,
-				initialHoldings: [{ currencyCode: "USD", amount: "1000" }],
+				initialHoldings: [{ currencyCode: "TWD", amount: "1000" }],
 			})
-			.expect(400);
-		expect(res.body.code).toBe("RATE_UNAVAILABLE");
+			.then((res) => res);
+		if (timing === "延迟") {
+			try {
+				await Promise.race([upstreamStarted.promise, response]);
+			} finally {
+				upstreamRelease.resolve();
+			}
+		}
+		const res = await response;
+		expect(erApiLatest).toHaveBeenCalledTimes(1);
+		expect(res).toMatchObject({ status: 400, body: { code: "RATE_UNAVAILABLE" } });
+		const rate = await ctx.prisma.exchangeRate.findUniqueOrThrow({ where: { id: stale.id } });
+		expect(rate.latestConfirmedAt).toEqual(stale.latestConfirmedAt);
 
 		// 整单回滚：无设置、无持仓、无批次、无账户
 		const settings = await ctx.prisma.userSettings.findUnique({
@@ -548,7 +566,7 @@ describe("OnboardingController（e2e）", () => {
 		},
 	);
 
-	it("HKD/TWD 组合：本位币 HKD 下 TWD 陈旧回显 → 同步回源后入账（FX-04 币对覆盖）", async () => {
+	it("HKD/TWD 组合：本位币 HKD 下 TWD 报价过期 → 同步回源后入账（FX-04 币对覆盖）", async () => {
 		await seedStaleRate("HKD", "TWD", "32.0000000000");
 		const created = await createTestUser(app, "onb-hkd-twd");
 		extraUserIds.push(created.userId);
@@ -825,7 +843,7 @@ describe("OnboardingController（e2e）", () => {
 				async () => {
 					const rejected = await backfill().expect(400);
 					expect(rejected.body.code).toBe("RATE_UNAVAILABLE");
-					expect(frankfurterLatest).toHaveBeenCalledWith(
+					expect(frankfurterLatest).toHaveBeenCalledExactlyOnceWith(
 						`${FRANKFURTER_RATE_URL}/latest?from=CNY&to=MYR`,
 					);
 				},
@@ -843,7 +861,7 @@ describe("OnboardingController（e2e）", () => {
 				async () => jsonResponse(frankfurterLatestBody(day, { MYR: "0.8" })),
 				async () => {
 					await backfill().expect(201);
-					expect(frankfurterLatest).toHaveBeenCalled();
+					expect(frankfurterLatest).toHaveBeenCalledTimes(1);
 				},
 			);
 			const holding = await ctx.prisma.initialHolding.findFirstOrThrow({ where });

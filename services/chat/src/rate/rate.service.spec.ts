@@ -257,6 +257,17 @@ describe("RateService", () => {
 		expect(result.rate).toBe("0.74");
 	});
 
+	it("入账取价直接复用仍在确认窗口内的报价", async () => {
+		prisma.exchangeRate.findMany.mockResolvedValue([mkRow("USD")]);
+
+		await expect(service.getLatestForBooking("CAD", ["USD"])).resolves.toMatchObject({
+			rate: "0.73",
+			fresh: true,
+			validUntil: minutesAfter(4).toISOString(),
+		});
+		expect(provider.fetchLatestBatch).not.toHaveBeenCalled();
+	});
+
 	it("SWR 陈旧回显：后台回源落库重置窗口，二次查询命中新窗口不再外呼", async () => {
 		prisma.exchangeRate.findMany.mockResolvedValue([
 			mkRow("USD", { latestConfirmedAt: minutesBefore(30) }),

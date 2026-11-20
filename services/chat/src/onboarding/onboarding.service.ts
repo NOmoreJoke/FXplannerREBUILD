@@ -504,26 +504,26 @@ export class OnboardingService {
 	/**
 	 * 批量取价并归一为 items 映射：单目标平铺响应（无 items）包一层、
 	 * 多目标组响应原样取 items（两种响应形状归一，对齐前端 use-latest-rates 思路）。
-	 * getLatest 整体异常（币对不支持/数据源不可用等）统一映射 400 RATE_UNAVAILABLE。
-	 *
-	 * 时效口径（MVP-F0-2，realtime-rate 底稿 §2「首次建账与补录」）：
-	 * 断言锚点为系统确认时效 fresh/validUntil（getLatest 既有语义），不再以
-	 * observedAt（供应商发布时间，日级源恒早于窗口）自设 5 分钟门槛——日级源
-	 * 刚获系统确认即可入账。陈旧回显 → 取一次真实同步刷新；刷新失败或刷新后
-	 * 仍不 fresh（如供应商停更且响应已过 validUntil）→ 保留 400 RATE_UNAVAILABLE。
+	 * 取价复用新鲜缓存，过期或缺失时同步回源一次。按系统确认时效 fresh/validUntil
+	 * 判断能否入账，取价失败、项级错误或报价过期均映射为 400 RATE_UNAVAILABLE。
 	 */
 	private async fetchLatestQuotes(
 		userId: string,
 		baseCurrency: string,
 		codes: string[],
 	): Promise<Map<string, LatestRateItem>> {
-		let items = await this.fetchLatestOnce(userId, baseCurrency, codes, false);
-		if (items.some((item) => !this.isFreshQuote(item, Date.now()))) {
-			this.warnFailure(userId, "RATE", "存在超窗陈旧报价，执行一次同步回源");
-			items = await this.fetchLatestOnce(userId, baseCurrency, codes, true);
+		let response: LatestRatesResponse;
+		try {
+			response = await this.rateService.getLatestForBooking(baseCurrency, codes);
+		} catch {
+			this.warnFailure(userId, "RATE", "汇率服务取价失败（整体异常）");
+			throw new RateUnavailableException();
 		}
-		if (items.some((item) => !this.isFreshQuote(item, Date.now()))) {
-			this.warnFailure(userId, "RATE", "同步回源后仍存在过期报价");
+		const items = "items" in response ? response.items : [response];
+		const now = Date.now();
+		const allFresh = items.every((item) => this.isFreshQuote(item, now));
+		if (!allFresh) {
+			this.warnFailure(userId, "RATE", "存在不可用或过期报价");
 			throw new RateUnavailableException();
 		}
 		return new Map(items.map((item) => [item.target, item]));
@@ -533,37 +533,6 @@ export class OnboardingService {
 		if (!("fresh" in item) || !item.fresh) return false;
 		const until = Date.parse(item.validUntil);
 		return Number.isFinite(until) && now < until;
-	}
-
-	/** 单次 getLatest 取价与形状归一（refresh 语义透传）；整体异常统一 RATE_UNAVAILABLE */
-	private async fetchLatestOnce(
-		userId: string,
-		baseCurrency: string,
-		codes: string[],
-		refresh: boolean,
-	): Promise<LatestRateItem[]> {
-		let response: LatestRatesResponse;
-		try {
-			response = await this.rateService.getLatest(baseCurrency, codes, refresh);
-		} catch {
-			this.warnFailure(userId, "RATE", "汇率服务取价失败（整体异常）");
-			throw new RateUnavailableException();
-		}
-		return "items" in response
-			? response.items
-			: [
-					{
-						target: response.target,
-						rate: response.rate,
-						...(response.sellRate !== undefined
-							? { sellRate: response.sellRate }
-							: {}),
-						source: response.source,
-						observedAt: response.observedAt,
-						validUntil: response.validUntil,
-						fresh: response.fresh,
-					},
-				];
 	}
 
 	/**

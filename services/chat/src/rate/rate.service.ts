@@ -63,6 +63,7 @@ interface QuoteToPersist {
 }
 
 type GroupResult = Map<string, LatestQuoteData | LatestQuoteError>;
+type LatestQuoteMode = 'swr' | 'fresh-only' | 'force-refresh';
 
 /**
  * 历史回源负缓存 TTL：回源后仍不完整的币对 10 分钟内不再重试回源
@@ -163,6 +164,19 @@ export class RateService {
    * - refresh=true 或冷启动路径：整组一次外呼（同一时点），错误逐项下沉或按单目标上抛。
    */
   async getLatest(base: string, targets?: string[], refresh = false) {
+    return this.loadLatest(base, targets, refresh ? 'force-refresh' : 'swr');
+  }
+
+  /** 入账取价：复用新鲜缓存，过期或缺失时等待一次整组回源。 */
+  async getLatestForBooking(base: string, targets: string[]) {
+    return this.loadLatest(base, targets, 'fresh-only');
+  }
+
+  private async loadLatest(
+    base: string,
+    targets: string[] | undefined,
+    mode: LatestQuoteMode,
+  ) {
     const normalizedBase = this.validateCurrency(base, 'base');
     const requested = this.normalizeTargets(targets);
     const externalTargets = requested.filter((target) => target !== normalizedBase);
@@ -178,9 +192,9 @@ export class RateService {
     });
 
     let group: GroupResult;
-    if (!refresh && allFresh) {
+    if (mode !== 'force-refresh' && allFresh) {
       group = cached;
-    } else if (!refresh && requested.every((target) => cached.has(target))) {
+    } else if (mode === 'swr' && requested.every((target) => cached.has(target))) {
       // SWR 陈旧回显：库内齐但超窗 → 先用旧值响应（不阻塞），后台异步回源落库；
       // 回源成功刷新最新确认时间，前端轮询可拿到新值。
       group = cached;
