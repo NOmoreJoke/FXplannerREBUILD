@@ -35,13 +35,21 @@ import {
 	verifyFrozenPlan,
 	type InventoryRow,
 } from "../../src/rate/rate-migration-plan";
-import { executeFrozenPlan, requireInventoryId } from "./execute";
+import {
+	executeFrozenPlan,
+	fingerprintTarget,
+	queryTargetIdentity,
+	requireInventoryId,
+	resolveTargetConnection,
+	verifyTargetFingerprint,
+} from "./execute";
 
 // 全计划逐行条件更新，幂等复跑还要读取未命中的行。给两批共享一个有限预算。
 const MIGRATION_TRANSACTION_TIMEOUT_MS = 30_000;
 
 interface FrozenInventory {
 	inventoryId?: string;
+	targetFingerprint?: string;
 	generatedAt: string;
 	note: string;
 	/** 人工方向证据圈选的可转换候选 id 集（底稿 §3.1「排除已正确写入行」）；
@@ -116,25 +124,34 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 
+	const databaseUrl = process.env.DATABASE_URL;
 	const prisma = new PrismaClient({
+		datasourceUrl: databaseUrl,
 		transactionOptions: { timeout: MIGRATION_TRANSACTION_TIMEOUT_MS },
 	});
 	try {
 		if (command === "inventory") {
-			// 只读盘点：全表扫描（exchange_rates 体量有限：日更少量行 × 币对）
-			const allRows = await prisma.exchangeRate.findMany({
-				select: {
-					id: true,
-					base: true,
-					quote: true,
-					source: true,
-					rate: true,
-					sellRate: true,
-					observedAt: true,
-					createdAt: true,
-				},
-				orderBy: { id: "asc" },
-			});
+			const connection = resolveTargetConnection(databaseUrl);
+			const [, targetIdentity, allRows] = await prisma.$transaction(
+				[
+					prisma.$executeRaw`SET TRANSACTION READ ONLY`,
+					queryTargetIdentity(prisma, connection),
+					prisma.exchangeRate.findMany({
+						select: {
+							id: true,
+							base: true,
+							quote: true,
+							source: true,
+							rate: true,
+							sellRate: true,
+							observedAt: true,
+							createdAt: true,
+						},
+						orderBy: { id: "asc" },
+					}),
+				],
+				{ isolationLevel: "RepeatableRead" },
+			);
 			const rows: InventoryRow[] = allRows.map((row) => ({
 				id: row.id,
 				base: row.base,
@@ -149,6 +166,7 @@ async function main(): Promise<void> {
 			const plan = deriveMigrationPlan(rows);
 			const frozen: FrozenInventory = {
 				inventoryId: randomUUID(),
+				targetFingerprint: fingerprintTarget(targetIdentity, connection),
 				generatedAt: new Date().toISOString(),
 				// 默认空圈选：自动分类只给「可疑候选」，是否确为旧方向由人工
 				// 核对方向证据后填入 approvedCandidateIds（防混合旧/新缓存二次取倒数）
@@ -240,11 +258,17 @@ async function main(): Promise<void> {
 		}
 
 		const inventoryId = requireInventoryId(frozen.inventoryId);
+		const connection = resolveTargetConnection(databaseUrl);
+		await verifyTargetFingerprint(prisma, connection, frozen.targetFingerprint);
 		const reverse = command === "rollback";
 		let planSummary: Awaited<ReturnType<typeof executeFrozenPlan>>;
 		try {
 			planSummary = await prisma.$transaction(
-				(tx) => executeFrozenPlan(tx, inventoryId, plan, reverse),
+				async (tx) => {
+					// 连接池可能为事务分派另一条连接，在首次读取台账前复核。
+					await verifyTargetFingerprint(tx, connection, frozen.targetFingerprint);
+					return executeFrozenPlan(tx, inventoryId, plan, reverse);
+				},
 				{ isolationLevel: "Serializable" },
 			);
 		} catch (error) {

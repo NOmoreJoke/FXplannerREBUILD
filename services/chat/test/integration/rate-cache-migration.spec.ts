@@ -6,6 +6,7 @@ import type { MigrationPlan } from "../../src/rate/rate-migration-plan";
 
 interface Inventory {
 	inventoryId?: string;
+	targetFingerprint?: string;
 	approvedCandidateIds: string[];
 	plan: MigrationPlan;
 }
@@ -72,6 +73,7 @@ describe("旧汇率缓存 CLI 与 PostgreSQL 完成记录", () => {
 		check(result, 0, /盘点完成/);
 		inventory = JSON.parse(result.stdout);
 		expect(inventory.inventoryId).toBeDefined();
+		expect(inventory.targetFingerprint).toMatch(/^[a-f0-9]{64}$/);
 		inventoryIds.push(inventory.inventoryId!);
 		inventory.approvedCandidateIds = [a, b];
 	});
@@ -211,10 +213,33 @@ describe("旧汇率缓存 CLI 与 PostgreSQL 完成记录", () => {
 
 	it("旧清单只可预览", async () => {
 		const before = await snapshot();
-		const legacy = { ...inventory, inventoryId: undefined };
-		check(run("rollback", legacy, false), 0, /dry-run/);
-		check(run("rollback", legacy), 1, /旧清单仅可预览/);
-		check(run("invert", legacy), 1, /旧清单仅可预览/);
+		for (const legacy of [
+			{ ...inventory, inventoryId: undefined },
+			{ ...inventory, targetFingerprint: undefined },
+		]) {
+			for (const command of ["invert", "rollback"] as const) {
+				check(run(command, legacy, false), 0, /dry-run/);
+				check(run(command, legacy), 1, /未进入计划事务，无写入.*旧清单仅可预览/s);
+			}
+		}
+		expect(await receipt()).toBeNull();
+		expect(await snapshot()).toEqual(before);
+	});
+
+	it("目标指纹与当前连接不符时，在写事务前拒绝转换与回滚", async () => {
+		const before = await snapshot();
+		const fingerprint = inventory.targetFingerprint!;
+		const foreign = {
+			...inventory,
+			targetFingerprint: (fingerprint[0] === "0" ? "1" : "0") + fingerprint.slice(1),
+		};
+		for (const command of ["invert", "rollback"] as const) {
+			check(
+				run(command, foreign),
+				1,
+				/未进入计划事务，无写入.*目标副本与当前连接不一致/s,
+			);
+		}
 		expect(await receipt()).toBeNull();
 		expect(await snapshot()).toEqual(before);
 	});

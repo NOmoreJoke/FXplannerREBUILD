@@ -8,7 +8,8 @@
 
 - `inventory`：只读盘点全表，按底稿 §3.1 分类（ErApi/Frankfurter 候选、
   ABC/identity 排除、sellRate 非空与非法/归零/越界冲突行单列），
-  为清单生成唯一的 `inventoryId`，将 JSON 输出到 **stdout**（人类重定向落盘）。
+  在同一只读事务中读取目标副本指纹和汇率行，为清单生成唯一的 `inventoryId`，
+  将 JSON 输出到 **stdout**（人类重定向落盘）。
 - `invert`：经 `verifyFrozenPlan` 全量校验（candidates/conflicts/excludedCount/
   checksum 四侧比对重算结果，stdin 中的候选永不直接执行）后，按【重算计划】
   对候选行做「**全冻结字段条件更新**」（id/rate 之外，base/quote/source/
@@ -42,8 +43,16 @@ PrismaClient 与 `src/rate/rate-invert` 取倒数口径，保证转换期望值�
 ## 运行（在 services/chat 下）
 
 先在备份副本应用 Prisma 迁移 `20261120090000_rate_cache_migration_receipt`。
-盘点后，人工核对并填入 `approvedCandidateIds`，保留这份清单及其 `inventoryId`
-供转换、复跑与回滚使用。
+盘点后，人工核对并填入 `approvedCandidateIds`，保留原始的 `inventoryId`
+与 `targetFingerprint` 供转换、复跑与回滚使用。
+
+盘点和写入使用 PostgreSQL TCP 连接，连接角色须能执行
+`pg_catalog.pg_control_system()`。如需授权，请由数据库管理员仅在目标副本给
+运维角色授予该函数的 `EXECUTE` 权限。清单仅记录由集群标识、数据库和 Prisma
+目标 schema 的 OID、服务端 TCP 地址和端口，以及客户端连接路由派生的指纹。
+各副本应使用可区分的 PostgreSQL 身份或专用连接路由，转换、复跑及回滚沿用
+盘点时的路由和服务端端点。密码和用户名无需固定。同一路由、同一服务端端点
+上的字节级物理替换会保留原有身份，应在专用路由上另行盘点。
 
 `invert` 和 `rollback` 写入前需要同时传入两个独立的裸旗标。旗标带值
 （无论用空格还是等号）、拼写错误或重复时，CLI 在读取清单前以退出码 1 结束。
@@ -57,6 +66,8 @@ bun run prisma/rate-cache-migration/migrate.ts rollback --apply --confirm-backup
 
 ## 幂等、复跑与防漂移
 
+- `invert --apply` 和 `rollback --apply` 必须通过写事务前的目标核对，
+  并在实际执行事务中再次核对。目标或指纹校验任一失败时不执行汇率或台账写入。
 - `invert --apply` 和 `rollback --apply` 的全计划事务期限为 30 秒，
   从事务开始计时，两批共用这个预算。超过期限会回滚整个计划，可从同一份冻结清单复跑。
 - 本地 PostgreSQL 双源演练使用两组 Frankfurter 365 天窗口工作日点和一组
@@ -76,8 +87,8 @@ bun run prisma/rate-cache-migration/migrate.ts rollback --apply --confirm-backup
   原归属，即使它写回相同字段值。任一候选失去归属或字段漂移会中止整个事务。
 - 回滚完成后保留完成记录，重复回滚只核对恢复状态，更新数为 0。如需再次转换，
   重新盘点并取得新清单。并发事务冲突时，使用原清单复跑核对已提交状态。
-- 旧清单可用于 dry-run。旧版 CLI 转换的行没有完成记录，须通过原备份恢复。
-  新版写入需使用新版 `inventory` 生成的清单。
+- 缺少目标指纹的旧清单仅可用于 dry-run。新版写入须在确认后的目标副本重新盘点。
+  需要恢复由旧清单转换的行时，使用原备份恢复。
 
 ## 旧版演练记录（2026-11-19/20 夜间，本地测试库真实 CUID 行）
 
