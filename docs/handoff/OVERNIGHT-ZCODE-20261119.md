@@ -19,7 +19,7 @@
 | W3 | C1·日级取价（getLatest fresh/validUntil + findQuoteAt 日级回看） | `feat/f0-w3-daily-quote-window` | W2 | ✅ 完成（`2bf93cc`，PR #4） |
 | W4 | C2·TWD 图表（Frankfurter v2 隔离） | `feat/f0-w4-twd-chart-v2` | W3 | ✅ 完成（`4290fd2`，PR #5） |
 | W5 | B2·迁移脚本（幂等转换/回滚，演练受限标注） | `feat/f0-w5-cache-migration-scripts` | W4 | ✅ 完成（`9565475`，PR #6） |
-| W6 | D·USAGE 闭环（共享 FIFO 内核 + 移除挡板 + T-CORR-004） | `feat/f0-w6-usage-correction-fifo` | W5 | 进行中 |
+| W6 | D·USAGE 闭环（共享 FIFO 内核 + 移除挡板 + T-CORR-004） | `feat/f0-w6-usage-correction-fifo` | W5 | ✅ 完成（`1735c08`，PR #7） |
 | W7 | E·导出（Dockerfile 权限 + CSV 精度 + Decimal 累加） | `feat/f0-w7-export-precision` | W6 | 待做 |
 | W8 | F1-1 findLatestRows 数据库端常数行 | `feat/f1-w8-latest-rows-query` | W7 | 待做 |
 | W9 | F1-2 DataRequestLockGuard 查询合并 | `feat/f1-w9-lock-guard-merge` | W8 | 待做 |
