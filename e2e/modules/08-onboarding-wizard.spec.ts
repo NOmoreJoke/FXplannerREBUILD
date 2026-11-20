@@ -2,7 +2,12 @@ import { test, expect } from "../fixtures/auto-screenshot";
 import { TestLogger } from "../helpers/logger";
 import { saveScreenshot } from "../helpers/save-screenshot";
 import { selectRadixOption } from "../helpers/test-utils";
-import { seedRegisterAndLogin } from "../helpers/api-seeder";
+import {
+	injectLoginCookie,
+	seedOnboarding,
+	seedRegisterAndLogin,
+	seedTransaction,
+} from "../helpers/api-seeder";
 import { TEST_PASSWORD } from "../helpers/test-credentials";
 
 /**
@@ -10,7 +15,7 @@ import { TEST_PASSWORD } from "../helpers/test-credentials";
  *
  * 覆盖需求文档场景：
  * - 场景 1/2（登录门槛）：不勾选 → 发送验证码按钮不可用并提示；勾选两项 → OTP 登录 → 未建账进向导
- * - 场景 5：向导第二步「没有，直接开始」→ 建账进首页 → 补录引导卡出现；设置页本位币只读
+ * - 场景 5：向导第二步「没有，直接开始」→ 空首页展示补录引导和免责声明；设置页本位币只读
  * - 场景 3/4：建账时填写初始持仓 → 核对页展示汇率/来源/时间/成本 → 返回改本位币再改回
  *   （汇率与成本重新展示、金额保留）→ 确认入账 → 首页 USD 账户卡、无引导卡
  * - 场景 6：向导第二步中途退出 → 重新登录从第一步开始，无残留
@@ -21,6 +26,9 @@ import { TEST_PASSWORD } from "../helpers/test-credentials";
  */
 
 const BASE_URL = process.env.CORS_ORIGIN || "http://localhost:3001";
+// 采用已定稿 A 版作为验收文案，独立于前端渲染组件。
+const APPROVED_DISCLAIMER =
+	"本工具由非持牌主体提供，非投资顾问服务；汇率与计划均为工具测算，不构成投资建议、不预测涨跌、不经手资金；据此操作的风险与损失由用户自行承担。";
 
 test.describe("【建账向导】登录即用 + 最小建账", () => {
 	const logger = new TestLogger("onboarding-wizard");
@@ -120,6 +128,12 @@ test.describe("【建账向导】登录即用 + 最小建账", () => {
 		await expect(
 			page.locator('[data-testid="initial-backfill-card"]'),
 		).toBeVisible({ timeout: 15000 });
+		await expect(
+			page.getByRole("heading", { name: "先建立第一笔跨币种资金准备" }),
+		).toBeVisible();
+		await expect(
+			page.getByText(APPROVED_DISCLAIMER, { exact: true }),
+		).toBeVisible();
 		await saveScreenshot(
 			page,
 			"08-onboarding",
@@ -331,5 +345,20 @@ test.describe("【建账向导】登录即用 + 最小建账", () => {
 		await page2.close();
 
 		await logger.saveToFile();
+	});
+
+	test("T-OBW-005: 有账户的正常首页展示已定稿免责声明", async ({ page }) => {
+		const user = await seedRegisterAndLogin("obw-dashboard-disclaimer");
+		await seedOnboarding(user.accessToken, "CNY");
+		await seedTransaction(user.accessToken, "CAD", "6000");
+		await injectLoginCookie(page.context(), user.accessToken, BASE_URL);
+
+		await page.goto(`${BASE_URL}/home`);
+		await expect(
+			page.getByRole("heading", { name: "首页", exact: true }),
+		).toBeVisible();
+		await expect(
+			page.getByText(APPROVED_DISCLAIMER, { exact: true }),
+		).toBeVisible();
 	});
 });

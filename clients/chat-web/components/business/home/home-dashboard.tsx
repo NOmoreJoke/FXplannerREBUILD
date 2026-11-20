@@ -218,7 +218,6 @@ export function HomeDashboard({ dashboard }: HomeDashboardProps) {
 				</section>
 			)}
 
-			{/* 最小合规免责声明（P0-5）：登录后首页固定展示（空态分支已有自己的免责提示条） */}
 			<div className="mt-8">
 				<ComplianceDisclaimer />
 			</div>

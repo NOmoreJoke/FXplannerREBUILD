@@ -1,7 +1,8 @@
 "use client";
 
-import { ShieldCheck, Wallet } from "lucide-react";
+import { Wallet } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { ComplianceDisclaimer } from "@/components/base";
 import { Button } from "@/components/ui/button";
 
 const STEPS = [
@@ -75,13 +76,8 @@ export function HomeEmptyState() {
 				</aside>
 			</div>
 
-			{/* 底部免责提示条 */}
-			<div className="mt-6 flex items-center gap-3 rounded-xl bg-mint-50 px-5 py-4">
-				<ShieldCheck className="size-5 shrink-0 text-mint-700" />
-				<p className="text-xs leading-5 text-ink-600">
-					FXPlanner
-					不连接银行或券商实时账户；所有账户/汇率功能用于在本地环境内规划使用。
-				</p>
+			<div className="mt-6">
+				<ComplianceDisclaimer />
 			</div>
 		</div>
 	);
