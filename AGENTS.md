@@ -88,15 +88,17 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │     └─ playwright-report/         # HTML 报告
 │
 ├─ infra/compose/                   # Docker Compose + Dockerfile
-├─ scripts/                         # 工程脚本（init / test / worktree）+ __tests__/
+├─ scripts/                         # 工程脚本（init / test / worktree / check-structure）+ __tests__/
 ├─ changes/                         # ⛔ 变更文档唯一位置（需求/方案/验收），按功能名称分目录
 │  ├─ tob-agent-workspace/          # ToB 组织工作台与 Agent 需求和技术方案
 │  └─ realtime-rate/                # MVP-F0 汇率回补与缓存迁移实施底稿（Goal #1 任务 B/C 执行口径）
 ├─ docs/                            # 长期规范文档
 │  ├─ VERIFY.md                     # 验证驱动、属性/差分测试与 Diff 触发防回归规范
+│  ├─ FEATURE-MAP.md                # 用户视角功能与确定性验证入口地图
 │  ├─ ITERATION-REFACTOR-ROADMAP-20261119.md # 迭代与重构总方案（MVP-F0/F1/F2 → ToB R1/R2）
 │  ├─ VIBE-CODING-PLAYBOOK.md       # 基于本仓工具链的 Vibe Coding 最佳实践手册
 │  └─ handoff/                      # 跨会话交接（OVERNIGHT-* / GOAL-* / 状态快照）
+├─ eslint.config.mjs                # 根 ESLint 9 确定性架构护栏（单向依赖/禁定时器/禁新裸写 useEffect/money 零 IO）
 ├─ .changeset/                      # Changesets 配置与变更记录
 ├─ .husky/                          # git hooks
 └─ .pi/skills/                      # AI 工作流技能存档（verify/ 为本地可选）
@@ -129,7 +131,8 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | MVP-F0 汇率回补与缓存迁移底稿 | `changes/realtime-rate/` |
 | 汇率缓存迁移完成记录与行归属 DDL | `services/chat/prisma/migrations/20261120090000_rate_cache_migration_receipt/` |
 | 汇率回源方向标记 DDL | `services/chat/prisma/migrations/20261120091000_rate_cache_canonical_write/` |
-| 验证与防回归规范 | `docs/VERIFY.md`（验证分级、属性/差分测试、Diff 触发检查） |
+| 验证与防回归规范 | `docs/VERIFY.md`（验证分级、属性/差分测试、Diff 触发检查）、`docs/FEATURE-MAP.md`（用户视角功能地图） |
+| 确定性静态护栏 | `eslint.config.mjs`（架构边界/禁定时器/禁新裸写 useEffect/money 零 IO）、`scripts/check-structure.ts`（目录与契约头守卫） |
 | 迭代路线与工作流手册 | `docs/ITERATION-REFACTOR-ROADMAP-20261119.md`、`docs/VIBE-CODING-PLAYBOOK.md` |
 | 跨会话交接文档   | `docs/handoff/`（夜间批次产出：OVERNIGHT-* / 接力目标提示词：GOAL-* / 状态快照；需求/方案/验收仍归 `changes/`） |
 
