@@ -1,131 +1,60 @@
 # @fxplanner-new/eslint-config
 
-共享的 ESLint 配置，为 LingJi Monorepo 提供统一的代码检查规则。
+共享的 ESLint 9 Flat Config 配置与插件依赖集合，为 FXplannerREBUILD Monorepo 提供统一的代码质量基线。
+
+## 职责定位
+
+- **做什么（职责）**：
+  - 集中托管 ESLint 9、`@typescript-eslint/{parser,eslint-plugin}` 与 `eslint-config-next` 插件依赖（供根 `eslint.config.mjs` 及各子包 `eslint.config.mjs` 共用，避免重复安装）。
+  - 提供 `base.js`（通用 TypeScript 规则）、`nestjs.js`（NestJS 后端 + 测试放宽）、`nextjs.js`（Next.js App Router + React Hooks）三套 Flat Config。
+- **不做什么（边界 / 非目标）**：
+  - 不包含仓级跨目录单向依赖规则、裸 `useEffect` / 定时器硬门禁或 `money` 零 IO 边界检查（这些架构护栏归根 `eslint.config.mjs`）。
+  - 不执行跨包 Git diff 检查或调度运行（归 `scripts/lint-observe.ts`）。
+- **为何独立成包**：
+  - 在 Bun + Turbo Workspace 中统一锁定 ESLint 9 插件版本，并确保 `infra/compose/Dockerfile.*` 仅拷贝必要依赖清单即可复现一致环境，避免业务包直接背负 lint 插件树。
 
 ## 配置文件
 
-- **base.js** - 通用基础规则，所有项目的共同配置
-- **nextjs.js** - Next.js 项目专用（继承 base + Next.js 规则）
-- **nestjs.js** - NestJS 项目专用（继承 base）
+- **base.js** — 通用 TS/TSX 规则：`@typescript-eslint/no-unused-vars`（`^_` 忽略，error）、`ban-ts-comment`（error）、`no-explicit-any`（warn）、`no-non-null-assertion`（warn）。
+- **nestjs.js** — 继承 `base.js`，对 `*.spec.ts` 与 `test/**/*.ts` 放宽 `no-explicit-any` / `no-non-null-assertion`。
+- **nextjs.js** — 继承 `base.js`，叠加 `react-hooks/rules-of-hooks`（error）、`react-hooks/exhaustive-deps`（warn）、`@next/next/no-img-element`（warn）、`@next/next/no-html-link-for-pages`（error），并对 `*.spec.*` / `*.test.*` 放宽测试断言。
 
-## 使用方式
+## 使用方式（ESLint 9 Flat Config）
 
-### Next.js 项目
+### NestJS 项目（`services/chat/eslint.config.mjs`）
 
-创建 `.eslintrc.js`：
+```js
+import nestjsConfig from "../../packages/eslint-config/nestjs.js";
 
-```javascript
-module.exports = {
-  extends: ['@fxplanner-new/eslint-config/nextjs'],
-  // 项目特定规则
-  rules: {
-    // 可以在这里覆盖规则
+export default [
+  { ignores: ["dist/**", "node_modules/**", "coverage/**", "prisma/migrations/**"] },
+  ...nestjsConfig,
+];
+```
+
+### Next.js 项目（`clients/chat-web/eslint.config.mjs`）
+
+```js
+import nextjsConfig from "../../packages/eslint-config/nextjs.js";
+
+export default [
+  {
+    ignores: [
+      ".next/**",
+      "node_modules/**",
+      "coverage/**",
+      "lib/api/schema.gen.ts",
+      "next-env.d.ts",
+    ],
   },
-};
+  ...nextjsConfig,
+];
 ```
 
-### NestJS 项目
+## 渐进式 `observe` 模式（`scripts/lint-observe.ts`）
 
-创建 `.eslintrc.js`：
-
-```javascript
-module.exports = {
-  extends: ['@fxplanner-new/eslint-config/nestjs'],
-  // 项目特定规则
-  rules: {
-    // 可以在这里覆盖规则
-  },
-};
-```
-
-## 核心规则说明
-
-### 通用规则（base.js）
-
-- `@typescript-eslint/no-explicit-any: warn` - 警告使用 any 类型
-- `@typescript-eslint/no-unused-vars: error` - 禁止未使用的变量（以 `_` 开头的除外）
-- `@typescript-eslint/no-non-null-assertion: warn` - 警告非空断言（`!`）
-
-### Next.js 规则（nextjs.js）
-
-- 继承 Next.js 官方推荐配置
-- 对 React Hooks 依赖检查设为警告
-
-### NestJS 规则（nestjs.js）
-
-- 针对装饰器和依赖注入优化
-- 允许接口名前缀（如 `IUserService`）
-
-## 运行 ESLint
-
-在根目录的 `package.json` 中添加脚本：
-
-```json
-{
-  "scripts": {
-    "lint": "turbo run lint",
-    "lint:fix": "turbo run lint:fix"
-  }
-}
-```
-
-在子项目的 `package.json` 中：
-
-```json
-{
-  "scripts": {
-    "lint": "eslint . --ext .ts,.tsx",
-    "lint:fix": "eslint . --ext .ts,.tsx --fix"
-  }
-}
-```
-
-## 自定义规则
-
-如果某个项目需要特定规则，直接在项目的 `.eslintrc.js` 中覆盖：
-
-```javascript
-module.exports = {
-  extends: ['@fxplanner-new/eslint-config/nextjs'],
-  rules: {
-    '@typescript-eslint/no-explicit-any': 'off', // 允许使用 any
-  },
-};
-```
-
-## 忽略文件
-
-在项目根目录创建 `.eslintignore`：
-
-```
-node_modules
-dist
-.next
-.turbo
-*.config.js
-```
-
-## 开发指南
-
-### 修改规则
-
-修改 `base.js` 会影响所有项目：
-
-1. 确保规则合理且团队达成共识
-2. 在根目录运行 `bun run lint` 验证所有项目
-3. 渐进式修改：先 warn 再 error
-
-### 添加新框架配置
-
-如需支持新框架（如 Vue、React Native）：
-
-1. 创建新的 JS 文件（如 `vue.js`）
-2. 继承 `base.js` 并添加框架特定规则
-3. 更新 `package.json` 的 `files` 和 `dependencies`
-4. 更新此 README
-
-## 注意事项
-
-- 首次启用 ESLint 可能会有大量警告/错误，建议逐步修复
-- 可以使用 `// eslint-disable-next-line` 临时禁用某行规则
-- 生产代码不应包含 `eslint-disable` 注释
+- 根目录 `bun run lint` 先运行结构/架构硬门禁（`lint:eslint` + `check:structure`），再经 `bun run lint:observe`（`turbo run lint`）调用 `scripts/lint-observe.ts`：
+  1. 对目标包全量运行包内 Flat Config 并打印存量 warning/error 基线统计（未修改的存量文件不阻断提交）；
+  2. 对比当前分支相对 `dev`（回退 `origin/dev`）的变更文件及未提交改动：
+     - **已修改的 `.ts/.tsx`**：禁止出现 `error`（`errorCount > 0` 即失败）；
+     - **新增的 `.ts/.tsx`**：`0 error, 0 warning`（任何新增告警/错误即失败）。

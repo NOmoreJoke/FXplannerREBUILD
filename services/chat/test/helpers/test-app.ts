@@ -78,12 +78,42 @@ export async function createTestUser(
 	};
 }
 
-/** 清理测试用户（项目等数据随用户级联删除） */
+/** 清理测试用户（先清理裸外键关联的 PlanAllocation / UsageLotAllocation 防遗留孤儿行，再级联删除用户） */
 export async function cleanupUser(
 	prisma: PrismaService,
 	userId: string,
 ): Promise<void> {
-	await prisma.user.delete({ where: { id: userId } }).catch(() => {});
+	try {
+		const [plans, usages, lots] = await Promise.all([
+			prisma.plan.findMany({ where: { userId }, select: { id: true } }),
+			prisma.usageRecord.findMany({ where: { userId }, select: { id: true } }),
+			prisma.costLot.findMany({ where: { userId }, select: { id: true } }),
+		]);
+		const planIds = plans.map((p) => p.id);
+		const usageIds = usages.map((u) => u.id);
+		const lotIds = lots.map((l) => l.id);
+
+		await prisma.$transaction(async (tx) => {
+			if (usageIds.length > 0 || lotIds.length > 0) {
+				await tx.usageLotAllocation.deleteMany({
+					where: {
+						OR: [
+							...(usageIds.length > 0 ? [{ usageId: { in: usageIds } }] : []),
+							...(lotIds.length > 0 ? [{ lotId: { in: lotIds } }] : []),
+						],
+					},
+				});
+			}
+			if (planIds.length > 0) {
+				await tx.planAllocation.deleteMany({
+					where: { planId: { in: planIds } },
+				});
+			}
+			await tx.user.delete({ where: { id: userId } });
+		});
+	} catch {
+		// 兼容已被业务流程提前删除（如账号注销用例）的用户
+	}
 }
 
 /** Bearer 头快捷方式 */

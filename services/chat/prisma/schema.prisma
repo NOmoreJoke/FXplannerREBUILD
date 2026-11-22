@@ -256,6 +256,7 @@ model Plan {
   updatedAt      DateTime @updatedAt @map("updated_at")
   user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   installments   PlanInstallment[]
+  changeLogs     PlanChangeLog[]
 
   @@index([userId, status])
   @@map("plans")
@@ -288,8 +289,7 @@ model PlanAllocation {
 }
 
 /// 计划变更记录（M5：目标/分配/完成/取消/重开留痕；完整变更明细由 JSON 快照承载）
-/// 走「裸外键」先例（对齐 PlanAllocation）：planId 不声明 Prisma relation（不触碰冻结基线的 Plan model），
-/// 级联删除由 migration SQL 的 REFERENCES plans(id) ON DELETE CASCADE 保证；查询按 planId 直查
+/// 通过 plan 关系显式对齐 migration SQL 中已有的 REFERENCES plans(id) ON DELETE CASCADE（零 DDL 变更）
 model PlanChangeLog {
   id             String   @id @default(cuid())
   planId         String   @map("plan_id")
@@ -303,6 +303,7 @@ model PlanChangeLog {
   beforeSnapshot Json     @map("before_snapshot")
   afterSnapshot  Json     @map("after_snapshot")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  plan           Plan     @relation(fields: [planId], references: [id], onDelete: Cascade)
 
   @@index([planId, createdAt(sort: Desc)])
   @@map("plan_change_logs")

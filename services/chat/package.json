@@ -9,7 +9,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit && tsc --noEmit -p prisma/rate-cache-migration/tsconfig.json",
-    "lint": "tsc --noEmit",
+    "lint": "bun run ../../scripts/lint-observe.ts --dir services/chat",
     "clean:logs": "rm -rf logs/*.log",
     "db:up": "bash ../../scripts/db-local.sh up",
     "db:down": "bash ../../scripts/db-local.sh down",
@@ -37,10 +37,8 @@
     "@nestjs/swagger": "^11.4.6",
     "@nestjs/throttler": "^6.5.0",
     "@prisma/client": "^5.0.0",
-    "@types/ali-oss": "^6.23.3",
     "@types/mime-types": "^3.0.1",
     "@types/multer": "^2.2.0",
-    "ali-oss": "^6.23.0",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
@@ -58,7 +56,6 @@
     "prisma": "^5.0.0",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.0",
-    "sharp": "^0.35.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {

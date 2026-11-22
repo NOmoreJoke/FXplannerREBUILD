@@ -88,7 +88,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │     └─ playwright-report/         # HTML 报告
 │
 ├─ infra/compose/                   # Docker Compose + Dockerfile
-├─ scripts/                         # 工程脚本（init / test / worktree / check-structure）+ __tests__/
+├─ scripts/                         # 工程脚本（init / test / worktree / check-structure / lint-observe）+ __tests__/
 ├─ changes/                         # ⛔ 变更文档唯一位置（需求/方案/验收），按功能名称分目录
 │  ├─ tob-agent-workspace/          # ToB 组织工作台与 Agent 需求和技术方案
 │  └─ realtime-rate/                # MVP-F0 汇率回补与缓存迁移实施底稿（Goal #1 任务 B/C 执行口径）
