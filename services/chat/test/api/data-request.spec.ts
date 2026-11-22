@@ -1,5 +1,6 @@
 import request from "supertest";
 import type { INestApplication } from "@nestjs/common";
+import { JwtService } from "@nestjs/jwt";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	cleanupUser,
@@ -583,6 +584,54 @@ describe("DataRequestController（e2e）", () => {
 			})
 			.expect(409);
 		expect(res.body.code).toBe("IMPACT_CHANGED");
+	});
+
+	it("F1-2 性能收敛：单次受保护请求仅验签 1 次、查 user 1 次、查 data_requests 1 次；已删除用户 token 零查 data_requests", async () => {
+		const jwtService = app.get(JwtService);
+		const verifySpy = vi.spyOn(jwtService, "verify");
+		const userFindSpy = vi.spyOn(env.prisma.user, "findUnique");
+		const drFindManySpy = vi.spyOn(env.prisma.dataRequest, "findMany");
+		const drFindFirstSpy = vi.spyOn(env.prisma.dataRequest, "findFirst");
+
+		try {
+			verifySpy.mockClear();
+			userFindSpy.mockClear();
+			drFindManySpy.mockClear();
+			drFindFirstSpy.mockClear();
+
+			// 1. 合法用户访问受保护业务端点（无进行中数据请求）
+			await request(app.getHttpServer())
+				.get("/api/settings")
+				.set("Authorization", `Bearer ${user.accessToken}`)
+				.expect(200);
+			expect(verifySpy).toHaveBeenCalledTimes(1);
+			expect(userFindSpy).toHaveBeenCalledTimes(1);
+			expect(drFindManySpy).toHaveBeenCalledTimes(1);
+			expect(drFindFirstSpy).not.toHaveBeenCalled();
+
+			// 2. 合法签名但用户不存在的旧 token → 401，且在守卫阶段短路零查 data_requests
+			verifySpy.mockClear();
+			userFindSpy.mockClear();
+			drFindManySpy.mockClear();
+			drFindFirstSpy.mockClear();
+			const ghostToken = jwtService.sign({
+				userId: "nonexistent-user-id",
+				email: "ghost@example.com",
+			});
+			await request(app.getHttpServer())
+				.get("/api/settings")
+				.set("Authorization", `Bearer ${ghostToken}`)
+				.expect(401);
+			expect(verifySpy).toHaveBeenCalledTimes(1);
+			expect(userFindSpy).toHaveBeenCalledTimes(1);
+			expect(drFindManySpy).not.toHaveBeenCalled();
+			expect(drFindFirstSpy).not.toHaveBeenCalled();
+		} finally {
+			verifySpy.mockRestore();
+			userFindSpy.mockRestore();
+			drFindManySpy.mockRestore();
+			drFindFirstSpy.mockRestore();
+		}
 	});
 
 	/** 读取当前 DELETION 请求 id（上一用例辅助） */

@@ -16,8 +16,10 @@ import {
 	resolveCancel,
 	resolveCreationConflict,
 	resolveDownload,
+	resolveLock,
 	toDisplayStatus,
 	type DataRequestType,
+	type LockResolution,
 	type OtpPurpose,
 	type VerificationErrorCode,
 	type VerificationResolution,
@@ -336,34 +338,75 @@ export class DataRequestService {
 	}
 
 	// ─────────────────────────────────────────────────────────
-	// 读时惰性推进（方案 §3.1 决策一）：到期 CLEAR/DELETION 先清理再放行
+	// 读时惰性推进 + 锁判定（方案 §3.1 决策一 + F1-2 单次查询合并）
 	// ─────────────────────────────────────────────────────────
 
-	async advanceDueRequests(userId: string): Promise<void> {
+	async advanceAndResolveLock(
+		userId: string,
+		options: { skipLock: boolean; method: string },
+	): Promise<{ userDeleted: boolean; lock: LockResolution }> {
 		const now = new Date();
-		const candidate = await this.prisma.dataRequest.findFirst({
+		const activeRows = await this.prisma.dataRequest.findMany({
 			where: {
 				userId,
 				type: { in: ["CLEAR", "DELETION"] },
-				status: { in: ["PENDING", "FAILED"] },
+				status: { in: ACTIVE_STATUSES as string[] },
 			},
 			orderBy: { requestedAt: "asc" },
+			select: {
+				id: true,
+				type: true,
+				status: true,
+				dueAt: true,
+			},
 		});
-		// 到期推进判定收敛在纯函数（PENDING/FAILED 且 now ≥ dueAt）
-		if (resolveAdvance(candidate, now) === "none") return;
-		const due = candidate!;
 
-		try {
-			await this.executeCleanup(userId, due);
-		} catch (error) {
-			// 整体回滚 → FAILED（锁保持，残留数据不当作正常账本）；下次读时重试
-			await this.prisma.dataRequest
-				.update({ where: { id: due.id }, data: { status: "FAILED" } })
-				.catch(() => undefined);
-			this.logger.warn(
-				`[data-request] cleanup FAILED type=${due.type} id=${due.id} userId=${userId}: ${error instanceof Error ? error.message : String(error)}`,
-			);
+		if (activeRows.length === 0) {
+			return { userDeleted: false, lock: null };
 		}
+
+		let remaining = activeRows;
+		const dueCandidate =
+			activeRows.find(
+				(row) => row.status === "PENDING" || row.status === "FAILED",
+			) ?? null;
+
+		if (resolveAdvance(dueCandidate, now) === "advance" && dueCandidate) {
+			try {
+				await this.executeCleanup(userId, dueCandidate);
+				if (dueCandidate.type === "DELETION") {
+					return { userDeleted: true, lock: null };
+				}
+				// CLEAR 推进成功：已转 COMPLETED，从当次活跃集合移除
+				remaining = activeRows.filter((row) => row.id !== dueCandidate.id);
+			} catch (error) {
+				// 整体回滚 → FAILED（锁保持，残留数据不当作正常账本）；下次读时重试
+				await this.prisma.dataRequest
+					.update({ where: { id: dueCandidate.id }, data: { status: "FAILED" } })
+					.catch(() => undefined);
+				this.logger.warn(
+					`[data-request] cleanup FAILED type=${dueCandidate.type} id=${dueCandidate.id} userId=${userId}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+				remaining = activeRows.map((row) =>
+					row.id === dueCandidate.id ? { ...row, status: "FAILED" } : row,
+				);
+			}
+		}
+
+		if (options.skipLock) {
+			return { userDeleted: false, lock: null };
+		}
+
+		// activeRows 按 requestedAt ASC 排序，末尾即最新活跃请求（与原 desc findFirst 等价）
+		const latestActive = remaining[remaining.length - 1] ?? null;
+		return {
+			userDeleted: false,
+			lock: resolveLock(latestActive, options.method),
+		};
+	}
+
+	async advanceDueRequests(userId: string): Promise<void> {
+		await this.advanceAndResolveLock(userId, { skipLock: true, method: "GET" });
 	}
 
 	/** 清理事务：PENDING/FAILED → PROCESSING → 六步删除 → COMPLETED（DELETION 随 user.delete 消失） */

@@ -1,8 +1,9 @@
-import { Module } from "@nestjs/common";
+import { Global, Module } from "@nestjs/common";
 import { JwtModule } from "@nestjs/jwt";
 import { PassportModule } from "@nestjs/passport";
 import { AuthController } from "./auth.controller";
 import { AuthService } from "./auth.service";
+import { RequestAuthService } from "./request-auth.service";
 import { JwtStrategy } from "./strategies/jwt.strategy";
 import { PrismaModule } from "../prisma/prisma.module";
 import { env } from "../config/env";
@@ -11,6 +12,7 @@ import { OtpService } from "./otp/otp.service";
 import { OTP_CHANNELS, OTP_OPTIONS } from "./otp/otp-channel";
 import { SmsOtpChannel } from "./otp/sms-otp.channel";
 
+@Global()
 @Module({
 	imports: [
 		PrismaModule,
@@ -25,6 +27,7 @@ import { SmsOtpChannel } from "./otp/sms-otp.channel";
 	controllers: [AuthController],
 	providers: [
 		AuthService,
+		RequestAuthService,
 		JwtStrategy,
 		OtpService,
 		EmailOtpChannel,
@@ -40,8 +43,8 @@ import { SmsOtpChannel } from "./otp/sms-otp.channel";
 			useValue: {},
 		},
 	],
-	// OtpService 导出供 data-request 模块复用验证凭证链路（account-data 技术方案 §3.4）；
-	// JwtModule 导出供锁守卫（DataRequestLockGuard）验签 JWT
-	exports: [AuthService, OtpService, JwtModule],
+	// @Global 导出：各业务模块 @UseGuards(JwtAuthGuard) 与 DataRequestLockGuard 共享同一
+	// RequestAuthService 与 JwtModule 单例，避免跨模块重复验签与查库；OtpService 供 data-request 复用
+	exports: [AuthService, RequestAuthService, OtpService, JwtModule],
 })
 export class AuthModule {}
