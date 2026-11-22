@@ -1,4 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Node ≥26 在 globalThis 上自带一个返回 undefined 的 localStorage 原生 getter，
+// 会遮蔽 vitest 4 populateGlobal 注入的 jsdom localStorage（vitest#8757）——
+// zustand persist 在 store 模块求值期通过 `window.localStorage` 取 storage，
+// 拿到 undefined 后首次 setState 即崩。此处从 vitest 暴露的原始 jsdom 实例
+// （globalThis.jsdom.window.localStorage 完好）回填，覆盖被遮蔽的 getter。
+// 仅 use-chat 触发：全仓唯一 persist store 是 chat-store；若后续 setupFiles
+// 方案落地或 vitest 修复 #8757，可整体移除本段。
+vi.hoisted(() => {
+	const dom = (
+		globalThis as { jsdom?: { window: Window & { localStorage?: Storage } } }
+	).jsdom;
+	const jsdomStorage = dom?.window?.localStorage;
+	if (!jsdomStorage) return;
+	const globals = [globalThis, globalThis.window] as Array<
+		Record<string, unknown>
+	>;
+	for (const target of globals) {
+		if (target.localStorage === undefined) {
+			Object.defineProperty(target, "localStorage", {
+				value: jsdomStorage,
+				configurable: true,
+				writable: true,
+			});
+		}
+	}
+});
+
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useChat } from "@/lib/hooks/use-chat";
