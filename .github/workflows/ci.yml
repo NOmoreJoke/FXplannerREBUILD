@@ -9,6 +9,10 @@ name: CI
 on:
   push:
     branches-ignore: [main]
+    paths-ignore:
+      - "docs/**"
+      - "changes/**"
+      - "*.md"
   pull_request:
     branches: [main]
 
