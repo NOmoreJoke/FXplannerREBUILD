@@ -99,12 +99,43 @@ export function summarizeObserveResults(
 	};
 }
 
+export function normalizeDirArg(dirArg: string): string {
+	return dirArg.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+}
+
+export function resolveDiffBaseCandidates(
+	explicitBase?: string,
+	env: Readonly<Record<string, string | undefined>> = process.env,
+): string[] {
+	if (explicitBase) return [explicitBase];
+	const candidates: string[] = [];
+	const githubBase = env.GITHUB_BASE_REF?.trim();
+	if (githubBase) {
+		candidates.push(githubBase, `origin/${githubBase}`);
+	}
+	candidates.push("dev", "origin/dev");
+	return [...new Set(candidates)];
+}
+
+export function shouldFailOnMissingDiffBase(
+	explicitBase?: string,
+	env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+	if (explicitBase) return true;
+	return (
+		env.CI === "true" ||
+		env.CI === "1" ||
+		env.GITHUB_ACTIONS === "true"
+	);
+}
+
 export function parseGitDiffNameStatus(
 	stdout: string,
 	dirPrefix: string,
 ): Map<string, ChangeKind> {
 	const result = new Map<string, ChangeKind>();
-	const normalizedPrefix = dirPrefix.replace(/\\/g, "/").replace(/\/+$/, "") + "/";
+	const cleanDir = normalizeDirArg(dirPrefix);
+	const normalizedPrefix = cleanDir ? `${cleanDir}/` : "";
 
 	for (const rawLine of stdout.split(/\r?\n/)) {
 		if (!rawLine) continue;
@@ -130,7 +161,8 @@ export function parseGitPorcelainStatus(
 	dirPrefix: string,
 ): Map<string, ChangeKind> {
 	const result = new Map<string, ChangeKind>();
-	const normalizedPrefix = dirPrefix.replace(/\\/g, "/").replace(/\/+$/, "") + "/";
+	const cleanDir = normalizeDirArg(dirPrefix);
+	const normalizedPrefix = cleanDir ? `${cleanDir}/` : "";
 
 	for (const rawLine of stdout.split(/\r?\n/)) {
 		if (rawLine.length < 4) continue;
@@ -203,7 +235,7 @@ export function evaluateObservePolicy(
 }
 
 function resolveDiffBase(repoRoot: string, explicitBase?: string): string | null {
-	const candidates = explicitBase ? [explicitBase] : ["dev", "origin/dev"];
+	const candidates = resolveDiffBaseCandidates(explicitBase, process.env);
 	for (const ref of candidates) {
 		const res = spawnSync("git", ["merge-base", ref, "HEAD"], {
 			cwd: repoRoot,
@@ -272,8 +304,8 @@ function collectBranchChangedFiles(
 export function runLintObserve(argv: readonly string[]): number {
 	const opts = parseCliArgs(argv);
 	const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-	const pkgDir = resolve(repoRoot, opts.dir);
-	const normDir = opts.dir.replace(/\\/g, "/").replace(/\/+$/, "");
+	const normDir = normalizeDirArg(opts.dir);
+	const pkgDir = resolve(repoRoot, normDir || ".");
 
 	const eslintBin = resolve(
 		repoRoot,
@@ -332,6 +364,13 @@ export function runLintObserve(argv: readonly string[]): number {
 		opts.base,
 	);
 	if (!baseSha) {
+		if (shouldFailOnMissingDiffBase(opts.base, process.env)) {
+			const tried = resolveDiffBaseCandidates(opts.base, process.env).join(", ");
+			console.error(
+				`[lint-observe] ${normDir}: BLOCKED — unable to resolve diff base against HEAD (tried: ${tried}). Pass --base <ref> or ensure git history is fetched.`,
+			);
+			return 1;
+		}
 		console.log(
 			`[lint-observe] ${normDir}: diff base (dev / origin/dev) unavailable; enforcing on working-tree changes only`,
 		);

@@ -84,16 +84,16 @@ export async function cleanupUser(
 	userId: string,
 ): Promise<void> {
 	try {
-		const [plans, usages, lots] = await Promise.all([
-			prisma.plan.findMany({ where: { userId }, select: { id: true } }),
-			prisma.usageRecord.findMany({ where: { userId }, select: { id: true } }),
-			prisma.costLot.findMany({ where: { userId }, select: { id: true } }),
-		]);
-		const planIds = plans.map((p) => p.id);
-		const usageIds = usages.map((u) => u.id);
-		const lotIds = lots.map((l) => l.id);
-
 		await prisma.$transaction(async (tx) => {
+			const [plans, usages, lots] = await Promise.all([
+				tx.plan.findMany({ where: { userId }, select: { id: true } }),
+				tx.usageRecord.findMany({ where: { userId }, select: { id: true } }),
+				tx.costLot.findMany({ where: { userId }, select: { id: true } }),
+			]);
+			const planIds = plans.map((p) => p.id);
+			const usageIds = usages.map((u) => u.id);
+			const lotIds = lots.map((l) => l.id);
+
 			if (usageIds.length > 0 || lotIds.length > 0) {
 				await tx.usageLotAllocation.deleteMany({
 					where: {

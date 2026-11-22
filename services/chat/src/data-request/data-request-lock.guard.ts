@@ -81,8 +81,12 @@ export class DataRequestLockGuard implements CanActivate {
 			if (error instanceof DataRequestLockedException) {
 				throw error;
 			}
+			// 非白名单受保护端点必须 fail-closed：避免锁状态库查询异常时绕过清理/注销锁定
+			if (!skipLock) {
+				throw error;
+			}
 			this.logger.warn(
-				`[data-request] 守卫判定失败（不阻塞请求，下次到访重试）: userId=${auth.user.id}, error=${error instanceof Error ? error.message : String(error)}`,
+				`[data-request] 白名单端点读时推进失败（不阻塞进度/撤回，下次到访重试）: userId=${auth.user.id}, error=${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
 

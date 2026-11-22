@@ -2,9 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
 	evaluateObservePolicy,
 	mergeChangedMaps,
+	normalizeDirArg,
 	parseCliArgs,
 	parseGitDiffNameStatus,
 	parseGitPorcelainStatus,
+	resolveDiffBaseCandidates,
+	shouldFailOnMissingDiffBase,
 	summarizeObserveResults,
 	type EslintFileResult,
 } from "../lint-observe";
@@ -181,5 +184,34 @@ describe("lint-observe helpers", () => {
 			"services/chat/src/modified-with-err.ts",
 			"services/chat/src/added-with-warn.ts",
 		]);
+	});
+
+	test("normalizeDirArg, resolveDiffBaseCandidates, and shouldFailOnMissingDiffBase enforce fail-closed CI / explicit --base", () => {
+		expect(normalizeDirArg("./services/chat/")).toBe("services/chat");
+		expect(
+			parseGitDiffNameStatus(
+				"M\tservices/chat/src/a.ts",
+				"./services/chat/",
+			).get("services/chat/src/a.ts"),
+		).toBe("modified");
+
+		expect(resolveDiffBaseCandidates("origin/main", { GITHUB_BASE_REF: "dev" })).toEqual([
+			"origin/main",
+		]);
+		expect(resolveDiffBaseCandidates(undefined, { GITHUB_BASE_REF: "main" })).toEqual([
+			"main",
+			"origin/main",
+			"dev",
+			"origin/dev",
+		]);
+		expect(resolveDiffBaseCandidates(undefined, { GITHUB_BASE_REF: "dev" })).toEqual([
+			"dev",
+			"origin/dev",
+		]);
+
+		expect(shouldFailOnMissingDiffBase("nonexistent-ref", {})).toBe(true);
+		expect(shouldFailOnMissingDiffBase(undefined, { CI: "true" })).toBe(true);
+		expect(shouldFailOnMissingDiffBase(undefined, { GITHUB_ACTIONS: "true" })).toBe(true);
+		expect(shouldFailOnMissingDiffBase(undefined, {})).toBe(false);
 	});
 });

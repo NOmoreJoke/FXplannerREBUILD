@@ -632,6 +632,64 @@ describe("DataRequestController（e2e）", () => {
 			drFindManySpy.mockRestore();
 			drFindFirstSpy.mockRestore();
 		}
+
+		// 3. CLEAR PENDING 期间单次查询不变量：GET 放行、POST 403 DATA_REQUEST_LOCKED，且均只查 1 次 dataRequest.findMany / 0 次 findFirst
+		const lockUser = await onboardedUser("f1-2-clear-pending");
+		const clearRow = await env.prisma.dataRequest.create({
+			data: {
+				userId: lockUser.userId,
+				type: "CLEAR",
+				status: "PENDING",
+				requestedAt: new Date(),
+				dueAt: new Date(Date.now() + 60 * 60 * 1000),
+			},
+		});
+		const drManyClearSpy = vi.spyOn(env.prisma.dataRequest, "findMany");
+		const drFirstClearSpy = vi.spyOn(env.prisma.dataRequest, "findFirst");
+		try {
+			drManyClearSpy.mockClear();
+			drFirstClearSpy.mockClear();
+			await request(app.getHttpServer())
+				.get("/api/settings")
+				.set("Authorization", `Bearer ${lockUser.accessToken}`)
+				.expect(200);
+			expect(drManyClearSpy).toHaveBeenCalledTimes(1);
+			expect(drFirstClearSpy).not.toHaveBeenCalled();
+
+			drManyClearSpy.mockClear();
+			drFirstClearSpy.mockClear();
+			const postRes = await request(app.getHttpServer())
+				.post("/api/transactions")
+				.set("Authorization", `Bearer ${lockUser.accessToken}`)
+				.send({})
+				.expect(403);
+			expect(postRes.body.code).toBe("DATA_REQUEST_LOCKED");
+			expect(drManyClearSpy).toHaveBeenCalledTimes(1);
+			expect(drFirstClearSpy).not.toHaveBeenCalled();
+		} finally {
+			drManyClearSpy.mockRestore();
+			drFirstClearSpy.mockRestore();
+			await env.prisma.dataRequest
+				.delete({ where: { id: clearRow.id } })
+				.catch(() => {});
+		}
+
+		// 4. data_requests 查询异常边界：非白名单端点 fail-closed（500），@SkipDataRequestLock 白名单放行（200）
+		const dbErrSpy = vi
+			.spyOn(env.prisma.dataRequest, "findMany")
+			.mockRejectedValue(new Error("simulated db connection error"));
+		try {
+			await request(app.getHttpServer())
+				.get("/api/settings")
+				.set("Authorization", `Bearer ${user.accessToken}`)
+				.expect(500);
+			await request(app.getHttpServer())
+				.get("/api/auth/me")
+				.set("Authorization", `Bearer ${user.accessToken}`)
+				.expect(200);
+		} finally {
+			dbErrSpy.mockRestore();
+		}
 	});
 
 	/** 读取当前 DELETION 请求 id（上一用例辅助） */

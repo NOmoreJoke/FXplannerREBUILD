@@ -1539,10 +1539,11 @@ describe("RateController（接口）", () => {
 					`;
 				});
 				const planText = planRows.map((row) => row["QUERY PLAN"]).join("\n");
-				// 无 Seq Scan（必须走 exchange_rates_base_quote_observed_at_* 索引），且命中确认层时分支 2 短路
+				// 严格要求反向索引扫描（无 Seq Scan、无 Sort / Incremental Sort），且命中确认层时分支 2 短路
 				expect(planText).not.toContain("Seq Scan");
+				expect(planText).not.toMatch(/\bSort\b|\bIncremental Sort\b/);
 				expect(planText).toMatch(
-					/Index Scan Backward using exchange_rates_base_quote_observed_at_|Bitmap Index Scan on exchange_rates_base_quote_observed_at_/,
+					/Index Scan Backward using exchange_rates_base_quote_observed_at_/,
 				);
 				expect(planText).toContain("never executed");
 			} finally {
