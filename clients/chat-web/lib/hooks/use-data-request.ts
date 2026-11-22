@@ -9,6 +9,10 @@ import type {
 	ImpactTotals,
 } from "@/lib/api/contract";
 import { dataRequestsApi } from "@/lib/api/data-requests";
+import {
+	invalidateAfterDataRequestMutation,
+	queryKeys,
+} from "@/lib/api/query-keys";
 
 /**
  * 数据权利请求 hook（account-data 技术方案 §8）：前端唯一带单测的层。
@@ -18,10 +22,10 @@ import { dataRequestsApi } from "@/lib/api/data-requests";
  */
 
 /** 当前数据请求查询 Key（提交/撤回后失效） */
-export const DATA_REQUEST_QUERY_KEY = ["data-request", "current"] as const;
+export const DATA_REQUEST_QUERY_KEY = queryKeys.dataRequests.current();
 
 /** 清空影响查询 Key */
-export const DATA_REQUEST_IMPACT_KEY = ["data-request", "impact"] as const;
+export const DATA_REQUEST_IMPACT_KEY = queryKeys.dataRequests.impact();
 
 export function useCurrentRequest() {
 	return useQuery<DataRequestView | null>({
@@ -62,12 +66,7 @@ export function useCreateDataRequest() {
 	return useMutation<DataRequestView, Error, CreateDataRequestVars>({
 		mutationFn: (vars) => dataRequestsApi.create(vars),
 		onSuccess: () => {
-			void queryClient.invalidateQueries({
-				queryKey: DATA_REQUEST_QUERY_KEY,
-			});
-			void queryClient.invalidateQueries({
-				queryKey: DATA_REQUEST_IMPACT_KEY,
-			});
+			invalidateAfterDataRequestMutation(queryClient);
 		},
 	});
 }
@@ -82,12 +81,7 @@ export function useCancelDataRequest() {
 		mutationFn: ({ requestId, challengeId }) =>
 			dataRequestsApi.cancel(requestId, challengeId),
 		onSuccess: () => {
-			void queryClient.invalidateQueries({
-				queryKey: DATA_REQUEST_QUERY_KEY,
-			});
-			void queryClient.invalidateQueries({
-				queryKey: DATA_REQUEST_IMPACT_KEY,
-			});
+			invalidateAfterDataRequestMutation(queryClient);
 		},
 	});
 }

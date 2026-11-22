@@ -6,7 +6,7 @@ import { BellOff, CircleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ReminderCard } from "@/components/business/reminder";
-import { SETTINGS_QUERY_KEY } from "@/components/business/settings/preferences-form";
+import { queryKeys } from "@/lib/api/query-keys";
 import { settingsApi } from "@/lib/api/settings";
 import {
 	useMarkAllRemindersRead,
@@ -24,10 +24,9 @@ import {
  * - GET 失败（401 已由 apiClient 统一处理）→ 整页错误态 + 重试。
  */
 export default function RemindersPage() {
-	const { items, unreadCount, isLoading, isError, refetch } = useReminders();
 	const markAllRead = useMarkAllRemindersRead();
 	const settingsQuery = useQuery({
-		queryKey: SETTINGS_QUERY_KEY,
+		queryKey: queryKeys.settings.detail(),
 		queryFn: settingsApi.getSettings,
 		retry: false,
 	});
@@ -36,6 +35,9 @@ export default function RemindersPage() {
 	const settingsLoading = settingsQuery.isPending;
 	// settings 查询失败（含未建账 409）→ 按开启态降级，不误报「已关闭」
 	const reminderDisabled = settingsQuery.data ? !reminderEnabled : false;
+	const { items, unreadCount, isLoading, isError, refetch } = useReminders({
+		enabled: !settingsLoading && !reminderDisabled,
+	});
 
 	return (
 		<div data-testid="reminders-page" className="mx-auto max-w-3xl px-8 py-6">

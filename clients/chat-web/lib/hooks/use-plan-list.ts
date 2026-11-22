@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { plansApi } from "@/lib/api/plans";
+import { queryKeys } from "@/lib/api/query-keys";
 import type { PlanListItem, PlanListStatus } from "@/lib/api/contract";
 
 /**
@@ -11,13 +12,13 @@ import type { PlanListItem, PlanListStatus } from "@/lib/api/contract";
  */
 
 /** 查询 Key 词根（[domain, action] 约定；完整 Key 由 buildPlanListQueryKey 组装） */
-export const PLAN_LIST_QUERY_STEM = ["plans", "list"] as const;
+export const PLAN_LIST_QUERY_STEM = queryKeys.plans.listStem;
 
 /** 组装完整查询 Key：词根 + status（undefined 归一为 "all"，保证 Key 稳定可序列化） */
 export function buildPlanListQueryKey(
 	status: PlanListStatus | undefined,
 ): readonly unknown[] {
-	return [...PLAN_LIST_QUERY_STEM, status ?? "all"];
+	return queryKeys.plans.list(status);
 }
 
 export interface UsePlanListResult {

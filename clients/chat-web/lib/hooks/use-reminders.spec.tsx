@@ -1,17 +1,36 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useReminders, useMarkReminderRead } from "./use-reminders";
+import {
+	isReminderBypassRoute,
+	useMarkReminderRead,
+	useReminderGate,
+	useReminders,
+} from "./use-reminders";
+import { onboardingApi } from "@/lib/api/onboarding";
 import { remindersApi } from "@/lib/api/reminders";
+import { settingsApi } from "@/lib/api/settings";
 import type { RemindersView } from "@/lib/api/contract";
 import type React from "react";
 
-// Mock 提醒接口封装（hook 单测不触网）
+// Mock API 封装（hook 单测不触网）
 vi.mock("@/lib/api/reminders", () => ({
 	remindersApi: {
 		list: vi.fn(),
 		markRead: vi.fn(),
 		markAllRead: vi.fn(),
+	},
+}));
+
+vi.mock("@/lib/api/onboarding", () => ({
+	onboardingApi: {
+		getStatus: vi.fn(),
+	},
+}));
+
+vi.mock("@/lib/api/settings", () => ({
+	settingsApi: {
+		getSettings: vi.fn(),
 	},
 }));
 
@@ -190,5 +209,109 @@ describe("useMarkReminderRead", () => {
 		result.current.mutate("rem-x");
 
 		await waitFor(() => expect(result.current.isError).toBe(true));
+	});
+});
+
+describe("useReminderGate（未建账与锁定期请求门控，F1-3 / DEBT-06）", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("useReminders({ enabled: false }) 不触发 GET /reminders", () => {
+		const { result } = renderHook(() => useReminders({ enabled: false }), {
+			wrapper: createWrapper(),
+		});
+
+		expect(result.current.items).toEqual([]);
+		expect(result.current.unreadCount).toBe(0);
+		expect(remindersApi.list).not.toHaveBeenCalled();
+	});
+
+	it("/onboarding 与 /data-requests 路由：零 onboarding / settings / reminders 请求", () => {
+		expect(isReminderBypassRoute("/onboarding")).toBe(true);
+		expect(isReminderBypassRoute("/onboarding?backfill=1")).toBe(true);
+		expect(isReminderBypassRoute("/data-requests")).toBe(true);
+		expect(isReminderBypassRoute("/home")).toBe(false);
+
+		for (const path of ["/onboarding", "/data-requests"]) {
+			const { result } = renderHook(() => useReminderGate(path), {
+				wrapper: createWrapper(),
+			});
+			expect(result.current.isBypassed).toBe(true);
+		}
+		expect(onboardingApi.getStatus).not.toHaveBeenCalled();
+		expect(settingsApi.getSettings).not.toHaveBeenCalled();
+		expect(remindersApi.list).not.toHaveBeenCalled();
+	});
+
+	it("未建账用户（completed=false）：只查 onboarding/status，零 settings 与 reminders 请求", async () => {
+		vi.mocked(onboardingApi.getStatus).mockResolvedValue({
+			completed: false,
+			requiredConsentsMet: true,
+			settings: null,
+			currentTermsVersion: "2026-01",
+		});
+
+		const { result } = renderHook(() => useReminderGate("/home"), {
+			wrapper: createWrapper(),
+		});
+
+		await waitFor(() => expect(onboardingApi.getStatus).toHaveBeenCalledTimes(1));
+		expect(result.current.isOnboarded).toBe(false);
+		expect(settingsApi.getSettings).not.toHaveBeenCalled();
+		expect(remindersApi.list).not.toHaveBeenCalled();
+	});
+
+	it("已建账但关闭提醒（reminderEnabled=false）：查 settings 但零 reminders 请求", async () => {
+		vi.mocked(onboardingApi.getStatus).mockResolvedValue({
+			completed: true,
+			requiredConsentsMet: true,
+			settings: null,
+			currentTermsVersion: "2026-01",
+		});
+		vi.mocked(settingsApi.getSettings).mockResolvedValue({
+			email: "u@example.com",
+			region: "CN",
+			locale: "zh-CN",
+			baseCurrency: "CNY",
+			prepPreference: "balanced",
+			reminderEnabled: false,
+			ledgerStartedAt: "2026-01-01T00:00:00.000Z",
+		});
+
+		const { result } = renderHook(() => useReminderGate("/home"), {
+			wrapper: createWrapper(),
+		});
+
+		await waitFor(() => expect(settingsApi.getSettings).toHaveBeenCalledTimes(1));
+		expect(result.current.isOnboarded).toBe(true);
+		expect(result.current.reminderEnabled).toBe(false);
+		expect(remindersApi.list).not.toHaveBeenCalled();
+	});
+
+	it("已建账且开启提醒（reminderEnabled=true）：正常拉取未读数", async () => {
+		vi.mocked(onboardingApi.getStatus).mockResolvedValue({
+			completed: true,
+			requiredConsentsMet: true,
+			settings: null,
+			currentTermsVersion: "2026-01",
+		});
+		vi.mocked(settingsApi.getSettings).mockResolvedValue({
+			email: "u@example.com",
+			region: "CN",
+			locale: "zh-CN",
+			baseCurrency: "CNY",
+			prepPreference: "balanced",
+			reminderEnabled: true,
+			ledgerStartedAt: "2026-01-01T00:00:00.000Z",
+		});
+		vi.mocked(remindersApi.list).mockResolvedValue(viewData);
+
+		const { result } = renderHook(() => useReminderGate("/home"), {
+			wrapper: createWrapper(),
+		});
+
+		await waitFor(() => expect(result.current.unreadCount).toBe(1));
+		expect(remindersApi.list).toHaveBeenCalledTimes(1);
 	});
 });

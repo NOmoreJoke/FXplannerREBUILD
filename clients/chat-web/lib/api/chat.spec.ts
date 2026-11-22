@@ -23,7 +23,15 @@ vi.mock("@/lib/api/client", () => {
 			this.name = "ApiError";
 		}
 	}
-	return { ApiError: MockApiError, apiClient: vi.fn() };
+	return {
+		ApiError: MockApiError,
+		apiClient: vi.fn(),
+		isExpectedControlFlowApiError: (status: number, code?: string) =>
+			(status === 409 && code === "ONBOARDING_NOT_COMPLETED") ||
+			(status === 403 &&
+				(code === "DATA_REQUEST_LOCKED" ||
+					code === "ACCOUNT_PENDING_DELETION")),
+	};
 });
 
 vi.mock("@/lib/auth/token", () => ({
@@ -405,6 +413,7 @@ describe("streamMessage（fetch + 响应校验协议）", () => {
 			streamMessage({ conversationId: "conv-1", content: "追问" }),
 		).rejects.toBeInstanceOf(ApiError);
 		expect(window.location.href).toBe("/data-requests");
+		expect(captureApiError).not.toHaveBeenCalled();
 	});
 
 	it("无 token：请求头不带 Authorization", async () => {

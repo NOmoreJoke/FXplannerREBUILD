@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { ApiError } from "@/lib/api/client";
 import { dataRequestsApi } from "@/lib/api/data-requests";
+import { invalidateAfterDataRequestMutation } from "@/lib/api/query-keys";
 import { useImpact } from "@/lib/hooks/use-data-request";
 import type { ImpactTotals } from "@/lib/api/contract";
 import { OtpVerifyStep } from "./otp-verify-step";
@@ -61,7 +62,7 @@ export function ClearFlow({
 		onSuccess: () => {
 			toast.success("清空请求已提交，开始清理前可撤回");
 			// 失效当前请求缓存：设置页立即切换为进度卡（写锁同步生效）
-			void queryClient.invalidateQueries({ queryKey: ["data-request"] });
+			invalidateAfterDataRequestMutation(queryClient);
 			onSubmitted?.();
 			reset();
 		},

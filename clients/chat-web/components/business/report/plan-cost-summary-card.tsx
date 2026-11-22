@@ -9,6 +9,7 @@ import { FileDown, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PlanReportPrintDialog } from "@/components/business/report/plan-report-print-view";
+import { queryKeys } from "@/lib/api/query-keys";
 import { reportsApi } from "@/lib/api/reports";
 import type { PlanReport } from "@/lib/api/contract";
 
@@ -253,7 +254,7 @@ export function PlanCostSummaryCard({
  */
 export function PlanReportSection({ planId }: { planId: string }) {
 	const query = useQuery({
-		queryKey: ["reports", "plan", planId] as const,
+		queryKey: queryKeys.reports.plan(planId),
 		queryFn: () => reportsApi.getPlanReport(planId),
 		retry: false,
 	});

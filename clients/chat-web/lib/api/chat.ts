@@ -1,5 +1,9 @@
 import { captureApiError } from "@/lib/dev-log/monitor";
-import { ApiError, apiClient } from "@/lib/api/client";
+import {
+	ApiError,
+	apiClient,
+	isExpectedControlFlowApiError,
+} from "@/lib/api/client";
 import { clearToken, getToken } from "@/lib/auth/token";
 
 /**
@@ -249,13 +253,15 @@ async function openStreamResponse(
 		const errorBody = await response
 			.json()
 			.catch(() => ({}) as { code?: string; message?: string });
-		captureApiError({
-			endpoint,
-			method: "POST",
-			kind: "http",
-			status: response.status,
-			message: errorBody.message ?? "请求失败",
-		});
+		if (!isExpectedControlFlowApiError(response.status, errorBody.code)) {
+			captureApiError({
+				endpoint,
+				method: "POST",
+				kind: "http",
+				status: response.status,
+				message: errorBody.message ?? "请求失败",
+			});
+		}
 		throw new ApiError(
 			errorBody.message ?? "请求失败",
 			response.status,

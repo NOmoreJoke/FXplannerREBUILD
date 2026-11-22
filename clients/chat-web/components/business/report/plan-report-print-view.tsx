@@ -13,6 +13,7 @@ import {
 	formatReportDate,
 	hasUsageQuantity,
 } from "@/components/business/report/plan-cost-summary-card";
+import { queryKeys } from "@/lib/api/query-keys";
 import { reportsApi } from "@/lib/api/reports";
 
 /**
@@ -121,7 +122,7 @@ export function PlanReportPrintDialog({
 	onClose,
 }: PlanReportPrintDialogProps) {
 	const query = useQuery({
-		queryKey: ["reports", "plan", planId] as const,
+		queryKey: queryKeys.reports.plan(planId),
 		queryFn: () => reportsApi.getPlanReport(planId),
 		enabled: open,
 		retry: false,

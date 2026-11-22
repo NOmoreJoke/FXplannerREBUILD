@@ -3,18 +3,19 @@ import { useQuery } from "@tanstack/react-query";
 import { differenceInCalendarDays, parseISO } from "date-fns";
 import Decimal from "decimal.js";
 import { fetchHomePortfolio, homeApi } from "@/lib/api/home";
+import { queryKeys } from "@/lib/api/query-keys";
 import type { HomePortfolioData } from "@/lib/api/home";
 import type { HomeState, PlanSummary } from "@/lib/api/contract";
 
 /**
  * 首页状态查询 Key
  */
-export const HOME_STATE_QUERY_KEY = ["home", "state"];
+export const HOME_STATE_QUERY_KEY = queryKeys.home.state();
 
 /**
  * 首页持仓成本查询 Key（GET /home/portfolio，与 state 并行、互不阻塞）
  */
-export const HOME_PORTFOLIO_QUERY_KEY = ["home", "portfolio"];
+export const HOME_PORTFOLIO_QUERY_KEY = queryKeys.home.portfolio();
 
 /**
  * 仪表盘焦点计划：status=ACTIVE 计划中 latestPrepDate 最早者

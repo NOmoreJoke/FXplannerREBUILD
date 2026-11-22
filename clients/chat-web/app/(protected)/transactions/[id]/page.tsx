@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { CircleAlert } from "lucide-react";
 import { TransactionDetail } from "@/components/business/transaction";
 import { ApiError } from "@/lib/api/client";
+import { queryKeys } from "@/lib/api/query-keys";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { transactionsApi } from "@/lib/api/transactions";
@@ -22,7 +23,7 @@ export default function TransactionDetailPage() {
 	const id = params?.id;
 
 	const query = useQuery({
-		queryKey: ["transactions", "detail", id],
+		queryKey: queryKeys.transactions.detail(id),
 		queryFn: () => transactionsApi.detail(id as string),
 		enabled: typeof id === "string" && id !== "",
 		retry: false, // 401 由 apiClient 统一跳登录；404 直接进提示态

@@ -1,5 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { onboardingApi } from "@/lib/api/onboarding";
 import { remindersApi } from "@/lib/api/reminders";
+import { queryKeys } from "@/lib/api/query-keys";
+import { settingsApi } from "@/lib/api/settings";
 import type { ReminderItem } from "@/lib/api/contract";
 
 /**
@@ -11,7 +14,12 @@ import type { ReminderItem } from "@/lib/api/contract";
  */
 
 /** 提醒列表查询 Key（[domain, action] 约定） */
-export const REMINDERS_QUERY_KEY = ["reminders", "list"];
+export const REMINDERS_QUERY_KEY = queryKeys.reminders.list();
+
+export interface UseRemindersOptions {
+	/** 是否允许触发查询（未建账 / 数据锁路由 / 提醒关闭时传 false 避免无效请求） */
+	enabled?: boolean;
+}
 
 export interface UseRemindersResult {
 	/** 提醒列表（未读全量 + 已读近 30 天，scheduledFor 倒序；无数据为空数组） */
@@ -27,10 +35,14 @@ export interface UseRemindersResult {
 }
 
 /** 提醒列表查询（铃铛角标 / 首页今日提醒区 / 提醒中心页共用） */
-export function useReminders(): UseRemindersResult {
+export function useReminders(
+	options?: UseRemindersOptions,
+): UseRemindersResult {
+	const enabled = options?.enabled ?? true;
 	const query = useQuery({
 		queryKey: REMINDERS_QUERY_KEY,
 		queryFn: remindersApi.list,
+		enabled,
 		staleTime: 30 * 1000, // 容忍秒级陈旧；写操作后由已读 mutation invalidate 精确刷新
 		retry: false, // 401 由 apiClient 统一处理；消费方（首页区块）静默降级
 	});
@@ -71,4 +83,51 @@ export function useMarkAllRemindersRead() {
 			void queryClient.invalidateQueries({ queryKey: REMINDERS_QUERY_KEY });
 		},
 	});
+}
+
+/** 建账向导与数据权利进度页为受控拦截路由，顶栏提醒铃铛禁止触发 settings/reminders 请求 */
+export function isReminderBypassRoute(pathname: string | null | undefined): boolean {
+	if (!pathname) return false;
+	return (
+		pathname.startsWith("/onboarding") || pathname.startsWith("/data-requests")
+	);
+}
+
+/**
+ * 顶栏提醒门控（F1-3 / DEBT-06）：
+ * - /onboarding 与 /data-requests 路由直接静默跳过所有请求（0 409 / 0 403）；
+ * - 其余路由先读取无 409 的 onboarding/status，仅 completed=true 时请求 /settings；
+ * - 仅 completed=true 且 reminderEnabled=true 时请求 /reminders。
+ */
+export function useReminderGate(pathname: string | null | undefined) {
+	const isBypassed = isReminderBypassRoute(pathname);
+
+	const onboardingStatusQuery = useQuery({
+		queryKey: queryKeys.onboarding.status(),
+		queryFn: onboardingApi.getStatus,
+		enabled: !isBypassed,
+		staleTime: 5 * 60 * 1000,
+		retry: false,
+	});
+	const isOnboarded = onboardingStatusQuery.data?.completed === true;
+
+	const settingsQuery = useQuery({
+		queryKey: queryKeys.settings.detail(),
+		queryFn: settingsApi.getSettings,
+		enabled: !isBypassed && isOnboarded,
+		retry: false,
+	});
+	const reminderEnabled = settingsQuery.data?.reminderEnabled === true;
+
+	const reminders = useReminders({
+		enabled: !isBypassed && isOnboarded && reminderEnabled,
+	});
+
+	return {
+		isBypassed,
+		isOnboarded,
+		settingsQuery,
+		reminderEnabled,
+		...reminders,
+	};
 }

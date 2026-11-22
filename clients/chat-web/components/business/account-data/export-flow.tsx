@@ -14,6 +14,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { dataRequestsApi } from "@/lib/api/data-requests";
+import { invalidateAfterDataRequestMutation } from "@/lib/api/query-keys";
 import type { DataRequestView } from "@/lib/api/contract";
 import { OtpVerifyStep } from "./otp-verify-step";
 
@@ -48,7 +49,7 @@ export function ExportFlow({
 		onSuccess: (view) => {
 			toast.success("导出包已生成，24 小时内可下载");
 			// 失效当前请求缓存：设置页立即切换为进度卡（重复提交幂等返回原请求）
-			void queryClient.invalidateQueries({ queryKey: ["data-request"] });
+			invalidateAfterDataRequestMutation(queryClient);
 			onSubmitted?.(view);
 			reset();
 		},

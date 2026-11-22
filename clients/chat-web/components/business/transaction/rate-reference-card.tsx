@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { queryKeys } from "@/lib/api/query-keys";
 import { ratesApi } from "@/lib/api/rates";
 
 /**
@@ -52,7 +53,7 @@ export function RateReferenceCard({
 }: RateReferenceCardProps) {
 	const enabled = baseCurrency !== null && targetCurrency !== "";
 	const query = useQuery({
-		queryKey: ["rates", "latest", baseCurrency, targetCurrency],
+		queryKey: queryKeys.rates.latestPair(baseCurrency, targetCurrency),
 		// 回显已落库报价优先（SWR，changes/rate-stale-echo-fix）：进页不等外呼，
 		// 超窗由后端回显旧值（fresh=false）+ 后台刷新；换币种由 queryKey 变化触发重查
 		queryFn: () =>

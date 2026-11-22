@@ -16,6 +16,7 @@ import {
 import { ApiError } from "@/lib/api/client";
 import type { SettingsView, UpdateSettingsReq } from "@/lib/api/contract";
 import { getCurrencyName } from "@/lib/api/currencies";
+import { queryKeys } from "@/lib/api/query-keys";
 import { settingsApi } from "@/lib/api/settings";
 
 /**
@@ -30,7 +31,7 @@ import { settingsApi } from "@/lib/api/settings";
  */
 
 /** 设置查询 Key（保存成功后失效回读） */
-export const SETTINGS_QUERY_KEY = ["settings"] as const;
+export const SETTINGS_QUERY_KEY = queryKeys.settings.detail();
 
 const REGION_OPTIONS = [
 	{ value: "CN", label: "中国大陆" },

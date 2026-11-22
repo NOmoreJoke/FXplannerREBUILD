@@ -14,6 +14,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { dataRequestsApi } from "@/lib/api/data-requests";
+import { invalidateAfterDataRequestMutation } from "@/lib/api/query-keys";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import type { DataRequestView, DataRequestDisplayStatus } from "@/lib/api/contract";
 import { ExportDownloadButton } from "./export-flow";
@@ -55,7 +56,7 @@ export function RequestProgress({ view }: { view: DataRequestView }) {
 			dataRequestsApi.cancel(view.id, challengeId),
 		onSuccess: () => {
 			toast.success("已撤回，数据恢复原样");
-			void queryClient.invalidateQueries({ queryKey: ["data-request"] });
+			invalidateAfterDataRequestMutation(queryClient);
 			setCancelDialogOpen(false);
 		},
 		onError: (error: Error) => toast.error(error.message || "撤回失败"),

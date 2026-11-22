@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getCurrencyName } from "@/lib/api/currencies";
+import { queryKeys } from "@/lib/api/query-keys";
 import { ratesApi } from "@/lib/api/rates";
 import type { CurrencySeriesEntry } from "@/lib/hooks/use-rate-history";
 
@@ -43,7 +44,7 @@ export function CurrencyMultiSelect({
 	disabled,
 }: CurrencyMultiSelectProps) {
 	const supportedQuery = useQuery({
-		queryKey: ["rates", "supported"],
+		queryKey: queryKeys.rates.supported(),
 		queryFn: () => ratesApi.supported(),
 		staleTime: 24 * 60 * 60_000, // 币种清单近乎静态，当日不再重拉
 		retry: 1,

@@ -13,9 +13,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { onboardingApi } from "@/lib/api/onboarding";
 import {
-	HOME_STATE_QUERY_KEY,
-	HOME_PORTFOLIO_QUERY_KEY,
-} from "@/lib/hooks/use-home-state";
+	invalidateAfterLedgerMutation,
+	invalidateAfterOnboarding,
+} from "@/lib/api/query-keys";
 import { ApiError } from "@/lib/api/client";
 import { safeRedirectPath } from "@/lib/auth/safe-redirect-path";
 import { PageLoading } from "@/components/base";
@@ -66,12 +66,12 @@ function OnboardingWizard() {
 		{ currencyCode: "", amount: "" },
 	]);
 
-	/** 入账成功后失效首页缓存：hasInitialHoldings/账户余额立即反映（免 5min staleTime 残留引导卡） */
-	const invalidateHomeCaches = useCallback(() => {
-		void queryClient.invalidateQueries({ queryKey: HOME_STATE_QUERY_KEY });
-		void queryClient.invalidateQueries({
-			queryKey: HOME_PORTFOLIO_QUERY_KEY,
-		});
+	const refreshAfterOnboarding = useCallback(() => {
+		invalidateAfterOnboarding(queryClient);
+	}, [queryClient]);
+
+	const refreshAfterBackfill = useCallback(() => {
+		invalidateAfterLedgerMutation(queryClient);
 	}, [queryClient]);
 
 	const loadStatus = useCallback(async () => {
@@ -114,7 +114,7 @@ function OnboardingWizard() {
 				...(holdings.length > 0 ? { initialHoldings: holdings } : {}),
 			});
 			toast.success("建账完成");
-			invalidateHomeCaches();
+			refreshAfterOnboarding();
 			router.replace("/home");
 		} catch (error) {
 			toast.error(
@@ -134,7 +134,7 @@ function OnboardingWizard() {
 		try {
 			await onboardingApi.saveInitialHoldings({ holdings });
 			toast.success("初始持仓已入账");
-			invalidateHomeCaches();
+			refreshAfterBackfill();
 			router.replace("/home");
 		} catch (error) {
 			toast.error(

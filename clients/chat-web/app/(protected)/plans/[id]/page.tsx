@@ -31,7 +31,10 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
 import { plansApi } from "@/lib/api/plans";
-import { HOME_STATE_QUERY_KEY } from "@/lib/hooks/use-home-state";
+import {
+	invalidateAfterLedgerMutation,
+	queryKeys,
+} from "@/lib/api/query-keys";
 import { usagesApi } from "@/lib/api/usages";
 import type { PlanDetail } from "@/lib/api/contract";
 
@@ -45,23 +48,13 @@ import type { PlanDetail } from "@/lib/api/contract";
  * 认证守卫在 (protected)/layout.tsx（勿在此重复）。
  */
 
-/** 详情查询 Key（写操作成功后据此精确回写） */
-function planDetailKey(id: string) {
-	return ["plans", "detail", id] as const;
-}
-
-/** 使用记录列表查询 Key（M7 记账成功后失效刷新） */
-function usagesListKey(id: string) {
-	return ["usages", "list", id] as const;
-}
-
 export default function PlanDetailPage() {
 	const params = useParams<{ id: string }>();
 	const id = params?.id;
 	const queryClient = useQueryClient();
 
 	const query = useQuery({
-		queryKey: planDetailKey(id as string),
+		queryKey: queryKeys.plans.detail(id as string),
 		queryFn: () => plansApi.getDetail(id as string),
 		enabled: typeof id === "string" && id !== "",
 		retry: false, // 401 由 apiClient 统一跳登录；404 直接进提示态
@@ -70,7 +63,7 @@ export default function PlanDetailPage() {
 	// 使用记录列表（M7）；失败静默降级为空态（详情 404 已被上方拦截）。
 	// ⚠️ 必须在所有条件 return 之前调用（React Hooks 规则：hook 顺序恒定）
 	const usagesQuery = useQuery({
-		queryKey: usagesListKey(id as string),
+		queryKey: queryKeys.usages.list(id as string),
 		queryFn: () => usagesApi.list(id as string),
 		enabled: typeof id === "string" && id !== "",
 		retry: false,
@@ -116,12 +109,10 @@ export default function PlanDetailPage() {
 		return null; // 不可达：非 loading 非 error 时 data 必已就绪（类型收窄）
 	}
 
-	// 刷新：记账成功后失效详情 + 使用记录列表（M7）
+	// 刷新：记账成功后集中失效关联缓存（详情 + 计划列表 + 使用记录 + 账户 + 报告 + 首页 + 提醒）
 	const refreshAfterUsage = () => {
 		if (typeof id !== "string") return;
-		void queryClient.invalidateQueries({ queryKey: planDetailKey(id) });
-		void queryClient.invalidateQueries({ queryKey: ["plans", "list"] });
-		void queryClient.invalidateQueries({ queryKey: usagesListKey(id) });
+		invalidateAfterLedgerMutation(queryClient, { planId: id });
 	};
 
 	return (
@@ -130,11 +121,8 @@ export default function PlanDetailPage() {
 				plan={query.data}
 				onApplied={(detail) => {
 					if (typeof id !== "string") return;
-					queryClient.setQueryData(planDetailKey(id), detail);
-					void queryClient.invalidateQueries({ queryKey: ["plans", "list"] });
-					// 分配随调整/取消/完成/重开变化：账户系（余额/分配明细/流水）一并失效
-					void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-					void queryClient.invalidateQueries({ queryKey: HOME_STATE_QUERY_KEY });
+					queryClient.setQueryData(queryKeys.plans.detail(id), detail);
+					invalidateAfterLedgerMutation(queryClient, { planId: id });
 				}}
 				onWriteFailed={() => void query.refetch()}
 				onUsageSaved={refreshAfterUsage}

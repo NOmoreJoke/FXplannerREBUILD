@@ -10,6 +10,7 @@ import {
 	RateChartPanel,
 } from "@/components/business/market";
 import { Button } from "@/components/ui/button";
+import { queryKeys } from "@/lib/api/query-keys";
 import { settingsApi } from "@/lib/api/settings";
 import {
 	useRateHistory,
@@ -25,7 +26,7 @@ import {
  */
 export default function MarketPage() {
 	const settingsQuery = useQuery({
-		queryKey: ["settings"],
+		queryKey: queryKeys.settings.detail(),
 		queryFn: settingsApi.getSettings,
 		retry: false, // 401 由 apiClient 统一处理；409/其余失败走错误分支
 	});

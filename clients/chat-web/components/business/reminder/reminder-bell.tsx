@@ -1,29 +1,27 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Bell } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { SETTINGS_QUERY_KEY } from "@/components/business/settings/preferences-form";
-import { settingsApi } from "@/lib/api/settings";
-import { useReminders } from "@/lib/hooks/use-reminders";
+import { useReminderGate } from "@/lib/hooks/use-reminders";
 
 /**
- * 工作台顶栏提醒入口（铃铛 + 未读角标；reminders 技术方案 §8）。
+ * 工作台顶栏提醒入口（铃铛 + 未读角标；reminders 技术方案 §8 + F1-3 门控）。
  * 位置：(protected)/layout.tsx 面包屑行右侧，全站受保护页面共享；由 AppBreadcrumb 的 actions 插槽承载。
  *
- * - 提醒开关关闭（reminderEnabled=false）→ 不渲染角标（需求 §7.1）；
- * - 未读数为 0 / 提醒接口失败（含未建账 409）→ 不渲染角标，铃铛本身保留入口；
- * - settings 查询复用设置页同 Key（SETTINGS_QUERY_KEY），跨组件共享缓存。
+ * - /onboarding 与 /data-requests 路由、或未建账完成前 → 零 /settings、零 /reminders 请求，返回 null；
+ * - 已建账但提醒开关关闭（reminderEnabled=false）→ 保留铃铛入口但不渲染角标且零 /reminders 请求；
+ * - 未读数为 0 / 提醒接口失败 → 不渲染角标，铃铛本身保留入口。
  */
 export function ReminderBell() {
-	const { unreadCount } = useReminders();
-	const settingsQuery = useQuery({
-		queryKey: SETTINGS_QUERY_KEY,
-		queryFn: settingsApi.getSettings,
-		retry: false, // 未建账 409 / 失败 → 按「角标不显示」降级
-	});
+	const pathname = usePathname();
+	const { isBypassed, isOnboarded, reminderEnabled, unreadCount } =
+		useReminderGate(pathname);
 
-	const reminderEnabled = settingsQuery.data?.reminderEnabled === true;
+	if (isBypassed || !isOnboarded) {
+		return null;
+	}
+
 	const showBadge = reminderEnabled && unreadCount > 0;
 
 	return (

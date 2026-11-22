@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
 import { Suspense, useEffect } from "react";
@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import type { CreateTransactionReq } from "@/lib/api/contract";
 import { onboardingApi } from "@/lib/api/onboarding";
+import { invalidateAfterLedgerMutation, queryKeys } from "@/lib/api/query-keys";
 import { transactionsApi } from "@/lib/api/transactions";
 import { useHomeState } from "@/lib/hooks/use-home-state";
 import {
@@ -19,9 +20,6 @@ import {
 	toCreateRequest,
 	useTransactionForm,
 } from "@/lib/hooks/use-transaction-form";
-
-/** 本位币/计划摘要查询 Key（与 plans/new、useHomeState 共用缓存） */
-const ONBOARDING_STATUS_QUERY_KEY = ["onboarding", "status"] as const;
 
 /**
  * 快速录入页（买入交易，changes/transaction-entry/技术方案.md §6）
@@ -45,6 +43,7 @@ export default function NewTransactionPage() {
 
 function NewTransactionPageContent() {
 	const router = useRouter();
+	const queryClient = useQueryClient();
 	const searchParams = useSearchParams();
 
 	// URL 预填：planId 直填；币种取 URL currency（非法代码忽略），
@@ -64,7 +63,7 @@ function NewTransactionPageContent() {
 
 	// 本位币（参考汇率的 base；完成首次设置后锁定）
 	const statusQuery = useQuery({
-		queryKey: ONBOARDING_STATUS_QUERY_KEY,
+		queryKey: queryKeys.onboarding.status(),
 		queryFn: () => onboardingApi.getStatus(),
 		retry: false, // 401 由 apiClient 统一跳登录，其余失败静默用默认值
 	});
@@ -94,6 +93,7 @@ function NewTransactionPageContent() {
 		mutationFn: (req: CreateTransactionReq) => transactionsApi.create(req),
 		onSuccess: (data) => {
 			toast.success("买入记录已保存");
+			invalidateAfterLedgerMutation(queryClient);
 			router.replace(`/transactions/${data.id}`);
 		},
 		onError: (error: unknown) => {

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { CircleAlert, Plus } from "lucide-react";
 import { accountsApi, type AccountListItem } from "@/lib/api/accounts";
 import { getCurrencyName } from "@/lib/api/currencies";
+import { queryKeys } from "@/lib/api/query-keys";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -25,7 +26,7 @@ import {
  */
 export default function AccountsPage() {
 	const query = useQuery({
-		queryKey: ["accounts"],
+		queryKey: queryKeys.accounts.list(),
 		queryFn: () => accountsApi.list(),
 	});
 

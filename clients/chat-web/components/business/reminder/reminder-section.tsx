@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { BellOff } from "lucide-react";
-import { SETTINGS_QUERY_KEY } from "@/components/business/settings/preferences-form";
+import { queryKeys } from "@/lib/api/query-keys";
 import { settingsApi } from "@/lib/api/settings";
 import { useReminders } from "@/lib/hooks/use-reminders";
 import { utcPlus8DayStart } from "@/lib/utils";
@@ -14,7 +14,7 @@ import { ReminderCard } from "./reminder-card";
  *
  * - 取列表中 scheduledFor 属于「业务今天」（UTC+8 日历天，对齐后端口径）的前 3 条
  *   + 「查看全部」；没有提醒时不渲染；
- * - 提醒开关关闭 → 改为一行关闭提示 + 设置页入口（角标/条目都不出现）；
+ * - 提醒开关关闭 → 改为一行关闭提示 + 设置页入口（角标/条目都不出现，且不发 /reminders 请求）；
  * - 加载中 / 接口失败（含未建账 409）→ 静默不渲染，首页不被提醒拖垮
  *   （「关闭提醒后页面仍显示状态」由既有焦点横幅天然承担）。
  */
@@ -23,18 +23,20 @@ import { ReminderCard } from "./reminder-card";
 const TODAY_LIMIT = 3;
 
 export function ReminderSection() {
-	const { items, isLoading, isError } = useReminders();
 	const settingsQuery = useQuery({
-		queryKey: SETTINGS_QUERY_KEY,
+		queryKey: queryKeys.settings.detail(),
 		queryFn: settingsApi.getSettings,
 		retry: false,
 	});
+	const reminderEnabled = settingsQuery.data?.reminderEnabled === true;
+	const { items, isLoading, isError } = useReminders({
+		enabled: !settingsQuery.isPending && !settingsQuery.isError && reminderEnabled,
+	});
 
-	// settings 未就绪不渲染（防「先出条目再闪成关闭提示」）；失败按开启态降级展示列表
-	if (settingsQuery.isPending) {
+	// settings 未就绪或失败不渲染（防「先出条目再闪成关闭提示」或 409 误显关闭提示）
+	if (settingsQuery.isPending || settingsQuery.isError) {
 		return null;
 	}
-	const reminderEnabled = settingsQuery.data?.reminderEnabled === true;
 
 	// 开关关闭：一行关闭提示 + 设置入口（无条目、无角标）
 	if (!reminderEnabled) {

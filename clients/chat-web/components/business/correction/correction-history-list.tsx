@@ -8,6 +8,7 @@ import type {
 	CorrectionTargetType,
 } from "@/lib/api/contract";
 import { correctionsApi } from "@/lib/api/corrections";
+import { queryKeys } from "@/lib/api/query-keys";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -31,7 +32,7 @@ export function CorrectionHistoryList({
 	const isUsage = targetType === "USAGE";
 	const [page, setPage] = useState(1);
 	const query = useQuery({
-		queryKey: ["corrections", "list", targetType, targetId, page],
+		queryKey: queryKeys.corrections.list(targetType, targetId, page),
 		queryFn: () => correctionsApi.list(targetType, targetId, page),
 		staleTime: isUsage ? 0 : undefined,
 		placeholderData: isUsage ? keepPreviousData : undefined,

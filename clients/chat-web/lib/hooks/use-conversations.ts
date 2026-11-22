@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { chatApi } from "@/lib/api/chat";
+import { queryKeys } from "@/lib/api/query-keys";
 
 /**
  * 会话列表消费层（ai-assistant 方案 §5.2）：
@@ -9,14 +10,14 @@ import { chatApi } from "@/lib/api/chat";
  */
 
 /** 查询 Key 词根（[domain, action] 约定，先例：rates） */
-export const AI_CONVERSATIONS_QUERY_STEM = ["ai", "conversations"] as const;
-export const AI_MESSAGES_QUERY_STEM = ["ai", "messages"] as const;
+export const AI_CONVERSATIONS_QUERY_STEM = queryKeys.ai.conversations();
+export const AI_MESSAGES_QUERY_STEM = queryKeys.ai.messagesStem;
 
 /** 组装完整消息查询 Key（按会话分桶） */
 export function aiMessagesQueryKey(
 	conversationId: string,
 ): readonly [string, string, string] {
-	return [...AI_MESSAGES_QUERY_STEM, conversationId] as const;
+	return queryKeys.ai.messages(conversationId);
 }
 
 /** 会话列表（GET /ai/conversations，按 lastMessageAt 倒序） */

@@ -15,6 +15,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { dataRequestsApi } from "@/lib/api/data-requests";
+import { invalidateAfterDataRequestMutation } from "@/lib/api/query-keys";
 import { OtpVerifyStep } from "./otp-verify-step";
 
 /**
@@ -49,7 +50,7 @@ export function DeletionFlow({
 		onSuccess: () => {
 			toast.success("注销请求已提交，7 个自然日撤回期内可反悔");
 			// 失效当前请求缓存：进度页读到 WITHDRAWAL_PERIOD（锁定由后端守卫强制）
-			void queryClient.invalidateQueries({ queryKey: ["data-request"] });
+			invalidateAfterDataRequestMutation(queryClient);
 			onSubmitted?.();
 			reset();
 			// 注销即「退出所有现有登录」的等效体验：直达进度页（其余端点已被锁拦截）

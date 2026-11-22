@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import type { CreatePlanReq } from "@/lib/api/contract";
 import { onboardingApi } from "@/lib/api/onboarding";
 import { plansApi } from "@/lib/api/plans";
-import { HOME_STATE_QUERY_KEY } from "@/lib/hooks/use-home-state";
+import { invalidateAfterLedgerMutation, queryKeys } from "@/lib/api/query-keys";
 import { toPacePreference, usePlanForm } from "@/lib/hooks/use-plan-form";
 import { useSchedulePreview } from "@/lib/hooks/use-schedule-preview";
 
@@ -23,8 +23,6 @@ import { useSchedulePreview } from "@/lib/hooks/use-schedule-preview";
  * 装配：usePlanForm（表单状态与校验）+ useSchedulePreview（防抖预览）+
  * react-query 取 onboarding 偏好回填默认节奏 + createMutation 提交。
  */
-const ONBOARDING_STATUS_QUERY_KEY = ["onboarding", "status"] as const;
-
 export default function NewPlanPage() {
 	const router = useRouter();
 	const queryClient = useQueryClient();
@@ -46,7 +44,7 @@ export default function NewPlanPage() {
 
 	// 首次设置的节奏偏好回填为默认节奏；用户已手动改过（touched）则不覆盖
 	const statusQuery = useQuery({
-		queryKey: ONBOARDING_STATUS_QUERY_KEY,
+		queryKey: queryKeys.onboarding.status(),
 		queryFn: () => onboardingApi.getStatus(),
 		retry: false, // 401 由 apiClient 统一跳登录，其余失败静默用默认节奏
 	});
@@ -71,9 +69,8 @@ export default function NewPlanPage() {
 		mutationFn: (req: CreatePlanReq) => plansApi.create(req),
 		onSuccess: () => {
 			toast.success("计划创建成功");
-			// 创建可携带分配：账户系（余额/分配明细）与首页状态一并失效，避免回看旧缓存
-			void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-			void queryClient.invalidateQueries({ queryKey: HOME_STATE_QUERY_KEY });
+			// 创建可携带分配：账户、计划、报告、首页与提醒缓存一并失效，避免回看旧缓存
+			invalidateAfterLedgerMutation(queryClient);
 			router.replace("/home"); // hasPlans=true 自动切换正常首页
 		},
 		onError: (error: unknown) => {

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { accountsApi } from "@/lib/api/accounts";
+import { queryKeys } from "@/lib/api/query-keys";
 import {
 	AccountCostCard,
 	ReportPlanList,
@@ -22,7 +23,7 @@ import { ComplianceDisclaimer } from "@/components/base";
 export default function ReportsPage() {
 	// 账户成本：先取账户列表（币种集合），再逐币种并发取详情（个人数据 ≤15 币种，方案 §5.3）
 	const accountsQuery = useQuery({
-		queryKey: ["accounts", "list"] as const,
+		queryKey: queryKeys.accounts.list(),
 		queryFn: () => accountsApi.list(),
 		staleTime: 15 * 1000,
 		retry: false,
@@ -31,11 +32,9 @@ export default function ReportsPage() {
 	const [printPlanId, setPrintPlanId] = useState<string | null>(null);
 
 	const accountDetails = useQuery({
-		queryKey: [
-			"accounts",
-			"report-details",
+		queryKey: queryKeys.accounts.reportDetails(
 			accounts.map((a) => a.currencyCode).join(","),
-		] as const,
+		),
 		queryFn: async () => {
 			const details = await Promise.all(
 				accounts.map((account) => accountsApi.detail(account.currencyCode)),

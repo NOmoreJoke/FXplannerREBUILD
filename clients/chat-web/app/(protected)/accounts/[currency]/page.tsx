@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
 import { getCurrencyName } from "@/lib/api/currencies";
+import { queryKeys } from "@/lib/api/query-keys";
 import { accountsApi } from "@/lib/api/accounts";
 
 /**
@@ -30,14 +31,14 @@ export default function AccountDetailPage() {
 	const code = typeof raw === "string" && raw !== "" ? raw.toUpperCase() : null;
 
 	const detailQuery = useQuery({
-		queryKey: ["accounts", "detail", code],
+		queryKey: queryKeys.accounts.detail(code),
 		queryFn: () => accountsApi.detail(code as string),
 		enabled: code !== null,
 		retry: false, // 401 由 apiClient 统一跳登录；404 直接进提示态
 	});
 
 	const ledgerQuery = useQuery({
-		queryKey: ["accounts", "ledger", code],
+		queryKey: queryKeys.accounts.ledger(code),
 		queryFn: () => accountsApi.ledger(code as string),
 		enabled: code !== null,
 		retry: false,
@@ -46,7 +47,7 @@ export default function AccountDetailPage() {
 	// 按计划分配明细（阶段5 §2 功能 13）：只读事实展示，与摘要/流水并行；
 	// 失败静默降级不阻塞整页（明细缺失不该挡住余额/流水查看）
 	const allocationsQuery = useQuery({
-		queryKey: ["accounts", "allocations", code],
+		queryKey: queryKeys.accounts.allocations(code),
 		queryFn: () => accountsApi.allocations(code as string),
 		enabled: code !== null,
 		retry: false,

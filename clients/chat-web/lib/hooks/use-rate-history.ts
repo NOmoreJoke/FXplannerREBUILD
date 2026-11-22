@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { ApiError } from "@/lib/api/client";
+import { queryKeys } from "@/lib/api/query-keys";
 import { ratesApi, REFERENCE_RATE_SOURCE } from "@/lib/api/rates";
 import {
 	mergeSeries,
@@ -14,7 +15,7 @@ import {
 export type MarketPeriod = 7 | 30 | 90 | 365;
 
 /** 查询 Key 词根（[domain, action] 约定，与 use-latest-rates 同风格） */
-export const RATE_HISTORY_QUERY_STEM = ["rates", "history"] as const;
+export const RATE_HISTORY_QUERY_STEM = queryKeys.rates.historyStem;
 
 /** 组装完整查询 Key（base + target + period 各占一位） */
 export function buildRateHistoryQueryKey(
@@ -22,7 +23,7 @@ export function buildRateHistoryQueryKey(
 	target: string,
 	period: MarketPeriod,
 ): readonly unknown[] {
-	return [...RATE_HISTORY_QUERY_STEM, base, target, period];
+	return queryKeys.rates.history(base, target, period);
 }
 
 /** 缓存保鲜期（§3.3/§5.2：staleTime 10min，窗口内切档位/币种秒回本地缓存） */

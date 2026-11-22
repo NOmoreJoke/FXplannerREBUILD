@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError } from "@/lib/api/client";
+import { queryKeys } from "@/lib/api/query-keys";
 import {
 	ratesApi,
 	type LatestRateGroupResponse,
@@ -17,7 +18,7 @@ const POLL_INTERVAL_MS = 60_000;
 const CLOCK_TICK_MS = 1_000;
 
 /** 查询 Key 词根（[domain, action] 约定；完整 Key 由 buildLatestRatesQueryKey 组装） */
-export const LATEST_RATES_QUERY_STEM = ["rates", "latest"] as const;
+export const LATEST_RATES_QUERY_STEM = queryKeys.rates.latestStem;
 
 /** 组装完整查询 Key（§4.2：base + targets 串 + locked/live 模式位） */
 export function buildLatestRatesQueryKey(
@@ -25,12 +26,7 @@ export function buildLatestRatesQueryKey(
 	targetsKey: string,
 	locked: boolean,
 ): readonly unknown[] {
-	return [
-		...LATEST_RATES_QUERY_STEM,
-		base,
-		targetsKey,
-		locked ? "locked" : "live",
-	];
+	return queryKeys.rates.latestGroup(base, targetsKey, locked);
 }
 
 /** hook 错误形态（§4.2：ApiError 归一结果；lastObservedAt 供「最后报价时间与原因」展示） */

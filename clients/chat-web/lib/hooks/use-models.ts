@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { chatApi } from "@/lib/api/chat";
+import { queryKeys } from "@/lib/api/query-keys";
 
 /**
  * 模型白名单消费层（ai-model-whitelist 方案 §5.2）：
@@ -9,7 +10,7 @@ import { chatApi } from "@/lib/api/chat";
  */
 
 /** 查询 Key 词根（[domain, action] 约定，与 conversations/messages 同构） */
-export const AI_MODELS_QUERY_STEM = ["ai", "models"] as const;
+export const AI_MODELS_QUERY_STEM = queryKeys.ai.models();
 
 /** staleTime 5 分钟（LingJi 同值）：白名单为封闭集合，变更频率极低 */
 const MODELS_STALE_TIME_MS = 5 * 60 * 1000;

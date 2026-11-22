@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AuthUser } from "@/lib/api/contract";
 import { authApi } from "@/lib/api/auth";
+import { queryKeys } from "@/lib/api/query-keys";
 
 /**
  * 当前用户查询 Key
  */
-export const CURRENT_USER_QUERY_KEY = ["auth", "me"];
+export const CURRENT_USER_QUERY_KEY = queryKeys.auth.me();
 
 /**
  * 查询当前用户信息

@@ -65,6 +65,25 @@ export class ApiError extends Error {
 	}
 }
 
+/**
+ * 预期业务控制流 HTTP 响应不记为 dev-log 错误事件（DEBT-06）：
+ * - 409 ONBOARDING_NOT_COMPLETED：首次建账前门控/降级语义
+ * - 403 DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION：数据锁守卫重定向进度页语义
+ */
+export function isExpectedControlFlowApiError(
+	status: number,
+	code?: string,
+): boolean {
+	if (status === 409 && code === "ONBOARDING_NOT_COMPLETED") return true;
+	if (
+		status === 403 &&
+		(code === "DATA_REQUEST_LOCKED" || code === "ACCOUNT_PENDING_DELETION")
+	) {
+		return true;
+	}
+	return false;
+}
+
 export async function apiClient<T>(
 	endpoint: string,
 	config: RequestConfig = {},
@@ -143,14 +162,16 @@ export async function apiClient<T>(
 		const error = await response
 			.json()
 			.catch(() => ({ message: "请求失败" }) as ApiErrorBody);
-		// HTTP 错误（4xx/5xx，401 除外）：上报本地开发日志
-		captureApiError({
-			endpoint,
-			method,
-			kind: "http",
-			status: response.status,
-			message: error.message || "请求失败",
-		});
+		// HTTP 错误（401 及预期控制流 409/403 除外）：上报本地开发日志
+		if (!isExpectedControlFlowApiError(response.status, error.code)) {
+			captureApiError({
+				endpoint,
+				method,
+				kind: "http",
+				status: response.status,
+				message: error.message || "请求失败",
+			});
+		}
 		throw new ApiError(
 			error.message || "请求失败",
 			response.status,

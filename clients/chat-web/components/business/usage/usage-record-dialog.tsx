@@ -7,10 +7,7 @@ import { usagesApi } from "@/lib/api/usages";
 import { ApiError } from "@/lib/api/client";
 import type { PlanDetail } from "@/lib/api/contract";
 import { utc8TodayYmd } from "@/lib/hooks/use-transaction-form";
-import {
-	HOME_PORTFOLIO_QUERY_KEY,
-	HOME_STATE_QUERY_KEY,
-} from "@/lib/hooks/use-home-state";
+import { invalidateAfterLedgerMutation } from "@/lib/api/query-keys";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -123,17 +120,8 @@ export function UsageRecordDialog({
 			}),
 		onSuccess: (data) => {
 			toast.success("使用记录已保存");
-			// 缓存失效（UI-P0③ 真根因修复）：录使用改变 账户余额/首页持仓/成本报告
-			// /计划详情，不失效则成本摘要卡保持「尚未使用」与使用记录同屏矛盾。
-			// 前缀失效幂等，与调用方页面级刷新（plans/[id] refreshAfterUsage）重复无妨。
-			void queryClient.invalidateQueries({ queryKey: ["reports"] }); // 成本摘要卡 + 报告中心（["reports","plan",id] / ["reports","plans",…]）
-			void queryClient.invalidateQueries({ queryKey: ["accounts"] }); // 账户余额全系（list/detail/ledger）
-			void queryClient.invalidateQueries({
-				queryKey: HOME_PORTFOLIO_QUERY_KEY,
-			}); // 首页持仓汇总
-			void queryClient.invalidateQueries({ queryKey: HOME_STATE_QUERY_KEY }); // 首页状态汇总（含余额）
-			void queryClient.invalidateQueries({ queryKey: ["plans"] }); // 计划详情 + 列表（剩余分配/已用）
-			void queryClient.invalidateQueries({ queryKey: ["usages"] }); // 使用记录列表
+			// 集中失效账户余额 / 首页持仓与状态 / 成本报告 / 计划 / 使用 / 提醒缓存
+			invalidateAfterLedgerMutation(queryClient, { planId: plan.id });
 			resetForm();
 			onOpenChange(false);
 			onSuccess(data);
