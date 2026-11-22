@@ -307,14 +307,22 @@ export function runLintObserve(argv: readonly string[]): number {
 	const normDir = normalizeDirArg(opts.dir);
 	const pkgDir = resolve(repoRoot, normDir || ".");
 
-	const eslintBin = resolve(
-		repoRoot,
-		"packages/eslint-config/node_modules/.bin/eslint",
+	// 二进制解析候选按序兜底：根 node_modules/.bin（eslint 为根 devDependency，
+	// CI 全新 bun install 下 hoisted 链接在此）→ eslint-config 包内链接（本地旧装态）。
+	// CI run 44996631172/45057288663：包内路径在全新安装下不存在，fail-closed 前先穷尽候选。
+	const eslintBinCandidates = [
+		resolve(repoRoot, "node_modules/.bin/eslint"),
+		resolve(repoRoot, "packages/eslint-config/node_modules/.bin/eslint"),
+	];
+	const eslintBin = eslintBinCandidates.find((candidate) =>
+		existsSync(candidate),
 	);
 	const configPath = resolve(pkgDir, "eslint.config.mjs");
 
-	if (!existsSync(eslintBin)) {
-		console.error(`[lint-observe] ESLint binary not found: ${eslintBin}`);
+	if (!eslintBin) {
+		console.error(
+			`[lint-observe] ESLint binary not found in candidates: ${eslintBinCandidates.join(", ")}`,
+		);
 		return 1;
 	}
 	if (!existsSync(configPath)) {
