@@ -1775,6 +1775,10 @@ export interface components {
              */
             updatedAt: string;
         };
+        PlanListDto: {
+            /** @description 计划列表（updatedAt 倒序，limit 100 兜底） */
+            items: components["schemas"]["PlanListItemDto"][];
+        };
         PlanChangeLogDto: {
             /** @description 记录 ID */
             id: string;
@@ -2139,8 +2143,9 @@ export interface components {
             /**
              * @description 资金准备节奏（conservative=安心 / balanced=均衡 / aggressive=主动）
              * @example balanced
+             * @enum {string}
              */
-            pacePreference: string;
+            pacePreference: "conservative" | "balanced" | "aggressive";
             /**
              * @description 开始准备日（ISO 8601；缺省 = 最早可安排日，即明天起首个工作日）
              * @example null
@@ -2188,8 +2193,9 @@ export interface components {
             /**
              * @description 资金准备节奏（conservative=安心 / balanced=均衡 / aggressive=主动）
              * @example balanced
+             * @enum {string}
              */
-            pacePreference: string;
+            pacePreference: "conservative" | "balanced" | "aggressive";
             /**
              * @description 开始准备日（ISO 8601；缺省 = 最早可安排日，即明天起首个工作日）
              * @example null
@@ -2384,15 +2390,30 @@ export interface components {
         };
         AccountDetailDto: {
             /**
-             * @description 本位币（成本币种，取 userSettings.baseCurrency）；新用户无设置行时为 null
-             * @example CNY
-             */
-            baseCurrency: string | null;
-            /**
              * @description 币种代码（ISO 4217）
              * @example CAD
              */
             currencyCode: string;
+            /**
+             * @description 账户余额（Decimal(20, 4)，toFixed(4) 字符串）
+             * @example 12000.0000
+             */
+            balance: string;
+            /**
+             * @description 已分配金额 = Σ全部计划剩余分配（amount − usedAmount，全状态求和；toFixed(4) 字符串）
+             * @example 6000.0000
+             */
+            allocatedAmount: string;
+            /**
+             * @description 未分配余额 = 余额 − 已分配（toFixed(4) 字符串）；正常数据 ≥ 0，为负说明数据被破坏，接口如实返回不钳 0
+             * @example 6000.0000
+             */
+            unallocatedAmount: string;
+            /**
+             * @description 本位币（成本币种，取 userSettings.baseCurrency）；新用户无设置行时为 null
+             * @example CNY
+             */
+            baseCurrency: string | null;
             /**
              * @description 剩余已记录成本 = Σ(remainingQty × unitCost)（toFixed(4) 字符串）；无批次（旧数据未回填）时为 null
              * @example 18420.0000
@@ -3545,6 +3566,91 @@ export interface components {
              */
             modelKey?: string;
         };
+        AiConversationSummaryDto: {
+            /** @description 会话 ID（cuid） */
+            id: string;
+            /** @description 会话标题（首条消息前 20 字） */
+            title: string;
+            /**
+             * @description 最近消息时间（ISO 8601 UTC）
+             * @example 2026-11-20T08:00:00.000Z
+             */
+            lastMessageAt: string;
+            /**
+             * @description 消息条数
+             * @example 2
+             */
+            messageCount: number;
+        };
+        AiConversationListDto: {
+            /** @description 会话列表（lastMessageAt 倒序） */
+            items: components["schemas"]["AiConversationSummaryDto"][];
+        };
+        AiMessageDto: {
+            /** @description 消息 ID（cuid） */
+            id: string;
+            /**
+             * @description 消息角色
+             * @enum {string}
+             */
+            role: "user" | "assistant";
+            /** @description 消息正文 */
+            content: string;
+            /**
+             * @description 创建时间（ISO 8601 UTC）
+             * @example 2026-11-20T08:00:00.000Z
+             */
+            createdAt: string;
+            /**
+             * @description 助手消息实际使用的白名单模型 key；用户消息或存量数据为 null
+             * @example gpt-4.1-mini
+             */
+            model?: string | null;
+        };
+        AiMessageListDto: {
+            /** @description 会话消息列表（createdAt 升序） */
+            items: components["schemas"]["AiMessageDto"][];
+        };
+        ChatModelSummaryDto: {
+            /**
+             * @description 对外白名单 key
+             * @example gpt-4.1-mini
+             */
+            key: string;
+            /**
+             * @description 展示名称
+             * @example GPT-4.1 mini
+             */
+            displayName: string;
+            /**
+             * @description 提供商标识
+             * @example openai
+             */
+            provider: string;
+            /**
+             * @description 模型能力集合
+             * @example [
+             *       "chat"
+             *     ]
+             */
+            capabilities: string[];
+            /**
+             * @description 成本档位 1~5（升序）
+             * @example 1
+             */
+            costTier: number;
+            /**
+             * @description 展示图标
+             * @example ⚡
+             */
+            icon: string;
+            /** @description 模型说明 */
+            description: string;
+        };
+        ChatModelListDto: {
+            /** @description 可选模型白名单（按 costTier 升序） */
+            items: components["schemas"]["ChatModelSummaryDto"][];
+        };
     };
     responses: never;
     parameters: never;
@@ -4051,9 +4157,7 @@ export interface operations {
                     "application/json": {
                         /** @example true */
                         success?: boolean;
-                        data?: {
-                            items?: components["schemas"]["PlanListItemDto"][];
-                        };
+                        data?: components["schemas"]["PlanListDto"];
                         message?: string;
                     };
                 };
@@ -5364,11 +5468,19 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description 获取成功，响应体为 { success, data, message } 包装 */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["AiConversationListDto"];
+                        message?: string;
+                    };
+                };
             };
         };
     };
@@ -5402,11 +5514,19 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description 获取成功，响应体为 { success, data, message } 包装 */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["ChatModelListDto"];
+                        message?: string;
+                    };
+                };
             };
         };
     };
@@ -5419,11 +5539,19 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description 获取成功，响应体为 { success, data, message } 包装 */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["AiMessageListDto"];
+                        message?: string;
+                    };
+                };
             };
         };
     };

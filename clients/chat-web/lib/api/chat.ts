@@ -4,6 +4,7 @@ import {
 	apiClient,
 	isExpectedControlFlowApiError,
 } from "@/lib/api/client";
+import type { components } from "@/lib/api/schema.gen";
 import { clearToken, getToken } from "@/lib/auth/token";
 
 /**
@@ -14,62 +15,30 @@ import { clearToken, getToken } from "@/lib/auth/token";
  *   （text/event-stream 不适用 JSON 包装），因此 401 清 token / 403 锁定跳转
  *   / 错误体解析必须在此本地复刻（§5.2 注解）。
  *
- * 类型说明：AI 端点响应在 OpenAPI 中为 content?: never（后端未打响应注解，
- * 与 rates.ts 的 RateHistoryData 同理），schema.gen 覆盖不到——以下类型按
- * 后端实现手写维护（services/chat/src/ai/ai.service.ts / ai.controller.ts
- * 为唯一事实），帧协议手写（§4：SSE 帧不进 OpenAPI）。
+ * 类型说明：REST 响应与列表项全部取 schema.gen 别名（后端 DTO 为唯一事实），
+ * 仅 SSE 帧协议保留本地定义（§4：text/event-stream 帧不进 OpenAPI）。
  */
 
-/** 会话列表项（GET /ai/conversations 的 items 项） */
-export interface AiConversationSummary {
-	id: string;
-	title: string;
-	/** ISO 8601（后端 toISOString） */
-	lastMessageAt: string;
-	messageCount: number;
-}
+type Schemas = components["schemas"];
 
-export interface AiConversationListData {
-	items: AiConversationSummary[];
-}
+/** 会话列表项（GET /ai/conversations 的 items 项） */
+export type AiConversationSummary = Schemas["AiConversationSummaryDto"];
+
+export type AiConversationListData = Schemas["AiConversationListDto"];
 
 /** 消息角色（后端仅落 "user" | "assistant" 两种） */
-export type AiMessageRole = "user" | "assistant";
+export type AiMessageRole = Schemas["AiMessageDto"]["role"];
 
 /** 消息（GET /ai/conversations/:id/messages 的 items 项；done 帧 assistantMessage 同形） */
-export interface AiMessage {
-	id: string;
-	role: AiMessageRole;
-	content: string;
-	/** ISO 8601 */
-	createdAt: string;
-	/** 所用白名单模型 key（assistant 消息有值；user 消息与存量数据为 null） */
-	model?: string | null;
-}
+export type AiMessage = Schemas["AiMessageDto"];
 
-export interface AiMessageListData {
-	items: AiMessage[];
-}
+export type AiMessageListData = Schemas["AiMessageListDto"];
 
 /** 模型列表项（GET /ai/models 的 items 项，按 costTier 升序）——密钥/baseURL/上游
  * model 名等敏感字段按契约不进响应体（ai-model-whitelist 方案 §4.1） */
-export interface ChatModelSummary {
-	/** 对外白名单 key（发消息 modelKey 的合法取值） */
-	key: string;
-	displayName: string;
-	provider: string;
-	/** 能力集合（FXPlanner 全模型为 ["chat"]） */
-	capabilities: string[];
-	/** 成本档位 1~5（列表已按升序返回，首项即服务端默认模型） */
-	costTier: number;
-	/** 展示图标（emoji 字符串） */
-	icon: string;
-	description: string;
-}
+export type ChatModelSummary = Schemas["ChatModelSummaryDto"];
 
-export interface ModelsListData {
-	items: ChatModelSummary[];
-}
+export type ModelsListData = Schemas["ChatModelListDto"];
 
 /** SSE token 用量（done 帧；本期仅透传展示来源，前端不持久化） */
 export interface AiStreamUsage {

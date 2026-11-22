@@ -42,6 +42,7 @@ import {
 	PlanDto,
 	PlanErrorDto,
 	PlanInstallmentDto,
+	PlanListDto,
 	PlanListItemDto,
 	PlanListQueryDto,
 	SchedulePreviewDto,
@@ -63,6 +64,7 @@ import { PlanService } from "./plan.service";
 	PlanInstallmentDto,
 	AllocatableCapsDto,
 	PlanListItemDto,
+	PlanListDto,
 	PlanDetailDto,
 	PlanChangeLogDto,
 	AdjustPreviewDto,
@@ -174,17 +176,7 @@ export class PlanController {
 		schema: {
 			properties: {
 				success: { type: "boolean", example: true },
-				data: {
-					type: "object",
-					properties: {
-						items: {
-							type: "array",
-							items: {
-								$ref: "#/components/schemas/PlanListItemDto",
-							},
-						},
-					},
-				},
+				data: { $ref: "#/components/schemas/PlanListDto" },
 				message: { type: "string" },
 			},
 		},

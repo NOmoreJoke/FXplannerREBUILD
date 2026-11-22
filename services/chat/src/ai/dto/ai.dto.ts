@@ -81,3 +81,104 @@ export class ListMessagesQueryDto {
 	@Max(500, { message: "limit 最大为 500" })
 	limit: number = 200;
 }
+
+/** GET /api/ai/conversations 单项（F2-1 / DEBT-05 OpenAPI 唯一来源） */
+export class AiConversationSummaryDto {
+	@ApiProperty({ description: "会话 ID（cuid）", type: String })
+	id!: string;
+
+	@ApiProperty({ description: "会话标题（首条消息前 20 字）", type: String })
+	title!: string;
+
+	@ApiProperty({
+		description: "最近消息时间（ISO 8601 UTC）",
+		example: "2026-11-20T08:00:00.000Z",
+		type: String,
+	})
+	lastMessageAt!: string;
+
+	@ApiProperty({ description: "消息条数", example: 2, type: Number })
+	messageCount!: number;
+}
+
+export class AiConversationListDto {
+	@ApiProperty({
+		description: "会话列表（lastMessageAt 倒序）",
+		type: [AiConversationSummaryDto],
+	})
+	items!: AiConversationSummaryDto[];
+}
+
+export class AiMessageDto {
+	@ApiProperty({ description: "消息 ID（cuid）", type: String })
+	id!: string;
+
+	@ApiProperty({
+		description: "消息角色",
+		enum: ["user", "assistant"],
+		type: String,
+	})
+	role!: "user" | "assistant";
+
+	@ApiProperty({ description: "消息正文", type: String })
+	content!: string;
+
+	@ApiProperty({
+		description: "创建时间（ISO 8601 UTC）",
+		example: "2026-11-20T08:00:00.000Z",
+		type: String,
+	})
+	createdAt!: string;
+
+	@ApiProperty({
+		description: "助手消息实际使用的白名单模型 key；用户消息或存量数据为 null",
+		example: "gpt-4.1-mini",
+		type: String,
+		required: false,
+		nullable: true,
+	})
+	model?: string | null;
+}
+
+export class AiMessageListDto {
+	@ApiProperty({
+		description: "会话消息列表（createdAt 升序）",
+		type: [AiMessageDto],
+	})
+	items!: AiMessageDto[];
+}
+
+export class ChatModelSummaryDto {
+	@ApiProperty({ description: "对外白名单 key", example: "gpt-4.1-mini", type: String })
+	key!: string;
+
+	@ApiProperty({ description: "展示名称", example: "GPT-4.1 mini", type: String })
+	displayName!: string;
+
+	@ApiProperty({ description: "提供商标识", example: "openai", type: String })
+	provider!: string;
+
+	@ApiProperty({
+		description: "模型能力集合",
+		example: ["chat"],
+		type: [String],
+	})
+	capabilities!: string[];
+
+	@ApiProperty({ description: "成本档位 1~5（升序）", example: 1, type: Number })
+	costTier!: number;
+
+	@ApiProperty({ description: "展示图标", example: "⚡", type: String })
+	icon!: string;
+
+	@ApiProperty({ description: "模型说明", type: String })
+	description!: string;
+}
+
+export class ChatModelListDto {
+	@ApiProperty({
+		description: "可选模型白名单（按 costTier 升序）",
+		type: [ChatModelSummaryDto],
+	})
+	items!: ChatModelSummaryDto[];
+}

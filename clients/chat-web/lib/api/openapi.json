@@ -835,15 +835,7 @@
                       "example": true
                     },
                     "data": {
-                      "type": "object",
-                      "properties": {
-                        "items": {
-                          "type": "array",
-                          "items": {
-                            "$ref": "#/components/schemas/PlanListItemDto"
-                          }
-                        }
-                      }
+                      "$ref": "#/components/schemas/PlanListDto"
                     },
                     "message": {
                       "type": "string"
@@ -2643,7 +2635,25 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "获取成功，响应体为 { success, data, message } 包装",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/AiConversationListDto"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2693,7 +2703,25 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "获取成功，响应体为 { success, data, message } 包装",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ChatModelListDto"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2743,7 +2771,25 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "获取成功，响应体为 { success, data, message } 包装",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/AiMessageListDto"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -4034,6 +4080,21 @@
           "updatedAt"
         ]
       },
+      "PlanListDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "description": "计划列表（updatedAt 倒序，limit 100 兜底）",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanListItemDto"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
       "PlanChangeLogDto": {
         "type": "object",
         "properties": {
@@ -4579,7 +4640,12 @@
           "pacePreference": {
             "type": "string",
             "description": "资金准备节奏（conservative=安心 / balanced=均衡 / aggressive=主动）",
-            "example": "balanced"
+            "example": "balanced",
+            "enum": [
+              "conservative",
+              "balanced",
+              "aggressive"
+            ]
           },
           "startDate": {
             "type": "string",
@@ -4646,7 +4712,12 @@
           "pacePreference": {
             "type": "string",
             "description": "资金准备节奏（conservative=安心 / balanced=均衡 / aggressive=主动）",
-            "example": "balanced"
+            "example": "balanced",
+            "enum": [
+              "conservative",
+              "balanced",
+              "aggressive"
+            ]
           },
           "startDate": {
             "type": "string",
@@ -4960,16 +5031,31 @@
       "AccountDetailDto": {
         "type": "object",
         "properties": {
+          "currencyCode": {
+            "type": "string",
+            "description": "币种代码（ISO 4217）",
+            "example": "CAD"
+          },
+          "balance": {
+            "type": "string",
+            "description": "账户余额（Decimal(20, 4)，toFixed(4) 字符串）",
+            "example": "12000.0000"
+          },
+          "allocatedAmount": {
+            "type": "string",
+            "description": "已分配金额 = Σ全部计划剩余分配（amount − usedAmount，全状态求和；toFixed(4) 字符串）",
+            "example": "6000.0000"
+          },
+          "unallocatedAmount": {
+            "type": "string",
+            "description": "未分配余额 = 余额 − 已分配（toFixed(4) 字符串）；正常数据 ≥ 0，为负说明数据被破坏，接口如实返回不钳 0",
+            "example": "6000.0000"
+          },
           "baseCurrency": {
             "type": "string",
             "description": "本位币（成本币种，取 userSettings.baseCurrency）；新用户无设置行时为 null",
             "example": "CNY",
             "nullable": true
-          },
-          "currencyCode": {
-            "type": "string",
-            "description": "币种代码（ISO 4217）",
-            "example": "CAD"
           },
           "remainingTotalCost": {
             "type": "string",
@@ -4985,8 +5071,11 @@
           }
         },
         "required": [
-          "baseCurrency",
           "currencyCode",
+          "balance",
+          "allocatedAmount",
+          "unallocatedAmount",
+          "baseCurrency",
           "remainingTotalCost",
           "averageUnitCost"
         ]
@@ -7035,6 +7124,171 @@
         },
         "required": [
           "content"
+        ]
+      },
+      "AiConversationSummaryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "会话 ID（cuid）"
+          },
+          "title": {
+            "type": "string",
+            "description": "会话标题（首条消息前 20 字）"
+          },
+          "lastMessageAt": {
+            "type": "string",
+            "description": "最近消息时间（ISO 8601 UTC）",
+            "example": "2026-11-20T08:00:00.000Z"
+          },
+          "messageCount": {
+            "type": "number",
+            "description": "消息条数",
+            "example": 2
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "lastMessageAt",
+          "messageCount"
+        ]
+      },
+      "AiConversationListDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "description": "会话列表（lastMessageAt 倒序）",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiConversationSummaryDto"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "AiMessageDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "消息 ID（cuid）"
+          },
+          "role": {
+            "type": "string",
+            "description": "消息角色",
+            "enum": [
+              "user",
+              "assistant"
+            ]
+          },
+          "content": {
+            "type": "string",
+            "description": "消息正文"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "创建时间（ISO 8601 UTC）",
+            "example": "2026-11-20T08:00:00.000Z"
+          },
+          "model": {
+            "type": "string",
+            "description": "助手消息实际使用的白名单模型 key；用户消息或存量数据为 null",
+            "example": "gpt-4.1-mini",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "content",
+          "createdAt"
+        ]
+      },
+      "AiMessageListDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "description": "会话消息列表（createdAt 升序）",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiMessageDto"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "ChatModelSummaryDto": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "对外白名单 key",
+            "example": "gpt-4.1-mini"
+          },
+          "displayName": {
+            "type": "string",
+            "description": "展示名称",
+            "example": "GPT-4.1 mini"
+          },
+          "provider": {
+            "type": "string",
+            "description": "提供商标识",
+            "example": "openai"
+          },
+          "capabilities": {
+            "description": "模型能力集合",
+            "example": [
+              "chat"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "costTier": {
+            "type": "number",
+            "description": "成本档位 1~5（升序）",
+            "example": 1
+          },
+          "icon": {
+            "type": "string",
+            "description": "展示图标",
+            "example": "⚡"
+          },
+          "description": {
+            "type": "string",
+            "description": "模型说明"
+          }
+        },
+        "required": [
+          "key",
+          "displayName",
+          "provider",
+          "capabilities",
+          "costTier",
+          "icon",
+          "description"
+        ]
+      },
+      "ChatModelListDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "description": "可选模型白名单（按 costTier 升序）",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatModelSummaryDto"
+            }
+          }
+        },
+        "required": [
+          "items"
         ]
       }
     }

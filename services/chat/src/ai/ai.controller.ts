@@ -18,6 +18,7 @@ import {
 	ApiBearerAuth,
 	ApiBody,
 	ApiExtraModels,
+	ApiOkResponse,
 	ApiOperation,
 	ApiTags,
 } from "@nestjs/swagger";
@@ -35,6 +36,12 @@ import { listChatModels } from "./ai-models.config";
 // 下方的 @ApiExtraModels/@ApiBody 是运行时引用（兼 swagger 契约完备），
 // 两者缺一不可：仅类型用途的符号才用 inline type 修饰符（如 StreamReplyParams）。
 import {
+	AiConversationListDto,
+	AiConversationSummaryDto,
+	AiMessageDto,
+	AiMessageListDto,
+	ChatModelListDto,
+	ChatModelSummaryDto,
 	ListConversationsQueryDto,
 	ListMessagesQueryDto,
 	SendMessageDto,
@@ -69,7 +76,17 @@ interface StreamWriteParams {
  */
 @ApiTags("Ai")
 // DTO 运行时引用：保障 design:paramtypes 可 emit 类引用（见 import 处注释，transaction 模块同款先例）
-@ApiExtraModels(ListConversationsQueryDto, ListMessagesQueryDto, SendMessageDto)
+@ApiExtraModels(
+	ListConversationsQueryDto,
+	ListMessagesQueryDto,
+	SendMessageDto,
+	AiConversationSummaryDto,
+	AiConversationListDto,
+	AiMessageDto,
+	AiMessageListDto,
+	ChatModelSummaryDto,
+	ChatModelListDto,
+)
 @ApiBearerAuth()
 @Controller("ai")
 @UseGuards(JwtAuthGuard)
@@ -87,6 +104,16 @@ export class AiController {
 		description:
 			"仅返回本人会话，按 lastMessageAt 倒序；幂等只读。未配 LLM key 或总开关关闭时 503 整体降级。",
 	})
+	@ApiOkResponse({
+		description: "获取成功，响应体为 { success, data, message } 包装",
+		schema: {
+			properties: {
+				success: { type: "boolean", example: true },
+				data: { $ref: "#/components/schemas/AiConversationListDto" },
+				message: { type: "string" },
+			},
+		},
+	})
 	async listConversations(
 		@CurrentUser() user: User,
 		@Query() query: ListConversationsQueryDto,
@@ -101,6 +128,16 @@ export class AiController {
 		summary: "聊天模型白名单列表",
 		description:
 			"返回可选聊天模型（按 costTier 升序）；幂等只读。仅展示字段（key/displayName/provider/capabilities/costTier/icon/description），不含密钥变量与上游模型名；密钥全未配时仍返回全量列表（可用性在发消息时判定）。",
+	})
+	@ApiOkResponse({
+		description: "获取成功，响应体为 { success, data, message } 包装",
+		schema: {
+			properties: {
+				success: { type: "boolean", example: true },
+				data: { $ref: "#/components/schemas/ChatModelListDto" },
+				message: { type: "string" },
+			},
+		},
 	})
 	async listModels() {
 		const data = { items: listChatModels() };
@@ -172,6 +209,16 @@ export class AiController {
 		summary: "会话消息列表",
 		description:
 			"按 createdAt 升序返回本人会话消息；非本人/不存在统一 404（防枚举）；幂等只读。",
+	})
+	@ApiOkResponse({
+		description: "获取成功，响应体为 { success, data, message } 包装",
+		schema: {
+			properties: {
+				success: { type: "boolean", example: true },
+				data: { $ref: "#/components/schemas/AiMessageListDto" },
+				message: { type: "string" },
+			},
+		},
 	})
 	async listMessages(
 		@CurrentUser() user: User,

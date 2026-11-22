@@ -89,65 +89,26 @@ export type TransactionDto = Schemas["TransactionDto"];
 export type TransactionErrorCode = Schemas["TransactionErrorDto"]["code"];
 
 // ---------------------------------------------------------------------------
-// 创建换汇计划（临时手写）：plan 后端模块生成链路（bun run generate:api）尚未覆盖，
-// 按 changes/plan-creation/技术方案.md §5 契约补齐；后端落地后重新生成并替换为
-// schema.gen 别名（与 HomeState 同一路径）。
+// 换汇计划创建与排期（plan-creation）：类型由 bun run generate:api 生成后经此层别名。
 // ---------------------------------------------------------------------------
 
 /** 资金准备节奏（后端 pacePreference 枚举：安心/均衡/主动） */
-export type PacePreference = "conservative" | "balanced" | "aggressive";
+export type PacePreference = Schemas["SchedulePreviewDto"]["pacePreference"];
 
 /** 排期预览请求（POST /plans/schedule-preview；startDate/allocatedAmount 缺省见后端 DTO） */
-export type PlanSchedulePreviewReq = {
-	/** 目标币种（15 币种清单内） */
-	targetCurrency: string;
-	/** 净到账金额（金额字符串，Decimal(20,4)） */
-	targetAmount: string;
-	/** 期望用汇日，ISO 8601 UTC */
-	expectUseDate: string;
-	/** 提前准备天数（1~30） */
-	prepLeadDays: number;
-	/** 资金准备节奏 */
-	pacePreference: PacePreference;
-	/** 开始准备日，ISO 8601 UTC；null/缺省 = 最早可安排日 */
-	startDate?: string | null;
-	/** 计入已有外币（金额字符串；缺省 "0"；预览排期按 目标 − 该值 计算，与创建口径一致） */
-	allocatedAmount?: string;
-};
+export type PlanSchedulePreviewReq = Schemas["SchedulePreviewDto"];
 
-/** 分批排期中的一批（后端 PlanInstallment） */
-export type PlanInstallment = {
-	/** 批次序号（1..3） */
-	seq: number;
-	/** 该批准备日期，ISO 8601 UTC */
-	scheduledAt: string;
-	/** 该批金额（金额字符串，Decimal(20,4)） */
-	amount: string;
-};
+/** 分批排期中的一批（后端 PlanInstallmentDto） */
+export type PlanInstallment = Schemas["PlanInstallmentDto"];
 
 /** 可分配余额上限（预览随响应返回，供前端对「计入已有外币」做实时预检） */
-export type PlanCaps = {
-	/** 该币种可分配余额（金额字符串） */
-	allocatableBalance: string;
-	/** 本次分配上限 = min(可分配余额, 目标金额)（金额字符串） */
-	maxAllocatable: string;
-};
+export type PlanCaps = Schemas["AllocatableCapsDto"];
 
 /** 排期预览响应（POST /plans/schedule-preview 的 data；只读不落库） */
-export type PlanSchedulePreviewResp = {
-	/** 最晚准备日，ISO 8601 UTC */
-	latestPrepDate: string;
-	/** 3 条分批排期 */
-	installments: PlanInstallment[];
-	/** 可分配余额上限 */
-	caps: PlanCaps;
-};
+export type PlanSchedulePreviewResp = Schemas["SchedulePreviewResultDto"];
 
 /** 创建计划请求（POST /plans）= 预览请求全字段（含 allocatedAmount）+ name */
-export type CreatePlanReq = PlanSchedulePreviewReq & {
-	/** 目标名称（可空；缺省时后端落 null） */
-	name?: string;
-};
+export type CreatePlanReq = Schemas["CreatePlanDto"];
 
 // ---------------------------------------------------------------------------
 // 计划管理（plan-management M5）：后端 PlanModule 已落地，
@@ -161,7 +122,7 @@ export type PlanStatus = Schemas["PlanListItemDto"]["status"];
 export type PlanListItem = Schemas["PlanListItemDto"];
 
 /** 计划列表响应 data（GET /plans 的 data：{ items }） */
-export type PlanListResp = { items: PlanListItem[] };
+export type PlanListResp = Schemas["PlanListDto"];
 
 /** 计划列表状态筛选值（GET /plans?status=；缺省全部） */
 export type PlanListStatus = Schemas["PlanListQueryDto"]["status"];
@@ -208,32 +169,7 @@ export type PlanFundSummary = Schemas["PlanFundSummaryDto"];
 export type FundStatus = Schemas["PlanFundSummaryDto"]["fundStatus"];
 
 /** 计划详情（后端 PlanDto，POST /plans 的 data） */
-export type PlanDto = {
-	/** 计划 ID（cuid） */
-	id: string;
-	/** 目标名称（可空） */
-	name: string | null;
-	/** 目标币种 */
-	targetCurrency: string;
-	/** 目标金额（金额字符串） */
-	targetAmount: string;
-	/** 已分配金额（金额字符串） */
-	allocatedAmount: string;
-	/** 剩余可分配 = allocatedAmount − usedAmount（服务端计算） */
-	remainingAmount: string;
-	/** 期望用汇日，ISO 8601 UTC */
-	expectUseDate: string;
-	/** 最晚备汇日（服务端重算，不信任前端），ISO 8601 UTC */
-	latestPrepDate: string;
-	/** 提前准备天数 */
-	prepLeadDays: number;
-	/** 资金准备节奏 */
-	pacePreference: PacePreference;
-	/** 计划状态（新建即为进行中） */
-	status: "ACTIVE";
-	/** 3 条分批排期 */
-	installments: PlanInstallment[];
-};
+export type PlanDto = Schemas["PlanDto"];
 
 // ---------------------------------------------------------------------------
 // 站内提醒（reminders）：后端 ReminderModule 已落地（GET /reminders、

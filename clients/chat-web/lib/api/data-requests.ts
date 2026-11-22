@@ -1,29 +1,21 @@
 import { apiClient, ApiError } from "@/lib/api/client";
+import type { components } from "@/lib/api/schema.gen";
 import type {
 	DataRequestView,
-	DataRequestPurpose,
 	DataRequestVerifyResult,
-	ImpactTotals,
 	ImpactView,
 } from "@/lib/api/contract";
 
 /**
  * 数据权利请求封装（account-data 技术方案 §8）：进度/影响/验证/创建/撤回/下载。
- * 类型取 schema.gen.ts 生成别名（contract.ts），禁止手写结构。
+ * 类型取 schema.gen.ts 生成别名，禁止手写结构。
  */
 
-export interface CreateDataRequestInput {
-	type: DataRequestView["type"];
-	challengeId: string;
-	/** CLEAR 必带：确认页数量快照（与服务端重算不一致 → 409 IMPACT_CHANGED） */
-	confirmedTotals?: ImpactTotals;
-}
+type Schemas = components["schemas"];
 
-export interface VerifyDataRequestInput {
-	challengeId: string;
-	code: string;
-	purpose: DataRequestPurpose;
-}
+export type CreateDataRequestInput = Schemas["CreateDataRequestDto"];
+
+export type VerifyDataRequestInput = Schemas["VerifyDataRequestDto"];
 
 export const dataRequestsApi = {
 	/** 当前请求（进度页）；无进行中请求返回 null */

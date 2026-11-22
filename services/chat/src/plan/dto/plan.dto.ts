@@ -50,6 +50,7 @@ export class SchedulePreviewDto {
 		description:
 			"资金准备节奏（conservative=安心 / balanced=均衡 / aggressive=主动）",
 		example: "balanced",
+		enum: [...PACE_PREFERENCES],
 		type: String,
 	})
 	@IsString({ message: "资金准备节奏必须是字符串" })
@@ -348,6 +349,15 @@ export class PlanListItemDto {
 		type: String,
 	})
 	updatedAt!: string;
+}
+
+/** GET /api/plans 出参（列表响应 data） */
+export class PlanListDto {
+	@ApiProperty({
+		description: "计划列表（updatedAt 倒序，limit 100 兜底）",
+		type: [PlanListItemDto],
+	})
+	items!: PlanListItemDto[];
 }
 
 /** 修改记录（plan_change_logs 行；GET /api/plans/:id 的 changeLogs 元素） */

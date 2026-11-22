@@ -61,7 +61,7 @@ export class AccountListDto {
 }
 
 /** GET /api/accounts/:currencyCode 出参（baseCurrency + 列表单项字段 + 成本指标，§4） */
-export class AccountDetailDto {
+export class AccountDetailDto extends AccountListItemDto {
 	@ApiProperty({
 		description:
 			"本位币（成本币种，取 userSettings.baseCurrency）；新用户无设置行时为 null",
@@ -71,12 +71,6 @@ export class AccountDetailDto {
 	})
 	baseCurrency!: string | null;
 
-	@ApiProperty({
-		description: "币种代码（ISO 4217）",
-		example: "CAD",
-		type: String,
-	})
-	currencyCode!: string;
 	@ApiProperty({
 		description:
 			"剩余已记录成本 = Σ(remainingQty × unitCost)（toFixed(4) 字符串）；无批次（旧数据未回填）时为 null",
@@ -112,7 +106,7 @@ export class AccountLedgerItemDto {
 		enum: ["PURCHASE", "USAGE", "INITIAL"],
 		type: String,
 	})
-	type!: string;
+	type!: "PURCHASE" | "USAGE" | "INITIAL";
 
 	@ApiProperty({
 		description: "发生时间（ISO 8601 UTC；买入 = 交易日期，使用 = 使用日期）",
