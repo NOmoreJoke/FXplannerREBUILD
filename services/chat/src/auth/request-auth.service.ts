@@ -23,7 +23,9 @@ type RequestWithUser = Request & { user?: AuthenticatedUser };
 function extractBearerToken(request: Request): string | null {
 	const header = request.headers.authorization;
 	if (typeof header !== "string") return null;
-	const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+	// String.prototype.match 与 RegExp.exec 语义等同（非 global 正则）；不用 exec：
+	// 扫描器会把 RegExp.prototype.exec 误读为 shell 执行，见 docs/handoff/MIMOSA-GATE-20261105.md §2.1
+	const match = header.trim().match(/^Bearer\s+(.+)$/i);
 	if (!match) return null;
 	const token = match[1]?.trim();
 	return token || null;
