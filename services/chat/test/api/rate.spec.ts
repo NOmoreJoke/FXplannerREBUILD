@@ -1322,4 +1322,233 @@ describe("RateController（接口）", () => {
 			}
 		});
 	});
+
+	describe("W8 常量行最新报价 LATERAL SQL 回归（真实 PG）", () => {
+		it("多历史行下走索引反向扫描且严格满足确认层优先、可发布门槛与可信方向契约", async () => {
+			const pairBase = "CNY";
+			const targetQuotes = ["USD", "MYR", "TWD"];
+			const cleanupWhere = {
+				base: pairBase,
+				quote: { in: targetQuotes },
+			};
+			await realCtx.prisma.exchangeRate.deleteMany({ where: cleanupWhere });
+
+			const fetchStub = createRateSourceFetchStub({
+				abc: async () => jsonResponse({ message: "stub down" }, 500),
+				erApi: async () => jsonResponse({ message: "stub down" }, 500),
+				frankfurter: async () => jsonResponse({ message: "stub down" }, 500),
+			});
+			const { app: isolatedApp, prisma } = await buildRateApp(
+				"multi",
+				fetchStub,
+				disableThrottler,
+			);
+			try {
+				const baseDay = new Date("2026-06-01T00:00:00.000Z").getTime();
+				const now = new Date();
+				const seedRows: Array<{
+					base: string;
+					quote: string;
+					observedAt: Date;
+					rate: string;
+					sellRate?: string | null;
+					source: string;
+					latestConfirmedAt: Date | null;
+					canonicalWriteId: string | null;
+				}> = [];
+
+				// 50 天历史已确认序列 + 更近期的干扰行（未确认新行、不可发布极小值行、未标记可信行）
+				for (let d = 0; d < 50; d += 1) {
+					seedRows.push({
+						base: pairBase,
+						quote: "USD",
+						observedAt: new Date(baseDay + d * 86_400_000),
+						rate: (7.1 + d * 0.001).toFixed(10),
+						sellRate: (7.12 + d * 0.001).toFixed(10),
+						source: "abc",
+						latestConfirmedAt: new Date(now.getTime() - 60_000),
+						canonicalWriteId: randomUUID(),
+					});
+				}
+				// USD 第 51 天：仅历史未确认行（latestConfirmedAt = null），不得覆盖第 50 天已确认行
+				seedRows.push({
+					base: pairBase,
+					quote: "USD",
+					observedAt: new Date(baseDay + 50 * 86_400_000),
+					rate: "8.8888000000",
+					sellRate: "8.9000000000",
+					source: "abc",
+					latestConfirmedAt: null,
+					canonicalWriteId: randomUUID(),
+				});
+				// USD 第 52 天：sellRate < 0.000000005（HALF_UP 舍入为 0），不得遮挡第 50 天有效行
+				seedRows.push({
+					base: pairBase,
+					quote: "USD",
+					observedAt: new Date(baseDay + 51 * 86_400_000),
+					rate: "7.3000000000",
+					sellRate: "0.0000000049",
+					source: "abc",
+					latestConfirmedAt: now,
+					canonicalWriteId: randomUUID(),
+				});
+
+				// MYR：最新一笔是旧版不可信 frankfurter（无 canonicalWriteId/migrationOwnerId），应回落到更早的可信历史行
+				seedRows.push(
+					{
+						base: pairBase,
+						quote: "MYR",
+						observedAt: new Date(baseDay + 10 * 86_400_000),
+						rate: "1.6200000000",
+						sellRate: null,
+						source: "frankfurter",
+						latestConfirmedAt: null,
+						canonicalWriteId: randomUUID(),
+					},
+					{
+						base: pairBase,
+						quote: "MYR",
+						observedAt: new Date(baseDay + 20 * 86_400_000),
+						rate: "0.6100000000",
+						sellRate: null,
+						source: "frankfurter",
+						latestConfirmedAt: now,
+						canonicalWriteId: null, // 未带 canonicalWriteId / migrationOwnerId
+					},
+				);
+
+				// TWD：已确认但 rate < 0.000000005 跳过，命中次新有效已确认行
+				seedRows.push(
+					{
+						base: pairBase,
+						quote: "TWD",
+						observedAt: new Date(baseDay + 10 * 86_400_000),
+						rate: "0.2200000000",
+						sellRate: null,
+						source: "er-api",
+						latestConfirmedAt: now,
+						canonicalWriteId: randomUUID(),
+					},
+					{
+						base: pairBase,
+						quote: "TWD",
+						observedAt: new Date(baseDay + 15 * 86_400_000),
+						rate: "0.0000000049",
+						sellRate: null,
+						source: "er-api",
+						latestConfirmedAt: now,
+						canonicalWriteId: randomUUID(),
+					},
+				);
+
+				await prisma.exchangeRate.createMany({ data: seedRows });
+
+				// 1. MYR 仅命中历史行（fresh=false），触发 SWR 回显并完成后台尝试（等待清零无悬空 promise）
+				const res = await request(isolatedApp.getHttpServer())
+					.get("/api/rates/latest/CNY?targets=USD,MYR,TWD")
+					.expect(200);
+				expect(res.body.data.items).toEqual([
+					expect.objectContaining({
+						target: "USD",
+						rate: "7.149",
+						sellRate: "7.169",
+						fresh: true,
+					}),
+					expect.objectContaining({
+						target: "MYR",
+						rate: "1.62",
+						fresh: false,
+					}),
+					expect.objectContaining({
+						target: "TWD",
+						rate: "0.22",
+						fresh: true,
+					}),
+				]);
+				await vi.waitFor(() => {
+					expect(fetchStub).toHaveBeenCalledTimes(3);
+				});
+
+				// 2. MYR 写入已确认行后全组新鲜，二次请求零外呼
+				await prisma.exchangeRate.create({
+					data: {
+						base: pairBase,
+						quote: "MYR",
+						observedAt: new Date(baseDay + 25 * 86_400_000),
+						rate: "1.6400000000",
+						sellRate: null,
+						source: "frankfurter",
+						latestConfirmedAt: now,
+						canonicalWriteId: randomUUID(),
+					},
+				});
+				fetchStub.mockClear();
+				const freshRes = await request(isolatedApp.getHttpServer())
+					.get("/api/rates/latest/CNY?targets=USD,MYR,TWD")
+					.expect(200);
+				expect(fetchStub).not.toHaveBeenCalled();
+				expect(freshRes.body.data.items).toEqual([
+					expect.objectContaining({ target: "USD", rate: "7.149", fresh: true }),
+					expect.objectContaining({ target: "MYR", rate: "1.64", fresh: true }),
+					expect.objectContaining({ target: "TWD", rate: "0.22", fresh: true }),
+				]);
+
+				// 验证空目标数组 0 次 SQL（直接调用私有查询方法检查边界短路）
+				const rateService = isolatedApp.get(RateService);
+				const querySpy = vi.spyOn(prisma, "$queryRaw");
+				const emptyMap = await rateService["findLatestPublishableQuotes"]("CNY", []);
+				expect(emptyMap.size).toBe(0);
+				expect(querySpy).not.toHaveBeenCalled();
+				querySpy.mockRestore();
+
+				// 验证在关停顺序扫描下，PostgreSQL 执行计划直走反向唯一索引且无外层全表 Sort
+				const planRows = await prisma.$transaction(async (tx) => {
+					await tx.$executeRawUnsafe("SET LOCAL enable_seqscan = off");
+					return tx.$queryRaw<Array<{ "QUERY PLAN": string }>>`
+						EXPLAIN (ANALYZE, BUFFERS)
+						SELECT r.id, r.base, r.quote
+						FROM unnest(ARRAY['USD', 'MYR', 'TWD']::text[]) AS q(quote)
+						CROSS JOIN LATERAL (
+							(
+								SELECT id, base, quote
+								FROM exchange_rates
+								WHERE base = 'CNY'
+									AND quote = q.quote
+									AND latest_confirmed_at IS NOT NULL
+									AND (source = ANY(ARRAY['abc','identity']::text[]) OR canonical_write_id IS NOT NULL OR migration_owner_id IS NOT NULL)
+									AND rate >= 0.000000005
+									AND (sell_rate IS NULL OR sell_rate >= 0.000000005)
+								ORDER BY observed_at DESC
+								LIMIT 1
+							)
+							UNION ALL
+							(
+								SELECT id, base, quote
+								FROM exchange_rates
+								WHERE base = 'CNY'
+									AND quote = q.quote
+									AND latest_confirmed_at IS NULL
+									AND (source = ANY(ARRAY['abc','identity']::text[]) OR canonical_write_id IS NOT NULL OR migration_owner_id IS NOT NULL)
+									AND rate >= 0.000000005
+									AND (sell_rate IS NULL OR sell_rate >= 0.000000005)
+								ORDER BY observed_at DESC
+								LIMIT 1
+							)
+							LIMIT 1
+						) r
+					`;
+				});
+				const planText = planRows.map((row) => row["QUERY PLAN"]).join("\n");
+				// 无 Seq Scan（必须走 exchange_rates_base_quote_observed_at_* 索引），且命中确认层时分支 2 短路
+				expect(planText).not.toContain("Seq Scan");
+				expect(planText).toMatch(
+					/Index Scan Backward using exchange_rates_base_quote_observed_at_|Bitmap Index Scan on exchange_rates_base_quote_observed_at_/,
+				);
+				expect(planText).toContain("never executed");
+			} finally {
+				await realCtx.prisma.exchangeRate.deleteMany({ where: cleanupWhere });
+				await closeTestApps(isolatedApp);
+			}
+		});
+	});
 });

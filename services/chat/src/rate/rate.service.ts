@@ -44,6 +44,18 @@ interface LatestQuoteData {
   confirmedAt: Date | null;
 }
 
+/** 常量行查价 raw SQL 投影 */
+interface LatestQuoteSqlRow {
+  id: string;
+  base: string;
+  quote: string;
+  rate: { toString(): string };
+  sellRate: { toString(): string } | null;
+  source: string;
+  observedAt: Date;
+  latestConfirmedAt: Date | null;
+}
+
 /** 项级错误（多目标时下沉到 items，不拖垮同组；doc 05：绝不返回过期报价/0/手填价） */
 export interface LatestQuoteError {
   code: 'RATE_PAIR_UNSUPPORTED' | 'RATE_SOURCE_UNAVAILABLE';
@@ -608,18 +620,65 @@ export class RateService {
     return normalized;
   }
 
-  /** 优先选择最近观测的已确认、可发布报价。历史点仅用于陈旧回显。 */
+    /** 优先选择最近观测的已确认、可发布报价。历史点仅用于陈旧回显。 */
   private async findLatestPublishableQuotes(
     base: string,
     quotes: string[],
   ): Promise<Map<string, LatestQuoteData>> {
     const latest = new Map<string, LatestQuoteData>();
-    if (quotes.length === 0) return latest;
+    const uniqueQuotes = [...new Set(quotes)];
+    if (uniqueQuotes.length === 0) return latest;
 
-    const rows = await this.prisma.exchangeRate.findMany({
-      where: { base, quote: { in: quotes }, ...TRUSTED_DIRECTION },
-      orderBy: { observedAt: 'desc' },
-    });
+    // 每目标币种按两档索引扫描上限 1 行（确认层优先，缺失时回退未确认历史层），
+    // 并去掉外层 Sort 以保留 Append -> Limit -> Index Scan Backward 短路执行计划。
+    const rows = await this.prisma.$queryRaw<LatestQuoteSqlRow[]>(Prisma.sql`
+      SELECT
+        r.id,
+        r.base,
+        r.quote,
+        r.rate,
+        r.sell_rate AS "sellRate",
+        r.source,
+        r.observed_at AS "observedAt",
+        r.latest_confirmed_at AS "latestConfirmedAt"
+      FROM unnest(${uniqueQuotes}::text[]) AS q(quote)
+      CROSS JOIN LATERAL (
+        (
+          SELECT id, base, quote, rate, sell_rate, source, observed_at, latest_confirmed_at
+          FROM exchange_rates
+          WHERE base = ${base}
+            AND quote = q.quote
+            AND latest_confirmed_at IS NOT NULL
+            AND (
+              source = ANY(${NATIVE_DIRECTION_SOURCES}::text[])
+              OR canonical_write_id IS NOT NULL
+              OR migration_owner_id IS NOT NULL
+            )
+            AND rate >= 0.000000005
+            AND (sell_rate IS NULL OR sell_rate >= 0.000000005)
+          ORDER BY observed_at DESC
+          LIMIT 1
+        )
+        UNION ALL
+        (
+          SELECT id, base, quote, rate, sell_rate, source, observed_at, latest_confirmed_at
+          FROM exchange_rates
+          WHERE base = ${base}
+            AND quote = q.quote
+            AND latest_confirmed_at IS NULL
+            AND (
+              source = ANY(${NATIVE_DIRECTION_SOURCES}::text[])
+              OR canonical_write_id IS NOT NULL
+              OR migration_owner_id IS NOT NULL
+            )
+            AND rate >= 0.000000005
+            AND (sell_rate IS NULL OR sell_rate >= 0.000000005)
+          ORDER BY observed_at DESC
+          LIMIT 1
+        )
+        LIMIT 1
+      ) r
+    `);
     for (const row of rows) {
       const selected = latest.get(row.quote);
       if (selected !== undefined &&
