@@ -143,6 +143,18 @@ export async function api<T>(
 	return json.data;
 }
 
+/**
+ * 种子运行 ID：run-e2e-tests.sh 注入 E2E_SEED_RUN_ID（单次脚本调用内稳定），
+ * 直接跑 Playwright 时回退进程启动时间。
+ * 背景：Playwright 对失败用例重试（retries=1）时会重跑 beforeAll——若每次注册
+ * 全新用户，依赖跨用例状态的模块（如 AI 会话链依赖种子用户的既有会话）在重试
+ * 路径上必然级联失败（20261122 E2E 实证：T-AI-003 首败后 T-AI-004/006 连环
+ * 假败，服务端数据其实完好）。同一次运行内邮箱固定：重试时 register 撞
+ * 409「该邮箱已被注册」→ 改走 login 复用同一用户；跨运行 RUN_ID 不同 →
+ * 保持用户级隔离，计数/状态断言不受历史运行污染。
+ */
+const SEED_RUN_ID = process.env.E2E_SEED_RUN_ID ?? String(Date.now());
+
 /** 注册并登录测试用户（返回 token 与 userId；用后由后端测试/人工清理或级联复用） */
 export async function seedRegisterAndLogin(label: string): Promise<{
 	email: string;
@@ -150,12 +162,19 @@ export async function seedRegisterAndLogin(label: string): Promise<{
 	accessToken: string;
 	userId: string;
 }> {
-	const email = `e2e-account-${label}-${Date.now()}@example.com`;
+	const email = `e2e-account-${label}-${SEED_RUN_ID}@example.com`;
 	const password = TEST_PASSWORD;
-	await api("/api/auth/register", {
-		method: "POST",
-		body: { email, password, name: label },
-	});
+	try {
+		await api("/api/auth/register", {
+			method: "POST",
+			body: { email, password, name: label },
+		});
+	} catch (error) {
+		// 同运行内重试复用同用户：邮箱已注册（auth.service ConflictException）
+		// 改走 login；其余注册失败照常抛出
+		const message = error instanceof Error ? error.message : String(error);
+		if (!message.includes("该邮箱已被注册")) throw error;
+	}
 	const data = await api<{ accessToken: string; user: { id: string } }>(
 		"/api/auth/login",
 		{ method: "POST", body: { email, password } },

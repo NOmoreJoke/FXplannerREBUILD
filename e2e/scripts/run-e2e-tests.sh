@@ -98,6 +98,10 @@ export AI_E2E_FAKE_STREAM=true
 export AI_PROVIDER_AIGYSD_API_KEY=e2e-dummy
 # 帧间隔放大（默认 30ms）：固定回复 38 字符 × 80ms ≈ 3s 流窗口，保证「光标出现→点停止」时序余量
 export AI_E2E_FAKE_INTERVAL_MS=80
+# 种子运行 ID（e2e/helpers/api-seeder）：beforeAll 在失败重试时会被 Playwright
+# 重跑；RUN_ID 单次运行内稳定使重试复用同一种子用户，避免依赖跨用例状态的
+# 模块（AI 会话链）级联失败。跨调用间自动更换，保持运行间隔离。
+export E2E_SEED_RUN_ID="${E2E_SEED_RUN_ID:-$(date +%s)}"
 
 # ============================================================================
 # 2. 清理端口 → 启动服务
