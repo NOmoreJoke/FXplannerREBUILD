@@ -100,6 +100,24 @@ export const queryKeys = {
 			["ai", "messages", conversationId] as const,
 		models: () => ["ai", "models"] as const,
 	},
+	// ToB R1 组织域（W20）：组织/成员/邀请/审计
+	organizations: {
+		all: ["organizations"] as const,
+		list: () => ["organizations", "list"] as const,
+		current: () => ["organizations", "current"] as const,
+	},
+	members: {
+		all: ["members"] as const,
+		list: () => ["members", "list"] as const,
+	},
+	invitations: {
+		all: ["invitations"] as const,
+		list: () => ["invitations", "list"] as const,
+	},
+	auditLogs: {
+		all: ["audit-logs"] as const,
+		list: () => ["audit-logs", "list"] as const,
+	},
 } as const;
 
 /** ToB 组织上下文作用域封装：未传 orgId 时保持个人工作区原 Key */
@@ -150,4 +168,32 @@ export function invalidateAfterDataRequestMutation(
 	queryClient: QueryClient,
 ): void {
 	void queryClient.invalidateQueries({ queryKey: queryKeys.dataRequests.all });
+}
+
+/**
+ * 组织切换缓存清理（ToB R1 W20；需求 15.1.4「无缓存串数据」）：
+ * 1. 先 cancelQueries 中止在途旧组织请求（防迟到响应回写新组织页面）；
+ * 2. 再 removeQueries 清除全部组织作用域业务缓存（保留公共缓存：汇率、
+ *    币种/模型白名单、认证、建账状态——与组织无关）；
+ * 3. 组织切换后的首屏数据由各页面重新拉取（staleTime 内的旧组织数据
+ *    已被移除，不可能命中）。
+ */
+export function clearOrganizationScopedQueries(queryClient: QueryClient): void {
+	const orgScopedKeys: readonly (readonly unknown[])[] = [
+		queryKeys.home.all,
+		queryKeys.accounts.all,
+		queryKeys.plans.all,
+		queryKeys.transactions.all,
+		queryKeys.usages.all,
+		queryKeys.corrections.all,
+		queryKeys.reminders.all,
+		queryKeys.settings.all,
+		queryKeys.reports.all,
+		queryKeys.ai.conversations(),
+		queryKeys.ai.messagesStem,
+	];
+	for (const key of orgScopedKeys) {
+		void queryClient.cancelQueries({ queryKey: key });
+		queryClient.removeQueries({ queryKey: key });
+	}
 }

@@ -26,6 +26,8 @@ vi.mock("@/lib/api/client", () => {
 	return {
 		ApiError: MockApiError,
 		apiClient: vi.fn(),
+		// ToB W20：chat.ts 经此读取组织头值（未选组织返回 null = 不注入）
+		getActiveOrganizationId: vi.fn(() => null),
 		isExpectedControlFlowApiError: (status: number, code?: string) =>
 			(status === 409 && code === "ONBOARDING_NOT_COMPLETED") ||
 			(status === 403 &&

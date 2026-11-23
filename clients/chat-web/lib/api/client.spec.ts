@@ -1,5 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// localStorage 回填（Node ≥26 原生 getter 遮蔽 jsdom localStorage，vitest#8757；
+// use-chat.spec 先例——client.ts 经 organization-store(persist) 触发同问题）
+vi.hoisted(() => {
+	const dom = (
+		globalThis as { jsdom?: { window: Window & { localStorage?: Storage } } }
+	).jsdom;
+	const jsdomStorage = dom?.window?.localStorage;
+	if (!jsdomStorage) return;
+	const globals = [globalThis, globalThis.window] as Array<
+		Record<string, unknown>
+	>;
+	for (const target of globals) {
+		if (target.localStorage === undefined) {
+			Object.defineProperty(target, "localStorage", {
+				value: jsdomStorage,
+				configurable: true,
+				writable: true,
+			});
+		}
+	}
+});
+
 const { captureApiErrorMock, getTokenMock, clearTokenMock } = vi.hoisted(() => ({
 	captureApiErrorMock: vi.fn(),
 	getTokenMock: vi.fn(() => "tok-123"),
@@ -91,5 +113,92 @@ describe("apiClient & isExpectedControlFlowApiError", () => {
 			status: 400,
 			message: "参数非法",
 		});
+	});
+
+	it("ToB W20：选中组织时注入 X-Organization-Id；未选组织不注入", async () => {
+		const { apiClient } = await import("@/lib/api/client");
+		const { useOrganizationStore } = await import(
+			"@/lib/stores/organization-store"
+		);
+
+		// 每次调用返回新 Response（body 单次消费，不能复用同一实例）
+		fetchMock.mockImplementation(async () =>
+			Response.json({ success: true, data: { ok: true } }),
+		);
+
+		useOrganizationStore.setState({ activeOrganizationId: "org-abc" });
+		await apiClient("/home/state");
+		expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+			Authorization: "Bearer tok-123",
+			"X-Organization-Id": "org-abc",
+		});
+
+		useOrganizationStore.setState({ activeOrganizationId: null });
+		await apiClient("/home/state");
+		const headers2 = fetchMock.mock.calls[1]?.[1]?.headers as Record<
+			string,
+			string
+		>;
+		expect(headers2["X-Organization-Id"]).toBeUndefined();
+		useOrganizationStore.setState({ activeOrganizationId: null });
+	});
+
+	it("ToB W20：400 ORGANIZATION_REQUIRED 清选择并跳组织选择页", async () => {
+		const { apiClient, ApiError } = await import("@/lib/api/client");
+		const { useOrganizationStore } = await import(
+			"@/lib/stores/organization-store"
+		);
+		Object.defineProperty(window, "location", {
+			value: { pathname: "/home", href: "" },
+			writable: true,
+			configurable: true,
+		});
+
+		useOrganizationStore.setState({ activeOrganizationId: "org-gone" });
+		fetchMock.mockResolvedValueOnce(
+			Response.json(
+				{ success: false, code: "ORGANIZATION_REQUIRED", message: "缺组织头" },
+				{ status: 400 },
+			),
+		);
+		await expect(apiClient("/plans")).rejects.toBeInstanceOf(ApiError);
+		expect(useOrganizationStore.getState().activeOrganizationId).toBeNull();
+		expect(window.location.href).toBe("/organization");
+		// 组织上下文语义为预期控制流，不上报 dev-log
+		expect(captureApiErrorMock).not.toHaveBeenCalled();
+	});
+
+	it("ToB W20：404 ORGANIZATION_NOT_FOUND 同样清选择并跳转；403 PERMISSION_DENIED 静默", async () => {
+		const { apiClient, ApiError } = await import("@/lib/api/client");
+		const { useOrganizationStore } = await import(
+			"@/lib/stores/organization-store"
+		);
+
+		useOrganizationStore.setState({ activeOrganizationId: "org-removed" });
+		fetchMock.mockResolvedValueOnce(
+			Response.json(
+				{
+					success: false,
+					code: "ORGANIZATION_NOT_FOUND",
+					message: "组织不存在或无权访问",
+				},
+				{ status: 404 },
+			),
+		);
+		await expect(apiClient("/accounts")).rejects.toBeInstanceOf(ApiError);
+		expect(useOrganizationStore.getState().activeOrganizationId).toBeNull();
+
+		// 403 PERMISSION_DENIED：预期控制流（不触发 dev-log、不清理凭证）
+		fetchMock.mockResolvedValueOnce(
+			Response.json(
+				{ success: false, code: "PERMISSION_DENIED", message: "无权限" },
+				{ status: 403 },
+			),
+		);
+		await expect(
+			apiClient("/organizations/current", { method: "PATCH", body: "{}" }),
+		).rejects.toBeInstanceOf(ApiError);
+		expect(captureApiErrorMock).not.toHaveBeenCalled();
+		expect(clearTokenMock).not.toHaveBeenCalled();
 	});
 });

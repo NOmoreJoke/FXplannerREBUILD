@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useOrganizationStore } from "@/lib/stores/organization-store";
 
 // Node ≥26 在 globalThis 上自带一个返回 undefined 的 localStorage 原生 getter，
 // 会遮蔽 vitest 4 populateGlobal 注入的 jsdom localStorage（vitest#8757）——
@@ -162,6 +163,8 @@ const hangMessagesFetch = () => {
 };
 
 beforeEach(() => {
+		// ToB W20：业务查询按组织门控（enabled: orgId !== null）——测试统一选中组织
+		useOrganizationStore.setState({ activeOrganizationId: "org-test" });
 	// 必须 reset（而非 clear）：clearAllMocks 不清 mockResolvedValue，
 	// 前用例的 implementation 会泄漏到后续用例（409 用例曾因此串数据）
 	vi.resetAllMocks();

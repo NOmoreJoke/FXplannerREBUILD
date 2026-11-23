@@ -20,6 +20,7 @@ import {
 	aiMessagesQueryKey,
 } from "@/lib/hooks/use-conversations";
 import { selectAnyStreaming, useChatStore } from "@/lib/stores/chat-store";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 
 /**
  * 对话消费层（ai-assistant 方案 §5.2）：发送状态机 idle/streaming/error。
@@ -112,10 +113,12 @@ export function useChat() {
 	const pendingUserContent = useChatStore((s) => s.pendingUserContent);
 
 	// 当前会话消息（enabled 随 activeId 翻转；删除后缓存已 remove，重进重拉）
+	// ToB W20：组织未选中不发请求（会话按 (userId, organizationId) 隔离）
+	const orgId = useActiveOrgId();
 	const messagesQuery = useQuery({
 		queryKey: aiMessagesQueryKey(activeId ?? ""),
 		queryFn: () => chatApi.listMessages(activeId!),
-		enabled: activeId !== null,
+		enabled: activeId !== null && orgId !== null,
 		staleTime: 30_000,
 		retry: false,
 	});

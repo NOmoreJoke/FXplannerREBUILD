@@ -1,7 +1,34 @@
+// Node ≥26 在 globalThis 上自带一个返回 undefined 的 localStorage 原生 getter，
+// 会遮蔽 vitest 4 populateGlobal 注入的 jsdom localStorage（vitest#8757）——
+// zustand persist 在 store 模块求值期通过 `window.localStorage` 取 storage，
+// 拿到 undefined 后首次 setState 即崩。此处从 vitest 暴露的原始 jsdom 实例
+// （globalThis.jsdom.window.localStorage 完好）回填，覆盖被遮蔽的 getter。
+// （use-chat.spec 先例；ToB W20 起 organization-store 也用 persist，本文件同样需要）
+vi.hoisted(() => {
+	const dom = (
+		globalThis as { jsdom?: { window: Window & { localStorage?: Storage } } }
+	).jsdom;
+	const jsdomStorage = dom?.window?.localStorage;
+	if (!jsdomStorage) return;
+	const globals = [globalThis, globalThis.window] as Array<
+		Record<string, unknown>
+	>;
+	for (const target of globals) {
+		if (target.localStorage === undefined) {
+			Object.defineProperty(target, "localStorage", {
+				value: jsdomStorage,
+				configurable: true,
+				writable: true,
+			});
+		}
+	}
+});
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useOrganizationStore } from "@/lib/stores/organization-store";
 import type { DataRequestView, ImpactView } from "@/lib/api/contract";
 import { dataRequestsApi } from "@/lib/api/data-requests";
 import {
@@ -61,6 +88,8 @@ function createWrapper() {
 
 describe("use-data-request（数据权利请求 hooks）", () => {
 	beforeEach(() => {
+		// ToB W20：业务查询按组织门控（enabled: orgId !== null）——测试统一选中组织
+		useOrganizationStore.setState({ activeOrganizationId: "org-test" });
 		vi.clearAllMocks();
 	});
 

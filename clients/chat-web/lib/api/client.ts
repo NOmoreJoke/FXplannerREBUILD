@@ -1,5 +1,6 @@
 import { captureApiError } from "@/lib/dev-log/monitor";
 import { clearToken, getToken } from "@/lib/auth/token";
+import { useOrganizationStore } from "@/lib/stores/organization-store";
 
 // 从环境变量读取后端 API 地址（必需）。
 // 仅允许 http/https 且不携带用户名/密码的地址，防止配置被注入成
@@ -69,6 +70,8 @@ export class ApiError extends Error {
  * 预期业务控制流 HTTP 响应不记为 dev-log 错误事件（DEBT-06）：
  * - 409 ONBOARDING_NOT_COMPLETED：首次建账前门控/降级语义
  * - 403 DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION：数据锁守卫重定向进度页语义
+ * - 400 ORGANIZATION_REQUIRED / 404 ORGANIZATION_NOT_FOUND / 403 PERMISSION_DENIED：
+ *   ToB 组织上下文语义（选择失效/权限变化由组织路由层接管，W20）
  */
 export function isExpectedControlFlowApiError(
 	status: number,
@@ -81,7 +84,19 @@ export function isExpectedControlFlowApiError(
 	) {
 		return true;
 	}
+	if (status === 400 && code === "ORGANIZATION_REQUIRED") return true;
+	if (status === 404 && code === "ORGANIZATION_NOT_FOUND") return true;
+	if (status === 403 && code === "PERMISSION_DENIED") return true;
 	return false;
+}
+
+/**
+ * 读取当前组织头值（ToB W20）：业务端点统一注入 X-Organization-Id；
+ * 未选择组织（null）不注入——兼容窗口由后端回落唯一默认组织
+ * （多组织用户会收到 400 ORGANIZATION_REQUIRED → 组织选择引导）。
+ */
+export function getActiveOrganizationId(): string | null {
+	return useOrganizationStore.getState().activeOrganizationId;
 }
 
 export async function apiClient<T>(
@@ -110,6 +125,12 @@ export async function apiClient<T>(
 		if (token) {
 			headers["Authorization"] = `Bearer ${token}`;
 		}
+		// 组织上下文头（ToB W20）：已有选中组织时对全部业务请求注入；
+		// 个人端点（/auth、/organizations、邀请 token 端点）后端不读此头，注入无害
+		const organizationId = getActiveOrganizationId();
+		if (organizationId) {
+			headers["X-Organization-Id"] = organizationId;
+		}
 	}
 
 	const method = (fetchConfig.method ?? "GET").toUpperCase();
@@ -137,6 +158,34 @@ export async function apiClient<T>(
 			clearToken();
 		}
 		throw new ApiError("Token 无效或已过期", 401);
+	}
+
+	// 组织上下文失效处理（ToB W20；技术方案 §10.1）：
+	// - 400 ORGANIZATION_REQUIRED：清失效选择并引导组织选择（多组织未带头）；
+	// - 404 ORGANIZATION_NOT_FOUND：选中组织已不可访问（被移除/禁用）→
+	//   清选择并引导；缓存清理由 /organization 路由层挂载时统一执行。
+	if (
+		(response.status === 400 || response.status === 404) &&
+		typeof window !== "undefined"
+	) {
+		const orgError = await response
+			.clone()
+			.json()
+			.catch(() => ({}) as ApiErrorBody);
+		if (
+			(response.status === 400 && orgError.code === "ORGANIZATION_REQUIRED") ||
+			(response.status === 404 && orgError.code === "ORGANIZATION_NOT_FOUND")
+		) {
+			useOrganizationStore.getState().clearActiveOrganization();
+			if (!window.location.pathname.startsWith("/organization")) {
+				window.location.href = "/organization";
+			}
+			throw new ApiError(
+				orgError.message || "组织上下文失效，请重新选择组织",
+				response.status,
+				orgError.code,
+			);
+		}
 	}
 
 	// 处理数据请求锁（account-data 技术方案 §8）：注销/清空处理中访问业务端点

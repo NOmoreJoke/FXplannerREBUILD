@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { onboardingApi } from "@/lib/api/onboarding";
 import { remindersApi } from "@/lib/api/reminders";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import { settingsApi } from "@/lib/api/settings";
 import type { ReminderItem } from "@/lib/api/contract";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
+import { useOrganizationStore } from "@/lib/stores/organization-store";
 
 /**
  * 提醒数据消费层（reminders 技术方案 §8）：一个 hook 对齐 use-home-state 范式。
@@ -15,6 +17,14 @@ import type { ReminderItem } from "@/lib/api/contract";
 
 /** 提醒列表查询 Key（[domain, action] 约定） */
 export const REMINDERS_QUERY_KEY = queryKeys.reminders.list();
+
+/** 组织作用域提醒 Key（mutation 失效时按当前组织组装——切换时缓存已被清空） */
+function remindersScopedKey(): readonly unknown[] {
+	return withOrgScope(
+		useOrganizationStore.getState().activeOrganizationId,
+		REMINDERS_QUERY_KEY,
+	);
+}
 
 export interface UseRemindersOptions {
 	/** 是否允许触发查询（未建账 / 数据锁路由 / 提醒关闭时传 false 避免无效请求） */
@@ -39,10 +49,12 @@ export function useReminders(
 	options?: UseRemindersOptions,
 ): UseRemindersResult {
 	const enabled = options?.enabled ?? true;
+	// ToB W20：组织作用域缓存键 + 未选组织不发业务请求
+	const orgId = useActiveOrgId();
 	const query = useQuery({
-		queryKey: REMINDERS_QUERY_KEY,
+		queryKey: withOrgScope(orgId, REMINDERS_QUERY_KEY),
 		queryFn: remindersApi.list,
-		enabled,
+		enabled: enabled && orgId !== null,
 		staleTime: 30 * 1000, // 容忍秒级陈旧；写操作后由已读 mutation invalidate 精确刷新
 		retry: false, // 401 由 apiClient 统一处理；消费方（首页区块）静默降级
 	});
@@ -69,7 +81,7 @@ export function useMarkReminderRead() {
 	return useMutation({
 		mutationFn: (id: string) => remindersApi.markRead(id),
 		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: REMINDERS_QUERY_KEY });
+			void queryClient.invalidateQueries({ queryKey: remindersScopedKey() });
 		},
 	});
 }
@@ -80,7 +92,7 @@ export function useMarkAllRemindersRead() {
 	return useMutation({
 		mutationFn: () => remindersApi.markAllRead(),
 		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: REMINDERS_QUERY_KEY });
+			void queryClient.invalidateQueries({ queryKey: remindersScopedKey() });
 		},
 	});
 }

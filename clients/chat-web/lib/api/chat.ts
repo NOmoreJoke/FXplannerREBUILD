@@ -6,6 +6,7 @@ import {
 } from "@/lib/api/client";
 import type { components } from "@/lib/api/schema.gen";
 import { clearToken, getToken } from "@/lib/auth/token";
+import { getActiveOrganizationId } from "@/lib/api/client";
 
 /**
  * AI 助手 API 封装（ai-assistant 技术方案 §4/§5.2）
@@ -159,6 +160,12 @@ async function openStreamResponse(
 	const token = getToken();
 	if (token) {
 		headers["Authorization"] = `Bearer ${token}`;
+	}
+	// 组织上下文头（ToB W20）：AI 会话按 (userId, organizationId) 隔离；
+	// 与 apiClient 同源（organization-store），未选组织不注入（兼容窗口后端回落）
+	const organizationId = getActiveOrganizationId();
+	if (organizationId) {
+		headers["X-Organization-Id"] = organizationId;
 	}
 
 	let response: Response;
