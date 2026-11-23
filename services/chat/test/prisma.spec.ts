@@ -311,4 +311,215 @@ describe("数据库基础设施测试", () => {
 			expect(readBack?.failReason).toBe("使用后余额不足以覆盖现有分配");
 		});
 	});
+
+	describe("ToB R1 MIG-A 增量", () => {
+		const migOrgIds: string[] = [];
+		const migUserIds: string[] = [];
+		const migCurrency = "M1A";
+		const migPlanId = "miga-plan-null-org";
+
+		afterAll(async () => {
+			await prisma.membership.deleteMany({
+				where: { organizationId: { in: migOrgIds } },
+			});
+			await prisma.organizationInvitation.deleteMany({
+				where: { organizationId: { in: migOrgIds } },
+			});
+			await prisma.organizationSettings.deleteMany({
+				where: { organizationId: { in: migOrgIds } },
+			});
+			await prisma.organization.deleteMany({
+				where: { id: { in: migOrgIds } },
+			});
+			await prisma.user.deleteMany({ where: { id: { in: migUserIds } } });
+			// 个人流程锁定测试的清理（内层 afterAll 先于外层 testUserId 清理执行）
+			await prisma.transaction.deleteMany({
+				where: { userId: testUserId, currencyCode: migCurrency },
+			});
+			await prisma.planAllocation.deleteMany({ where: { planId: migPlanId } });
+			await prisma.plan.deleteMany({
+				where: { userId: testUserId, id: migPlanId },
+			});
+			await prisma.account.deleteMany({
+				where: { userId: testUserId, currencyCode: migCurrency },
+			});
+		});
+
+		test("部分唯一索引 memberships_single_active_owner_uidx 阻断同组织双活跃 OWNER", async () => {
+			const org = await prisma.organization.create({
+				data: { name: "MIG-A 单 Owner 唯一性测试组织" },
+			});
+			migOrgIds.push(org.id);
+			const owner1 = await prisma.user.create({
+				data: {
+					email: `miga-owner1-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
+				},
+			});
+			const owner2 = await prisma.user.create({
+				data: {
+					email: `miga-owner2-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
+				},
+			});
+			migUserIds.push(owner1.id, owner2.id);
+
+			await prisma.membership.create({
+				data: {
+					organizationId: org.id,
+					userId: owner1.id,
+					role: "OWNER",
+					status: "ACTIVE",
+				},
+			});
+			// 第二个 OWNER+ACTIVE 违反部分唯一索引（Prisma 以底层唯一冲突抛错）
+			await expect(
+				prisma.membership.create({
+					data: {
+						organizationId: org.id,
+						userId: owner2.id,
+						role: "OWNER",
+						status: "ACTIVE",
+					},
+				}),
+			).rejects.toThrow();
+
+			// 先降原 Owner（转移所有权顺序保护）→ 新 Owner 可 ACTIVE
+			await prisma.membership.update({
+				where: {
+					organizationId_userId: { organizationId: org.id, userId: owner1.id },
+				},
+				data: { role: "ADMIN" },
+			});
+			await expect(
+				prisma.membership.create({
+					data: {
+						organizationId: org.id,
+						userId: owner2.id,
+						role: "OWNER",
+						status: "ACTIVE",
+					},
+				}),
+			).resolves.toBeDefined();
+
+			// DISABLED 的 OWNER 不占唯一索引（禁用 Owner 不阻断新 Owner）
+			await prisma.membership.update({
+				where: {
+					organizationId_userId: { organizationId: org.id, userId: owner2.id },
+				},
+				data: { status: "DISABLED" },
+			});
+			const owner3 = await prisma.user.create({
+				data: {
+					email: `miga-owner3-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
+				},
+			});
+			migUserIds.push(owner3.id);
+			await expect(
+				prisma.membership.create({
+					data: {
+						organizationId: org.id,
+						userId: owner3.id,
+						role: "OWNER",
+						status: "ACTIVE",
+					},
+				}),
+			).resolves.toBeDefined();
+		});
+
+		test("OrganizationInvitation.tokenHash 唯一", async () => {
+			const org = await prisma.organization.create({
+				data: { name: "MIG-A 邀请唯一性测试组织" },
+			});
+			migOrgIds.push(org.id);
+			const inviter = await prisma.user.create({
+				data: {
+					email: `miga-inviter-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
+				},
+			});
+			migUserIds.push(inviter.id);
+
+			await prisma.organizationInvitation.create({
+				data: {
+					organizationId: org.id,
+					email: "miga-invitee@example.com",
+					role: "FINANCE",
+					tokenHash: "miga-token-hash-unique-probe",
+					invitedById: inviter.id,
+					expiresAt: new Date(Date.now() + 7 * 86_400_000),
+				},
+			});
+			await expect(
+				prisma.organizationInvitation.create({
+					data: {
+						organizationId: org.id,
+						email: "miga-invitee-2@example.com",
+						role: "OPERATOR",
+						tokenHash: "miga-token-hash-unique-probe",
+						invitedById: inviter.id,
+						expiresAt: new Date(Date.now() + 7 * 86_400_000),
+					},
+				}),
+			).rejects.toThrow();
+		});
+
+		test("新增可空租户列不影响既有个人建账/写入流程（NULL 往返）", async () => {
+			// 不带 organizationId/createdById 写入 → 成功且读回 NULL（个人 MVP 路径零破坏）
+			const account = await prisma.account.create({
+				data: {
+					userId: testUserId,
+					currencyCode: migCurrency,
+					balance: "77.0000",
+				},
+			});
+			const accountRead = await prisma.account.findUnique({
+				where: { id: account.id },
+			});
+			expect(accountRead?.organizationId).toBeNull();
+			expect(accountRead?.createdById).toBeNull();
+
+			const transaction = await prisma.transaction.create({
+				data: {
+					userId: testUserId,
+					currencyCode: migCurrency,
+					quantity: "10.0000",
+					principalAmount: "650.0000",
+					exchangeRate: "6.5000000000",
+					rateSource: "identity",
+					rateObservedAt: new Date(Date.UTC(2024, 0, 1, 12, 0, 0)),
+					transactedAt: new Date(Date.UTC(2024, 0, 2, 12, 0, 0)),
+				},
+			});
+			expect(transaction.organizationId).toBeNull();
+			expect(transaction.createdById).toBeNull();
+
+			const plan = await prisma.plan.create({
+				data: {
+					id: migPlanId,
+					userId: testUserId,
+					targetCurrency: migCurrency,
+					targetAmount: "100.0000",
+					expectUseDate: new Date(Date.UTC(2024, 1, 1)),
+					latestPrepDate: new Date(Date.UTC(2024, 0, 25)),
+				},
+			});
+			expect(plan.organizationId).toBeNull();
+			expect(plan.createdById).toBeNull();
+
+			// DataRequest.scope 默认 PERSONAL；organizationId 可空
+			const dataRequest = await prisma.dataRequest.create({
+				data: {
+					userId: testUserId,
+					type: "EXPORT",
+					requestedAt: new Date(),
+					dueAt: new Date(Date.now() + 86_400_000),
+				},
+			});
+			expect(dataRequest.scope).toBe("PERSONAL");
+			expect(dataRequest.organizationId).toBeNull();
+			await prisma.dataRequest.delete({ where: { id: dataRequest.id } });
+		});
+	});
 });

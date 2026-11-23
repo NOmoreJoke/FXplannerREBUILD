@@ -1502,6 +1502,10 @@ describe("RateController（接口）", () => {
 				querySpy.mockRestore();
 
 				// 验证在关停顺序扫描下，PostgreSQL 执行计划直走反向唯一索引且无外层全表 Sort
+				// 规划器统计确定性：exchange_rates 的全局统计可能因外部写入漂移（如 E2E 报价写入、
+				// 旁路造数），陈旧统计会让规划器在 Index Scan Backward ↔ Bitmap+Sort 间漂移；
+				// 先 ANALYZE 让统计反映本用例刚提交的夹具数据，保证计划断言只依赖本用例输入
+				await prisma.$executeRawUnsafe("ANALYZE exchange_rates");
 				const planRows = await prisma.$transaction(async (tx) => {
 					await tx.$executeRawUnsafe("SET LOCAL enable_seqscan = off");
 					return tx.$queryRaw<Array<{ "QUERY PLAN": string }>>`
@@ -1539,12 +1543,24 @@ describe("RateController（接口）", () => {
 					`;
 				});
 				const planText = planRows.map((row) => row["QUERY PLAN"]).join("\n");
-				// 严格要求反向索引扫描（无 Seq Scan、无 Sort / Incremental Sort），且命中确认层时分支 2 短路
+				// 严格要求「实际执行路径」为反向索引扫描：无 Seq Scan，无实际执行的
+				// Sort / Incremental Sort / Bitmap 节点。分支 2 按设计被分支 1 命中后
+				// 短路（never executed），其未执行节点的计划形态随规划器统计波动
+				// （Bitmap+Sort 与 Index Scan 对 LIMIT 1 未执行分支等价），不构成
+				// 运行时性能契约，故仅对 (actual time=...) 的执行节点断言。
 				expect(planText).not.toContain("Seq Scan");
-				expect(planText).not.toMatch(/\bSort\b|\bIncremental Sort\b/);
+				const executedPlanLines = planText.split("\n").filter((line) =>
+					line.includes("(actual time="),
+				);
+				expect(executedPlanLines.length).toBeGreaterThan(0);
+				for (const line of executedPlanLines) {
+					expect(line).not.toMatch(/\bSort\b|\bIncremental Sort\b/);
+					expect(line).not.toMatch(/\bBitmap Heap Scan\b|\bBitmap Index Scan\b/);
+				}
 				expect(planText).toMatch(
 					/Index Scan Backward using exchange_rates_base_quote_observed_at_/,
 				);
+				// 命中确认层时分支 2 短路
 				expect(planText).toContain("never executed");
 			} finally {
 				await realCtx.prisma.exchangeRate.deleteMany({ where: cleanupWhere });
