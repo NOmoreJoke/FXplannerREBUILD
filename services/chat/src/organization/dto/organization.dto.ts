@@ -1,0 +1,71 @@
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { IsNotEmpty, IsString, MaxLength } from "class-validator";
+
+/** 组织创建/改名入参（ORG-01：名称 1~100 字符） */
+export class OrganizationUpsertDto {
+	@ApiProperty({ description: "组织名称（1~100 字符）", example: "张三的工作台" })
+	@IsString()
+	@IsNotEmpty()
+	@MaxLength(100)
+	name!: string;
+}
+
+/** 组织列表项（GET /api/organizations：本人有效组织与建账状态） */
+export class OrganizationViewDto {
+	@ApiProperty({ description: "组织 id" })
+	id!: string;
+
+	@ApiProperty({ description: "组织名称" })
+	name!: string;
+
+	@ApiProperty({ description: "当前用户在组织的角色", enum: ["OWNER", "ADMIN", "FINANCE", "OPERATOR", "VIEWER"] })
+	role!: string;
+
+	@ApiPropertyOptional({ description: "组织本位币（未建账为 null）" })
+	baseCurrency!: string | null;
+
+	@ApiProperty({ description: "是否已建账（OrganizationSettings 存在且记账起点已落）" })
+	onboardingCompleted!: boolean;
+
+	@ApiProperty({ description: "创建时间" })
+	createdAt!: Date;
+}
+
+/** 组织数据请求锁摘要（Goal #3B 拆分后的组织锁状态） */
+export class OrganizationLockDto {
+	@ApiProperty({ description: "是否存在进行中的组织数据请求锁" })
+	active!: boolean;
+
+	@ApiPropertyOptional({ description: "锁类型（CLEAR/DELETION）" })
+	type!: string | null;
+}
+
+/** 当前组织详情（GET /api/organizations/current：详情+角色+capabilities+锁+建账状态） */
+export class OrganizationCurrentDto {
+	@ApiProperty({ description: "组织 id" })
+	id!: string;
+
+	@ApiProperty({ description: "组织名称" })
+	name!: string;
+
+	@ApiProperty({ description: "当前操作者角色", enum: ["OWNER", "ADMIN", "FINANCE", "OPERATOR", "VIEWER"] })
+	role!: string;
+
+	@ApiProperty({
+		description: "capabilities 全量权限布尔表（后端真源）",
+		additionalProperties: { type: "boolean" },
+	})
+	capabilities!: Record<string, boolean>;
+
+	@ApiProperty({ description: "是否已建账" })
+	onboardingCompleted!: boolean;
+
+	@ApiPropertyOptional({ description: "组织本位币（未建账为 null）" })
+	baseCurrency!: string | null;
+
+	@ApiPropertyOptional({ description: "记账起点（未建账为 null）" })
+	ledgerStartedAt!: string | null;
+
+	@ApiProperty({ description: "组织数据请求锁状态" })
+	dataRequestLock!: OrganizationLockDto;
+}

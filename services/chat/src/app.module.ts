@@ -24,6 +24,8 @@ import { DataRequestModule } from "./data-request/data-request.module";
 import { DataRequestLockGuard } from "./data-request/data-request-lock.guard";
 import { AiModule } from "./ai/ai.module";
 import { AuditModule } from "./audit/audit.module";
+import { AuthorizationModule } from "./authorization/authorization.module";
+import { OrganizationModule } from "./organization/organization.module";
 
 @Module({
 	imports: [
@@ -53,6 +55,9 @@ import { AuditModule } from "./audit/audit.module";
 		DataRequestModule,
 		// 审计（ToB R1 §13.1）：业务写同事务审计与只读分页，唯一注册点
 		AuditModule,
+		// ToB R1（技术方案 §4.3）：组织上下文/权限 Guard 与组织 CRUD，唯一注册点
+		AuthorizationModule,
+		OrganizationModule,
 		// AI 助手（ai-assistant 技术方案 §5.1）：ReAct agent 对话，唯一注册点
 		AiModule,
 	],
