@@ -23,6 +23,15 @@ interface OrganizationStore {
 	 * 单组织用户被移出后会陷入「清除选择 → 自动选回 → 再 404」的循环。
 	 */
 	rejectedOrganizationIds: string[];
+	/**
+	 * 当前选择被（重新）设置的时刻（毫秒；仅内存、不持久化）。
+	 * 路由分流据此区分两类选择：
+	 * - 从 localStorage 恢复的选择：时刻为 0，列表一到位即校验，不在列表里就清除；
+	 * - 本会话内由应用设置的选择（切换/接受邀请/新建组织）：列表缓存此刻可能
+	 *   还不含该组织（已失效、重拉在途），必须等列表数据新于该时刻再校验——
+	 *   否则刚加入的组织会被当成失效选择立刻清掉。
+	 */
+	activeOrganizationSetAt: number;
 	/** 设置当前组织（登录后按服务端有效 Membership 路由时调用） */
 	setActiveOrganization: (organizationId: string | null) => void;
 	/** 清除选择（登出 / 401：换账号登录不得继承上一个账号的组织） */
@@ -38,10 +47,15 @@ export const useOrganizationStore = create<OrganizationStore>()(
 	persist(
 		(set) => ({
 			activeOrganizationId: null,
+			activeOrganizationSetAt: 0,
 			rejectedOrganizationIds: [],
 			setActiveOrganization: (organizationId) =>
-				set({ activeOrganizationId: organizationId }),
-			clearActiveOrganization: () => set({ activeOrganizationId: null }),
+				set({
+					activeOrganizationId: organizationId,
+					activeOrganizationSetAt: organizationId === null ? 0 : Date.now(),
+				}),
+			clearActiveOrganization: () =>
+				set({ activeOrganizationId: null, activeOrganizationSetAt: 0 }),
 			rejectOrganizationContext: (organizationId) =>
 				set((state) => ({
 					rejectedOrganizationIds:
@@ -53,6 +67,10 @@ export const useOrganizationStore = create<OrganizationStore>()(
 						state.activeOrganizationId === organizationId
 							? null
 							: state.activeOrganizationId,
+					activeOrganizationSetAt:
+						state.activeOrganizationId === organizationId
+							? 0
+							: state.activeOrganizationSetAt,
 				})),
 		}),
 		{

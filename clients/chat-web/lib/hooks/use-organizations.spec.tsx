@@ -105,6 +105,7 @@ beforeEach(() => {
 	vi.resetAllMocks();
 	useOrganizationStore.setState({
 		activeOrganizationId: null,
+		activeOrganizationSetAt: 0,
 		rejectedOrganizationIds: [],
 	});
 	useChatStore.setState(CHAT_RUNTIME);
@@ -322,6 +323,52 @@ describe("useOrganizationRouting（受保护区的组织路由分流）", () => 
 			() => useOrganizationRouting({ enabled: true }),
 			{ wrapper },
 		);
+		await waitFor(() =>
+			expect(useOrganizationStore.getState().activeOrganizationId).toBe("org-a"),
+		);
+		expect(result.current.status).toBe("ready");
+	});
+
+	it("应用设置的选择（切换/接受邀请/新建组织）：列表尚未重拉时不得被当作失效选择清除", async () => {
+		vi.mocked(organizationsApi.list).mockResolvedValue([
+			summary("org-a", "组织 A"),
+		]);
+		const { wrapper } = wrapperFactory();
+		const { result } = renderHook(
+			() => useOrganizationRouting({ enabled: true }),
+			{ wrapper },
+		);
+		await waitFor(() =>
+			expect(useOrganizationStore.getState().activeOrganizationId).toBe("org-a"),
+		);
+
+		// 模拟刚接受邀请：应用立即选中新组织，而列表缓存（已失效、重拉在途）还不含它
+		act(() => {
+			useOrganizationStore.getState().setActiveOrganization("org-new");
+		});
+		await waitFor(() => expect(result.current.status).toBe("ready"));
+		await act(async () => {
+			await Promise.resolve();
+		});
+		// 选择保留（否则用户会被切回默认组织，而不是刚加入的那个）
+		expect(useOrganizationStore.getState().activeOrganizationId).toBe("org-new");
+	});
+
+	it("应用设置的选择在列表数据新于设置时刻后仍不存在 → 清除（服务端从未认可该组织）", async () => {
+		vi.mocked(organizationsApi.list).mockResolvedValue([
+			summary("org-a", "组织 A"),
+		]);
+		useOrganizationStore.setState({
+			activeOrganizationId: "org-ghost",
+			activeOrganizationSetAt: 1,
+		});
+		const { wrapper } = wrapperFactory();
+		const { result } = renderHook(
+			() => useOrganizationRouting({ enabled: true }),
+			{ wrapper },
+		);
+
+		// 列表到达（数据时刻远晚于设置时刻）且不含 org-ghost → 清除 → 剩余单组织自动选中
 		await waitFor(() =>
 			expect(useOrganizationStore.getState().activeOrganizationId).toBe("org-a"),
 		);

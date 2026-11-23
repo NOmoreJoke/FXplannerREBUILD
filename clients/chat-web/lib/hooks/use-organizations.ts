@@ -159,6 +159,9 @@ export function useOrganizationRouting(options: {
 	const rejectedOrganizationIds = useOrganizationStore(
 		(s) => s.rejectedOrganizationIds,
 	);
+	const activeOrganizationSetAt = useOrganizationStore(
+		(s) => s.activeOrganizationSetAt,
+	);
 	const setActiveOrganization = useOrganizationStore(
 		(s) => s.setActiveOrganization,
 	);
@@ -174,12 +177,22 @@ export function useOrganizationRouting(options: {
 		[organizations, rejectedOrganizationIds],
 	);
 
+	/**
+	 * 列表数据是否早于当前选择的设置时刻。本会话内由应用设置的选择（切换 /
+	 * 接受邀请 / 新建组织）在设置时列表缓存往往还不含该组织（已失效、重拉在途），
+	 * 此刻不得把它当作失效选择清除——否则刚加入的组织会被立刻切走。
+	 */
+	const listPredatesSelection =
+		activeOrganizationId !== null &&
+		organizationsQuery.dataUpdatedAt <= activeOrganizationSetAt;
+
 	useEffect(() => {
 		if (!enabled || !selectable) return;
 		if (
 			activeOrganizationId !== null &&
 			!selectable.some((org) => org.id === activeOrganizationId)
 		) {
+			if (listPredatesSelection) return; // 等列表重拉后再校验
 			clearActiveOrganization();
 			return;
 		}
@@ -190,6 +203,7 @@ export function useOrganizationRouting(options: {
 		enabled,
 		selectable,
 		activeOrganizationId,
+		listPredatesSelection,
 		setActiveOrganization,
 		clearActiveOrganization,
 	]);
@@ -211,8 +225,11 @@ export function useOrganizationRouting(options: {
 		status = "loading";
 	} else if (
 		activeOrganizationId !== null &&
-		selectable.some((org) => org.id === activeOrganizationId)
+		(selectable.some((org) => org.id === activeOrganizationId) ||
+			listPredatesSelection)
 	) {
+		// 列表尚不含刚选中的组织（接受邀请/新建组织后）：按就绪处理，业务请求
+		// 携带该组织头由服务端校验；列表重拉后再做选择校验
 		status = "ready";
 	} else if (activeOrganizationId === null && selectable.length === 1) {
 		status = "ready";
