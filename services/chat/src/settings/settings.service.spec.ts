@@ -15,17 +15,56 @@ const settingsRow = {
 	user: { email: "user@example.com" },
 };
 
-function createPrismaMock() {
+/** 组织偏好解析所需的 mock（评审 I-08/I-10）：组织设置 → 所有者 → 所有者默认组织 → 所有者个人设置 */
+type SettingsRowLike = Record<string, unknown>;
+
+function createPrismaMock(overrides: {
+	organizationSettings?: SettingsRowLike | null;
+	ownerUserId?: string | null;
+	ownerDefaultOrganizationId?: string | null;
+	/** 各用户的个人设置行（按 userId）；缺省用户 = 无个人设置行 */
+	userSettingsByUserId?: Record<string, SettingsRowLike>;
+} = {}) {
 	const userSettings = {
-		findUnique: vi.fn(),
+		// 同一个 mock 服务两种查询：请求者本人的展示字段 / 兼容回落时所有者的设置
+		findUnique: vi.fn((args: { where: { userId: string } }) =>
+			Promise.resolve(overrides.userSettingsByUserId?.[args.where.userId] ?? null),
+		),
 		update: vi.fn(),
 	};
-	// W18 组织偏好读取：默认 null（组织设置未迁 → 回落 UserSettings 原值）
 	const organizationSettings = {
-		findUnique: vi.fn().mockResolvedValue(null),
+		findUnique: vi.fn().mockResolvedValue(overrides.organizationSettings ?? null),
 	};
-	return { userSettings, organizationSettings };
+	const membership = {
+		// 两种查询形状：按组织找活跃 Owner / 按用户找最早的活跃 OWNER 成员关系（默认组织）
+		findFirst: vi.fn((args: { where: Record<string, unknown> }) =>
+			"organizationId" in args.where
+				? Promise.resolve(
+						overrides.ownerUserId ? { userId: overrides.ownerUserId } : null,
+					)
+				: Promise.resolve(
+						overrides.ownerDefaultOrganizationId
+							? { organizationId: overrides.ownerDefaultOrganizationId }
+							: null,
+					),
+		),
+	};
+	return { userSettings, organizationSettings, membership };
 }
+
+const orgSettingsRow = {
+	baseCurrency: "CNY",
+	prepPreference: "balanced",
+	reminderEnabled: true,
+	ledgerStartedAt: T0,
+};
+
+const legacySettingsRow = {
+	baseCurrency: "USD",
+	prepPreference: "cautious",
+	reminderEnabled: false,
+	ledgerStartedAt: T0,
+};
 
 function errorOf(action: () => Promise<unknown>) {
 	return action().then(
@@ -46,28 +85,41 @@ describe("SettingsService", () => {
 	let prisma: ReturnType<typeof createPrismaMock>;
 	let service: SettingsService;
 
+	/** 以指定组织偏好形态构造服务（默认：无组织设置、无所有者 = 未建账） */
+	function buildService(overrides: Parameters<typeof createPrismaMock>[0] = {}) {
+		const mock = createPrismaMock(overrides);
+		return {
+			mock,
+			instance: new SettingsService(mock as unknown as PrismaService),
+		};
+	}
+
 	beforeEach(() => {
 		prisma = createPrismaMock();
 		service = new SettingsService(prisma as unknown as PrismaService);
 	});
 
-	describe("getSettings", () => {
-		it("未建账 → 409 ONBOARDING_NOT_COMPLETED", async () => {
-			prisma.userSettings.findUnique.mockResolvedValue(null);
+	describe("getSettings（组织偏好 + 个人展示字段；评审 I-08/I-10）", () => {
+		const SCOPE = { userId: "u1", organizationId: "org-test" };
+		/** 守卫链已解析的登录身份（控制器传入，服务不再查 user） */
+		const IDENTITY = { email: "user@example.com" };
 
-			const { status, body } = await errorOf(() => service.getSettings({ userId: "u1", organizationId: "org-test" }));
+		it("未建账（无组织设置、无所有者个人设置）→ 409 ONBOARDING_NOT_COMPLETED", async () => {
+			const { instance } = buildService();
+
+			const { status, body } = await errorOf(() => instance.getSettings(SCOPE, IDENTITY));
 
 			expect(status).toBe(409);
 			expect(body.code).toBe("ONBOARDING_NOT_COMPLETED");
 		});
 
-		it("已建账：返回完整视图（含 user.email 与只读 baseCurrency）", async () => {
-			prisma.userSettings.findUnique.mockResolvedValue(settingsRow);
+		it("组织设置存在：受邀成员（无个人设置行）读到组织偏好 + 展示默认值，不再 409", async () => {
+			const { instance } = buildService({ organizationSettings: orgSettingsRow });
 
-			const view = await service.getSettings({ userId: "u1", organizationId: "org-test" });
+			const view = await instance.getSettings(SCOPE, IDENTITY);
 
 			expect(view).toEqual({
-				email: "user@example.com",
+				email: "user@example.com", // 守卫链解析的登录身份，不依赖个人设置行
 				region: "CN",
 				locale: "zh-CN",
 				baseCurrency: "CNY",
@@ -75,6 +127,81 @@ describe("SettingsService", () => {
 				reminderEnabled: true,
 				ledgerStartedAt: T0,
 			});
+		});
+
+		it("个人展示字段取请求者本人设置，组织偏好不被个人行覆盖；email 取登录身份", async () => {
+			const { instance } = buildService({
+				organizationSettings: orgSettingsRow,
+				userSettingsByUserId: {
+					u1: {
+						region: "HK",
+						locale: "en",
+						baseCurrency: "JPY", // 个人行里的旧本位币不得带出
+					},
+				},
+			});
+
+			const view = await instance.getSettings(SCOPE, { email: "login@example.com" });
+
+			expect(view).toMatchObject({
+				email: "login@example.com",
+				region: "HK",
+				locale: "en",
+				baseCurrency: "CNY",
+			});
+		});
+
+		it("兼容回落：默认组织的所有者尚无 OrganizationSettings 时，以其个人设置代表组织偏好", async () => {
+			const { instance } = buildService({
+				ownerUserId: "u1",
+				ownerDefaultOrganizationId: "org-test",
+				userSettingsByUserId: {
+					u1: { ...legacySettingsRow, region: "CN", locale: "zh-CN", user: { email: "user@example.com" } },
+				},
+			});
+
+			const view = await instance.getSettings(SCOPE, IDENTITY);
+
+			expect(view).toEqual({
+				email: "user@example.com",
+				region: "CN",
+				locale: "zh-CN",
+				baseCurrency: "USD",
+				prepPreference: "cautious",
+				reminderEnabled: false,
+				ledgerStartedAt: T0,
+			});
+		});
+
+		it("兼容回落读的是组织所有者的设置：受邀成员在仅所有者建过账的组织里同样可读", async () => {
+			const { instance } = buildService({
+				ownerUserId: "owner",
+				ownerDefaultOrganizationId: "org-test",
+				userSettingsByUserId: { owner: legacySettingsRow },
+			});
+
+			const view = await instance.getSettings(
+				{ userId: "member", organizationId: "org-test" },
+				{ email: null },
+			);
+
+			expect(view.baseCurrency).toBe("USD");
+			expect(view.email).toBeNull();
+		});
+
+		it("非默认组织绝不回落：创建者个人已建账，但其新建组织仍判未建账（评审 I-08）", async () => {
+			const { instance } = buildService({
+				ownerUserId: "u1",
+				ownerDefaultOrganizationId: "org-default", // 创建者的默认组织是另一个
+				userSettingsByUserId: {
+					u1: { ...legacySettingsRow, region: "CN", locale: "zh-CN", user: { email: "user@example.com" } },
+				},
+			});
+
+			const { status, body } = await errorOf(() => instance.getSettings(SCOPE, IDENTITY));
+
+			expect(status).toBe(409);
+			expect(body.code).toBe("ONBOARDING_NOT_COMPLETED");
 		});
 	});
 

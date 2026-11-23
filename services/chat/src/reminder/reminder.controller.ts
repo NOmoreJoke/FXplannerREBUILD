@@ -76,10 +76,7 @@ export class ReminderController {
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,
 	) {
-		const data = await this.reminderService.list({
-			userId: actor.userId,
-			organizationId: actor.organizationId,
-		});
+		const data = await this.reminderService.list(actor);
 		return { success: true, data, message: "提醒列表获取成功" };
 	}
 

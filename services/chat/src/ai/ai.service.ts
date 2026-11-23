@@ -82,8 +82,17 @@ export class AiService {
 		if (!this.config.chatEnabled) throw new AiDisabledException();
 	}
 
-	/** 越权与不存在统一 404（防枚举，§4）；scope 可选：读路径传入时叠加组织隔离
-	 * （会话个人所有 + 组织绑定，技术方案 §8.4），写路径不传保持原语义 */
+	/**
+	 * 越权与不存在统一 404（防枚举，§4）；scope 可选：读路径传入时叠加组织隔离
+	 * （会话个人所有 + 组织绑定，技术方案 §8.4），写路径不传保持原语义。
+	 *
+	 * 兼容窗口（Goal #3B W25 之前）——这里的 `organizationId IS NULL` 分支**有意不**
+	 * 锚定默认组织（区别于 compatReadWhere，评审 I-08）：建会话/追问/删除的写路径
+	 * 尚未接入组织作用域，新会话一律落 NULL。若读侧单独锚定，用户在非默认组织里
+	 * 发出的会话会在该组织中不可见、也无法打开消息。因此在 W25 完成「全部 /ai/*
+	 * 端点按 (id, userId, organizationId) 校验 + 建会话写入 organizationId」之前，
+	 * AI 会话是**个人级**资源：仅本人可见（userId 隔离不变），但不按组织分区。
+	 */
 	async assertOwned(
 		conversationId: string,
 		userId: string,

@@ -63,10 +63,7 @@ export class HomeController {
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,
 	) {
-		const data = await this.homeService.getState({
-			userId: actor.userId,
-			organizationId: actor.organizationId,
-		});
+		const data = await this.homeService.getState(actor);
 		return { success: true, data, message: "首页状态查询成功" };
 	}
 
@@ -93,10 +90,7 @@ export class HomeController {
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,
 	) {
-		const data = await this.homeService.getPortfolio({
-			userId: actor.userId,
-			organizationId: actor.organizationId,
-		});
+		const data = await this.homeService.getPortfolio(actor);
 		return { success: true, data, message: "持仓聚合查询成功" };
 	}
 }

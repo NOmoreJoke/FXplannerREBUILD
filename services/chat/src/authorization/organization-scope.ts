@@ -52,30 +52,51 @@ export function assertParentChildSameOrg(
 // W18 兼容窗口读作用域（GOAL-3A W18；技术方案 §7.3 迁移期兼容规则）
 // ─────────────────────────────────────────────────────────────
 
-/** 业务读作用域：请求者 + 解析出的当前组织 */
+/**
+ * 业务读作用域：请求者 + 当前组织 + 是否默认组织。
+ * 结构上与 ActorContext 兼容——Controller 直接传 actor 即可。
+ */
 export interface ReadScope {
 	userId: string;
 	organizationId: string;
+	/** 缺省（undefined）按 false 处理：不带存量回落，fail-closed */
+	isDefaultOrganization?: boolean;
 }
+
+type CompatBranch =
+	| { organizationId: string }
+	| { organizationId: null; userId: string };
 
 /**
  * 兼容窗口读 where 片段（W18 专用，W22/Goal #3B 双写切换后移除）：
  * - `organizationId = 当前组织`：MIG-B 已回填行 / 显式组织行（跨用户可见，
  *   同组织成员共享）；
  * - `organizationId IS NULL AND userId = 请求者`：MIG-A 之后、写侧 Actor 化
- *   （Goal #3B）之前经旧写路径产生的过渡期行——逻辑上属请求者默认组织，
+ *   （Goal #3B）之前经旧写路径产生的过渡期行——逻辑上属请求者的**默认组织**，
  *   仅本人可见，禁止跨用户共享。
+ *
+ * 评审 I-08：NULL 分支**仅在默认组织上下文**拼接。此前它对任何组织无条件生效，
+ *   用户新建组织 B 或受邀加入组织 C 后，其个人未迁移记录会整批渗入 B/C。
+ *   `isDefaultOrganization` 由 Guard 按最早的 ACTIVE OWNER 成员关系判定
+ *   （default-organization.ts）；缺省一律不带回落。
  */
-export function compatReadWhere(scope: ReadScope): {
-	OR: [
-		{ organizationId: string },
-		{ organizationId: null; userId: string },
-	];
+export function compatReadWhere(scope: ReadScope): { OR: CompatBranch[] } {
+	const branches: CompatBranch[] = [{ organizationId: scope.organizationId }];
+	if (scope.isDefaultOrganization === true) {
+		branches.push({ organizationId: null, userId: scope.userId });
+	}
+	return { OR: branches };
+}
+
+/** SQL（$queryRaw/$executeRaw）用的同口径谓词片段参数（与 compatReadWhere 一致） */
+export function compatReadPredicate(scope: ReadScope): {
+	organizationId: string;
+	userId: string;
+	includeLegacy: boolean;
 } {
 	return {
-		OR: [
-			{ organizationId: scope.organizationId },
-			{ organizationId: null, userId: scope.userId },
-		],
+		organizationId: scope.organizationId,
+		userId: scope.userId,
+		includeLegacy: scope.isDefaultOrganization === true,
 	};
 }

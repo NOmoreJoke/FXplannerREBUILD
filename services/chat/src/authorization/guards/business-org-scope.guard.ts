@@ -8,6 +8,7 @@ import {
 import { RequestAuthService } from "../../auth/request-auth.service";
 import { PrismaService } from "../../prisma/prisma.service";
 import { isOrganizationRole } from "../authorization.types";
+import { resolveDefaultOrganizationId } from "../default-organization";
 import {
 	OrganizationNotFoundException,
 	OrganizationRequiredException,
@@ -90,6 +91,11 @@ export class BusinessOrgScopeGuard implements CanActivate {
 		if (!isOrganizationRole(membership.role)) {
 			throw new PermissionDeniedException("成员角色无效，拒绝访问");
 		}
+		// 默认组织标记（评审 I-08）：兼容窗口的存量回落只在默认组织上下文生效
+		const defaultOrganizationId = await resolveDefaultOrganizationId(
+			this.prisma,
+			auth.user.id,
+		);
 
 		request.actor = {
 			userId: auth.user.id,
@@ -97,6 +103,7 @@ export class BusinessOrgScopeGuard implements CanActivate {
 			membershipId: membership.id,
 			role: membership.role,
 			authMethod: "USER",
+			isDefaultOrganization: defaultOrganizationId === organizationId,
 		};
 		return true;
 	}

@@ -12,6 +12,7 @@ import {
 	compatReadWhere,
 	type ReadScope,
 } from "../authorization/organization-scope";
+import { resolveOrganizationPreferences } from "../organization/organization-preferences";
 import {
 	aggregatePlanUsage,
 	computeRemainingToUse,
@@ -101,22 +102,16 @@ export class ReportService {
 	) {}
 
 	/**
-	 * 本位币解析（W18，与 account.service 同款规则）：组织设置优先（LEDGER-02），
-	 * 回落 UserSettings（兼容窗口未迁旧记录），均无 → null。
+	 * 本位币解析（W18，与 account.service 同款规则；LEDGER-02）：统一走组织偏好
+	 * 解析——OrganizationSettings 优先，兼容回落仅限「该组织是其所有者的默认组织」
+	 * （评审 I-08），均无 → null。
 	 */
 	private async resolveBaseCurrency(scope: ReadScope): Promise<string | null> {
-		const orgSettings = await this.prisma.organizationSettings.findUnique({
-			where: { organizationId: scope.organizationId },
-			select: { baseCurrency: true },
-		});
-		if (orgSettings?.baseCurrency) {
-			return orgSettings.baseCurrency;
-		}
-		const userSettings = await this.prisma.userSettings.findUnique({
-			where: { userId: scope.userId },
-			select: { baseCurrency: true },
-		});
-		return userSettings?.baseCurrency ?? null;
+		const preferences = await resolveOrganizationPreferences(
+			this.prisma,
+			scope.organizationId,
+		);
+		return preferences?.baseCurrency ?? null;
 	}
 
 	/** 报告中心列表（GET /api/reports/plans，§5.1；W18 组织隔离）：全计划成本摘要 + 状态/币种筛选 */

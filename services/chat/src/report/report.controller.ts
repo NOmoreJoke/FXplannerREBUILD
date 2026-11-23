@@ -116,7 +116,7 @@ export class ReportController {
 			null,
 			() =>
 				this.reportService.list(
-					{ userId: actor.userId, organizationId: actor.organizationId },
+					actor,
 					{
 						status: query.status,
 						currencyCode: query.currencyCode,
@@ -162,7 +162,7 @@ export class ReportController {
 	) {
 		return this.withLog("GET /reports/plans/:id", user.id, id, () =>
 			this.reportService.detail(
-				{ userId: actor.userId, organizationId: actor.organizationId },
+				actor,
 				id,
 			),
 		).then((data) => ({

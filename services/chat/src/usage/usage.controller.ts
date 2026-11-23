@@ -139,7 +139,7 @@ export class UsageController {
 	) {
 		return this.withLog("GET /plans/:id/usages", user.id, id, () =>
 			this.usageService.list(
-				{ userId: actor.userId, organizationId: actor.organizationId },
+				actor,
 				id,
 			),
 		).then(

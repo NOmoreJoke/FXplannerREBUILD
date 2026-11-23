@@ -173,7 +173,7 @@ export class CorrectionController {
 		@Query("targetId") targetId: string,
 	) {
 		const data = await this.correctionService.getTarget(
-			{ userId: actor.userId, organizationId: actor.organizationId },
+			actor,
 			targetType,
 			targetId,
 		);
@@ -215,7 +215,7 @@ export class CorrectionController {
 		@Query("page") page: string,
 	) {
 		const data = await this.correctionService.list(
-			{ userId: actor.userId, organizationId: actor.organizationId },
+			actor,
 			targetType,
 			targetId,
 			page,

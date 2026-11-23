@@ -128,7 +128,7 @@ export class AiController {
 	) {
 		this.aiService.assertChatAvailable();
 		const data = await this.aiService.listConversations(
-			{ userId: actor.userId, organizationId: actor.organizationId },
+			actor,
 			query.limit,
 		);
 		return { success: true, data, message: "会话列表获取成功" };
@@ -242,7 +242,7 @@ export class AiController {
 		this.aiService.assertChatAvailable();
 		const data = await this.aiService.listMessages(
 			conversationId,
-			{ userId: actor.userId, organizationId: actor.organizationId },
+			actor,
 			query.limit,
 		);
 		return { success: true, data, message: "消息列表获取成功" };

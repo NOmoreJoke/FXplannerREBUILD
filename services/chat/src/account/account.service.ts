@@ -12,6 +12,7 @@ import {
 	compatReadWhere,
 	type ReadScope,
 } from "../authorization/organization-scope";
+import { resolveOrganizationPreferences } from "../organization/organization-preferences";
 import {
 	computeRemainingCost,
 	mergeLedgerItems,
@@ -316,22 +317,17 @@ export class AccountService {
 	}
 
 	/**
-	 * 本位币解析（W18）：组织设置优先（LEDGER-02 组织偏好），回落 UserSettings
-	 * （兼容窗口未迁旧记录），均无 → null。
+	 * 本位币解析（W18；LEDGER-02 组织偏好）：统一走组织偏好解析——
+	 * OrganizationSettings 优先，兼容回落仅限「该组织是其所有者的默认组织」
+	 * （评审 I-08：不再读请求者本人的 UserSettings，避免把个人本位币带进
+	 * 其新建或受邀加入的其他组织）；均无 → null。
 	 */
 	private async resolveBaseCurrency(scope: ReadScope): Promise<string | null> {
-		const orgSettings = await this.prisma.organizationSettings.findUnique({
-			where: { organizationId: scope.organizationId },
-			select: { baseCurrency: true },
-		});
-		if (orgSettings?.baseCurrency) {
-			return orgSettings.baseCurrency;
-		}
-		const userSettings = await this.prisma.userSettings.findUnique({
-			where: { userId: scope.userId },
-			select: { baseCurrency: true },
-		});
-		return userSettings?.baseCurrency ?? null;
+		const preferences = await resolveOrganizationPreferences(
+			this.prisma,
+			scope.organizationId,
+		);
+		return preferences?.baseCurrency ?? null;
 	}
 
 	/**

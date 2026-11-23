@@ -105,7 +105,7 @@ export class TransactionController {
 		@Param("id") id: string,
 	) {
 		const data = await this.transactionService.detail(
-			{ userId: actor.userId, organizationId: actor.organizationId },
+			actor,
 			id,
 		);
 		return { success: true, data, message: "查询成功" };

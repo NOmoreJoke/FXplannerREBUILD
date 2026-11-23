@@ -7,6 +7,7 @@ import {
 	compatReadWhere,
 	type ReadScope,
 } from "../authorization/organization-scope";
+import { resolveOrganizationPreferences } from "../organization/organization-preferences";
 import type {
 	AccountSummaryDto,
 	HomeStateDto,
@@ -38,18 +39,13 @@ export class HomeService {
 	 */
 	async getState(scope: ReadScope): Promise<HomeStateDto> {
 		const [
-			userSettings,
-			orgSettings,
+			preferences,
 			accounts,
 			plans,
 			latestRateObservedAt,
 			initialLotCount,
 		] = await Promise.all([
-			this.prisma.userSettings.findUnique({ where: { userId: scope.userId } }),
-			this.prisma.organizationSettings.findUnique({
-				where: { organizationId: scope.organizationId },
-				select: { ledgerStartedAt: true },
-			}),
+			resolveOrganizationPreferences(this.prisma, scope.organizationId),
 			this.prisma.account.findMany({
 				where: compatReadWhere(scope),
 				orderBy: { currencyCode: "asc" },
@@ -74,10 +70,10 @@ export class HomeService {
 		);
 
 		return {
-			// 建账态（LEDGER-02 组织级）：组织设置已迁则以组织为准，
-			// 兼容窗口回落 UserSettings（未迁旧记录，行为与 W18 前一致）
-			onboardingCompleted:
-				orgSettings?.ledgerStartedAt != null || userSettings !== null,
+			// 建账态（LEDGER-02 组织级）：以组织偏好为准（OrganizationSettings，
+			// 或默认组织所有者的个人设置兼容回落）——评审 I-08：不再读请求者本人的
+			// UserSettings，全新未建账组织不会因创建者个人已建账而误报 completed
+			onboardingCompleted: preferences !== null,
 			hasInitialHoldings: initialLotCount > 0,
 			hasAccounts: accounts.length > 0,
 			hasPlans: plans.length > 0,
@@ -104,15 +100,9 @@ export class HomeService {
 	 * 仅分组结果返回内存，禁止全表明细拉内存再过滤（契约 §2）。
 	 */
 	async getPortfolio(scope: ReadScope): Promise<PortfolioDto> {
-		const [orgSettings, userSettings, rows] = await Promise.all([
-			this.prisma.organizationSettings.findUnique({
-				where: { organizationId: scope.organizationId },
-				select: { baseCurrency: true },
-			}),
-			this.prisma.userSettings.findUnique({
-				where: { userId: scope.userId },
-				select: { baseCurrency: true },
-			}),
+		const includeLegacy = scope.isDefaultOrganization === true;
+		const [preferences, rows] = await Promise.all([
+			resolveOrganizationPreferences(this.prisma, scope.organizationId),
 			this.prisma.$queryRaw<PortfolioGroupRow[]>`
 				SELECT
 					currency_code,
@@ -121,7 +111,9 @@ export class HomeService {
 				FROM cost_lots
 				WHERE
 					(organization_id = ${scope.organizationId}
-						OR (organization_id IS NULL AND user_id = ${scope.userId}))
+						OR (organization_id IS NULL
+							AND user_id = ${scope.userId}
+							AND ${includeLegacy}))
 					AND remaining_qty > 0
 				GROUP BY currency_code
 				ORDER BY currency_code ASC
@@ -137,8 +129,7 @@ export class HomeService {
 			.toFixed(4);
 
 		return {
-			baseCurrency:
-				orgSettings?.baseCurrency ?? userSettings?.baseCurrency ?? null,
+			baseCurrency: preferences?.baseCurrency ?? null,
 			totalRemainingCost,
 			byCurrency: rows.map((row) => this.toPortfolioByCurrency(row)),
 		};

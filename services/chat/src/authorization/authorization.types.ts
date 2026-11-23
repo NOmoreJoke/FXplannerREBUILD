@@ -74,7 +74,7 @@ export type ActorAuthMethod = "USER" | "API";
 
 /**
  * 请求级授权上下文（技术方案 §4.2）：
- * 由 OrganizationContextGuard 实时查询 Membership 后构造（W17），
+ * 由 OrganizationContextGuard / BusinessOrgScopeGuard 实时查询 Membership 后构造，
  * 业务 Service 以 actor 替代裸 userId 作为数据范围与权限来源。
  * Agent 不构造另一个高权限 Actor——工具调用复用当前请求 Actor。
  */
@@ -84,4 +84,11 @@ export interface ActorContext {
 	membershipId: string;
 	role: OrganizationRole;
 	authMethod: ActorAuthMethod;
+	/**
+	 * 当前组织是否为该用户的默认组织（最早的 ACTIVE OWNER 成员关系所属组织，
+	 * 见 default-organization.ts）。兼容窗口的存量回落（organizationId IS NULL 的
+	 * 旧写路径行、未迁入 OrganizationSettings 的个人设置）仅在默认组织生效
+	 * （评审 I-08：严禁渗入用户后来新建或受邀加入的其他组织）。
+	 */
+	isDefaultOrganization: boolean;
 }

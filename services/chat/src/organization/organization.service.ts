@@ -9,6 +9,7 @@ import {
 } from "./organization-rules";
 import { OrganizationNotFoundException } from "../authorization/authorization.errors";
 import { InvalidOrganizationNameException } from "./organization.errors";
+import { resolveOrganizationPreferences } from "./organization-preferences";
 import { ACTIVE_STATUSES } from "../data-request/data-request-rules";
 
 /**
@@ -46,26 +47,23 @@ export class OrganizationService {
 			select: {
 				role: true,
 				organization: {
-					select: {
-						id: true,
-						name: true,
-						createdAt: true,
-						settings: {
-							select: {
-								baseCurrency: true,
-								ledgerStartedAt: true,
-							},
-						},
-					},
+					select: { id: true, name: true, createdAt: true },
 				},
 			},
 		});
-		return memberships.map((m) => ({
+		const preferencesList = await Promise.all(
+			memberships.map((m) =>
+				resolveOrganizationPreferences(this.prisma, m.organization.id),
+			),
+		);
+		return memberships.map((m, index) => ({
 			id: m.organization.id,
 			name: m.organization.name,
 			role: m.role,
-			baseCurrency: m.organization.settings?.baseCurrency ?? null,
-			onboardingCompleted: Boolean(m.organization.settings?.ledgerStartedAt),
+			// 建账态与本位币以组织偏好为准（OrganizationSettings 优先；默认组织兼容回落
+			// 到所有者的个人设置——评审 I-08：用户新建的其他组织绝不回落）
+			baseCurrency: preferencesList[index]?.baseCurrency ?? null,
+			onboardingCompleted: preferencesList[index] !== null,
 			createdAt: m.organization.createdAt.toISOString(),
 		}));
 	}
@@ -130,15 +128,16 @@ export class OrganizationService {
 	}> {
 		const organization = await this.prisma.organization.findUnique({
 			where: { id: actor.organizationId },
-			select: {
-				id: true,
-				name: true,
-				settings: { select: { baseCurrency: true, ledgerStartedAt: true } },
-			},
+			select: { id: true, name: true },
 		});
 		if (!organization) {
 			throw new OrganizationNotFoundException();
 		}
+		// 建账态与本位币以组织偏好为准（评审 I-08：新建组织不回落创建者的个人设置）
+		const preferences = await resolveOrganizationPreferences(
+			this.prisma,
+			actor.organizationId,
+		);
 		// 组织锁（只读摘要；技术方案 §9 / data-request-rules）：
 		// 仅 CLEAR / DELETION 锁定组织账本（EXPORT 不锁写），进行中状态含 FAILED
 		// （失败保锁态，ACTIVE_STATUSES 单一真源）——评审 I-14
@@ -157,10 +156,10 @@ export class OrganizationService {
 			name: organization.name,
 			role: actor.role,
 			capabilities: buildCapabilities(actor.role),
-			onboardingCompleted: Boolean(organization.settings?.ledgerStartedAt),
-			baseCurrency: organization.settings?.baseCurrency ?? null,
+			onboardingCompleted: preferences !== null,
+			baseCurrency: preferences?.baseCurrency ?? null,
 			ledgerStartedAt:
-				organization.settings?.ledgerStartedAt?.toISOString() ?? null,
+				preferences?.ledgerStartedAt?.toISOString() ?? null,
 			dataRequestLock: {
 				active: Boolean(activeLock),
 				type: activeLock?.type ?? null,

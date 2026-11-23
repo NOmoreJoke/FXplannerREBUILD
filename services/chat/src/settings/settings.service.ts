@@ -2,10 +2,19 @@ import { HttpException, HttpStatus, Inject, Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
 import type { ReadScope } from "../authorization/organization-scope";
+import {
+	PERSONAL_DEFAULT_LOCALE,
+	PERSONAL_DEFAULT_REGION,
+	resolveOrganizationPreferences,
+} from "../organization/organization-preferences";
 import type {
 	SettingsViewDto,
 	UpdateSettingsDto,
 } from "./dto/update-settings.dto";
+
+/** 个人展示偏好的产品默认值（无个人设置行时使用：受邀成员未独立建账） */
+const DEFAULT_REGION = PERSONAL_DEFAULT_REGION;
+const DEFAULT_LOCALE = PERSONAL_DEFAULT_LOCALE;
 
 /**
  * 设置更新空入参（400 SETTINGS_UPDATE_EMPTY）：白名单四字段全空时拒绝。
@@ -40,26 +49,39 @@ export class SettingsService {
 	) {}
 
 	/**
-	 * 查询完整设置视图（未建账 → 409 ONBOARDING_NOT_COMPLETED；W18 组织隔离）：
-	 * 个人展示字段（email/locale/region）读 UserSettings；组织偏好
-	 * （baseCurrency/prepPreference/reminderEnabled/ledgerStartedAt）优先读
-	 * OrganizationSettings（LEDGER-02），未迁旧记录回落 UserSettings 原值。
+	 * 查询完整设置视图（未建账 → 409 ONBOARDING_NOT_COMPLETED；W18 组织隔离）。
+	 *
+	 * 评审 I-10：组织偏好（baseCurrency/prepPreference/reminderEnabled/ledgerStartedAt）
+	 * 以**当前组织**为准，经 resolveOrganizationPreferences 解析——
+	 * OrganizationSettings 优先；兼容回落读的是**组织所有者**（默认组织）的个人设置，
+	 * 而非请求者本人的。此前先查请求者的 UserSettings、不存在即 409，导致受邀加入
+	 * 已建账组织的新成员（没有自己的 UserSettings）读设置必 409。
+	 * 个人展示字段：email 取守卫链已解析的登录身份（identity，零额外查询——F1-2
+	 * 契约要求单次受保护请求查 user 仅 1 次）；locale/region 取本人设置行，无则取产品默认值。
 	 */
-	async getSettings(scope: ReadScope): Promise<SettingsViewDto> {
-		const view = await this.getUserSettingsView(scope.userId);
-		const orgSettings = await this.prisma.organizationSettings.findUnique({
-			where: { organizationId: scope.organizationId },
-		});
-		if (orgSettings) {
-			return {
-				...view,
-				baseCurrency: orgSettings.baseCurrency,
-				prepPreference: orgSettings.prepPreference,
-				reminderEnabled: orgSettings.reminderEnabled,
-				ledgerStartedAt: orgSettings.ledgerStartedAt,
-			};
+	async getSettings(
+		scope: ReadScope,
+		identity: { email: string | null },
+	): Promise<SettingsViewDto> {
+		const [preferences, personal] = await Promise.all([
+			resolveOrganizationPreferences(this.prisma, scope.organizationId),
+			this.prisma.userSettings.findUnique({
+				where: { userId: scope.userId },
+				select: { region: true, locale: true },
+			}),
+		]);
+		if (!preferences) {
+			throw new OnboardingNotCompletedException();
 		}
-		return view;
+		return {
+			email: identity.email,
+			region: personal?.region ?? DEFAULT_REGION,
+			locale: personal?.locale ?? DEFAULT_LOCALE,
+			baseCurrency: preferences.baseCurrency,
+			prepPreference: preferences.prepPreference as SettingsViewDto["prepPreference"],
+			reminderEnabled: preferences.reminderEnabled,
+			ledgerStartedAt: preferences.ledgerStartedAt,
+		};
 	}
 
 	/** UserSettings 原值视图（写路径收尾复用；未建账 409） */

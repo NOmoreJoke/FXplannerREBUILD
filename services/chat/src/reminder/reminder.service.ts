@@ -7,6 +7,7 @@ import {
 	compatReadWhere,
 	type ReadScope,
 } from "../authorization/organization-scope";
+import { resolveOrganizationPreferences } from "../organization/organization-preferences";
 import type {
 	ReminderItemDto,
 	ReminderMatterDto,
@@ -49,28 +50,29 @@ export class ReminderService {
 
 	/**
 	 * 提醒列表（GET /api/reminders，§4.2/§6 时序）：
-	 * ① 未建账 409（依赖 UserSettings.reminderEnabled，对齐 settings 先例）
-	 * ② 开关开启 → 读时懒生成「今天」应存在的行（§4.2 挂载点；失败降级跳过，§11）
-	 * ③ 查询未读全量 + 已读近 30 天（scheduledFor 倒序，limit 100）
+	 * ① 未建账 409（以**当前组织**的偏好为准——评审 I-10：此前读请求者本人的
+	 *    UserSettings，受邀加入已建账组织的成员没有个人设置行，读提醒必 409）
+	 * ② 组织开关开启 → 读时懒生成「今天」应存在的行（§4.2 挂载点；失败降级跳过，§11）
+	 * ③ 查询未读全量 + 已读近 30 天（scheduledFor 倒序，limit 100）——已读态按
+	 *    **当前成员**判定（LEDGER-03）：行主读过不替其他成员清除未读（评审 I-11）
 	 * ④ 逐行派生 matters：非 ACTIVE 计划行、planId 缺失行、matters 为空的行不返回（§4.5）。
 	 */
 	async list(scope: ReadScope): Promise<RemindersViewDto> {
-		const settings = await this.prisma.userSettings.findUnique({
-			where: { userId: scope.userId },
-			select: { reminderEnabled: true },
-		});
-		if (!settings) {
+		const preferences = await resolveOrganizationPreferences(
+			this.prisma,
+			scope.organizationId,
+		);
+		if (!preferences) {
 			throw new OnboardingNotCompletedException();
 		}
 
-		if (settings.reminderEnabled) {
+		if (preferences.reminderEnabled) {
 			// 生成失败兜底（§11）：漏一轮无业务损失，下次请求重算；列表本身失败才走错误态
-			// 生成路径维持 userId 语义（W18 禁改写路径；组织级生成随 Goal #3B 收口）
 			try {
-				await this.generateDueReminders(scope.userId);
+				await this.generateDueReminders(scope);
 			} catch (error) {
 				this.logger.warn(
-					`generateDueReminders failed userId=${scope.userId} error=${error instanceof Error ? error.message : String(error)}`,
+					`generateDueReminders failed organizationId=${scope.organizationId} error=${error instanceof Error ? error.message : String(error)}`,
 				);
 			}
 		}
@@ -79,41 +81,52 @@ export class ReminderService {
 			utcPlus8Midnight(new Date()),
 			-READ_WINDOW_DAYS,
 		);
-		const rows = await this.prisma.reminder.findMany({
+		// 候选集（SQL 粗筛，三条并集保证不漏当前成员的未读）：
+		//   a. 行主本人未读；b. 落在近 30 天窗口内；c. 当前成员从未读过
+		// 此前直接用行内 reminders.read_at 过滤窗口——行主读过一条 30 天前的提醒后，
+		// 同组织其他成员的这条未读提醒会被 SQL 直接滤掉（评审 I-11）。
+		const candidates = await this.prisma.reminder.findMany({
 			where: {
 				AND: [
 					compatReadWhere(scope),
 					{
-						OR: [{ readAt: null }, { scheduledFor: { gte: readWindowStart } }],
+						OR: [
+							{ readAt: null },
+							{ scheduledFor: { gte: readWindowStart } },
+							{ NOT: { readStates: { some: { userId: scope.userId } } } },
+						],
 					},
 				],
 			},
 			orderBy: [{ scheduledFor: "desc" }, { id: "desc" }],
-			take: REMINDER_LIST_LIMIT,
 		});
 
-		// LEDGER-03 只读侧（W18）：个人未读态优先按成员级 ReminderRead（当前
-		// actor.userId）计算；无成员级行时回落行内 readAt（仅行主本人语义）
+		// 当前成员的已读时刻：成员级 ReminderRead 优先；无成员级行时回落行内 readAt
+		// （仅行主本人语义——他人行的 readAt 不构成我的已读态）
 		const memberReads = await this.prisma.reminderRead.findMany({
 			where: {
 				userId: scope.userId,
-				reminderId: { in: rows.map((row) => row.id) },
+				reminderId: { in: candidates.map((row) => row.id) },
 			},
 			select: { reminderId: true, readAt: true },
 		});
 		const memberReadAtByReminder = new Map(
 			memberReads.map((read) => [read.reminderId, read.readAt]),
 		);
-		for (const row of rows) {
-			const memberReadAt = memberReadAtByReminder.get(row.id);
-			if (memberReadAt) {
-				row.readAt = memberReadAt;
-			} else if (row.userId !== scope.userId) {
-				row.readAt = null; // 他人行的 readAt 不构成我的已读态
-			}
-		}
+		const effectiveReadAt = (row: { id: string; userId: string; readAt: Date | null }) =>
+			memberReadAtByReminder.get(row.id) ??
+			(row.userId === scope.userId ? row.readAt : null);
+		// 窗口语义不变：「未读全量 + 已读近 30 天」，近 30 天以**提醒日 scheduledFor** 计
+		// （与原 SQL 口径一致），已读态取当前成员的
+		const rows = candidates
+			.filter((row) => {
+				const readAt = effectiveReadAt(row);
+				return readAt === null || row.scheduledFor >= readWindowStart;
+			})
+			.slice(0, REMINDER_LIST_LIMIT)
+			.map((row) => ({ ...row, readAt: effectiveReadAt(row) }));
 
-		const items = await this.toItems(rows);
+		const items = await this.toItems(scope, rows);
 		return {
 			items,
 			unreadCount: items.filter((item) => item.readAt === null).length,
@@ -161,14 +174,25 @@ export class ReminderService {
 	/**
 	 * 读时懒生成：读 ACTIVE 计划 + 分配 + 排期 + 已有行（批量）→ 纯函数判定（只算今天）
 	 * → createMany skipDuplicates（唯一键 [userId, dedupKey, scheduledFor] 兜底并发）。
+	 *
+	 * 评审 I-11：只在**当前组织作用域**内生成（compatReadWhere）。此前按 userId 全量
+	 * 扫描该用户在所有组织的 ACTIVE 计划并写入 organizationId IS NULL 的行——读任意
+	 * 组织都会把别的组织的提醒以 NULL 行生成出来。现在行的 userId/organizationId
+	 * 随父计划（父子同组织，§5.3.2）；同组织任一成员的读取都会为其组织补齐到期提醒。
 	 */
-	private async generateDueReminders(userId: string): Promise<void> {
+	private async generateDueReminders(scope: ReadScope): Promise<void> {
 		const plans = await this.prisma.plan.findMany({
-			where: { userId, status: "ACTIVE" },
+			where: { status: "ACTIVE", ...compatReadWhere(scope) },
 		});
 		if (plans.length === 0) {
 			return;
 		}
+		const ownerByPlanId = new Map(
+			plans.map((plan) => [
+				plan.id,
+				{ userId: plan.userId, organizationId: plan.organizationId },
+			]),
+		);
 		const planIds = plans.map((plan) => plan.id);
 		const [allocations, installments, existingRows] = await Promise.all([
 			this.prisma.planAllocation.findMany({
@@ -179,7 +203,7 @@ export class ReminderService {
 				orderBy: { seq: "asc" },
 			}),
 			this.prisma.reminder.findMany({
-				where: { userId, planId: { in: planIds } },
+				where: { planId: { in: planIds } },
 				select: { planId: true, type: true, scheduledFor: true },
 			}),
 		]);
@@ -209,7 +233,16 @@ export class ReminderService {
 			return;
 		}
 		await this.prisma.reminder.createMany({
-			data: drafts.map((draft) => ({ ...draft, userId })),
+			// 行的归属随父计划：userId = 计划创建者（唯一键与存量一致，保证幂等），
+			// organizationId = 计划所属组织（NULL 计划保持 NULL，仅在默认组织可见）
+			data: drafts.map((draft) => {
+				const owner = ownerByPlanId.get(draft.planId);
+				return {
+					...draft,
+					userId: owner?.userId ?? scope.userId,
+					organizationId: owner?.organizationId ?? null,
+				};
+			}),
 			skipDuplicates: true,
 		});
 	}
@@ -242,6 +275,7 @@ export class ReminderService {
 
 	/** 行列表 → 出参列表：内存关联计划（裸外键先例），过滤非 ACTIVE / matters 为空的行 */
 	private async toItems(
+		scope: ReadScope,
 		rows: Array<{
 			id: string;
 			planId: string | null;
@@ -257,7 +291,11 @@ export class ReminderService {
 			return [];
 		}
 		const [plans, allocations] = await Promise.all([
-			this.prisma.plan.findMany({ where: { id: { in: planIds } } }),
+			// 纵深防御（评审 N-08）：计划查询同样带组织作用域条件，不凭「id 来自已过
+			// 滤的提醒行」推断可见性
+			this.prisma.plan.findMany({
+				where: { id: { in: planIds }, ...compatReadWhere(scope) },
+			}),
 			this.prisma.planAllocation.findMany({
 				where: { planId: { in: planIds } },
 			}),

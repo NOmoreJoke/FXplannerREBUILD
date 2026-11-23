@@ -75,9 +75,8 @@ export class SettingsController {
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,
 	) {
-		const data = await this.settingsService.getSettings({
-			userId: actor.userId,
-			organizationId: actor.organizationId,
+		const data = await this.settingsService.getSettings(actor, {
+			email: user.email,
 		});
 		return { success: true, data, message: "设置查询成功" };
 	}

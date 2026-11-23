@@ -117,10 +117,7 @@ export class AccountController {
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,
 	) {
-		const scope: ReadScope = {
-			userId: actor.userId,
-			organizationId: actor.organizationId,
-		};
+		const scope: ReadScope = actor;
 		return this.withLog("GET /accounts", user.id, null, () =>
 			this.accountService.list(scope),
 		).then((data) => ({ success: true, data, message: "账户列表获取成功" }));
@@ -157,10 +154,7 @@ export class AccountController {
 		@CurrentActor() actor: ActorContext,
 		@Param() params: AccountCurrencyParamDto,
 	) {
-		const scope: ReadScope = {
-			userId: actor.userId,
-			organizationId: actor.organizationId,
-		};
+		const scope: ReadScope = actor;
 		return this.withLog(
 			"GET /accounts/:currencyCode",
 			user.id,
@@ -207,10 +201,7 @@ export class AccountController {
 		@CurrentActor() actor: ActorContext,
 		@Param() params: AccountCurrencyParamDto,
 	) {
-		const scope: ReadScope = {
-			userId: actor.userId,
-			organizationId: actor.organizationId,
-		};
+		const scope: ReadScope = actor;
 		return this.withLog(
 			"GET /accounts/:currencyCode/allocations",
 			user.id,
@@ -250,10 +241,7 @@ export class AccountController {
 		@CurrentActor() actor: ActorContext,
 		@Param() params: AccountCurrencyParamDto,
 	) {
-		const scope: ReadScope = {
-			userId: actor.userId,
-			organizationId: actor.organizationId,
-		};
+		const scope: ReadScope = actor;
 		return this.withLog(
 			"GET /accounts/:currencyCode/transactions",
 			user.id,

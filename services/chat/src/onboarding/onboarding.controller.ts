@@ -22,6 +22,13 @@ import {
 import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
+import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { PermissionGuard } from "../authorization/guards/permission.guard";
+import {
+	RequiresPermission,
+} from "../authorization/decorators/requires-permission.decorator";
+import type { ActorContext } from "../authorization/authorization.types";
 import {
 	CompleteOnboardingDto,
 	InitialHoldingsResultDto,
@@ -54,19 +61,23 @@ export class OnboardingController {
 		private readonly onboardingService: OnboardingService,
 	) {}
 
+	// 只读状态查询与业务 GET 同一守卫链（评审 I-10：此前漏挂，离职成员/跨组织上下文
+	// 仍可读，且完成态只看个人设置——现按当前组织的偏好判定）
 	@Get("status")
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("settings.read")
 	@ApiOperation({
-		summary: "查询首次设置状态",
+		summary: "查询首次设置状态（按当前组织）",
 		description:
-			"完成态判定 / 条款确认进度 / 已保存设置 / 当前条款版本。只读无副作用。",
+			"完成态判定 / 条款确认进度 / 已保存设置 / 当前条款版本。只读无副作用。完成态与设置以当前组织为准（组织设置优先；兼容窗口内回落到默认组织所有者的个人设置）；条款确认进度为个人维度。无组织头的单组织用户回落到其默认组织，多组织须带 X-Organization-Id。",
 	})
 	@ApiOkResponse({
 		description: "状态查询成功，响应体为 { success, data, message } 包装",
 		type: OnboardingStatusDto,
 	})
 	@HttpCode(HttpStatus.OK)
-	async getStatus(@CurrentUser() user: User) {
-		const data = await this.onboardingService.getStatus(user.id);
+	async getStatus(@CurrentActor() actor: ActorContext) {
+		const data = await this.onboardingService.getStatus(actor);
 		return { success: true, data, message: "首次设置状态查询成功" };
 	}
 

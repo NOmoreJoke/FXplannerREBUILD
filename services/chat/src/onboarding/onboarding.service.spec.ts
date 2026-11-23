@@ -33,6 +33,18 @@ function createPrismaMock() {
 		findUnique: vi.fn(),
 		create: vi.fn(),
 	};
+	// 组织偏好解析（评审 I-10）：默认无 OrganizationSettings；组织活跃 Owner 与
+	// 用户的默认组织都指向 u1 / org-default（单组织存量用户形态）
+	const organizationSettings = {
+		findUnique: vi.fn().mockResolvedValue(null),
+	};
+	const membership = {
+		findFirst: vi.fn((args: { where: Record<string, unknown> }) =>
+			"organizationId" in args.where
+				? Promise.resolve({ userId: "u1" })
+				: Promise.resolve({ organizationId: "org-default" }),
+		),
+	};
 	const termsConsent = {
 		count: vi.fn(),
 		upsert: vi.fn(),
@@ -50,6 +62,8 @@ function createPrismaMock() {
 	};
 	const prisma = {
 		userSettings,
+		organizationSettings,
+		membership,
 		termsConsent,
 		initialHolding,
 		costLot,
@@ -165,12 +179,23 @@ describe("OnboardingService", () => {
 		prisma.account.upsert.mockResolvedValue({});
 	}
 
-	describe("getStatus", () => {
+	describe("getStatus（按当前组织的偏好判定完成态；评审 I-10）", () => {
+		/** u1 的默认组织；无 OrganizationSettings，兼容回落到 u1 的个人设置 */
+		const DEFAULT_SCOPE = { userId: "u1", organizationId: "org-default" };
+		const onboardedRow = {
+			baseCurrency: "HKD",
+			locale: "zh-CN",
+			region: "CN",
+			prepPreference: "balanced",
+			reminderEnabled: false,
+			ledgerStartedAt: T0,
+		};
+
 		it("未完成：completed=false、settings=null", async () => {
 			prisma.userSettings.findUnique.mockResolvedValue(null);
 			prisma.termsConsent.count.mockResolvedValue(0);
 
-			const status = await service.getStatus("u1");
+			const status = await service.getStatus(DEFAULT_SCOPE);
 
 			expect(status.completed).toBe(false);
 			expect(status.requiredConsentsMet).toBe(false);
@@ -178,18 +203,11 @@ describe("OnboardingService", () => {
 			expect(status.currentTermsVersion).toBe(CURRENT_TERMS_VERSION);
 		});
 
-		it("已完成：返回 settings 视图，completed=true", async () => {
-			prisma.userSettings.findUnique.mockResolvedValue({
-				baseCurrency: "HKD",
-				locale: "zh-CN",
-				region: "CN",
-				prepPreference: "balanced",
-				reminderEnabled: false,
-				ledgerStartedAt: T0,
-			});
+		it("已完成（兼容回落到默认组织所有者的个人设置）：返回 settings 视图，completed=true", async () => {
+			prisma.userSettings.findUnique.mockResolvedValue(onboardedRow);
 			prisma.termsConsent.count.mockResolvedValue(2);
 
-			const status = await service.getStatus("u1");
+			const status = await service.getStatus(DEFAULT_SCOPE);
 
 			expect(status.completed).toBe(true);
 			expect(status.requiredConsentsMet).toBe(true);
@@ -203,11 +221,55 @@ describe("OnboardingService", () => {
 			});
 		});
 
+		it("受邀成员（无个人设置行）在已建账的默认组织里：completed=true，不读成员本人的设置", async () => {
+			// 组织所有者 u1 已建账；成员 member 没有自己的 UserSettings
+			prisma.userSettings.findUnique.mockImplementation((args: { where: { userId: string } }) =>
+				Promise.resolve(args.where.userId === "u1" ? onboardedRow : null),
+			);
+			prisma.termsConsent.count.mockResolvedValue(0);
+
+			const status = await service.getStatus({ userId: "member", organizationId: "org-default" });
+
+			expect(status.completed).toBe(true);
+			expect(status.settings).toMatchObject({ baseCurrency: "HKD", locale: "zh-CN", region: "CN" });
+			expect(status.requiredConsentsMet).toBe(false); // 条款确认仍是个人维度
+		});
+
+		it("组织设置存在时以组织设置为准，不再读任何个人设置", async () => {
+			prisma.organizationSettings.findUnique.mockResolvedValue({
+				baseCurrency: "USD",
+				prepPreference: "cautious",
+				reminderEnabled: true,
+				ledgerStartedAt: T0,
+			});
+			prisma.userSettings.findUnique.mockResolvedValue(null);
+			prisma.termsConsent.count.mockResolvedValue(2);
+
+			const status = await service.getStatus(DEFAULT_SCOPE);
+
+			expect(status.completed).toBe(true);
+			expect(status.settings).toMatchObject({ baseCurrency: "USD", prepPreference: "cautious", locale: "zh-CN", region: "CN" });
+		});
+
+		it("已建账用户切到其新建的（未建账）组织：completed=false——不回落创建者的个人设置", async () => {
+			prisma.userSettings.findUnique.mockResolvedValue(onboardedRow);
+			// u1 的默认组织是 org-default；当前请求的组织 org-new 不是默认组织
+			prisma.membership.findFirst.mockImplementation((args: { where: Record<string, unknown> }) =>
+				Promise.resolve("organizationId" in args.where ? { userId: "u1" } : { organizationId: "org-default" }),
+			);
+			prisma.termsConsent.count.mockResolvedValue(2);
+
+			const status = await service.getStatus({ userId: "u1", organizationId: "org-new" });
+
+			expect(status.completed).toBe(false);
+			expect(status.settings).toBeNull();
+		});
+
 		it("条款只差一条也算未满足（age18 + terms 须齐全）", async () => {
 			prisma.userSettings.findUnique.mockResolvedValue(null);
 			prisma.termsConsent.count.mockResolvedValue(1);
 
-			const status = await service.getStatus("u1");
+			const status = await service.getStatus(DEFAULT_SCOPE);
 
 			expect(status.requiredConsentsMet).toBe(false);
 		});

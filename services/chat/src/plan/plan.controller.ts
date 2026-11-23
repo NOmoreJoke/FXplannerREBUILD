@@ -202,10 +202,7 @@ export class PlanController {
 		@CurrentActor() actor: ActorContext,
 		@Query() query: PlanListQueryDto,
 	) {
-		const scope: ReadScope = {
-			userId: actor.userId,
-			organizationId: actor.organizationId,
-		};
+		const scope: ReadScope = actor;
 		return this.withLog(`GET /plans status=${query.status ?? "ALL"}`, user.id, null, () =>
 			this.planService.list(scope, query.status),
 		).then(
@@ -240,10 +237,7 @@ export class PlanController {
 		@CurrentActor() actor: ActorContext,
 		@Param("id") id: string,
 	) {
-		const scope: ReadScope = {
-			userId: actor.userId,
-			organizationId: actor.organizationId,
-		};
+		const scope: ReadScope = actor;
 		return this.withLog("GET /plans/:id", user.id, id, () =>
 			this.planService.getDetail(scope, id),
 		).then(
