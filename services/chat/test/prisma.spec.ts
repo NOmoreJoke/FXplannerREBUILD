@@ -522,4 +522,75 @@ describe("数据库基础设施测试", () => {
 			await prisma.dataRequest.delete({ where: { id: dataRequest.id } });
 		});
 	});
+
+	describe("ToB R1 评审跟进（N-09 跟进索引 / N-11 ReminderRead 唯一性）", () => {
+		const readStateUserIds: string[] = [];
+		let sharedReminderId = "";
+
+		afterAll(async () => {
+			if (sharedReminderId) {
+				await prisma.reminder
+					.deleteMany({ where: { id: sharedReminderId } })
+					.catch(() => {});
+			}
+			await prisma.user.deleteMany({ where: { id: { in: readStateUserIds } } });
+		});
+
+		test("ReminderRead(reminderId, userId) 唯一：同成员重复已读被拒，不同成员互不干扰", async () => {
+			const owner = await prisma.user.create({
+				data: {
+					email: `rr-owner-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
+				},
+			});
+			const member = await prisma.user.create({
+				data: {
+					email: `rr-member-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
+				},
+			});
+			readStateUserIds.push(owner.id, member.id);
+			const reminder = await prisma.reminder.create({
+				data: {
+					userId: owner.id,
+					type: "PLAN_DUE",
+					dedupKey: `rr-${Date.now()}`,
+					scheduledFor: observedAt,
+				},
+			});
+			sharedReminderId = reminder.id;
+
+			const readAt = new Date(Date.UTC(2026, 10, 23, 1, 0, 0));
+			await prisma.reminderRead.create({
+				data: { reminderId: reminder.id, userId: owner.id, readAt },
+			});
+			// 同一成员对同一提醒的重复已读行 → 唯一约束拒绝（LEDGER-03 / MIG-B 幂等兜底）
+			await expect(
+				prisma.reminderRead.create({
+					data: { reminderId: reminder.id, userId: owner.id, readAt },
+				}),
+			).rejects.toMatchObject({ code: "P2002" });
+			// 另一成员的已读态是独立行：一人已读不清除他人未读
+			await expect(
+				prisma.reminderRead.create({
+					data: { reminderId: reminder.id, userId: member.id, readAt },
+				}),
+			).resolves.toBeDefined();
+			expect(
+				await prisma.reminderRead.count({ where: { reminderId: reminder.id } }),
+			).toBe(2);
+		});
+
+		test("N-09 跟进索引已随迁移落库（reminder_reads.user_id / ai_conversations 组织打头）", async () => {
+			const rows = await prisma.$queryRaw<Array<{ indexname: string }>>`
+				SELECT indexname FROM pg_indexes
+				WHERE schemaname = 'public'
+					AND indexname IN ('reminder_reads_user_id_idx', 'ai_conversations_organization_id_last_message_at_idx')
+			`;
+			expect(rows.map((row) => row.indexname).sort()).toEqual([
+				"ai_conversations_organization_id_last_message_at_idx",
+				"reminder_reads_user_id_idx",
+			]);
+		});
+	});
 });

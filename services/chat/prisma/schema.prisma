@@ -150,6 +150,8 @@ model ReminderRead {
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([reminderId, userId])
+  /// 按成员查已读态 / 用户注销级联删除的访问路径（唯一索引以 reminder_id 打头，服务不到只按 user_id 的查询）
+  @@index([userId])
   @@map("reminder_reads")
 }
 
@@ -582,6 +584,8 @@ model AiConversation {
 
   @@index([userId, updatedAt(sort: Desc)], map: "idx_user_updated")
   @@index([userId, organizationId, updatedAt(sort: Desc)])
+  /// 组织打头的访问路径（组织级导出/清空、按组织核对）；既有两条索引均以 user_id 打头
+  @@index([organizationId, lastMessageAt(sort: Desc)])
   @@map("ai_conversations")
 }
 

@@ -10,13 +10,18 @@
  * 纪律（沿用 rate-cache-migration 先例）：
  * - 旗标必须为独立裸旗标；带值（空格/等号）、拼写错误、重复、未知旗标一律退出码 1；
  * - JSON 结果输出到 stdout（人类重定向落盘），人类可读提示走 stderr；
- * - 写入模式单事务原子执行；孤儿派生行阻断（BackfillAnomalyError → 退出 1）。
+ * - 写入模式按用户分片事务执行（每片一个事务、幂等可重跑，失败只回滚当前片）；
+ *   孤儿派生行预检阻断（BackfillAnomalyError → 退出 1）；
+ * - 写入模式拒绝生产目标：库名含 fxplanner_prod（大小写不敏感）或
+ *   NODE_ENV=production 一律退出 1（评审 I-15；verify 为只读，不受此限）；
+ * - verify 是迁移时点闸门，须在停写窗口内执行。
  */
 
 import { PrismaClient } from "@prisma/client";
 import {
 	BackfillAnomalyError,
 	backfillDefaultOrganizations,
+	isProductionBackfillTarget,
 	type BackfillSummary,
 } from "../../src/organization/organization-backfill";
 import {
@@ -79,9 +84,14 @@ async function main(): Promise<number> {
 		console.error("缺少 DATABASE_URL（指向备份副本/演练库）");
 		return 1;
 	}
-	if (mode === "backfill-apply" && /fxplanner_prod/.test(databaseUrl)) {
+	if (
+		mode === "backfill-apply" &&
+		isProductionBackfillTarget(databaseUrl, process.env.NODE_ENV)
+	) {
 		// 生产执行不由 AI/本工具自动进行（技术方案 §12.4）
-		console.error("拒绝指向生产库执行；生产停写窗口由人类另行批准");
+		console.error(
+			"拒绝指向生产目标执行写入（库名匹配 fxplanner_prod 或 NODE_ENV=production）；生产停写窗口由人类另行批准",
+		);
 		return 1;
 	}
 
@@ -95,6 +105,9 @@ async function main(): Promise<number> {
 				return 1;
 			}
 			console.error(`核对通过：${result.checks} 项检查，0 diffs`);
+			console.error(
+				"提示：verify 为迁移时点闸门，须在停写窗口内执行；上线后业务数据可在非默认组织演进，不作常驻巡检",
+			);
 			return 0;
 		}
 

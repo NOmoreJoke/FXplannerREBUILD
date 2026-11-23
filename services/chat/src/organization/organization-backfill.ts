@@ -1,19 +1,29 @@
 /**
- * MIG-B 默认组织幂等回填（技术方案 §12.2；Goal #3A W15）。
+ * MIG-B 默认组织幂等回填（技术方案 §12.2；Goal #3A W15；评审 I-15 加固）。
  *
  * 职责边界：
  * - 仅做「存量个人数据 → 默认组织」的一次性回填，幂等可重复执行；
  * - 不删除、不禁用任何 userId 读路径（兼容窗口在 Goal #3B 收口）；
- * - 金额、ID、版本、时间戳一律不改（§12.2.6）；
+ * - 金额、ID、版本、时间戳一律不改（§12.2.6）——因此业务行用原生 UPDATE 只写
+ *   租户列，绕开 Prisma `@updatedAt` 自动改写 `updated_at`；
  * - 孤儿/父子缺失预检失败即抛错阻断，绝不静默归组（§12.2.5）。
+ *
+ * 执行模型：全库只读预检 → 按用户分片、每片一个事务（默认 50 用户/片，显式
+ * 超时）。分片间不共享事务：某片失败只回滚该片，已提交的分片保持有效；因为
+ * 每一步都幂等（仅更新 organizationId IS NULL 的行、设置/已读行跳过重复），
+ * 修复问题后重跑即续跑，不会重复建组或覆盖数据。全库单事务在生产数据量下会
+ * 超出交互式事务超时，已弃用。
  *
  * 复用方式：integration 测试直接调用本模块函数；CLI 入口见
  * prisma/tob-r1-migration/backfill.ts（dry-run 默认，--apply 需双旗标确认）。
  */
 
 import type { PrismaClient, Prisma } from "@prisma/client";
+import { resolveDefaultOrganizationId } from "../authorization/default-organization";
+import { defaultOrganizationName } from "./default-organization";
 
 type Db = PrismaClient | Prisma.TransactionClient;
+type Tx = Prisma.TransactionClient;
 
 /** 回填执行摘要（CLI 以 JSON 输出；测试断言计数） */
 export interface BackfillSummary {
@@ -40,11 +50,26 @@ export interface BackfillSummary {
 	};
 	/** 新建 ReminderRead 行数 */
 	reminderReadsCreated: number;
-	/** DataRequest 重置 scope 行数（EXPORT/DELETION→PERSONAL、CLEAR→ORGANIZATION） */
+	/** DataRequest 语义映射行数（仅未挂组织的存量行） */
 	dataRequestsRescoped: number;
 	/** 已有 OWNER Membership 而幂等跳过建组的用户数 */
 	usersSkippedIdempotent: number;
+	/** 已提交的事务分片数 */
+	chunksCommitted: number;
 }
+
+export interface BackfillOptions {
+	dryRun?: boolean;
+	/** 仅处理指定用户（测试/演练分片）；缺省全量 */
+	userIds?: string[];
+	/** 每个事务处理的用户数（默认 50） */
+	chunkSize?: number;
+}
+
+/** 默认分片大小：每用户约 16 条语句，50 用户/片在百毫秒~秒级完成 */
+export const BACKFILL_CHUNK_SIZE = 50;
+/** 分片事务参数：显式超时，不依赖 PrismaClient 的默认值（交互式事务默认仅 5s） */
+const CHUNK_TX_OPTIONS = { maxWait: 30_000, timeout: 180_000 };
 
 /** 孤儿/父子缺失阻断错误（details 携带各表孤儿计数，绝不静默归组） */
 export class BackfillAnomalyError extends Error {
@@ -57,47 +82,18 @@ export class BackfillAnomalyError extends Error {
 	}
 }
 
-/** 默认组织名（需求 ORG-01.3：「用户名称/邮箱前缀的工作台」） */
-export function defaultOrganizationName(user: {
-	name: string | null;
-	email: string | null;
-}): string {
-	const base = user.name?.trim() || (user.email?.split("@")[0] ?? "").trim();
-	return `${base || "我的"}的工作台`;
-}
-
-/** 单用户默认组织视图（回填与核对共用） */
-export interface DefaultOrgView {
-	userId: string;
-	organizationId: string;
-}
-
 /**
- * 解析用户的默认组织：已有 OWNER Membership 则幂等复用，否则新建
- * Organization + OWNER/ACTIVE Membership（单活跃 Owner 由
- * memberships_single_active_owner_uidx 兜底）。
+ * MIG-B 写入的生产目标拒绝（技术方案 §12.4「生产执行不由 AI 自动进行」）：
+ * 连接串库名含 fxplanner_prod（**大小写不敏感**，评审 I-15）或运行环境为
+ * production 即判为生产。任一命中即拒绝——拒绝判定宁可误伤
+ * （如 FXPLANNER_PROD_BAK、fxplanner_prod_backup），不可漏放。
+ * 只读的 verify 不受此限（停写窗口内的人工核对需要它）。
  */
-export async function resolveDefaultOrganization(
-	db: Db,
-	user: { id: string; name: string | null; email: string | null },
-): Promise<{ organizationId: string; created: boolean }> {
-	const existing = await db.membership.findFirst({
-		where: { userId: user.id, role: "OWNER", status: "ACTIVE" },
-		select: { organizationId: true },
-	});
-	if (existing) {
-		return { organizationId: existing.organizationId, created: false };
-	}
-	const org = await db.organization.create({
-		data: {
-			name: defaultOrganizationName(user),
-			memberships: {
-				create: { userId: user.id, role: "OWNER", status: "ACTIVE" },
-			},
-		},
-		select: { id: true },
-	});
-	return { organizationId: org.id, created: true };
+export function isProductionBackfillTarget(
+	databaseUrl: string,
+	nodeEnv: string | undefined = undefined,
+): boolean {
+	return /fxplanner_prod/i.test(databaseUrl) || nodeEnv === "production";
 }
 
 /** 孤儿派生行计数（裸外键表无 Prisma 关系，用 LEFT JOIN IS NULL 检测） */
@@ -108,146 +104,264 @@ interface OrphanCounts {
 	plan_change_logs: number;
 }
 
-/** MIG-B 孤儿预检（§12.2.5）：父记录缺失即阻断发布，不静默归组 */
+/**
+ * MIG-B 孤儿预检（§12.2.5）：父记录缺失即阻断发布，不静默归组。
+ * 全库只读闸门——孤儿行不属于任何用户分片，因此不接受 userIds。
+ */
 export async function assertNoOrphanRows(db: Db): Promise<OrphanCounts> {
-	const rows = await db.$queryRaw<Array<{ n: bigint }>>`
-		SELECT (
+	const rows = await db.$queryRaw<
+		Array<Record<keyof OrphanCounts, bigint>>
+	>`
+		SELECT
 			(SELECT count(*) FROM plan_allocations a
-				LEFT JOIN plans p ON p.id = a.plan_id WHERE p.id IS NULL)
-			+ (SELECT count(*) FROM usage_lot_allocations x
+				LEFT JOIN plans p ON p.id = a.plan_id WHERE p.id IS NULL) AS plan_allocations,
+			(SELECT count(*) FROM usage_lot_allocations x
 				LEFT JOIN usage_records u ON u.id = x.usage_id
 				LEFT JOIN cost_lots l ON l.id = x.lot_id
-				WHERE u.id IS NULL OR l.id IS NULL)
-			+ (SELECT count(*) FROM usage_records u
-				LEFT JOIN plans p ON p.id = u.plan_id WHERE p.id IS NULL)
-			+ (SELECT count(*) FROM plan_change_logs c
-				LEFT JOIN plans p ON p.id = c.plan_id WHERE p.id IS NULL)
-		) AS n
+				WHERE u.id IS NULL OR l.id IS NULL) AS usage_lot_allocations,
+			(SELECT count(*) FROM usage_records u
+				LEFT JOIN plans p ON p.id = u.plan_id WHERE p.id IS NULL) AS usage_records,
+			(SELECT count(*) FROM plan_change_logs c
+				LEFT JOIN plans p ON p.id = c.plan_id WHERE p.id IS NULL) AS plan_change_logs
 	`;
-	const total = Number(rows[0]?.n ?? 0);
+	const counts: OrphanCounts = {
+		plan_allocations: Number(rows[0]?.plan_allocations ?? 0n),
+		usage_lot_allocations: Number(rows[0]?.usage_lot_allocations ?? 0n),
+		usage_records: Number(rows[0]?.usage_records ?? 0n),
+		plan_change_logs: Number(rows[0]?.plan_change_logs ?? 0n),
+	};
+	const total =
+		counts.plan_allocations +
+		counts.usage_lot_allocations +
+		counts.usage_records +
+		counts.plan_change_logs;
 	if (total > 0) {
-		// 逐表细分计数，供人类定位（阻止发布语义，不自动修复）
-		const detailed = await db.$queryRaw<Array<{ n: bigint }>>`
-			SELECT
-				(SELECT count(*) FROM plan_allocations a
-					LEFT JOIN plans p ON p.id = a.plan_id WHERE p.id IS NULL) AS n
-		`;
-		const planAllocations = Number(detailed[0]?.n ?? 0);
-		const detailedLots = await db.$queryRaw<Array<{ n: bigint }>>`
-			SELECT count(*) AS n FROM usage_lot_allocations x
-				LEFT JOIN usage_records u ON u.id = x.usage_id
-				LEFT JOIN cost_lots l ON l.id = x.lot_id
-				WHERE u.id IS NULL OR l.id IS NULL
-		`;
-		const usageLotAllocations = Number(detailedLots[0]?.n ?? 0);
-		const detailedUsages = await db.$queryRaw<Array<{ n: bigint }>>`
-			SELECT count(*) AS n FROM usage_records u
-				LEFT JOIN plans p ON p.id = u.plan_id WHERE p.id IS NULL
-		`;
-		const usageRecords = Number(detailedUsages[0]?.n ?? 0);
-		const detailedChangeLogs = await db.$queryRaw<Array<{ n: bigint }>>`
-			SELECT count(*) AS n FROM plan_change_logs c
-				LEFT JOIN plans p ON p.id = c.plan_id WHERE p.id IS NULL
-		`;
-		const planChangeLogs = Number(detailedChangeLogs[0]?.n ?? 0);
 		throw new BackfillAnomalyError(
 			"MIG-B 孤儿派生行阻断：父记录缺失，禁止归组（技术方案 §12.2.5）",
-			{ plan_allocations: planAllocations, usage_lot_allocations: usageLotAllocations, usage_records: usageRecords, plan_change_logs: planChangeLogs },
+			{ ...counts },
 		);
 	}
-	return {
-		plan_allocations: 0,
-		usage_lot_allocations: 0,
-		usage_records: 0,
-		plan_change_logs: 0,
-	};
+	return counts;
 }
 
 /**
  * 幂等回填单个用户的存量个人数据到其默认组织。
- * 仅更新 organizationId IS NULL 的行；createdById/actorUserId 写原 userId
- * （操作者快照），金额/ID/版本/时间戳不动。
+ *
+ * 仅更新 organization_id IS NULL 的行；created_by_id / actor_user_id 写原 userId
+ * （操作者快照）。原生 UPDATE 只触碰租户列——Prisma updateMany 会经 `@updatedAt`
+ * 改写 updated_at，违反 §12.2.6「时间戳不改」；MIG-B 相关表上无 updated_at 触发器。
+ * SQL 全部静态 + 绑定参数（迁移工具不得留任何拼接面）。
  */
 export async function backfillUserRows(
-	db: Db,
-	user: { id: string },
+	tx: Tx,
+	userId: string,
 	organizationId: string,
 ): Promise<BackfillSummary["rowsBackfilled"]> {
-	const common = { where: { userId: user.id, organizationId: null } };
-	const accounts = await db.account.updateMany({
-		...common,
-		data: { organizationId, createdById: user.id },
-	});
-	const transactions = await db.transaction.updateMany({
-		...common,
-		data: { organizationId, createdById: user.id },
-	});
-	const initialHoldings = await db.initialHolding.updateMany({
-		...common,
-		data: { organizationId, createdById: user.id },
-	});
-	const costLots = await db.costLot.updateMany({
-		where: { userId: user.id, organizationId: null },
-		data: { organizationId },
-	});
-	const plans = await db.plan.updateMany({
-		...common,
-		data: { organizationId, createdById: user.id },
-	});
-	const usageRecords = await db.usageRecord.updateMany({
-		...common,
-		data: { organizationId, createdById: user.id },
-	});
-	const corrections = await db.correction.updateMany({
-		...common,
-		data: { organizationId, actorUserId: user.id },
-	});
-	const reminders = await db.reminder.updateMany({
-		where: { userId: user.id, organizationId: null },
-		data: { organizationId },
-	});
-	const aiConversations = await db.aiConversation.updateMany({
-		where: { userId: user.id, organizationId: null },
-		data: { organizationId },
-	});
-	// PlanChangeLog 按父 Plan.organizationId 校对回填（§12.2.4）：
-	// 此时该用户全部 Plan 已回填为本组织，父缺失行由孤儿预检阻断
-	const planChangeLogs = await db.planChangeLog.updateMany({
-		where: {
-			organizationId: null,
-			plan: { userId: user.id, organizationId },
-		},
-		data: { organizationId, actorUserId: user.id },
-	});
+	const accounts = Number(
+		await tx.$executeRaw`
+			UPDATE accounts
+			SET organization_id = ${organizationId}, created_by_id = ${userId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	const transactions = Number(
+		await tx.$executeRaw`
+			UPDATE transactions
+			SET organization_id = ${organizationId}, created_by_id = ${userId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	const initialHoldings = Number(
+		await tx.$executeRaw`
+			UPDATE initial_holdings
+			SET organization_id = ${organizationId}, created_by_id = ${userId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	const costLots = Number(
+		await tx.$executeRaw`
+			UPDATE cost_lots
+			SET organization_id = ${organizationId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	const plans = Number(
+		await tx.$executeRaw`
+			UPDATE plans
+			SET organization_id = ${organizationId}, created_by_id = ${userId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	const usageRecords = Number(
+		await tx.$executeRaw`
+			UPDATE usage_records
+			SET organization_id = ${organizationId}, created_by_id = ${userId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	const corrections = Number(
+		await tx.$executeRaw`
+			UPDATE corrections
+			SET organization_id = ${organizationId}, actor_user_id = ${userId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	const reminders = Number(
+		await tx.$executeRaw`
+			UPDATE reminders
+			SET organization_id = ${organizationId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	const aiConversations = Number(
+		await tx.$executeRaw`
+			UPDATE ai_conversations
+			SET organization_id = ${organizationId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	// PlanChangeLog 按父 Plan 校对回填（§12.2.4）：此时该用户全部 Plan 已回填为
+	// 本组织，父缺失行由孤儿预检阻断
+	const planChangeLogs = Number(
+		await tx.$executeRaw`
+			UPDATE plan_change_logs c
+			SET organization_id = ${organizationId}, actor_user_id = ${userId}
+			FROM plans p
+			WHERE p.id = c.plan_id
+				AND p.user_id = ${userId}
+				AND p.organization_id = ${organizationId}
+				AND c.organization_id IS NULL`,
+	);
 	return {
-		accounts: accounts.count,
-		transactions: transactions.count,
-		initialHoldings: initialHoldings.count,
-		costLots: costLots.count,
-		plans: plans.count,
-		usageRecords: usageRecords.count,
-		corrections: corrections.count,
-		reminders: reminders.count,
-		aiConversations: aiConversations.count,
-		planChangeLogs: planChangeLogs.count,
+		accounts,
+		transactions,
+		initialHoldings,
+		costLots,
+		plans,
+		usageRecords,
+		corrections,
+		reminders,
+		aiConversations,
+		planChangeLogs,
 	};
 }
 
 /**
- * 全量 MIG-B 回填（§12.2 七条规则；单事务原子执行）。
+ * DataRequest 语义映射（§12.2.7，仅限**未挂组织的存量行**）：
+ * - EXPORT / DELETION → scope=PERSONAL（保持不挂组织）；
+ * - 历史 CLEAR → scope=ORGANIZATION + 默认组织。
  *
- * 幂等保证：
- * - 组织/Membership：以「已存在 OWNER Membership」判定复用；
- * - OrganizationSettings：仅当不存在时创建（无 UserSettings 不虚构）；
- * - 业务行：只更新 organizationId IS NULL 的行；
- * - ReminderRead：@@unique([reminderId, userId]) 兜底，重复已读不重建；
- * - DataRequest：重置 scope 为幂等赋值（状态机字段一律不动，§12.2.7）。
+ * 评审 I-15：ToB R1 之后新建的组织级请求（organizationId 已指向某个组织）
+ * 绝不能被重跑的回填改写到默认组织或重置为 PERSONAL——它们不是存量个人行。
+ * 状态机字段一律不动；原生 UPDATE 同样不触碰 updated_at。
  */
-export async function backfillDefaultOrganizations(
-	prisma: PrismaClient,
-	options: { dryRun?: boolean; userIds?: string[] } = {},
-): Promise<BackfillSummary> {
-	const emptyRows: BackfillSummary["rowsBackfilled"] = {
+async function rescopeLegacyDataRequests(
+	tx: Tx,
+	userId: string,
+	organizationId: string,
+): Promise<number> {
+	const personal = Number(
+		await tx.$executeRaw`
+			UPDATE data_requests
+			SET scope = 'PERSONAL'
+			WHERE user_id = ${userId}
+				AND organization_id IS NULL
+				AND type IN ('EXPORT', 'DELETION')
+				AND scope <> 'PERSONAL'`,
+	);
+	const cleared = Number(
+		await tx.$executeRaw`
+			UPDATE data_requests
+			SET scope = 'ORGANIZATION', organization_id = ${organizationId}
+			WHERE user_id = ${userId}
+				AND organization_id IS NULL
+				AND type = 'CLEAR'`,
+	);
+	return personal + cleared;
+}
+
+/** 回填单个用户（调用方负责事务边界与计数汇总） */
+async function backfillUser(
+	tx: Tx,
+	user: { id: string; name: string | null; email: string | null },
+): Promise<{
+	organizationId: string;
+	organizationCreated: boolean;
+	rows: BackfillSummary["rowsBackfilled"];
+	settingsCreated: number;
+	reminderReadsCreated: number;
+	dataRequestsRescoped: number;
+}> {
+	// 默认组织 = 最早的 ACTIVE OWNER 成员关系（与运行时 resolveDefaultOrganizationId
+	// 同口径；用户可同时是多个组织的 Owner，取「最早」才是 MIG-B 的默认组织）
+	let organizationId = await resolveDefaultOrganizationId(tx, user.id);
+	let organizationCreated = false;
+	if (organizationId === null) {
+		const organization = await tx.organization.create({
+			data: {
+				name: defaultOrganizationName(user),
+				memberships: {
+					create: { userId: user.id, role: "OWNER", status: "ACTIVE" },
+				},
+			},
+			select: { id: true },
+		});
+		organizationId = organization.id;
+		organizationCreated = true;
+	}
+
+	// §12.2.3：UserSettings 有则幂等复制到 OrganizationSettings；无则保持待建账
+	let settingsCreated = 0;
+	const userSettings = await tx.userSettings.findUnique({
+		where: { userId: user.id },
+	});
+	if (userSettings) {
+		const existing = await tx.organizationSettings.findUnique({
+			where: { organizationId },
+		});
+		if (!existing) {
+			await tx.organizationSettings.create({
+				data: {
+					organizationId,
+					baseCurrency: userSettings.baseCurrency,
+					prepPreference: userSettings.prepPreference,
+					reminderEnabled: userSettings.reminderEnabled,
+					ledgerStartedAt: userSettings.ledgerStartedAt,
+				},
+			});
+			settingsCreated = 1;
+		}
+	}
+
+	const rows = await backfillUserRows(tx, user.id, organizationId);
+
+	// §12.2.5（LEDGER-03）：已读提醒回填成员级 ReminderRead（唯一约束兜底，重复不重建）
+	const readReminders = await tx.reminder.findMany({
+		where: { userId: user.id, readAt: { not: null } },
+		select: { id: true, userId: true, readAt: true },
+	});
+	let reminderReadsCreated = 0;
+	if (readReminders.length > 0) {
+		const created = await tx.reminderRead.createMany({
+			data: readReminders.map((r) => ({
+				reminderId: r.id,
+				userId: r.userId,
+				readAt: r.readAt as Date,
+			})),
+			skipDuplicates: true,
+		});
+		reminderReadsCreated = created.count;
+	}
+
+	const dataRequestsRescoped = await rescopeLegacyDataRequests(
+		tx,
+		user.id,
+		organizationId,
+	);
+
+	return {
+		organizationId,
+		organizationCreated,
+		rows,
+		settingsCreated,
+		reminderReadsCreated,
+		dataRequestsRescoped,
+	};
+}
+
+function emptyRows(): BackfillSummary["rowsBackfilled"] {
+	return {
 		accounts: 0,
 		transactions: 0,
 		initialHoldings: 0,
@@ -259,33 +373,70 @@ export async function backfillDefaultOrganizations(
 		aiConversations: 0,
 		planChangeLogs: 0,
 	};
+}
+
+function addRows(
+	total: BackfillSummary["rowsBackfilled"],
+	rows: BackfillSummary["rowsBackfilled"],
+): void {
+	for (const table of Object.keys(total) as Array<keyof typeof total>) {
+		total[table] += rows[table];
+	}
+}
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+	const chunks: T[][] = [];
+	for (let index = 0; index < items.length; index += size) {
+		chunks.push(items.slice(index, index + size));
+	}
+	return chunks;
+}
+
+/**
+ * MIG-B 回填（§12.2 七条规则）。
+ *
+ * dryRun：全库只读预检 + 估算（将新建的组织数、各表待回填行数、待映射的数据请求），
+ * 估算条件与真实写入条件逐项一致。
+ *
+ * 幂等保证：
+ * - 组织/Membership：以「已存在 OWNER Membership」判定复用；
+ * - OrganizationSettings：仅当不存在时创建（无 UserSettings 不虚构）；
+ * - 业务行：只更新 organizationId IS NULL 的行；
+ * - ReminderRead：@@unique([reminderId, userId]) 兜底，重复已读不重建；
+ * - DataRequest：只映射未挂组织的存量行（§12.2.7）。
+ */
+export async function backfillDefaultOrganizations(
+	prisma: PrismaClient,
+	options: BackfillOptions = {},
+): Promise<BackfillSummary> {
+	// 孤儿预检在任何写入之前（全库只读），失败即阻断且零写入
+	await assertNoOrphanRows(prisma);
+
+	const userWhere = options.userIds ? { id: { in: options.userIds } } : {};
+	const sharded = options.userIds !== undefined;
+	const users = await prisma.user.findMany({
+		where: userWhere,
+		select: { id: true, name: true, email: true },
+		orderBy: { id: "asc" },
+	});
+	const userIds = users.map((user) => user.id);
+	const userScope = sharded ? { userId: { in: userIds } } : {};
+
 	const summary: BackfillSummary = {
-		usersProcessed: 0,
+		usersProcessed: users.length,
 		organizationsCreated: 0,
 		ownerMembershipsCreated: 0,
 		organizationSettingsCreated: 0,
-		rowsBackfilled: emptyRows,
+		rowsBackfilled: emptyRows(),
 		reminderReadsCreated: 0,
 		dataRequestsRescoped: 0,
 		usersSkippedIdempotent: 0,
+		chunksCommitted: 0,
 	};
 
-	// 孤儿预检在事务外先行（只读），失败即阻断且零写入
-	await assertNoOrphanRows(prisma);
-
 	if (options.dryRun) {
-		// dry-run：估算将新建的组织数（无 OWNER Membership 的用户数）与待回填行数；
-		// userIds 过滤用于测试/演练分片（CLI 全量执行不传）
-		const userWhere = options.userIds
-			? { id: { in: options.userIds } }
-			: undefined;
-		const users = await prisma.user.findMany({
-			where: userWhere,
-			select: { id: true },
-		});
-		summary.usersProcessed = users.length;
 		const owners = await prisma.membership.findMany({
-			where: { role: "OWNER", status: "ACTIVE", userId: { in: users.map((u) => u.id) } },
+			where: { role: "OWNER", status: "ACTIVE", userId: { in: userIds } },
 			select: { userId: true },
 		});
 		const ownerUserIds = new Set(owners.map((m) => m.userId));
@@ -295,133 +446,107 @@ export async function backfillDefaultOrganizations(
 		summary.usersSkippedIdempotent = users.filter((u) =>
 			ownerUserIds.has(u.id),
 		).length;
-		const rowScope = options.userIds
-			? { organizationId: null, userId: { in: options.userIds } }
-			: { organizationId: null };
+
+		// 待回填行：organizationId IS NULL 的用户行
+		const legacyRows = { organizationId: null, ...userScope };
 		summary.rowsBackfilled.accounts = await prisma.account.count({
-			where: rowScope,
+			where: legacyRows,
 		});
 		summary.rowsBackfilled.transactions = await prisma.transaction.count({
-			where: rowScope,
+			where: legacyRows,
 		});
-		summary.rowsBackfilled.initialHoldings = await prisma.initialHolding.count(
-			{ where: rowScope },
-		);
+		summary.rowsBackfilled.initialHoldings =
+			await prisma.initialHolding.count({ where: legacyRows });
 		summary.rowsBackfilled.costLots = await prisma.costLot.count({
-			where: rowScope,
+			where: legacyRows,
 		});
 		summary.rowsBackfilled.plans = await prisma.plan.count({
-			where: rowScope,
+			where: legacyRows,
 		});
 		summary.rowsBackfilled.usageRecords = await prisma.usageRecord.count({
-			where: rowScope,
+			where: legacyRows,
 		});
 		summary.rowsBackfilled.corrections = await prisma.correction.count({
-			where: rowScope,
+			where: legacyRows,
 		});
 		summary.rowsBackfilled.reminders = await prisma.reminder.count({
-			where: rowScope,
+			where: legacyRows,
 		});
-		summary.rowsBackfilled.aiConversations = await prisma.aiConversation.count(
-			{ where: rowScope },
-		);
-		summary.rowsBackfilled.planChangeLogs = await prisma.planChangeLog.count({
-			where: rowScope,
-		});
+		summary.rowsBackfilled.aiConversations =
+			await prisma.aiConversation.count({ where: legacyRows });
+		// PlanChangeLog 无 userId 列：经父 Plan 归属
+		summary.rowsBackfilled.planChangeLogs =
+			await prisma.planChangeLog.count({
+				where: {
+					organizationId: null,
+					plan: sharded ? { userId: { in: userIds } } : {},
+				},
+			});
+		// 待映射数据请求：与 rescopeLegacyDataRequests 的写入条件逐项一致
 		summary.dataRequestsRescoped = await prisma.dataRequest.count({
 			where: {
-				...(options.userIds ? { userId: { in: options.userIds } } : {}),
+				organizationId: null,
+				...userScope,
 				OR: [
-					{ type: { in: ["EXPORT", "DELETION"] }, scope: { not: "PERSONAL" } },
+					{
+						type: { in: ["EXPORT", "DELETION"] },
+						scope: { not: "PERSONAL" },
+					},
 					{ type: "CLEAR", scope: { not: "ORGANIZATION" } },
 				],
 			},
 		});
+		// 待补建的已读行：已读但尚无成员级已读行
+		summary.reminderReadsCreated = await prisma.reminder.count({
+			where: {
+				...userScope,
+				readAt: { not: null },
+				readStates: { none: {} },
+			},
+		});
+		// 待补建的组织设置：有个人设置、而（尚不存在的）默认组织无组织设置
+		const [settingsToCreate] = await prisma.$queryRaw<Array<{ n: bigint }>>`
+			WITH defaults AS (
+				SELECT DISTINCT ON (m.user_id) m.user_id, m.organization_id
+				FROM memberships m
+				WHERE m.role = 'OWNER' AND m.status = 'ACTIVE'
+				ORDER BY m.user_id, m.joined_at ASC, m.created_at ASC
+			)
+			SELECT count(*) AS n FROM user_settings s
+			LEFT JOIN defaults d ON d.user_id = s.user_id
+			LEFT JOIN organization_settings o ON o.organization_id = d.organization_id
+			WHERE o.organization_id IS NULL
+				AND (NOT ${sharded} OR s.user_id = ANY(${userIds}::text[]))`;
+		summary.organizationSettingsCreated = Number(settingsToCreate?.n ?? 0n);
 		return summary;
 	}
 
-	await prisma.$transaction(async (tx) => {
-		const users = await tx.user.findMany({
-			where: options.userIds ? { id: { in: options.userIds } } : undefined,
-			select: { id: true, name: true, email: true },
-		});
-		summary.usersProcessed = users.length;
+	const chunkSize = options.chunkSize ?? BACKFILL_CHUNK_SIZE;
+	if (!Number.isInteger(chunkSize) || chunkSize < 1) {
+		throw new Error(`chunkSize 必须是正整数，收到: ${chunkSize}`);
+	}
 
-		for (const user of users) {
-			const { organizationId, created } = await resolveDefaultOrganization(
-				tx,
-				user,
-			);
-			if (created) {
-				summary.organizationsCreated += 1;
-				summary.ownerMembershipsCreated += 1;
-			} else {
-				summary.usersSkippedIdempotent += 1;
-			}
-
-			// §12.2.3：UserSettings 有则幂等复制到 OrganizationSettings；无则保持待建账
-			const userSettings = await tx.userSettings.findUnique({
-				where: { userId: user.id },
-			});
-			if (userSettings) {
-				const existing = await tx.organizationSettings.findUnique({
-					where: { organizationId },
-				});
-				if (!existing) {
-					await tx.organizationSettings.create({
-						data: {
-							organizationId,
-							baseCurrency: userSettings.baseCurrency,
-							prepPreference: userSettings.prepPreference,
-							reminderEnabled: userSettings.reminderEnabled,
-							ledgerStartedAt: userSettings.ledgerStartedAt,
-						},
-					});
-					summary.organizationSettingsCreated += 1;
+	for (const userChunk of chunk(users, chunkSize)) {
+		await prisma.$transaction(
+			async (tx) => {
+				for (const user of userChunk) {
+					const result = await backfillUser(tx, user);
+					if (result.organizationCreated) {
+						summary.organizationsCreated += 1;
+						summary.ownerMembershipsCreated += 1;
+					} else {
+						summary.usersSkippedIdempotent += 1;
+					}
+					summary.organizationSettingsCreated += result.settingsCreated;
+					addRows(summary.rowsBackfilled, result.rows);
+					summary.reminderReadsCreated += result.reminderReadsCreated;
+					summary.dataRequestsRescoped += result.dataRequestsRescoped;
 				}
-			}
-
-			const rows = await backfillUserRows(tx, user, organizationId);
-			summary.rowsBackfilled.accounts += rows.accounts;
-			summary.rowsBackfilled.transactions += rows.transactions;
-			summary.rowsBackfilled.initialHoldings += rows.initialHoldings;
-			summary.rowsBackfilled.costLots += rows.costLots;
-			summary.rowsBackfilled.plans += rows.plans;
-			summary.rowsBackfilled.usageRecords += rows.usageRecords;
-			summary.rowsBackfilled.corrections += rows.corrections;
-			summary.rowsBackfilled.reminders += rows.reminders;
-			summary.rowsBackfilled.aiConversations += rows.aiConversations;
-			summary.rowsBackfilled.planChangeLogs += rows.planChangeLogs;
-
-			// §12.2.5（LEDGER-03）：已读提醒回填成员级 ReminderRead（幂等）
-			const readReminders = await tx.reminder.findMany({
-				where: { userId: user.id, readAt: { not: null } },
-				select: { id: true, userId: true, readAt: true },
-			});
-			if (readReminders.length > 0) {
-				const created = await tx.reminderRead.createMany({
-					data: readReminders.map((r) => ({
-						reminderId: r.id,
-						userId: r.userId,
-						readAt: r.readAt as Date,
-					})),
-					skipDuplicates: true,
-				});
-				summary.reminderReadsCreated += created.count;
-			}
-
-			// §12.2.6：DataRequest 语义映射（EXPORT/DELETION→PERSONAL；历史 CLEAR→默认组织）
-			const rescoped = await tx.dataRequest.updateMany({
-				where: { userId: user.id, type: { in: ["EXPORT", "DELETION"] } },
-				data: { scope: "PERSONAL", organizationId: null },
-			});
-			const cleared = await tx.dataRequest.updateMany({
-				where: { userId: user.id, type: "CLEAR" },
-				data: { scope: "ORGANIZATION", organizationId },
-			});
-			summary.dataRequestsRescoped += rescoped.count + cleared.count;
-		}
-	});
+			},
+			CHUNK_TX_OPTIONS,
+		);
+		summary.chunksCommitted += 1;
+	}
 
 	return summary;
 }
