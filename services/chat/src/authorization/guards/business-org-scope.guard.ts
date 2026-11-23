@@ -45,12 +45,15 @@ export class BusinessOrgScopeGuard implements CanActivate {
 		}
 
 		const header = request.headers["x-organization-id"];
-		const raw = Array.isArray(header) ? header[0] : header;
+		// 数组头严格拒绝（对齐 OrganizationContextGuard 口径，对抗审 R1 [Nit]）
+		if (Array.isArray(header)) {
+			throw new OrganizationRequiredException();
+		}
 
 		let organizationId: string;
-		if (typeof raw === "string" && CUID_PATTERN.test(raw.trim())) {
-			organizationId = raw.trim();
-		} else if (typeof raw === "undefined") {
+		if (typeof header === "string" && CUID_PATTERN.test(header.trim())) {
+			organizationId = header.trim();
+		} else if (typeof header === "undefined") {
 			// 兼容窗口：无头时回落到唯一 ACTIVE 组织
 			const memberships = await this.prisma.membership.findMany({
 				where: { userId: auth.user.id, status: "ACTIVE" },

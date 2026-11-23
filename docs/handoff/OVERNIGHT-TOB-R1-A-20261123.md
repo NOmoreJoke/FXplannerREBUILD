@@ -55,8 +55,16 @@
 
 ## 4. 独立对抗审（D6）
 
-- **执行方式**：Codex CLI 在本机不可用（Goal #2 会话已验证 `model_not_found`），按 GOAL-3A §4.5 降级为独立只读 Explore 子代理，以 `git diff dev...HEAD` 增量为审查对象。
-- **结果**：（对抗审完成后回填——R1 六个围堵面：跨组织 404 / 部分唯一索引转移顺序 / tokenHash 纪律 / 降权秒级 / 前端切换缓存 / 目录与裸 useEffect。）
+- **执行方式**：Codex CLI 在本机不可用（Goal #2 会话已验证 `model_not_found`），按 GOAL-3A §4.5 降级为独立只读 Explore 子代理，以 `git diff dev...HEAD` 增量为审查对象（R1 审查覆盖六个围堵面 + R2 增量复核）。
+- **R1 结果**：`Verdict: 1 [Important], 6 [Nit], 0 [Pre-existing]`。
+  1. `[Important]` `clearOrganizationScopedQueries` 遗漏 members/invitations/auditLogs 无前缀键——切组织时组织工作台页（路由不卸载）残留旧组织成员/邀请/审计列表（写操作有后端 404 挡、无越权，但属需求 15.1.4 必须修复的跨组织脏展示）→ **已修复**：三键加入清理列表 + `switchOrganization` 显式 invalidate 兜底 + 键形态注释修正。
+  2. `[Nit]` 数组头静默取首元素与文档「严格拒绝」不一致 → **已修复**（两 Guard `Array.isArray` 即 400）。
+  3. `[Nit]` 并发所有权转移唯一索引违规冒 500 → **已修复**（P2002 映射 409 TRANSFER_CONFLICT）。
+  4. `[Nit]` 受邀页裸拼 queryKey 违反工厂自律 → **已修复**（`queryKeys.organizationInvitation.summary(token)`）。
+  5. `[Nit]`（未修、记 backlog）`organizations.current` 键不含组织 id，切换后 capabilities 有短暂旧值窗（后端强制校验兜底，仅按钮显隐瞬时错位）——建议随 #3B 前端全量带头时一并键化。
+  6. `[Nit]`（未修、记 backlog）PermissionGuard 拒绝前 await DENIED 审计，审计库挂起会推迟 403（try/catch 不吞错；可加超时）。
+  7. `[Nit]`（未修、记 backlog）layout 单组织自动选中分支依赖后续请求兜底清缓存（无前缀键由 clearOrganizationScopedQueries 统一覆盖后已缓解）。
+- **R2 增量复核（修复提交后）**：`Verdict: 0 [Important], 0 [Nit], 0 [Pre-existing]`（以修复提交 diff 复核确认；详见 PR 审查记录）。
 
 ## 5. L3 人工 E2E 跑测清单（NOT_RUN 项）
 

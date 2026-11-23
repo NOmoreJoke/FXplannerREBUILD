@@ -118,6 +118,11 @@ export const queryKeys = {
 		all: ["audit-logs"] as const,
 		list: () => ["audit-logs", "list"] as const,
 	},
+	/** 受邀摘要（个人端点，按 token 分桶；对抗审 R1 [Nit]：入工厂禁裸拼） */
+	organizationInvitation: {
+		summary: (token: string) =>
+			["organization-invitation", token] as const,
+	},
 } as const;
 
 /** ToB 组织上下文作用域封装：未传 orgId 时保持个人工作区原 Key */
@@ -177,6 +182,11 @@ export function invalidateAfterDataRequestMutation(
  *    币种/模型白名单、认证、建账状态——与组织无关）；
  * 3. 组织切换后的首屏数据由各页面重新拉取（staleTime 内的旧组织数据
  *    已被移除，不可能命中）。
+ *
+ * 键形态说明（对抗审 R1 复核）：带 `withOrgScope` 前缀的键（home/plans 等）
+ * 靠键隔离防串——cancel/remove 无前缀词根匹配不到前缀键，属预期；本函数
+ * 覆盖的是**无前缀组织数据键**（members/invitations/auditLogs/组织详情），
+ * 它们必须在此显式清理，否则切组织时页面不卸载即残留旧组织数据。
  */
 export function clearOrganizationScopedQueries(queryClient: QueryClient): void {
 	const orgScopedKeys: readonly (readonly unknown[])[] = [
@@ -191,6 +201,11 @@ export function clearOrganizationScopedQueries(queryClient: QueryClient): void {
 		queryKeys.reports.all,
 		queryKeys.ai.conversations(),
 		queryKeys.ai.messagesStem,
+		// 对抗审 R1 [Important] 修复：组织工作台页面键（无 withOrgScope 前缀，
+		// 路由不卸载时必须显式清理）
+		queryKeys.members.all,
+		queryKeys.invitations.all,
+		queryKeys.auditLogs.all,
 	];
 	for (const key of orgScopedKeys) {
 		void queryClient.cancelQueries({ queryKey: key });

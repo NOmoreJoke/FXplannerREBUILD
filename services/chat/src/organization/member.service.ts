@@ -9,6 +9,7 @@ import {
 	InvalidRoleException,
 	LastOwnerRequiredException,
 	MemberNotFoundException,
+	TransferConflictException,
 } from "./organization.errors";
 
 /**
@@ -198,45 +199,62 @@ export class MemberService {
 		if (actor.role !== "OWNER") {
 			throw new PermissionDeniedException("仅所有者可转移所有权");
 		}
-		return this.prisma.$transaction(async (tx) => {
-			const target = await tx.membership.findFirst({
-				where: {
-					id: targetMembershipId,
-					organizationId: actor.organizationId,
-				},
-			});
-			if (!target) throw new MemberNotFoundException();
-			if (target.userId === actor.userId) {
-				throw new InvalidRoleException("不能转移给自己（自降请走成员管理）");
-			}
-			if (target.status !== "ACTIVE") {
-				throw new InvalidRoleException("仅有效成员可接任所有权");
-			}
+		try {
+			return await this.prisma.$transaction(async (tx) => {
+				const target = await tx.membership.findFirst({
+					where: {
+						id: targetMembershipId,
+						organizationId: actor.organizationId,
+					},
+				});
+				if (!target) throw new MemberNotFoundException();
+				if (target.userId === actor.userId) {
+					throw new InvalidRoleException("不能转移给自己（自降请走成员管理）");
+				}
+				if (target.status !== "ACTIVE") {
+					throw new InvalidRoleException("仅有效成员可接任所有权");
+				}
 
-			// 先降原 Owner（释放部分唯一索引槽位），再升目标
-			await tx.membership.update({
-				where: { id: actor.membershipId },
-				data: { role: "ADMIN" },
+				// 先降原 Owner（释放部分唯一索引槽位），再升目标；
+				// 并发双提交时第二个事务的提升命中 memberships_single_active_owner_uidx
+				// → 唯一约束违规 → 整体回滚（事务外映射 409，对抗审 R1 [Nit]）
+				await tx.membership.update({
+					where: { id: actor.membershipId },
+					data: { role: "ADMIN" },
+				});
+				await tx.membership.update({
+					where: { id: targetMembershipId },
+					data: { role: "OWNER" },
+				});
+				await this.auditService.recordInTx(tx, {
+					organizationId: actor.organizationId,
+					actorUserId: actor.userId,
+					actorType: "USER",
+					action: "owner.transfer",
+					targetType: "membership",
+					targetId: targetMembershipId,
+					result: "SUCCESS",
+					detail: {
+						fromMembershipId: actor.membershipId,
+						toMembershipId: targetMembershipId,
+						toUserId: target.userId,
+					},
+				});
+				return {
+					promotedId: targetMembershipId,
+					demotedId: actor.membershipId,
+				};
 			});
-			await tx.membership.update({
-				where: { id: targetMembershipId },
-				data: { role: "OWNER" },
-			});
-			await this.auditService.recordInTx(tx, {
-				organizationId: actor.organizationId,
-				actorUserId: actor.userId,
-				actorType: "USER",
-				action: "owner.transfer",
-				targetType: "membership",
-				targetId: targetMembershipId,
-				result: "SUCCESS",
-				detail: {
-					fromMembershipId: actor.membershipId,
-					toMembershipId: targetMembershipId,
-					toUserId: target.userId,
-				},
-			});
-			return { promotedId: targetMembershipId, demotedId: actor.membershipId };
-		});
+		} catch (error) {
+			// 并发所有权转移：唯一索引兜底违规（P2002）→ 409 而非 500
+			if (
+				typeof error === "object" &&
+				error !== null &&
+				(error as { code?: string }).code === "P2002"
+			) {
+				throw new TransferConflictException();
+			}
+			throw error;
+		}
 	}
 }

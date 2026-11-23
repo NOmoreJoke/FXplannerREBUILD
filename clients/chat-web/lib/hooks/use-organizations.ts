@@ -57,16 +57,27 @@ export function useSwitchOrganization() {
 	return useCallback(
 		(nextOrganizationId: string) => {
 			// 1. 中止旧组织在途请求（cancel 触发 fetch Abort）
-			// 2. 清组织作用域缓存（公共汇率/认证/建账态保留）
+			// 2. 清组织作用域缓存（公共汇率/认证/建账态保留；含成员/邀请/审计
+			//    工作台键——对抗审 R1 [Important] 修复）
 			clearOrganizationScopedQueries(queryClient);
 			// 3. 切换选择（persist 落 localStorage，仅存选择不构成凭证）
 			setActiveOrganization(nextOrganizationId);
-			// 4. 组织详情失效重拉（新组织的 capabilities/建账态）
+			// 4. 组织详情失效重拉（新组织的 capabilities/建账态）；工作台页面键
+			//    已被 remove，被观察查询自动按新组织头重拉，此处 invalidate 兜底
 			void queryClient.invalidateQueries({
 				queryKey: queryKeys.organizations.current(),
 			});
 			void queryClient.invalidateQueries({
 				queryKey: queryKeys.organizations.list(),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: queryKeys.members.all,
+			});
+			void queryClient.invalidateQueries({
+				queryKey: queryKeys.invitations.all,
+			});
+			void queryClient.invalidateQueries({
+				queryKey: queryKeys.auditLogs.all,
 			});
 		},
 		[queryClient, setActiveOrganization],

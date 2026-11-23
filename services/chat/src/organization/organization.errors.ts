@@ -94,3 +94,17 @@ export class InvitationConflictException extends HttpException {
 		);
 	}
 }
+
+/** 并发所有权转移冲突（唯一索引兜底违规映射；最终仍恰一个活跃 Owner） */
+export class TransferConflictException extends HttpException {
+	constructor() {
+		super(
+			{
+				success: false,
+				code: "TRANSFER_CONFLICT",
+				message: "所有权转移冲突（并发操作），请刷新后重试",
+			},
+			HttpStatus.CONFLICT,
+		);
+	}
+}

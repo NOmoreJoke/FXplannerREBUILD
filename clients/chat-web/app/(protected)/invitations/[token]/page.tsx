@@ -4,6 +4,7 @@ import { use, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { invitationsApi } from "@/lib/api/organizations";
+import { queryKeys } from "@/lib/api/query-keys";
 import { getToken } from "@/lib/auth/token";
 
 /**
@@ -23,7 +24,7 @@ export default function InvitationTokenPage({
 	const hasToken = Boolean(getToken());
 
 	const summaryQuery = useQuery({
-		queryKey: ["organization-invitation", token],
+		queryKey: queryKeys.organizationInvitation.summary(token),
 		queryFn: () => invitationsApi.summary(token),
 		enabled: hasToken, // 未登录：保护区 layout 守卫统一跳 /login?redirect=…
 		retry: false,

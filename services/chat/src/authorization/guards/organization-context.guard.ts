@@ -54,14 +54,14 @@ export class OrganizationContextGuard implements CanActivate {
 		}
 
 		const header = request.headers["x-organization-id"];
-		const raw = Array.isArray(header) ? header[0] : header;
-		if (
-			typeof raw !== "string" ||
-			!CUID_PATTERN.test(raw.trim())
-		) {
+		// 数组头严格拒绝（对抗审 R1 [Nit]：对齐文档口径，不静默取首元素）
+		if (Array.isArray(header)) {
 			throw new OrganizationRequiredException();
 		}
-		const organizationId = raw.trim();
+		if (typeof header !== "string" || !CUID_PATTERN.test(header.trim())) {
+			throw new OrganizationRequiredException();
+		}
+		const organizationId = header.trim();
 
 		const membership = await this.prisma.membership.findUnique({
 			where: {
