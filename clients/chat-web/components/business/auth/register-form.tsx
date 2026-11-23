@@ -112,7 +112,7 @@ export function RegisterForm() {
 								FXPlanner
 							</h1>
 						</div>
-						<p className="text-muted-foreground">创建您的账户</p>
+						<p className="text-muted-foreground">创建您的账户，开启可邀请成员协作的组织工作台</p>
 					</div>
 
 					{/* 表单 */}

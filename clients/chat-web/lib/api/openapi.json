@@ -7877,6 +7877,7 @@
             "type": "string",
             "description": "角色",
             "enum": [
+              "OWNER",
               "ADMIN",
               "FINANCE",
               "OPERATOR",

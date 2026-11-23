@@ -3916,7 +3916,7 @@ export interface components {
              * @description 角色
              * @enum {string}
              */
-            role: "ADMIN" | "FINANCE" | "OPERATOR" | "VIEWER";
+            role: "OWNER" | "ADMIN" | "FINANCE" | "OPERATOR" | "VIEWER";
             /**
              * @description 状态
              * @enum {string}

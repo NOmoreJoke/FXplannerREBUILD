@@ -11,6 +11,9 @@ import { INVITABLE_ROLES } from "../invitation-rules";
 /** 可分配角色（OWNER 禁止出现在调整/邀请入参——DTO 白名单第一道闸） */
 const ASSIGNABLE_ROLES = ["ADMIN", "FINANCE", "OPERATOR", "VIEWER"] as const;
 
+/** 响应侧全角色（成员列表/视图必然包含 OWNER 行） */
+const ALL_ROLES = ["OWNER", "ADMIN", "FINANCE", "OPERATOR", "VIEWER"] as const;
+
 /** 邀请状态归并（展示态） */
 const INVITATION_STATUSES = [
 	"OPEN",
@@ -42,7 +45,7 @@ export class MemberViewDto {
 	})
 	email!: string | null;
 
-	@ApiProperty({ description: "角色", enum: ASSIGNABLE_ROLES, type: String })
+	@ApiProperty({ description: "角色", enum: ALL_ROLES, type: String })
 	role!: string;
 
 	@ApiProperty({

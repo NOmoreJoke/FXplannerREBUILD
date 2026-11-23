@@ -179,7 +179,7 @@ export function LoginForm() {
 								FXPlanner
 							</h1>
 						</div>
-						<p className="text-muted-foreground">登录您的账户</p>
+						<p className="text-muted-foreground">登录您的账户，支持团队协作与组织账本</p>
 					</div>
 
 					<div

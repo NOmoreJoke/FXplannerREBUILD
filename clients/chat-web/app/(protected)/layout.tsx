@@ -17,9 +17,15 @@ import { authApi } from "@/lib/api/auth";
 import { getToken } from "@/lib/auth/token";
 import { redirectToLogin } from "@/lib/auth/redirect-to-login";
 import { useAuthStore } from "@/lib/stores/auth-store";
+import { useOrganizationStore } from "@/lib/stores/organization-store";
 import { useLogout } from "@/lib/query/hooks/use-auth";
+import { useOrganizations } from "@/lib/hooks/use-organizations";
 import { AppBreadcrumb, PageLoading } from "@/components/base";
 import { ReminderBell } from "@/components/business/reminder";
+import {
+	OrganizationPicker,
+	OrganizationSwitcher,
+} from "@/components/business/organization";
 import { cn } from "@/lib/utils";
 
 /**
@@ -66,8 +72,39 @@ export default function ProtectedLayout({
 		void checkAuth();
 	}, [pathname, setUser, clearUser]);
 
+	// ToB R1 组织路由分流（W21；需求 ORG-00.3/ORG-02.4）：
+	// 单组织直达（自动选中）；多组织未选 → OrganizationPicker（整屏隔离，
+	// 不闪旧组织数据）；0 组织 → Picker 内新建引导。组织上下文未就绪前
+	// 业务页面不渲染（hooks enabled 门控 + 缓存清理双保险）。
+	// 豁免路由：/invitations/*（受邀者可能尚无任何组织，接受流程为个人端点）。
+	const organizationsQuery = useOrganizations();
+	const organizations = organizationsQuery.data;
+	const orgsLoading = organizationsQuery.isLoading;
+	const activeOrganizationId = useOrganizationStore(
+		(s) => s.activeOrganizationId,
+	);
+	const setActiveOrganization = useOrganizationStore(
+		(s) => s.setActiveOrganization,
+	);
+	const singleOrg = organizations?.length === 1 ? organizations[0] : null;
+	if (singleOrg && activeOrganizationId === null) {
+		// 渲染期外部 store 校正（React 渲染期 setState 同组件模式）：单组织自动选中
+		setActiveOrganization(singleOrg.id);
+	}
+
 	if (!user) {
 		return <PageLoading />;
+	}
+
+	const orglessRouteAllowed = pathname.startsWith("/invitations");
+	// 组织上下文就绪检查：认证已过但组织未就绪（加载中/待选择/待创建）
+	if (!orglessRouteAllowed) {
+		if (orgsLoading) {
+			return <PageLoading />;
+		}
+		if (activeOrganizationId === null) {
+			return <OrganizationPicker />;
+		}
 	}
 
 	const displayName = user.name || user.email || "已认证用户";
@@ -96,9 +133,12 @@ export default function ProtectedLayout({
 						FXPlanner
 					</span>
 				</Link>
-				<p className="px-5 pb-4 text-xs text-muted-foreground">
-					规划你的换汇工作台
-				</p>
+			<p className="px-5 pb-4 text-xs text-muted-foreground">
+				规划你的换汇工作台
+			</p>
+
+			{/* ToB R1 组织切换器（W21）：单组织简化态 / 多组织下拉切换 */}
+			<OrganizationSwitcher />
 
 				{/* 导航菜单 */}
 				<nav className="flex-1 space-y-1 px-3">
