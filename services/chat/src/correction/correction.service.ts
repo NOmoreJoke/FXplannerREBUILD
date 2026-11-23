@@ -16,6 +16,10 @@ import {
 import { lockLedgerAccounts } from "../prisma/ledger-write-lock";
 import { PrismaService } from "../prisma/prisma.service";
 import { RateService } from "../rate/rate.service";
+import {
+	compatReadWhere,
+	type ReadScope,
+} from "../authorization/organization-scope";
 import { replayCurrencyLedger, type LedgerEvent, type ReplayResult } from "./ledger-replay";
 import {
 	assertCorrectionBasics,
@@ -345,7 +349,7 @@ export class CorrectionService {
 
 	/** 修改记录列表（GET /api/corrections，方案 §6.3）：createdAt 倒序分页，含 APPLIED 与 FAILED */
 	async list(
-		userId: string,
+		scope: ReadScope,
 		targetTypeRaw: string | undefined,
 		targetId: string | undefined,
 		pageRaw: string | undefined,
@@ -356,9 +360,15 @@ export class CorrectionService {
 		const targetType = this.parseTargetType(targetTypeRaw);
 		this.assertSupportedTargetType(targetType);
 		const page = parsePage(pageRaw);
-		// 目标存在性校验：非本人与不存在一律 404（不泄露存在性，验收场景 20）
-		await this.loadTarget(this.prisma, userId, targetType, targetId);
-		const where = { userId, targetType, targetId };
+		// 目标存在性校验：组织作用域外与不存在一律 404（不泄露存在性，验收场景 20）
+		await this.loadTarget(
+			this.prisma,
+			scope.userId,
+			targetType,
+			targetId,
+			scope,
+		);
+		const where = { targetType, targetId, ...compatReadWhere(scope) };
 		const [total, rows] = await Promise.all([
 			this.prisma.correction.count({ where }),
 			this.prisma.correction.findMany({
@@ -388,7 +398,7 @@ export class CorrectionService {
 
 	/** 目标当前内容（GET /api/corrections/target）：更正页表单初值与乐观校验基准的数据源 */
 	async getTarget(
-		userId: string,
+		scope: ReadScope,
 		targetTypeRaw: string | undefined,
 		targetId: string | undefined,
 	): Promise<{
@@ -401,7 +411,13 @@ export class CorrectionService {
 		}
 		const targetType = this.parseTargetType(targetTypeRaw);
 		this.assertSupportedTargetType(targetType);
-		const target = await this.loadTarget(this.prisma, userId, targetType, targetId);
+		const target = await this.loadTarget(
+			this.prisma,
+			scope.userId,
+			targetType,
+			targetId,
+			scope,
+		);
 		return {
 			targetType,
 			targetId,
@@ -1419,28 +1435,32 @@ export class CorrectionService {
 
 	// ──────────────────────── 目标加载 / 校验 / 上下文 ────────────────────────
 
+	/** W18 读作用域（可选）：传入时目标查找按组织作用域（组织行 + 兼容 NULL 行），
+	 * 写路径（preview/apply）不传、保持 { id, userId } 原行为不变 */
 	private async loadTarget(
 		db: CorrectionDb,
 		userId: string,
 		targetType: CorrectionTargetTypeValue,
 		targetId: string,
+		scope?: ReadScope,
 	): Promise<LoadedTarget> {
+		const owner = scope ? compatReadWhere(scope) : { userId };
 		if (targetType === "TRANSACTION") {
 			const transaction = await db.transaction.findFirst({
-				where: { id: targetId, userId },
+				where: { id: targetId, ...owner },
 			});
 			if (!transaction) throw new CorrectionTargetNotFoundException();
 			return { type: "TRANSACTION", transaction };
 		}
 		if (targetType === "USAGE") {
 			const usage = await db.usageRecord.findFirst({
-				where: { id: targetId, userId },
+				where: { id: targetId, ...owner },
 			});
 			if (!usage) throw new CorrectionTargetNotFoundException();
 			return { type: "USAGE", usage };
 		}
 		const holding = await db.initialHolding.findFirst({
-			where: { id: targetId, userId },
+			where: { id: targetId, ...owner },
 		});
 		if (!holding) throw new CorrectionTargetNotFoundException();
 		return { type: "INITIAL_HOLDING", holding };

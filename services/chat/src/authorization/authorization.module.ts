@@ -4,9 +4,10 @@ import { AuthModule } from "../auth/auth.module";
 import { AuditModule } from "../audit/audit.module";
 import { OrganizationContextGuard } from "./guards/organization-context.guard";
 import { PermissionGuard } from "./guards/permission.guard";
+import { BusinessOrgScopeGuard } from "./guards/business-org-scope.guard";
 
 /**
- * 授权模块（技术方案 §4.3；Goal #3A W17）。
+ * 授权模块（技术方案 §4.3；Goal #3A W17/W18）。
  *
  * 边界（AGENTS.md + eslint 后端模块护栏）：
  * - 仅提供组织上下文/权限 Guard、装饰器、错误族与纯函数策略（策略真源
@@ -17,7 +18,7 @@ import { PermissionGuard } from "./guards/permission.guard";
  */
 @Module({
 	imports: [PrismaModule, AuthModule, AuditModule],
-	providers: [OrganizationContextGuard, PermissionGuard],
-	exports: [OrganizationContextGuard, PermissionGuard],
+	providers: [OrganizationContextGuard, PermissionGuard, BusinessOrgScopeGuard],
+	exports: [OrganizationContextGuard, PermissionGuard, BusinessOrgScopeGuard],
 })
 export class AuthorizationModule {}

@@ -22,6 +22,9 @@ import {
 import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
+import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import type { ActorContext } from "../authorization/authorization.types";
 import {
 	CreateTransactionDto,
 	TransactionDto,
@@ -92,8 +95,16 @@ export class TransactionController {
 		description: "交易不存在或不属于本人（TRANSACTION_NOT_FOUND）",
 		type: TransactionErrorDto,
 	})
-	async detail(@CurrentUser() user: User, @Param("id") id: string) {
-		const data = await this.transactionService.detail(user.id, id);
+	@UseGuards(BusinessOrgScopeGuard)
+	async detail(
+		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
+		@Param("id") id: string,
+	) {
+		const data = await this.transactionService.detail(
+			{ userId: actor.userId, organizationId: actor.organizationId },
+			id,
+		);
 		return { success: true, data, message: "查询成功" };
 	}
 }

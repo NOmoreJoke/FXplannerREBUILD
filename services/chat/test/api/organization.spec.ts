@@ -147,12 +147,14 @@ describe("OrganizationController（e2e）", () => {
 		expect(
 			mine.some((item) => orgIds.includes(item.id) && item.role === "OWNER"),
 		).toBe(true);
-		// 其他成员此时无组织
+		// W18 注册兜底：新注册用户立即拥有唯一默认组织（OWNER/待建账）
 		const outsiderRes = await request(app.getHttpServer())
 			.get("/api/organizations")
 			.set("Authorization", `Bearer ${outsider.accessToken}`)
 			.expect(200);
-		expect(outsiderRes.body.data).toHaveLength(0);
+		expect(outsiderRes.body.data).toHaveLength(1);
+		expect(outsiderRes.body.data[0].role).toBe("OWNER");
+		expect(outsiderRes.body.data[0].onboardingCompleted).toBe(false);
 	});
 
 	it("GET /organizations/current：缺头 400 / 非法头 400 / 不存在 404", async () => {

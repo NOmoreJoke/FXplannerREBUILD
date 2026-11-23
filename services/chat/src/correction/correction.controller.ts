@@ -23,6 +23,9 @@ import {
 import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
+import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import type { ActorContext } from "../authorization/authorization.types";
 import {
 	CorrectionApplyResultDto,
 	CorrectionErrorDto,
@@ -155,13 +158,15 @@ export class CorrectionController {
 		description: "目标不存在或不属于本人（CORRECTION_TARGET_NOT_FOUND）",
 		type: CorrectionErrorDto,
 	})
+	@UseGuards(BusinessOrgScopeGuard)
 	async getTarget(
 		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
 		@Query("targetType") targetType: string,
 		@Query("targetId") targetId: string,
 	) {
 		const data = await this.correctionService.getTarget(
-			user.id,
+			{ userId: actor.userId, organizationId: actor.organizationId },
 			targetType,
 			targetId,
 		);
@@ -193,14 +198,16 @@ export class CorrectionController {
 		description: "目标不存在或不属于本人（CORRECTION_TARGET_NOT_FOUND）",
 		type: CorrectionErrorDto,
 	})
+	@UseGuards(BusinessOrgScopeGuard)
 	async list(
 		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
 		@Query("targetType") targetType: string,
 		@Query("targetId") targetId: string,
 		@Query("page") page: string,
 	) {
 		const data = await this.correctionService.list(
-			user.id,
+			{ userId: actor.userId, organizationId: actor.organizationId },
 			targetType,
 			targetId,
 			page,

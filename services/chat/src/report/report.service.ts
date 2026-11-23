@@ -9,6 +9,10 @@ import { getCurrency } from "@fxplanner-new/money";
 import type { Prisma, CostLot, Plan } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import {
+	compatReadWhere,
+	type ReadScope,
+} from "../authorization/organization-scope";
+import {
 	aggregatePlanUsage,
 	computeRemainingToUse,
 	computeReportUpdatedAt,
@@ -96,22 +100,38 @@ export class ReportService {
 		@Inject(PrismaService) private readonly prisma: PrismaService,
 	) {}
 
-	/** 报告中心列表（GET /api/reports/plans，§5.1）：全计划成本摘要 + 状态/币种筛选 */
+	/**
+	 * 本位币解析（W18，与 account.service 同款规则）：组织设置优先（LEDGER-02），
+	 * 回落 UserSettings（兼容窗口未迁旧记录），均无 → null。
+	 */
+	private async resolveBaseCurrency(scope: ReadScope): Promise<string | null> {
+		const orgSettings = await this.prisma.organizationSettings.findUnique({
+			where: { organizationId: scope.organizationId },
+			select: { baseCurrency: true },
+		});
+		if (orgSettings?.baseCurrency) {
+			return orgSettings.baseCurrency;
+		}
+		const userSettings = await this.prisma.userSettings.findUnique({
+			where: { userId: scope.userId },
+			select: { baseCurrency: true },
+		});
+		return userSettings?.baseCurrency ?? null;
+	}
+
+	/** 报告中心列表（GET /api/reports/plans，§5.1；W18 组织隔离）：全计划成本摘要 + 状态/币种筛选 */
 	async list(
-		userId: string,
+		scope: ReadScope,
 		query: { status?: string; currencyCode?: string },
 	): Promise<ReportPlanListDto> {
 		const status = this.normalizeStatus(query.status);
 		const currencyCode = this.normalizeCurrencyCode(query.currencyCode);
 
-		const [settings, plans] = await Promise.all([
-			this.prisma.userSettings.findUnique({
-				where: { userId },
-				select: { baseCurrency: true },
-			}),
+		const [baseCurrency, plans] = await Promise.all([
+			this.resolveBaseCurrency(scope),
 			this.prisma.plan.findMany({
 				where: {
-					userId,
+					...compatReadWhere(scope),
 					...(status ? { status } : {}),
 					...(currencyCode ? { targetCurrency: currencyCode } : {}),
 				},
@@ -120,7 +140,7 @@ export class ReportService {
 		]);
 
 		const context = await this.loadUsageContext(
-			userId,
+			scope,
 			plans.map((plan) => plan.id),
 		);
 
@@ -131,27 +151,24 @@ export class ReportService {
 				context,
 			),
 		);
-		return { baseCurrency: settings?.baseCurrency ?? null, items };
+		return { baseCurrency, items };
 	}
 
-	/** 单计划报告（GET /api/reports/plans/:id，§5.2）：页面摘要与打印视图共用数据源 */
-	async detail(userId: string, planId: string): Promise<PlanReportDto> {
+	/** 单计划报告（GET /api/reports/plans/:id，§5.2；W18 组织隔离）：页面摘要与打印视图共用数据源 */
+	async detail(scope: ReadScope, planId: string): Promise<PlanReportDto> {
 		if (!PLAN_ID_PATTERN.test(planId)) {
 			throw new ReportInvalidParamsException("计划 ID 格式非法");
 		}
 		const plan = await this.prisma.plan.findFirst({
-			where: { id: planId, userId },
+			where: { id: planId, ...compatReadWhere(scope) },
 		});
 		if (!plan) {
-			// 不存在或不属于本人均 404（防枚举，对齐 plan 模块）
+			// 组织作用域外与不存在均 404（防枚举，对齐 plan 模块）
 			throw new ReportPlanNotFoundException();
 		}
-		const [settings, context] = await Promise.all([
-			this.prisma.userSettings.findUnique({
-				where: { userId },
-				select: { baseCurrency: true },
-			}),
-			this.loadUsageContext(userId, [plan.id]),
+		const [baseCurrency, context] = await Promise.all([
+			this.resolveBaseCurrency(scope),
+			this.loadUsageContext(scope, [plan.id]),
 		]);
 
 		const aggregate = this.aggregateForPlan(plan.id, context);
@@ -162,7 +179,7 @@ export class ReportService {
 				name: plan.name,
 				status: plan.status,
 				currencyCode: plan.targetCurrency,
-				baseCurrency: settings?.baseCurrency ?? null,
+				baseCurrency,
 				targetAmount: plan.targetAmount.toFixed(4),
 				usedQuantity: aggregate.usedQuantity.toFixed(4),
 				remainingToUseAmount: computeRemainingToUse(
@@ -234,7 +251,7 @@ export class ReportService {
 	 * planId = 该计划的交易（字面口径；分摊来源交易若 planId=null 不参与 updatedAt）。
 	 */
 	private async loadUsageContext(
-		userId: string,
+		scope: ReadScope,
 		planIds: string[],
 	): Promise<UsageContext> {
 		const empty: UsageContext = {
@@ -252,10 +269,10 @@ export class ReportService {
 
 		const [usageRecords, planTransactions] = await Promise.all([
 			this.prisma.usageRecord.findMany({
-				where: { userId, planId: { in: planIds } },
+				where: { planId: { in: planIds }, ...compatReadWhere(scope) },
 			}),
 			this.prisma.transaction.findMany({
-				where: { userId, planId: { in: planIds } },
+				where: { planId: { in: planIds }, ...compatReadWhere(scope) },
 				select: { id: true, planId: true },
 			}),
 		]);

@@ -1,11 +1,7 @@
 import type { HttpException } from "@nestjs/common";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaService } from "../prisma/prisma.service";
-import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
-import {
-	SettingsService,
-	SettingsUpdateEmptyException,
-} from "./settings.service";
+import { SettingsService } from "./settings.service";
 
 const T0 = new Date("2026-08-01T00:00:00.000Z");
 
@@ -24,7 +20,11 @@ function createPrismaMock() {
 		findUnique: vi.fn(),
 		update: vi.fn(),
 	};
-	return { userSettings };
+	// W18 组织偏好读取：默认 null（组织设置未迁 → 回落 UserSettings 原值）
+	const organizationSettings = {
+		findUnique: vi.fn().mockResolvedValue(null),
+	};
+	return { userSettings, organizationSettings };
 }
 
 function errorOf(action: () => Promise<unknown>) {
@@ -55,7 +55,7 @@ describe("SettingsService", () => {
 		it("未建账 → 409 ONBOARDING_NOT_COMPLETED", async () => {
 			prisma.userSettings.findUnique.mockResolvedValue(null);
 
-			const { status, body } = await errorOf(() => service.getSettings("u1"));
+			const { status, body } = await errorOf(() => service.getSettings({ userId: "u1", organizationId: "org-test" }));
 
 			expect(status).toBe(409);
 			expect(body.code).toBe("ONBOARDING_NOT_COMPLETED");
@@ -64,7 +64,7 @@ describe("SettingsService", () => {
 		it("已建账：返回完整视图（含 user.email 与只读 baseCurrency）", async () => {
 			prisma.userSettings.findUnique.mockResolvedValue(settingsRow);
 
-			const view = await service.getSettings("u1");
+			const view = await service.getSettings({ userId: "u1", organizationId: "org-test" });
 
 			expect(view).toEqual({
 				email: "user@example.com",

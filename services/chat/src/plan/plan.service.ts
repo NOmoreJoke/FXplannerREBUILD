@@ -10,6 +10,10 @@ import { Prisma } from "@prisma/client";
 import { lockLedgerAccounts, lockPlanAccount } from "../prisma/ledger-write-lock";
 import { PrismaService } from "../prisma/prisma.service";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
+import {
+	compatReadWhere,
+	type ReadScope,
+} from "../authorization/organization-scope";
 import type {
 	AdjustPreviewDto,
 	AdjustPreviewResultDto,
@@ -323,11 +327,11 @@ export class PlanService {
 	 * 派生量（剩余分配/缺口）复用 plan-calculator.computeDerived，禁止另行实现公式。
 	 */
 	async list(
-		userId: string,
+		scope: ReadScope,
 		status?: string,
 	): Promise<{ items: PlanListItemDto[] }> {
 		const plans = await this.prisma.plan.findMany({
-			where: { userId, ...(status ? { status } : {}) },
+			where: { ...compatReadWhere(scope), ...(status ? { status } : {}) },
 			orderBy: { updatedAt: "desc" },
 			take: PLAN_LIST_LIMIT,
 		});
@@ -372,16 +376,44 @@ export class PlanService {
 	}
 
 	/**
-	 * 计划详情（GET /api/plans/:id，§4.2）：归属校验（非本人与不存在均 404，防枚举）。
-	 * canModify/canCancel/canComplete/canReopen 由服务端按状态与数据计算，前端据此显隐按钮。
+	 * 计划详情（GET /api/plans/:id，§4.2；W18 组织隔离）：组织作用域归属校验
+	 * （组织外与不存在均 404，防枚举）。canModify/canCancel/canComplete/canReopen
+	 * 由服务端按状态与数据计算，前端据此显隐按钮。
 	 */
-	async getDetail(userId: string, planId: string): Promise<PlanDetailDto> {
+	async getDetail(scope: ReadScope, planId: string): Promise<PlanDetailDto> {
+		const plan = await this.prisma.plan.findFirst({
+			where: { id: planId, ...compatReadWhere(scope) },
+		});
+		if (!plan) {
+			throw new PlanNotFoundException();
+		}
+		return this.buildDetail(plan);
+	}
+
+	/**
+	 * 写路径收尾详情（原 getDetail 语义）：事务提交后按 { id, userId } 重读，
+	 * 含本次写入的变更记录；写路径 organizationId 语义随 Goal #3B Actor 化收口。
+	 */
+	private async detailAfterWrite(
+		userId: string,
+		planId: string,
+	): Promise<PlanDetailDto> {
 		const plan = await this.prisma.plan.findFirst({
 			where: { id: planId, userId },
 		});
 		if (!plan) {
 			throw new PlanNotFoundException();
 		}
+		return this.buildDetail(plan);
+	}
+
+	/**
+	 * 详情组装（写路径复用）：adjust/complete/cancel 事务内已按 { id, userId }
+	 * 校验并持有 plan 行，直接组装详情，不重复归属查询（写路径 OrganizationId
+	 * 语义随 Goal #3B Actor 化收口）。
+	 */
+	private async buildDetail(plan: Plan): Promise<PlanDetailDto> {
+		const planId = plan.id;
 		const [allocation, installments, changeLogs] = await Promise.all([
 			this.prisma.planAllocation.findUnique({ where: { planId } }),
 			this.prisma.planInstallment.findMany({
@@ -611,7 +643,7 @@ export class PlanService {
 				});
 			}
 		});
-		return this.getDetail(userId, planId);
+		return this.detailAfterWrite(userId, planId);
 	}
 
 	/**
@@ -674,7 +706,7 @@ export class PlanService {
 				},
 			});
 		});
-		return this.getDetail(userId, planId);
+		return this.detailAfterWrite(userId, planId);
 	}
 
 	/**
@@ -736,7 +768,7 @@ export class PlanService {
 				},
 			});
 		});
-		return this.getDetail(userId, planId);
+		return this.detailAfterWrite(userId, planId);
 	}
 
 // ────────────────────────── 私有辅助 ──────────────────────────

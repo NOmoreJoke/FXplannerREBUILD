@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus, Inject, Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
+import type { ReadScope } from "../authorization/organization-scope";
 import type {
 	SettingsViewDto,
 	UpdateSettingsDto,
@@ -38,8 +39,33 @@ export class SettingsService {
 		@Inject(PrismaService) private readonly prisma: PrismaService,
 	) {}
 
-	/** 查询完整设置视图（未建账 → 409 ONBOARDING_NOT_COMPLETED） */
-	async getSettings(userId: string): Promise<SettingsViewDto> {
+	/**
+	 * 查询完整设置视图（未建账 → 409 ONBOARDING_NOT_COMPLETED；W18 组织隔离）：
+	 * 个人展示字段（email/locale/region）读 UserSettings；组织偏好
+	 * （baseCurrency/prepPreference/reminderEnabled/ledgerStartedAt）优先读
+	 * OrganizationSettings（LEDGER-02），未迁旧记录回落 UserSettings 原值。
+	 */
+	async getSettings(scope: ReadScope): Promise<SettingsViewDto> {
+		const view = await this.getUserSettingsView(scope.userId);
+		const orgSettings = await this.prisma.organizationSettings.findUnique({
+			where: { organizationId: scope.organizationId },
+		});
+		if (orgSettings) {
+			return {
+				...view,
+				baseCurrency: orgSettings.baseCurrency,
+				prepPreference: orgSettings.prepPreference,
+				reminderEnabled: orgSettings.reminderEnabled,
+				ledgerStartedAt: orgSettings.ledgerStartedAt,
+			};
+		}
+		return view;
+	}
+
+	/** UserSettings 原值视图（写路径收尾复用；未建账 409） */
+	private async getUserSettingsView(
+		userId: string,
+	): Promise<SettingsViewDto> {
 		const settings = await this.prisma.userSettings.findUnique({
 			where: { userId },
 			include: { user: { select: { email: true } } },
@@ -84,7 +110,9 @@ export class SettingsService {
 				}
 				throw error;
 			});
-		return this.getSettings(userId);
+		// 写路径收尾返回 UserSettings 原值（compat：组织偏好覆盖语义仅 GET 展示，
+		// 个人写路径的响应忠实反映本次写入；组织化写随 Goal #3B 收口）
+		return this.getUserSettingsView(userId);
 	}
 
 	/** UserSettings（含 user.email）→ 视图 DTO（金额/时间不做格式化，序列化交给 HTTP 层） */

@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, BadRequestException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { Prisma } from "@prisma/client";
+import type { ReadScope } from "../authorization/organization-scope";
 import { ConcurrencySemaphore } from "./ai-concurrency-semaphore";
 import {
 	AiBusyException,
@@ -81,24 +82,43 @@ export class AiService {
 		if (!this.config.chatEnabled) throw new AiDisabledException();
 	}
 
-	/** 越权与不存在统一 404（防枚举，§4） */
+	/** 越权与不存在统一 404（防枚举，§4）；scope 可选：读路径传入时叠加组织隔离
+	 * （会话个人所有 + 组织绑定，技术方案 §8.4），写路径不传保持原语义 */
 	async assertOwned(
 		conversationId: string,
 		userId: string,
+		scope?: ReadScope,
 	): Promise<{ id: string; title: string }> {
 		const conversation = await this.prisma.aiConversation.findFirst({
-			where: { id: conversationId, userId },
+			where: {
+				id: conversationId,
+				userId,
+				...(scope
+					? {
+							OR: [
+								{ organizationId: scope.organizationId },
+								{ organizationId: null },
+							],
+						}
+					: {}),
+			},
 			select: { id: true, title: true },
 		});
 		if (!conversation) throw new AiConversationNotFoundException();
 		return conversation;
 	}
 
-	async listConversations(userId: string, limit?: number) {
+	async listConversations(scope: ReadScope, limit?: number) {
 		const effective = limit ?? 50;
 		this.assertListLimit(effective, AI_LIST_LIMIT_CAPS.conversations);
 		const rows = await this.prisma.aiConversation.findMany({
-			where: { userId },
+			where: {
+				userId: scope.userId,
+				OR: [
+					{ organizationId: scope.organizationId },
+					{ organizationId: null },
+				],
+			},
 			orderBy: { lastMessageAt: "desc" },
 			take: effective,
 			include: { _count: { select: { messages: true } } },
@@ -113,9 +133,13 @@ export class AiService {
 		};
 	}
 
-	async listMessages(conversationId: string, userId: string, limit?: number) {
-		// 归属校验（404 防枚举）先行于参数校验（§8.2 行 8 顺序）
-		await this.assertOwned(conversationId, userId);
+	async listMessages(
+		conversationId: string,
+		scope: ReadScope,
+		limit?: number,
+	) {
+		// 归属校验（404 防枚举）先行于参数校验（§8.2 行 8 顺序）；叠加组织隔离
+		await this.assertOwned(conversationId, scope.userId, scope);
 		// DTO 默认值在 esbuild 转译的测试环境不生效，service 层兜底默认值
 		const effective = limit ?? 200;
 		this.assertListLimit(effective, AI_LIST_LIMIT_CAPS.messages);

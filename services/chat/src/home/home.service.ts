@@ -3,6 +3,10 @@ import { Prisma } from "@prisma/client";
 import type { Account, Plan, PlanAllocation } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { RateService } from "../rate/rate.service";
+import {
+	compatReadWhere,
+	type ReadScope,
+} from "../authorization/organization-scope";
 import type {
 	AccountSummaryDto,
 	HomeStateDto,
@@ -32,23 +36,33 @@ export class HomeService {
 	 * 首页状态（GET /api/home/state，方案 §4.2）：五组查询并行，一次请求返回分流 + 摘要。
 	 * 只读、无副作用；空状态只返回原始事实（四布尔），分流规则归前端展示层，后端保持数据中立。
 	 */
-	async getState(userId: string): Promise<HomeStateDto> {
-		const [settings, accounts, plans, latestRateObservedAt, initialLotCount] =
-			await Promise.all([
-				this.prisma.userSettings.findUnique({ where: { userId } }),
-				this.prisma.account.findMany({
-					where: { userId },
-					orderBy: { currencyCode: "asc" },
-				}),
-				this.prisma.plan.findMany({
-					where: { userId },
-					orderBy: { createdAt: "desc" },
-				}),
-				this.rateService.getLatestObservedAt(),
-				this.prisma.costLot.count({
-					where: { userId, sourceType: "INITIAL" },
-				}),
-			]);
+	async getState(scope: ReadScope): Promise<HomeStateDto> {
+		const [
+			userSettings,
+			orgSettings,
+			accounts,
+			plans,
+			latestRateObservedAt,
+			initialLotCount,
+		] = await Promise.all([
+			this.prisma.userSettings.findUnique({ where: { userId: scope.userId } }),
+			this.prisma.organizationSettings.findUnique({
+				where: { organizationId: scope.organizationId },
+				select: { ledgerStartedAt: true },
+			}),
+			this.prisma.account.findMany({
+				where: compatReadWhere(scope),
+				orderBy: { currencyCode: "asc" },
+			}),
+			this.prisma.plan.findMany({
+				where: compatReadWhere(scope),
+				orderBy: { createdAt: "desc" },
+			}),
+			this.rateService.getLatestObservedAt(),
+			this.prisma.costLot.count({
+				where: { sourceType: "INITIAL", ...compatReadWhere(scope) },
+			}),
+		]);
 
 		// PlanAllocation 与 Plan 无 Prisma relation（planId 为裸外键 + @unique），
 		// 方案中的 include 不可行：改为按本页计划 ID 批量取出后内存关联（等价语义）
@@ -60,7 +74,10 @@ export class HomeService {
 		);
 
 		return {
-			onboardingCompleted: settings !== null,
+			// 建账态（LEDGER-02 组织级）：组织设置已迁则以组织为准，
+			// 兼容窗口回落 UserSettings（未迁旧记录，行为与 W18 前一致）
+			onboardingCompleted:
+				orgSettings?.ledgerStartedAt != null || userSettings !== null,
 			hasInitialHoldings: initialLotCount > 0,
 			hasAccounts: accounts.length > 0,
 			hasPlans: plans.length > 0,
@@ -86,10 +103,14 @@ export class HomeService {
 	 * 实现要求：聚合在 SQL 层完成（SUM/GROUP BY，WHERE 按 userId 过滤），
 	 * 仅分组结果返回内存，禁止全表明细拉内存再过滤（契约 §2）。
 	 */
-	async getPortfolio(userId: string): Promise<PortfolioDto> {
-		const [settings, rows] = await Promise.all([
+	async getPortfolio(scope: ReadScope): Promise<PortfolioDto> {
+		const [orgSettings, userSettings, rows] = await Promise.all([
+			this.prisma.organizationSettings.findUnique({
+				where: { organizationId: scope.organizationId },
+				select: { baseCurrency: true },
+			}),
 			this.prisma.userSettings.findUnique({
-				where: { userId },
+				where: { userId: scope.userId },
 				select: { baseCurrency: true },
 			}),
 			this.prisma.$queryRaw<PortfolioGroupRow[]>`
@@ -98,7 +119,10 @@ export class HomeService {
 					SUM(remaining_qty) AS remaining_qty,
 					SUM(remaining_qty * unit_cost) AS total_cost
 				FROM cost_lots
-				WHERE user_id = ${userId} AND remaining_qty > 0
+				WHERE
+					(organization_id = ${scope.organizationId}
+						OR (organization_id IS NULL AND user_id = ${scope.userId}))
+					AND remaining_qty > 0
 				GROUP BY currency_code
 				ORDER BY currency_code ASC
 			`,
@@ -113,7 +137,8 @@ export class HomeService {
 			.toFixed(4);
 
 		return {
-			baseCurrency: settings?.baseCurrency ?? null,
+			baseCurrency:
+				orgSettings?.baseCurrency ?? userSettings?.baseCurrency ?? null,
 			totalRemainingCost,
 			byCurrency: rows.map((row) => this.toPortfolioByCurrency(row)),
 		};

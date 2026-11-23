@@ -1,5 +1,6 @@
 import { Logger, Module } from "@nestjs/common";
 import { RateModule } from "../rate/rate.module";
+import { AuthorizationModule } from "../authorization/authorization.module";
 import { AiAgentService } from "./ai-agent.service";
 import { AiController } from "./ai.controller";
 import { AiService } from "./ai.service";
@@ -17,7 +18,7 @@ import { AI_LLM_FACTORY, createLlmFactory } from "./llm/llm-factory";
  * 解析（而非加载期固化的 env 常量），使集成测试可按 app 实例注入阈值（§8.2 装配③）。
  */
 @Module({
-	imports: [RateModule],
+	imports: [RateModule, AuthorizationModule],
 	controllers: [AiController],
 	providers: [
 		AiService,

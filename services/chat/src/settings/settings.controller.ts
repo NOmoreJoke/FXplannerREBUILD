@@ -21,6 +21,9 @@ import {
 import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
+import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import type { ActorContext } from "../authorization/authorization.types";
 import {
 	SettingsErrorDto,
 	SettingsViewDto,
@@ -64,8 +67,15 @@ export class SettingsController {
 		description: "尚未完成首次设置（ONBOARDING_NOT_COMPLETED）",
 		type: SettingsErrorDto,
 	})
-	async getSettings(@CurrentUser() user: User) {
-		const data = await this.settingsService.getSettings(user.id);
+	@UseGuards(BusinessOrgScopeGuard)
+	async getSettings(
+		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
+	) {
+		const data = await this.settingsService.getSettings({
+			userId: actor.userId,
+			organizationId: actor.organizationId,
+		});
 		return { success: true, data, message: "设置查询成功" };
 	}
 

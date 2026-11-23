@@ -4,6 +4,10 @@ import { Prisma, type Transaction as TransactionModel } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
 import {
+	compatReadWhere,
+	type ReadScope,
+} from "../authorization/organization-scope";
+import {
 	assertUnitCostInRange,
 	buildPurchaseLot,
 } from "../account/account-calculator";
@@ -162,9 +166,9 @@ export class TransactionService {
 	 * 交易详情（GET /transactions/:id，方案 §5.2）：
 	 * 按 id + userId 联查，不存在或不属于本人一律 404（不泄露存在性）。
 	 */
-	async detail(userId: string, id: string): Promise<TransactionDto> {
+	async detail(scope: ReadScope, id: string): Promise<TransactionDto> {
 		const transaction = await this.prisma.transaction.findFirst({
-			where: { id, userId },
+			where: { id, ...compatReadWhere(scope) },
 		});
 		if (!transaction) {
 			throw new TransactionNotFoundException();

@@ -8,6 +8,8 @@ import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
 import type { RegisterDto, LoginDto, AuthResponseDto, UserDto } from './dto';
+// 纯函数导入（无 Nest 模块依赖，无循环风险）：默认组织命名与 MIG-B 同源
+import { defaultOrganizationName } from '../organization/organization-backfill';
 
 @Injectable()
 export class AuthService {
@@ -31,12 +33,26 @@ export class AuthService {
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(dto.password, salt);
 
-    // 3. 创建用户
-    const user = await this.prisma.user.create({
-      data: {
-        email,
-        passwordHash,
-      },
+    // 3. 创建用户 + 默认组织兜底（GOAL-3A W17.4/W18：单用户单组织兼容窗口的
+    // 前置——新注册用户立即拥有唯一默认组织与 OWNER Membership，业务 GET 的
+    // 无头回落才有唯一映射目标；不建 OrganizationSettings，保持待建账语义
+    // 与 MIG-B §12.2.3 一致。响应体不变，既有 auth API/E2E 零破坏。）
+    const user = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          email,
+          passwordHash,
+        },
+      });
+      await tx.organization.create({
+        data: {
+          name: defaultOrganizationName(created),
+          memberships: {
+            create: { userId: created.id, role: 'OWNER', status: 'ACTIVE' },
+          },
+        },
+      });
+      return created;
     });
 
     // 4. 生成 JWT Token

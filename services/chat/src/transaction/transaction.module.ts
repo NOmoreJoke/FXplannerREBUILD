@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AuthorizationModule } from "../authorization/authorization.module";
 import { TransactionController } from "./transaction.controller";
 import { TransactionService } from "./transaction.service";
 
@@ -7,6 +8,7 @@ import { TransactionService } from "./transaction.service";
  * PrismaModule 为全局模块，无需重复导入；transaction-calculator 为模块内纯函数，不进 providers。
  */
 @Module({
+	imports: [AuthorizationModule],
 	controllers: [TransactionController],
 	providers: [TransactionService],
 	exports: [TransactionService],

@@ -28,6 +28,10 @@ import {
 import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
+import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import type { ActorContext } from "../authorization/authorization.types";
+import type { ReadScope } from "../authorization/organization-scope";
 import {
 	AdjustCapsDto,
 	AdjustImpactDto,
@@ -185,9 +189,18 @@ export class PlanController {
 		description: "status 非法（不在三值枚举内），无模块 code",
 		type: PlanErrorDto,
 	})
-	async list(@CurrentUser() user: User, @Query() query: PlanListQueryDto) {
+	@UseGuards(BusinessOrgScopeGuard)
+	async list(
+		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
+		@Query() query: PlanListQueryDto,
+	) {
+		const scope: ReadScope = {
+			userId: actor.userId,
+			organizationId: actor.organizationId,
+		};
 		return this.withLog(`GET /plans status=${query.status ?? "ALL"}`, user.id, null, () =>
-			this.planService.list(user.id, query.status),
+			this.planService.list(scope, query.status),
 		).then(
 			(data) => ({ success: true, data, message: "计划列表获取成功" }),
 		);
@@ -213,9 +226,18 @@ export class PlanController {
 		description: "计划不存在或不属于本人（PLAN_NOT_FOUND）",
 		type: PlanErrorDto,
 	})
-	async getDetail(@CurrentUser() user: User, @Param("id") id: string) {
+	@UseGuards(BusinessOrgScopeGuard)
+	async getDetail(
+		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
+		@Param("id") id: string,
+	) {
+		const scope: ReadScope = {
+			userId: actor.userId,
+			organizationId: actor.organizationId,
+		};
 		return this.withLog("GET /plans/:id", user.id, id, () =>
-			this.planService.getDetail(user.id, id),
+			this.planService.getDetail(scope, id),
 		).then(
 			(data) => ({ success: true, data, message: "计划详情获取成功" }),
 		);

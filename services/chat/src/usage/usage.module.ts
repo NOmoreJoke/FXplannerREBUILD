@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AuthorizationModule } from "../authorization/authorization.module";
 import { UsageController } from "./usage.controller";
 import { UsageService } from "./usage.service";
 
@@ -11,6 +12,7 @@ import { UsageService } from "./usage.service";
  * - PrismaModule 为全局模块，无需重复导入。
  */
 @Module({
+	imports: [AuthorizationModule],
 	controllers: [UsageController],
 	providers: [UsageService],
 })

@@ -2,9 +2,7 @@ import {
 	Body,
 	Controller,
 	Get,
-	HttpCode,
 	HttpException,
-	HttpStatus,
 	Inject,
 	Logger,
 	Param,
@@ -26,6 +24,9 @@ import {
 import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
+import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import type { ActorContext } from "../authorization/authorization.types";
 import {
 	CreateUsageDto,
 	CreateUsageRespDto,
@@ -127,9 +128,17 @@ export class UsageController {
 		description: "计划不存在或不属于本人（PLAN_NOT_FOUND，防枚举）",
 		type: UsageErrorDto,
 	})
-	async list(@CurrentUser() user: User, @Param("id") id: string) {
+	@UseGuards(BusinessOrgScopeGuard)
+	async list(
+		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
+		@Param("id") id: string,
+	) {
 		return this.withLog("GET /plans/:id/usages", user.id, id, () =>
-			this.usageService.list(user.id, id),
+			this.usageService.list(
+				{ userId: actor.userId, organizationId: actor.organizationId },
+				id,
+			),
 		).then(
 			(data) => ({ success: true, data, message: "使用记录获取成功" }),
 		);

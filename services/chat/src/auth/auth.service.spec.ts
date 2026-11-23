@@ -23,6 +23,10 @@ describe("AuthService", () => {
 			findUnique: ReturnType<typeof vi.fn>;
 			create: ReturnType<typeof vi.fn>;
 		};
+		organization: {
+			create: ReturnType<typeof vi.fn>;
+		};
+		$transaction: ReturnType<typeof vi.fn>;
 	};
 	let jwtService: { sign: ReturnType<typeof vi.fn> };
 
@@ -32,6 +36,13 @@ describe("AuthService", () => {
 				findUnique: vi.fn(),
 				create: vi.fn(),
 			},
+			organization: {
+				create: vi.fn().mockResolvedValue({ id: "org-1" }),
+			},
+			// W18 注册兜底：user + 默认组织在同一事务创建；单测以「直调回调」透传 mock prisma
+			$transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) =>
+				run(prisma),
+			),
 		};
 		jwtService = { sign: vi.fn().mockReturnValue("access-token") };
 		service = new AuthService(

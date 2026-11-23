@@ -11,6 +11,9 @@ import {
 import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
+import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import type { ActorContext } from "../authorization/authorization.types";
 import {
 	ReminderErrorDto,
 	ReminderItemDto,
@@ -65,8 +68,15 @@ export class ReminderController {
 		description: "尚未完成首次设置（ONBOARDING_NOT_COMPLETED）",
 		type: ReminderErrorDto,
 	})
-	async list(@CurrentUser() user: User) {
-		const data = await this.reminderService.list(user.id);
+	@UseGuards(BusinessOrgScopeGuard)
+	async list(
+		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
+	) {
+		const data = await this.reminderService.list({
+			userId: actor.userId,
+			organizationId: actor.organizationId,
+		});
 		return { success: true, data, message: "提醒列表获取成功" };
 	}
 

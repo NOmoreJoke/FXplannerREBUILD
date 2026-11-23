@@ -3,6 +3,10 @@ import type { Plan, PlanAllocation, PlanInstallment } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
+import {
+	compatReadWhere,
+	type ReadScope,
+} from "../authorization/organization-scope";
 import type {
 	ReminderItemDto,
 	ReminderMatterDto,
@@ -50,9 +54,9 @@ export class ReminderService {
 	 * ③ 查询未读全量 + 已读近 30 天（scheduledFor 倒序，limit 100）
 	 * ④ 逐行派生 matters：非 ACTIVE 计划行、planId 缺失行、matters 为空的行不返回（§4.5）。
 	 */
-	async list(userId: string): Promise<RemindersViewDto> {
+	async list(scope: ReadScope): Promise<RemindersViewDto> {
 		const settings = await this.prisma.userSettings.findUnique({
-			where: { userId },
+			where: { userId: scope.userId },
 			select: { reminderEnabled: true },
 		});
 		if (!settings) {
@@ -61,11 +65,12 @@ export class ReminderService {
 
 		if (settings.reminderEnabled) {
 			// 生成失败兜底（§11）：漏一轮无业务损失，下次请求重算；列表本身失败才走错误态
+			// 生成路径维持 userId 语义（W18 禁改写路径；组织级生成随 Goal #3B 收口）
 			try {
-				await this.generateDueReminders(userId);
+				await this.generateDueReminders(scope.userId);
 			} catch (error) {
 				this.logger.warn(
-					`generateDueReminders failed userId=${userId} error=${error instanceof Error ? error.message : String(error)}`,
+					`generateDueReminders failed userId=${scope.userId} error=${error instanceof Error ? error.message : String(error)}`,
 				);
 			}
 		}
@@ -76,12 +81,37 @@ export class ReminderService {
 		);
 		const rows = await this.prisma.reminder.findMany({
 			where: {
-				userId,
-				OR: [{ readAt: null }, { scheduledFor: { gte: readWindowStart } }],
+				AND: [
+					compatReadWhere(scope),
+					{
+						OR: [{ readAt: null }, { scheduledFor: { gte: readWindowStart } }],
+					},
+				],
 			},
 			orderBy: [{ scheduledFor: "desc" }, { id: "desc" }],
 			take: REMINDER_LIST_LIMIT,
 		});
+
+		// LEDGER-03 只读侧（W18）：个人未读态优先按成员级 ReminderRead（当前
+		// actor.userId）计算；无成员级行时回落行内 readAt（仅行主本人语义）
+		const memberReads = await this.prisma.reminderRead.findMany({
+			where: {
+				userId: scope.userId,
+				reminderId: { in: rows.map((row) => row.id) },
+			},
+			select: { reminderId: true, readAt: true },
+		});
+		const memberReadAtByReminder = new Map(
+			memberReads.map((read) => [read.reminderId, read.readAt]),
+		);
+		for (const row of rows) {
+			const memberReadAt = memberReadAtByReminder.get(row.id);
+			if (memberReadAt) {
+				row.readAt = memberReadAt;
+			} else if (row.userId !== scope.userId) {
+				row.readAt = null; // 他人行的 readAt 不构成我的已读态
+			}
+		}
 
 		const items = await this.toItems(rows);
 		return {
