@@ -89,8 +89,8 @@ export class AuditService {
 			result: string;
 			requestId: string | null;
 			agentRunId: string | null;
-			detail: unknown;
-			createdAt: Date;
+			detail: Record<string, unknown> | null;
+			createdAt: string;
 		}>;
 		page: number;
 		pageSize: number;
@@ -112,7 +112,7 @@ export class AuditService {
 			...(query.action ? { action: query.action } : {}),
 			...(query.result ? { result: query.result } : {}),
 		};
-		const [items, total] = await Promise.all([
+		const [rows, total] = await Promise.all([
 			this.prisma.auditLog.findMany({
 				where,
 				orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -121,6 +121,25 @@ export class AuditService {
 			}),
 			this.prisma.auditLog.count({ where }),
 		]);
-		return { items, page, pageSize, total };
+		return {
+			items: rows.map((row) => ({
+				id: row.id,
+				organizationId: row.organizationId,
+				actorUserId: row.actorUserId,
+				actorType: row.actorType,
+				action: row.action,
+				targetType: row.targetType,
+				targetId: row.targetId,
+				result: row.result,
+				requestId: row.requestId,
+				agentRunId: row.agentRunId,
+				detail:
+					(row.detail as Record<string, unknown> | null | undefined) ?? null,
+				createdAt: row.createdAt.toISOString(),
+			})),
+			page,
+			pageSize,
+			total,
+		};
 	}
 }

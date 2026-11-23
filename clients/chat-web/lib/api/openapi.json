@@ -692,6 +692,37 @@
         ]
       }
     },
+    "/api/organizations/current/audit-logs": {
+      "get": {
+        "description": "按时间起止/操作者/动作/结果筛选的分页只读查询；无任何写/删接口（AUDIT-03.3）；Operator/Viewer 403 并落 DENIED 审计。",
+        "operationId": "AuditController_listCurrent",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditLogListDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED（Operator/Viewer）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "当前组织审计日志（只读分页；Owner/Admin/Finance 可读）",
+        "tags": [
+          "Audit"
+        ]
+      }
+    },
     "/api/plans/schedule-preview": {
       "post": {
         "description": "按目标金额/用途日期/提前天数/节奏实时生成分批排期（3/2/1 批），并返回该币种可分配余额 caps 供前端对「计入已有外币」做实时预检。可随表单输入反复调用，不产生任何落库副作用。错误：400 INVALID_PLAN_PARAMS（币种/金额/日期/天数/节奏非法）、NO_AVAILABLE_DATES（可安排工作日为 0）、AMOUNT_TOO_SMALL（分批取整后某批为 0）。",
@@ -2628,6 +2659,512 @@
         ]
       }
     },
+    "/api/organizations": {
+      "get": {
+        "description": "返回当前登录用户全部 ACTIVE Membership 对应组织、角色、本位币与建账状态；无组织用户返回空列表（W22 兼容窗口前不自动建组）。",
+        "operationId": "OrganizationController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OrganizationViewDto"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED（角色无对应权限点）"
+          },
+          "404": {
+            "description": "404 ORGANIZATION_NOT_FOUND（非成员/禁用/不存在，不泄露存在性）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "列出本人有效组织（个人端点，单/多组织路由依据）",
+        "tags": [
+          "Organizations"
+        ]
+      },
+      "post": {
+        "description": "事务内创建 Organization + OWNER/ACTIVE Membership 并写组织创建审计；不复制任何既有组织数据或成员（ORG-01.4/5），新组织需独立完成首次设置。",
+        "operationId": "OrganizationController_create",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationViewDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED（角色无对应权限点）"
+          },
+          "404": {
+            "description": "404 ORGANIZATION_NOT_FOUND（非成员/禁用/不存在，不泄露存在性）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "创建组织（创建者 OWNER + 空设置待建账；同事务审计）",
+        "tags": [
+          "Organizations"
+        ]
+      }
+    },
+    "/api/organizations/current": {
+      "get": {
+        "description": "按 X-Organization-Id 解析组织上下文（非成员/禁用统一 404 不泄露存在性）；返回当前角色、全部权限点布尔表（后端真源，前端据此渲染按钮）、组织数据请求锁摘要与建账状态。",
+        "operationId": "OrganizationController_getCurrent",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationCurrentDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED（角色无对应权限点）"
+          },
+          "404": {
+            "description": "404 ORGANIZATION_NOT_FOUND（非成员/禁用/不存在，不泄露存在性）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "当前组织详情 + capabilities + 组织锁与建账状态",
+        "tags": [
+          "Organizations"
+        ]
+      },
+      "patch": {
+        "description": "仅 organization.update 权限（Owner/Admin）可改；同事务写入 organization.update 审计（含改名前后快照）。Operator/Viewer 403 PERMISSION_DENIED。",
+        "operationId": "OrganizationController_updateCurrent",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationCurrentDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED（角色无对应权限点）"
+          },
+          "404": {
+            "description": "404 ORGANIZATION_NOT_FOUND（非成员/禁用/不存在，不泄露存在性）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "修改当前组织名称（同事务审计）",
+        "tags": [
+          "Organizations"
+        ]
+      }
+    },
+    "/api/organizations/current/members": {
+      "get": {
+        "description": "全部有效成员可读（member.read 为全角色基础权限）；DISABLED 成员保留在列表中以维持历史可审计性。",
+        "operationId": "MemberController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MemberViewDto"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED（canManage 资格不足）"
+          },
+          "404": {
+            "description": "404 MEMBER_NOT_FOUND / ORGANIZATION_NOT_FOUND"
+          },
+          "409": {
+            "description": "409 LAST_OWNER_REQUIRED（最后 Owner 保护）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "当前组织成员列表（角色/状态/加入时间）",
+        "tags": [
+          "Members"
+        ]
+      }
+    },
+    "/api/organizations/current/members/{id}": {
+      "patch": {
+        "description": "Owner 可调整任意非 Owner 成员；Admin 仅可调整普通角色（Finance/Operator/Viewer），不可管 Owner/Admin；最后 Owner 不可被降权（409 LAST_OWNER_REQUIRED）。",
+        "operationId": "MemberController_updateRole",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberViewDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED（canManage 资格不足）"
+          },
+          "404": {
+            "description": "404 MEMBER_NOT_FOUND / ORGANIZATION_NOT_FOUND"
+          },
+          "409": {
+            "description": "409 LAST_OWNER_REQUIRED（最后 Owner 保护）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "调整成员角色（同事务审计）",
+        "tags": [
+          "Members"
+        ]
+      },
+      "delete": {
+        "description": "移除后该成员立即失去组织访问权（下一次请求 404 ORGANIZATION_NOT_FOUND）；历史操作者信息保留为审计快照。最后 Owner 不可被移除。",
+        "operationId": "MemberController_remove",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberViewDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED（canManage 资格不足）"
+          },
+          "404": {
+            "description": "404 MEMBER_NOT_FOUND / ORGANIZATION_NOT_FOUND"
+          },
+          "409": {
+            "description": "409 LAST_OWNER_REQUIRED（最后 Owner 保护）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "移除成员（DISABLED 保留历史归属；同事务审计）",
+        "tags": [
+          "Members"
+        ]
+      }
+    },
+    "/api/organizations/current/members/leave": {
+      "post": {
+        "description": "成员自助退出（DISABLED 自身成员关系）；组织仅剩一名活跃 Owner 时拒绝并要求先转移所有权。",
+        "operationId": "MemberController_leave",
+        "parameters": [],
+        "responses": {
+          "403": {
+            "description": "403 PERMISSION_DENIED（canManage 资格不足）"
+          },
+          "404": {
+            "description": "404 MEMBER_NOT_FOUND / ORGANIZATION_NOT_FOUND"
+          },
+          "409": {
+            "description": "409 LAST_OWNER_REQUIRED"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "主动退出组织（最后 Owner 409）",
+        "tags": [
+          "Members"
+        ]
+      }
+    },
+    "/api/organizations/current/transfer-ownership": {
+      "post": {
+        "description": "仅 Owner 可发起；目标须为当前组织 ACTIVE 成员且非本人。事务内先将原 Owner 降为 ADMIN 再将目标升为 OWNER（memberships_single_active_owner_uidx 部分唯一索引顺序保护），同事务写审计；转移后新 Owner 权限立即生效。",
+        "operationId": "MemberController_transfer",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED（canManage 资格不足）"
+          },
+          "404": {
+            "description": "404 MEMBER_NOT_FOUND / ORGANIZATION_NOT_FOUND"
+          },
+          "409": {
+            "description": "409 LAST_OWNER_REQUIRED（最后 Owner 保护）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "转移所有权（原 Owner 降为 ADMIN；先降后升保索引顺序）",
+        "tags": [
+          "Members"
+        ]
+      }
+    },
+    "/api/organizations/current/invitations": {
+      "post": {
+        "description": "Owner/Admin（Admin 限普通角色，禁邀 OWNER）按邮箱邀请，默认 7 天有效；同邮箱存在有效未过期邀请时幂等复用（reused=true，不重发 token）。服务端只存 token 的 SHA-256 hash。",
+        "operationId": "InvitationController_create",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationCreatedDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH"
+          },
+          "404": {
+            "description": "404 INVITATION_NOT_FOUND（防枚举）"
+          },
+          "409": {
+            "description": "409 INVITATION_NOT_ACCEPTABLE（状态机）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "创建邀请（原始 token 仅本次响应出现；同事务审计）",
+        "tags": [
+          "Invitations"
+        ]
+      },
+      "get": {
+        "description": "按创建时间倒序（上限 100），含状态归并（OPEN/ACCEPTED/DECLINED/REVOKED/EXPIRED）。",
+        "operationId": "InvitationController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InvitationViewDto"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH"
+          },
+          "404": {
+            "description": "404 INVITATION_NOT_FOUND（防枚举）"
+          },
+          "409": {
+            "description": "409 INVITATION_NOT_ACCEPTABLE（状态机）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "当前组织邀请列表（不回吐 tokenHash）",
+        "tags": [
+          "Invitations"
+        ]
+      }
+    },
+    "/api/organizations/current/invitations/{id}": {
+      "delete": {
+        "description": "仅 OPEN 状态可撤回；已接受/拒绝/过期返回 409。",
+        "operationId": "InvitationController_revoke",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH"
+          },
+          "404": {
+            "description": "404 INVITATION_NOT_FOUND（防枚举）"
+          },
+          "409": {
+            "description": "409 INVITATION_NOT_ACCEPTABLE（状态机）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "撤回有效邀请（同事务审计）",
+        "tags": [
+          "Invitations"
+        ]
+      }
+    },
+    "/api/organization-invitations/{token}": {
+      "get": {
+        "description": "按 token 返回组织名、角色、邀请人显示名、有效期与状态；不含任何账户余额、交易明细或组织业务数据（MEM-01.7）。无效 token 统一 404（防枚举）。",
+        "operationId": "InvitationController_summary",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationSummaryDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH"
+          },
+          "404": {
+            "description": "404 INVITATION_NOT_FOUND（防枚举）"
+          },
+          "409": {
+            "description": "409 INVITATION_NOT_ACCEPTABLE（状态机）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "受邀摘要（登录个人端点；脱敏）",
+        "tags": [
+          "Invitations"
+        ]
+      }
+    },
+    "/api/organization-invitations/{token}/accept": {
+      "post": {
+        "description": "登录邮箱须与受邀邮箱一致（trim+小写规范化）；并发双抢由条件更新保证仅产生一个有效 Membership；被移除（DISABLED）成员重新获邀按新角色恢复 ACTIVE。接受后同事务写审计。",
+        "operationId": "InvitationController_accept",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH"
+          },
+          "404": {
+            "description": "404 INVITATION_NOT_FOUND（防枚举）"
+          },
+          "409": {
+            "description": "409 INVITATION_NOT_ACCEPTABLE（状态机）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "接受邀请（登录 + 邮箱严格匹配；事务消费 + 恢复/新建成员关系）",
+        "tags": [
+          "Invitations"
+        ]
+      }
+    },
+    "/api/organization-invitations/{token}/decline": {
+      "post": {
+        "description": "重复拒绝幂等返回 DECLINED；已接受/撤回/过期返回 409。",
+        "operationId": "InvitationController_decline",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "403": {
+            "description": "403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH"
+          },
+          "404": {
+            "description": "404 INVITATION_NOT_FOUND（防枚举）"
+          },
+          "409": {
+            "description": "409 INVITATION_NOT_ACCEPTABLE（状态机）"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "拒绝邀请（登录 + 邮箱匹配；不自动加入组织）",
+        "tags": [
+          "Invitations"
+        ]
+      }
+    },
     "/api/ai/conversations": {
       "get": {
         "description": "仅返回本人会话，按 lastMessageAt 倒序；幂等只读。未配 LLM key 或总开关关闭时 503 整体降级。",
@@ -3826,6 +4363,117 @@
           "baseCurrency",
           "totalRemainingCost",
           "byCurrency"
+        ]
+      },
+      "AuditLogViewDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "审计行 id"
+          },
+          "organizationId": {
+            "type": "string",
+            "description": "组织 id"
+          },
+          "actorUserId": {
+            "type": "string",
+            "description": "操作者 userId（系统动作为 null）",
+            "nullable": true
+          },
+          "actorType": {
+            "type": "string",
+            "description": "操作者类型",
+            "enum": [
+              "USER",
+              "API",
+              "AGENT"
+            ]
+          },
+          "action": {
+            "type": "string",
+            "description": "动作（如 organization.update、member.invite）"
+          },
+          "targetType": {
+            "type": "string",
+            "description": "目标类型",
+            "nullable": true
+          },
+          "targetId": {
+            "type": "string",
+            "description": "目标 id",
+            "nullable": true
+          },
+          "result": {
+            "type": "string",
+            "description": "结果",
+            "enum": [
+              "SUCCESS",
+              "DENIED",
+              "FAILED"
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "description": "关联请求 id",
+            "nullable": true
+          },
+          "agentRunId": {
+            "type": "string",
+            "description": "关联 Agent 运行 id",
+            "nullable": true
+          },
+          "detail": {
+            "type": "object",
+            "description": "脱敏后的白名单摘要（键值开放对象）",
+            "additionalProperties": true,
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "创建时间（UTC ISO）",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "organizationId",
+          "actorType",
+          "action",
+          "result",
+          "createdAt"
+        ]
+      },
+      "AuditLogListDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditLogViewDto"
+            }
+          },
+          "page": {
+            "type": "number",
+            "description": "当前页码",
+            "example": 1
+          },
+          "pageSize": {
+            "type": "number",
+            "description": "每页条数",
+            "example": 20
+          },
+          "total": {
+            "type": "number",
+            "description": "总条数",
+            "example": 42
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "pageSize",
+          "total"
         ]
       },
       "PlanInstallmentDto": {
@@ -7079,6 +7727,340 @@
             "description": "DELETION 撤回必带：verify（purpose=DELETION）返回的挑战 ID（已消费凭证，仅登录不算撤回）；CLEAR 直接撤回无需携带"
           }
         }
+      },
+      "OrganizationViewDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "组织 id"
+          },
+          "name": {
+            "type": "string",
+            "description": "组织名称"
+          },
+          "role": {
+            "type": "string",
+            "description": "当前用户在组织的角色",
+            "enum": [
+              "OWNER",
+              "ADMIN",
+              "FINANCE",
+              "OPERATOR",
+              "VIEWER"
+            ]
+          },
+          "baseCurrency": {
+            "type": "string",
+            "description": "组织本位币（未建账为 null）",
+            "nullable": true
+          },
+          "onboardingCompleted": {
+            "type": "boolean",
+            "description": "是否已建账（OrganizationSettings 存在且记账起点已落）"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "创建时间（UTC ISO）",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "role",
+          "onboardingCompleted",
+          "createdAt"
+        ]
+      },
+      "OrganizationLockDto": {
+        "type": "object",
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "是否存在进行中的组织数据请求锁"
+          },
+          "type": {
+            "type": "string",
+            "description": "锁类型（CLEAR/DELETION）",
+            "nullable": true
+          }
+        },
+        "required": [
+          "active"
+        ]
+      },
+      "OrganizationCurrentDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "组织 id"
+          },
+          "name": {
+            "type": "string",
+            "description": "组织名称"
+          },
+          "role": {
+            "type": "string",
+            "description": "当前操作者角色",
+            "enum": [
+              "OWNER",
+              "ADMIN",
+              "FINANCE",
+              "OPERATOR",
+              "VIEWER"
+            ]
+          },
+          "capabilities": {
+            "type": "object",
+            "description": "capabilities 全量权限布尔表（后端真源）",
+            "additionalProperties": {
+              "type": "boolean"
+            }
+          },
+          "onboardingCompleted": {
+            "type": "boolean",
+            "description": "是否已建账"
+          },
+          "baseCurrency": {
+            "type": "string",
+            "description": "组织本位币（未建账为 null）",
+            "nullable": true
+          },
+          "ledgerStartedAt": {
+            "type": "string",
+            "description": "记账起点（未建账为 null；UTC ISO）",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "dataRequestLock": {
+            "description": "组织数据请求锁状态",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrganizationLockDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "role",
+          "capabilities",
+          "onboardingCompleted",
+          "dataRequestLock"
+        ]
+      },
+      "MemberViewDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Membership id"
+          },
+          "userId": {
+            "type": "string",
+            "description": "用户 id"
+          },
+          "name": {
+            "type": "string",
+            "description": "显示名（无则为 null）",
+            "nullable": true
+          },
+          "email": {
+            "type": "string",
+            "description": "邮箱（无邮箱账号为 null）",
+            "nullable": true
+          },
+          "role": {
+            "type": "string",
+            "description": "角色",
+            "enum": [
+              "ADMIN",
+              "FINANCE",
+              "OPERATOR",
+              "VIEWER"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "状态",
+            "enum": [
+              "ACTIVE",
+              "DISABLED"
+            ]
+          },
+          "joinedAt": {
+            "type": "string",
+            "description": "加入时间（UTC ISO）",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "userId",
+          "role",
+          "status",
+          "joinedAt"
+        ]
+      },
+      "InvitationCreatedDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "邀请 id"
+          },
+          "email": {
+            "type": "string",
+            "description": "规范化邮箱"
+          },
+          "role": {
+            "type": "string",
+            "description": "角色",
+            "enum": [
+              "ADMIN",
+              "FINANCE",
+              "OPERATOR",
+              "VIEWER"
+            ]
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "过期时间（UTC ISO）",
+            "format": "date-time"
+          },
+          "token": {
+            "type": "string",
+            "description": "邀请 token（仅本次响应出现；服务端只存 SHA-256 hash；幂等复用时为空串）"
+          },
+          "reused": {
+            "type": "boolean",
+            "description": "是否幂等复用了既有有效邀请"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "expiresAt",
+          "token",
+          "reused"
+        ]
+      },
+      "InvitationViewDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "邀请 id"
+          },
+          "email": {
+            "type": "string",
+            "description": "受邀邮箱（规范化）"
+          },
+          "role": {
+            "type": "string",
+            "description": "角色",
+            "enum": [
+              "ADMIN",
+              "FINANCE",
+              "OPERATOR",
+              "VIEWER"
+            ]
+          },
+          "invitedByName": {
+            "type": "string",
+            "description": "邀请人显示名",
+            "nullable": true
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "过期时间（UTC ISO）",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "description": "状态",
+            "enum": [
+              "OPEN",
+              "ACCEPTED",
+              "DECLINED",
+              "REVOKED",
+              "EXPIRED"
+            ]
+          },
+          "acceptedAt": {
+            "type": "string",
+            "description": "接受时间（未接受 null；UTC ISO）",
+            "nullable": true,
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "expiresAt",
+          "status"
+        ]
+      },
+      "InvitationSummaryDto": {
+        "type": "object",
+        "properties": {
+          "organizationId": {
+            "type": "string",
+            "description": "组织 id"
+          },
+          "organizationName": {
+            "type": "string",
+            "description": "组织名称"
+          },
+          "email": {
+            "type": "string",
+            "description": "受邀邮箱（规范化）"
+          },
+          "role": {
+            "type": "string",
+            "description": "角色",
+            "enum": [
+              "ADMIN",
+              "FINANCE",
+              "OPERATOR",
+              "VIEWER"
+            ]
+          },
+          "invitedByName": {
+            "type": "string",
+            "description": "邀请人显示名",
+            "nullable": true
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "过期时间（UTC ISO）",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "description": "状态",
+            "enum": [
+              "OPEN",
+              "ACCEPTED",
+              "DECLINED",
+              "REVOKED",
+              "EXPIRED"
+            ]
+          }
+        },
+        "required": [
+          "organizationId",
+          "organizationName",
+          "email",
+          "role",
+          "expiresAt",
+          "status"
+        ]
       },
       "ListConversationsQueryDto": {
         "type": "object",

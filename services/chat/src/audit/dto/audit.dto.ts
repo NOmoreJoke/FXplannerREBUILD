@@ -15,53 +15,89 @@ export const AUDIT_RESULTS = ["SUCCESS", "DENIED", "FAILED"] as const;
 
 /** 审计日志只读视图（AUDIT-03：无编辑/删除入口；detail 已脱敏） */
 export class AuditLogViewDto {
-	@ApiProperty({ description: "审计行 id", example: "cmd5x…" })
+	@ApiProperty({ description: "审计行 id", type: String })
 	id!: string;
 
-	@ApiProperty({ description: "组织 id" })
+	@ApiProperty({ description: "组织 id", type: String })
 	organizationId!: string;
 
-	@ApiPropertyOptional({ description: "操作者 userId（系统动作为 null）" })
+	@ApiPropertyOptional({
+		description: "操作者 userId（系统动作为 null）",
+		type: String,
+		nullable: true,
+	})
 	actorUserId!: string | null;
 
-	@ApiProperty({ description: "操作者类型", enum: ["USER", "API", "AGENT"] })
+	@ApiProperty({
+		description: "操作者类型",
+		enum: ["USER", "API", "AGENT"],
+		type: String,
+	})
 	actorType!: string;
 
-	@ApiProperty({ description: "动作（如 organization.update、member.invite）" })
+	@ApiProperty({
+		description: "动作（如 organization.update、member.invite）",
+		type: String,
+	})
 	action!: string;
 
-	@ApiPropertyOptional({ description: "目标类型" })
+	@ApiPropertyOptional({
+		description: "目标类型",
+		type: String,
+		nullable: true,
+	})
 	targetType!: string | null;
 
-	@ApiPropertyOptional({ description: "目标 id" })
+	@ApiPropertyOptional({
+		description: "目标 id",
+		type: String,
+		nullable: true,
+	})
 	targetId!: string | null;
 
-	@ApiProperty({ description: "结果", enum: AUDIT_RESULTS })
+	@ApiProperty({ description: "结果", enum: AUDIT_RESULTS, type: String })
 	result!: string;
 
-	@ApiPropertyOptional({ description: "关联请求 id" })
+	@ApiPropertyOptional({
+		description: "关联请求 id",
+		type: String,
+		nullable: true,
+	})
 	requestId!: string | null;
 
-	@ApiPropertyOptional({ description: "关联 Agent 运行 id" })
+	@ApiPropertyOptional({
+		description: "关联 Agent 运行 id",
+		type: String,
+		nullable: true,
+	})
 	agentRunId!: string | null;
 
-	@ApiPropertyOptional({ description: "脱敏后的白名单摘要" })
-	detail!: unknown;
+	@ApiPropertyOptional({
+		description: "脱敏后的白名单摘要（键值开放对象）",
+		type: "object",
+		additionalProperties: true,
+		nullable: true,
+	})
+	detail!: Record<string, unknown> | null;
 
-	@ApiProperty({ description: "创建时间（UTC ISO）" })
-	createdAt!: Date;
+	@ApiProperty({ description: "创建时间（UTC ISO）", type: String, format: "date-time" })
+	createdAt!: string;
 }
 
 /** 审计分页查询参数（AUDIT-03.1：按时间起止、成员、动作筛选；分页不返回全量） */
 export class ListAuditLogsQueryDto {
-	@ApiPropertyOptional({ description: "页码（从 1 起）", example: 1 })
+	@ApiPropertyOptional({ description: "页码（从 1 起）", example: 1, type: Number })
 	@Type(() => Number)
 	@IsInt()
 	@Min(1)
 	@IsOptional()
 	page?: number;
 
-	@ApiPropertyOptional({ description: "每页条数（1-100，默认 20）", example: 20 })
+	@ApiPropertyOptional({
+		description: "每页条数（1-100，默认 20）",
+		example: 20,
+		type: Number,
+	})
 	@Type(() => Number)
 	@IsInt()
 	@Min(1)
@@ -72,6 +108,7 @@ export class ListAuditLogsQueryDto {
 	@ApiPropertyOptional({
 		description: "起始时间（ISO 8601，含）",
 		example: "2026-11-23T00:00:00.000Z",
+		type: String,
 	})
 	@IsISO8601()
 	@IsOptional()
@@ -80,22 +117,23 @@ export class ListAuditLogsQueryDto {
 	@ApiPropertyOptional({
 		description: "截止时间（ISO 8601，含）",
 		example: "2026-11-23T23:59:59.000Z",
+		type: String,
 	})
 	@IsISO8601()
 	@IsOptional()
 	to?: string;
 
-	@ApiPropertyOptional({ description: "按操作者 userId 精确筛选" })
+	@ApiPropertyOptional({ description: "按操作者 userId 精确筛选", type: String })
 	@IsString()
 	@IsOptional()
 	actorUserId?: string;
 
-	@ApiPropertyOptional({ description: "按动作精确筛选" })
+	@ApiPropertyOptional({ description: "按动作精确筛选", type: String })
 	@IsString()
 	@IsOptional()
 	action?: string;
 
-	@ApiPropertyOptional({ description: "按结果筛选", enum: AUDIT_RESULTS })
+	@ApiPropertyOptional({ description: "按结果筛选", enum: AUDIT_RESULTS, type: String })
 	@IsIn(AUDIT_RESULTS)
 	@IsOptional()
 	result?: string;
@@ -106,12 +144,12 @@ export class AuditLogListDto {
 	@ApiProperty({ type: [AuditLogViewDto] })
 	items!: AuditLogViewDto[];
 
-	@ApiProperty({ description: "当前页码", example: 1 })
+	@ApiProperty({ description: "当前页码", example: 1, type: Number })
 	page!: number;
 
-	@ApiProperty({ description: "每页条数", example: 20 })
+	@ApiProperty({ description: "每页条数", example: 20, type: Number })
 	pageSize!: number;
 
-	@ApiProperty({ description: "总条数", example: 42 })
+	@ApiProperty({ description: "总条数", example: 42, type: Number })
 	total!: number;
 }

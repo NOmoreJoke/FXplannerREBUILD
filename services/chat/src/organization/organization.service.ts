@@ -34,7 +34,7 @@ export class OrganizationService {
 			role: string;
 			baseCurrency: string | null;
 			onboardingCompleted: boolean;
-			createdAt: Date;
+			createdAt: string;
 		}>
 	> {
 		const memberships = await this.prisma.membership.findMany({
@@ -63,7 +63,7 @@ export class OrganizationService {
 			role: m.role,
 			baseCurrency: m.organization.settings?.baseCurrency ?? null,
 			onboardingCompleted: Boolean(m.organization.settings?.ledgerStartedAt),
-			createdAt: m.organization.createdAt,
+			createdAt: m.organization.createdAt.toISOString(),
 		}));
 	}
 

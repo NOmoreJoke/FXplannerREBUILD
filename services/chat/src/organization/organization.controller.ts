@@ -108,7 +108,7 @@ export class OrganizationController {
 				role: created.role,
 				baseCurrency: null,
 				onboardingCompleted: false,
-				createdAt: new Date(),
+				createdAt: new Date().toISOString(),
 			},
 			message: "组织创建成功",
 		};

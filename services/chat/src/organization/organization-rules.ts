@@ -35,3 +35,25 @@ export function buildCapabilities(
 	}
 	return result;
 }
+
+// ─────────────────────────────────────────────────────────────
+// W19 成员生命周期规则（需求 MEM-02 / ORG-03.3；技术方案 §6.3）
+// ─────────────────────────────────────────────────────────────
+
+/** 最后 Owner 保护（ORG-03.3 / §6.3）：目标为组织唯一活跃 Owner 时禁止
+ * 退出/移除/降权——必须先转移所有权或删除组织 */
+export function isLastActiveOwner(
+	activeOwnerCount: number,
+	targetRole: string,
+	targetStatus: string,
+): boolean {
+	return (
+		activeOwnerCount <= 1 && targetRole === "OWNER" && targetStatus === "ACTIVE"
+	);
+}
+
+/** 角色形状校验：目标角色必须在五角色枚举内（可分配性由 canManage 判定） */
+const ALL_ROLES = ["OWNER", "ADMIN", "FINANCE", "OPERATOR", "VIEWER"] as const;
+export function isValidRole(role: string): boolean {
+	return (ALL_ROLES as readonly string[]).includes(role);
+}
