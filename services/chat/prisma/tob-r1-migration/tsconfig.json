@@ -1,0 +1,12 @@
+{
+  "extends": "@fxplanner-new/typescript-config/nestjs.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": [
+    "backfill.ts",
+    "../../src/organization/organization-backfill.ts",
+    "../../src/organization/organization-reconcile.ts"
+  ]
+}

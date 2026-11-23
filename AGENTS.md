@@ -72,7 +72,8 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  ├─ migrations/               # Prisma 版本化迁移
 │  │  │  ├─ 20261120090000_rate_cache_migration_receipt/ # 汇率缓存迁移完成记录与行归属
 │  │  │  └─ 20261120091000_rate_cache_canonical_write/ # 记录可信的汇率回源写入
-│  │  └─ rate-cache-migration/      # 旧汇率缓存迁移运维 CLI（B2；README 见目录内）
+│  │  ├─ rate-cache-migration/      # 旧汇率缓存迁移运维 CLI（B2；README 见目录内）
+│  │  └─ tob-r1-migration/          # ToB R1 MIG-B 回填与 §12.3 核对运维 CLI（README 见目录内）
 │  └─ test/
 │     ├─ api/                       # 接口测试
 │     ├─ integration/               # 集成测试
@@ -125,6 +126,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | shadcn 原语      | `bunx shadcn add`，进 `components/ui/`，不手改                          |
 | 新后端模块       | `services/chat/src/<模块>/`，在 `app.module.ts` 注册一次                |
 | 旧汇率缓存迁移运维 CLI | `services/chat/prisma/rate-cache-migration/` |
+| ToB R1 MIG-B 回填/核对运维 CLI | `services/chat/prisma/tob-r1-migration/`（逻辑在 `src/organization/organization-{backfill,reconcile}.ts`，先例同 rate-cache-migration） |
 | 新 package       | `packages/<名称>/`，必须含 `README.md`：做什么（职责）、不做什么（边界/非目标）、为何独立成包 |
 | 新共享类型       | 后端 DTO 为唯一来源，前端 `bun run generate:api` 从 OpenAPI 生成（禁止手写共享类型） |
 | 跨端共享计算逻辑 | `packages/money/`（仅限纯函数：精度、舍入、币种常量；有 IO 的逻辑禁止进包） |
