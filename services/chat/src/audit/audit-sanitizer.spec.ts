@@ -1,11 +1,159 @@
 import { describe, expect, it } from "vitest";
+import { Prisma } from "@prisma/client";
 
 import {
 	AUDIT_DETAIL_MAX_BYTES,
+	isSensitiveKey,
 	sanitizeAuditDetail,
 } from "./audit-sanitizer";
 
-/** 审计脱敏防愚弄测试（AUDIT-02 / §13.2；W16 必配） */
+/**
+ * 审计脱敏防愚弄测试（AUDIT-02 / §13.2；W16 必配；评审 I-14 词根匹配）。
+ * 夹具里的「凭据值」全部是工厂生成的占位样本（非真实凭据）。
+ */
+const sample = (label: string): string => `sample-${label}`;
+
+describe("isSensitiveKey：按词匹配（覆盖仓内真实字段名，不误伤业务字段）", () => {
+	it("真实敏感字段名全部命中（全等表此前全部漏网）", () => {
+		for (const key of [
+			"accessToken",
+			"refreshToken",
+			"password_hash",
+			"token_hash",
+			"code_hash",
+			"codeHash",
+			"api_key",
+			"x-api-key",
+			"Authorization",
+			"HTTP_AUTHORIZATION",
+			"devCode",
+			"otpCode",
+			"verificationCode",
+			"sessionId",
+			"session_id",
+			"clientSecret",
+			"cookie",
+			"Set-Cookie",
+			"privateKey",
+			"credentials",
+			"otp",
+			"messages",
+			"code",
+		]) {
+			expect(isSensitiveKey(key), `键 ${key} 应判敏感`).toBe(true);
+		}
+	});
+
+	it("业务字段不误伤", () => {
+		for (const key of [
+			"currencyCode",
+			"errorCode",
+			"statusCode",
+			"httpCode",
+			"postalCode",
+			"inputTokens",
+			"outputTokens",
+			"message",
+			"planId",
+			"baseCurrency",
+			"requestedAt",
+			"actorUserId",
+			"organizationId",
+			"targetType",
+		]) {
+			expect(isSensitiveKey(key), `键 ${key} 不应判敏感`).toBe(false);
+		}
+	});
+});
+
+describe("sanitizeAuditDetail：值的类型安全序列化（评审 I-14）", () => {
+	it("Date → ISO 字符串（此前被 Object.entries 抹成 {}）", () => {
+		const at = new Date("2026-11-23T00:00:00.000Z");
+		const result = sanitizeAuditDetail({ requestedAt: at }) as {
+			requestedAt: unknown;
+		};
+		expect(result.requestedAt).toBe("2026-11-23T00:00:00.000Z");
+	});
+
+	it("BigInt → 字符串（此前令整条 detail 崩为不可序列化）", () => {
+		const result = sanitizeAuditDetail({ count: 9007199254740993n }) as {
+			count: unknown;
+		};
+		expect(result.count).toBe("9007199254740993");
+		expect(() => JSON.stringify(result)).not.toThrow();
+	});
+
+	it("带 toJSON 的类实例取其 JSON 值（Prisma Decimal）", () => {
+		const result = sanitizeAuditDetail({
+			amount: new Prisma.Decimal("1234.5000"),
+		}) as { amount: unknown };
+		expect(result.amount).toBe("1234.5");
+	});
+
+	it("二进制不尝试解码；undefined 属性不落库；Invalid Date → null", () => {
+		const result = sanitizeAuditDetail({
+			blob: Buffer.from(sample("bytes")),
+			skipped: undefined,
+			kept: 1,
+			badDate: new Date(Number.NaN),
+		}) as Record<string, unknown>;
+		expect(result.blob).toBe("[BINARY]");
+		expect(JSON.stringify(result)).not.toContain(sample("bytes"));
+		expect("skipped" in result).toBe(false);
+		expect(result.kept).toBe(1);
+		expect(result.badDate).toBeNull();
+	});
+
+	it("嵌套的真实凭据字段全部脱敏，且降级预览路径同样不泄露", () => {
+		const [jwt, key, access, refresh, hash, otp] = [
+			sample("jwt"),
+			sample("key"),
+			sample("access"),
+			sample("refresh"),
+			sample("hash"),
+			sample("otp"),
+		];
+		const detail = {
+			headers: {
+				authorization: jwt,
+				"x-api-key": key,
+				"content-type": "application/json",
+			},
+			auth: { accessToken: access, refreshToken: refresh },
+			passwordHash: hash,
+			devCode: otp,
+			currencyCode: "USD",
+			errorCode: "RATE_UNAVAILABLE",
+		};
+		const result = sanitizeAuditDetail(detail) as Record<string, unknown>;
+		const serialized = JSON.stringify(result);
+		for (const leak of [jwt, key, access, refresh, hash, otp]) {
+			expect(serialized).not.toContain(leak);
+		}
+		expect((result.headers as Record<string, unknown>)["content-type"]).toBe(
+			"application/json",
+		);
+		expect(result.currencyCode).toBe("USD");
+		expect(result.errorCode).toBe("RATE_UNAVAILABLE");
+
+		// 降级路径：构造有损压缩后仍超限的 detail，预览里同样只有 [REDACTED]
+		const secret = sample("preview-leak");
+		const huge: Record<string, unknown> = {};
+		huge["api" + "Key"] = secret;
+		for (let index = 0; index < 400; index += 1) {
+			huge[`field${index}`] = Array.from({ length: 10 }, () => "x".repeat(300));
+		}
+		const degraded = sanitizeAuditDetail(huge) as {
+			truncated: boolean;
+			preview: string;
+		};
+		expect(degraded.truncated).toBe(true);
+		expect(degraded.preview).not.toContain(secret);
+		expect(Buffer.byteLength(JSON.stringify(degraded))).toBeLessThanOrEqual(
+			AUDIT_DETAIL_MAX_BYTES,
+		);
+	});
+});
 
 describe("sanitizeAuditDetail：敏感字段剥离", () => {
 	it("顶层敏感键替换为 [REDACTED]，保留键位", () => {
