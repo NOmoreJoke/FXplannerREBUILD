@@ -59,3 +59,42 @@ export async function orderLedgerRequests(
 		await Promise.allSettled(pending);
 	}
 }
+
+/**
+ * 持有事务级 advisory 锁（lockKey 与被测服务同一把），直到 target 发出的请求
+ * 确实阻塞在这把锁上；阻塞期间执行 whileHeld（模拟「另一条不受该锁约束的写」，
+ * 如直改数据库），随后提交屏障释放锁，让 target 继续并返回其结果。
+ *
+ * 用于确定性复现「读后写」竞态：被测请求必须持锁后才读状态——若它在锁外
+ * 已读过状态（TOCTOU），并发改动会被漏判。whileHeld 抛错时屏障回滚并收完响应。
+ */
+export async function runBehindAdvisoryLock<T>(
+	prisma: PrismaClient,
+	lockKey: string,
+	target: () => Promise<T>,
+	whileHeld: () => Promise<void>,
+): Promise<T> {
+	const pending = target();
+	void pending.catch(() => {});
+	try {
+		await prisma.$transaction(
+			async (tx) => {
+				const [holder] = await tx.$queryRaw<Array<{ pid: number }>>`
+					SELECT pg_backend_pid() AS pid
+					FROM pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+				expect(holder).toBeDefined();
+				await waitForBlockedQuery(
+					tx,
+					holder.pid,
+					"SELECT pg_advisory_xact_lock(%",
+				);
+				await whileHeld();
+			},
+			{ timeout: 10_000 },
+		);
+	} catch (error) {
+		await Promise.allSettled([pending]);
+		throw error;
+	}
+	return pending;
+}

@@ -4,6 +4,7 @@
  */
 
 import {
+	isOrganizationRole,
 	PERMISSIONS,
 	type OrganizationRole,
 	type Permission,
@@ -52,8 +53,7 @@ export function isLastActiveOwner(
 	);
 }
 
-/** 角色形状校验：目标角色必须在五角色枚举内（可分配性由 canManage 判定） */
-const ALL_ROLES = ["OWNER", "ADMIN", "FINANCE", "OPERATOR", "VIEWER"] as const;
+/** 角色形状校验：委托授权层唯一真源（可分配性由 canManage 判定） */
 export function isValidRole(role: string): boolean {
-	return (ALL_ROLES as readonly string[]).includes(role);
+	return isOrganizationRole(role);
 }

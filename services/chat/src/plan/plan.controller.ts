@@ -30,6 +30,8 @@ import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
 import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { PermissionGuard } from "../authorization/guards/permission.guard";
+import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
 import type { ReadScope } from "../authorization/organization-scope";
 import {
@@ -114,7 +116,11 @@ export class PlanController {
 		}
 	}
 
+	// 只读预览（@Post 但不落库）：与业务 GET 同一守卫链（评审 I-12——禁离职成员/
+	// 跨组织上下文取快照，禁 Viewer 绕过 plan.create 权限点）
 	@Post("schedule-preview")
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("plan.create")
 	@ApiOperation({
 		summary: "分批排期预览（只读，不落库）",
 		description:
@@ -189,7 +195,8 @@ export class PlanController {
 		description: "status 非法（不在三值枚举内），无模块 code",
 		type: PlanErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard)
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("plan.read")
 	async list(
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,
@@ -226,7 +233,8 @@ export class PlanController {
 		description: "计划不存在或不属于本人（PLAN_NOT_FOUND）",
 		type: PlanErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard)
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("plan.read")
 	async getDetail(
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,
@@ -245,6 +253,8 @@ export class PlanController {
 
 	@Post(":id/adjust-preview")
 	@HttpCode(HttpStatus.OK)
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("plan.adjust")
 	@ApiOperation({
 		summary: "修改预览（只读，不落库）",
 		description:

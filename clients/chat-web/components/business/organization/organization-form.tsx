@@ -19,7 +19,7 @@ export function OrganizationForm() {
 	const [error, setError] = useState<string | null>(null);
 
 	const renameMutation = useMutation({
-		mutationFn: () => organizationsApi.rename((name ?? "").trim()),
+		mutationFn: () => organizationsApi.rename({ name: (name ?? "").trim() }),
 		onSuccess: () => {
 			setName(null);
 			setError(null);

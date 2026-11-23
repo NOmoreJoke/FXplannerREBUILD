@@ -4,6 +4,7 @@ import {
 	type TestingModuleBuilder,
 } from "@nestjs/testing";
 import { type INestApplication, ValidationPipe } from "@nestjs/common";
+import { JwtService } from "@nestjs/jwt";
 import request from "supertest";
 import { AppModule } from "../../src/app.module";
 import { PrismaService } from "../../src/prisma/prisma.service";
@@ -78,7 +79,13 @@ export async function createTestUser(
 	};
 }
 
-/** 清理测试用户（先清理裸外键关联的 PlanAllocation / UsageLotAllocation 防遗留孤儿行，再级联删除用户） */
+/**
+ * 清理测试用户：先清理裸外键关联的 PlanAllocation / UsageLotAllocation 防遗留孤儿行，
+ * 再回收「删掉该用户后不再有任何成员」的组织（注册/验证码首登兜底的默认组织及其
+ * 审计日志——组织本身不随 User 级联，只有 Membership 级联；评审 I-17 实测本地库
+ * 累积 1905 条无成员孤儿 organizations），最后级联删除用户。
+ * 仍有其他成员的共享组织保留（由用例自己的 afterAll 显式清理）。
+ */
 export async function cleanupUser(
 	prisma: PrismaService,
 	userId: string,
@@ -109,6 +116,34 @@ export async function cleanupUser(
 					where: { planId: { in: planIds } },
 				});
 			}
+
+			// 默认组织回收：仅清掉删掉该用户后不再有任何成员的组织
+			const ownMemberships = await tx.membership.findMany({
+				where: { userId },
+				select: { organizationId: true },
+			});
+			const ownOrgIds = [...new Set(ownMemberships.map((m) => m.organizationId))];
+			if (ownOrgIds.length > 0) {
+				const otherMembers = await tx.membership.findMany({
+					where: {
+						organizationId: { in: ownOrgIds },
+						userId: { not: userId },
+					},
+					select: { organizationId: true },
+				});
+				const sharedOrgIds = new Set(otherMembers.map((m) => m.organizationId));
+				const orphanOrgIds = ownOrgIds.filter((id) => !sharedOrgIds.has(id));
+				if (orphanOrgIds.length > 0) {
+					// 审计日志无外键，须先于组织显式清理
+					await tx.auditLog.deleteMany({
+						where: { organizationId: { in: orphanOrgIds } },
+					});
+					await tx.organization.deleteMany({
+						where: { id: { in: orphanOrgIds } },
+					});
+				}
+			}
+
 			await tx.user.delete({ where: { id: userId } });
 		});
 	} catch {
@@ -119,4 +154,17 @@ export async function cleanupUser(
 /** Bearer 头快捷方式 */
 export function bearer(token: string): { Authorization: string } {
 	return { Authorization: `Bearer ${token}` };
+}
+
+/**
+ * 为任意已存在的用户签发访问令牌：直造用户（prisma.user.create）或纯 OTP 账号
+ * 没有密码可走 /auth/login，组织/邀请类用例需要其登录态时经此签发。
+ * 与 AuthModule 的 JwtModule 同一密钥（RequestAuthService 验签口径一致）。
+ */
+export function mintAccessToken(
+	app: INestApplication,
+	userId: string,
+	email: string | null = null,
+): string {
+	return app.get(JwtService, { strict: false }).sign({ userId, email });
 }

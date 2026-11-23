@@ -26,6 +26,9 @@ describe("AuthService", () => {
 		organization: {
 			create: ReturnType<typeof vi.fn>;
 		};
+		auditLog: {
+			create: ReturnType<typeof vi.fn>;
+		};
 		$transaction: ReturnType<typeof vi.fn>;
 	};
 	let jwtService: { sign: ReturnType<typeof vi.fn> };
@@ -38,6 +41,10 @@ describe("AuthService", () => {
 			},
 			organization: {
 				create: vi.fn().mockResolvedValue({ id: "org-1" }),
+			},
+			// ORG-01.2 默认组织兜底同事务写 organization.create 审计（评审 N-05）
+			auditLog: {
+				create: vi.fn().mockResolvedValue({}),
 			},
 			// W18 注册兜底：user + 默认组织在同一事务创建；单测以「直调回调」透传 mock prisma
 			$transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) =>
@@ -83,6 +90,25 @@ describe("AuthService", () => {
 		expect(prisma.user.create.mock.calls[0][0].data.passwordHash).not.toBe(
 			TEST_PASSWORD,
 		);
+		// ORG-01.2：同事务建默认组织（OWNER/ACTIVE）；无显示名时组织名取邮箱前缀；
+		// 并写 organization.create 审计（评审 N-05）
+		expect(prisma.organization.create).toHaveBeenCalledWith({
+			data: expect.objectContaining({
+				name: "new的工作台",
+				memberships: {
+					create: { userId: user.id, role: "OWNER", status: "ACTIVE" },
+				},
+			}),
+			select: { id: true, name: true, createdAt: true },
+		});
+		expect(prisma.auditLog.create).toHaveBeenCalledWith({
+			data: expect.objectContaining({
+				organizationId: "org-1",
+				actorUserId: user.id,
+				action: "organization.create",
+				result: "SUCCESS",
+			}),
+		});
 	});
 
 	it("注册和登录邮箱统一归一化为小写", async () => {

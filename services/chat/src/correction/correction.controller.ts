@@ -25,6 +25,8 @@ import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
 import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { PermissionGuard } from "../authorization/guards/permission.guard";
+import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
 import {
 	CorrectionApplyResultDto,
@@ -60,8 +62,12 @@ export class CorrectionController {
 		private readonly correctionService: CorrectionService,
 	) {}
 
+	// 只读预览（@Post 但不落库）：与业务 GET 同一守卫链（评审 I-12——禁离职成员/
+	// 跨组织上下文取账本重放快照，禁 Operator/Viewer 绕过 correction.preview 权限点）
 	@Post("preview")
 	@HttpCode(HttpStatus.OK)
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("correction.preview")
 	@ApiOperation({
 		summary: "影响预览（只读重放）",
 		description:
@@ -158,7 +164,8 @@ export class CorrectionController {
 		description: "目标不存在或不属于本人（CORRECTION_TARGET_NOT_FOUND）",
 		type: CorrectionErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard)
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("correction.read")
 	async getTarget(
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,
@@ -198,7 +205,8 @@ export class CorrectionController {
 		description: "目标不存在或不属于本人（CORRECTION_TARGET_NOT_FOUND）",
 		type: CorrectionErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard)
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("correction.read")
 	async list(
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,

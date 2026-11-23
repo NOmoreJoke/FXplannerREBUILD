@@ -3,14 +3,18 @@ import {
 	type ExecutionContext,
 	Inject,
 	Injectable,
+	UnauthorizedException,
 } from "@nestjs/common";
 import type { Request } from "express";
 import { RequestAuthService } from "../../auth/request-auth.service";
 import { PrismaService } from "../../prisma/prisma.service";
-import type { OrganizationRole } from "../authorization.types";
+import { isOrganizationRole } from "../authorization.types";
 import type { ActorContext } from "../authorization.types";
-import { OrganizationRequiredException } from "../authorization.errors";
-import { OrganizationNotFoundException } from "../authorization.errors";
+import {
+	OrganizationNotFoundException,
+	OrganizationRequiredException,
+	PermissionDeniedException,
+} from "../authorization.errors";
 
 /** 组织上下文请求扩展（request.actor 由本守卫挂载） */
 export interface RequestWithActor extends Request {
@@ -49,8 +53,8 @@ export class OrganizationContextGuard implements CanActivate {
 
 		const auth = await this.requestAuth.resolveBearerUser(request);
 		if (auth.status !== "authenticated") {
-			// JWT 守卫在守卫链中先行，此处防御性放行交由其统一 401
-			return true;
+			// 正常链路 JwtAuthGuard 先行；此处为装配错误时的 fail-closed 兜底（评审 N-04）
+			throw new UnauthorizedException();
 		}
 
 		const header = request.headers["x-organization-id"];
@@ -72,12 +76,16 @@ export class OrganizationContextGuard implements CanActivate {
 		if (!membership || membership.status !== "ACTIVE") {
 			throw new OrganizationNotFoundException();
 		}
+		// 角色合法性 fail-closed（评审 I-13：role 为非约束 TEXT，禁止断言放行未知值）
+		if (!isOrganizationRole(membership.role)) {
+			throw new PermissionDeniedException("成员角色无效，拒绝访问");
+		}
 
 		request.actor = {
 			userId: auth.user.id,
 			organizationId,
 			membershipId: membership.id,
-			role: membership.role as OrganizationRole,
+			role: membership.role,
 			authMethod: "USER",
 		};
 		return true;

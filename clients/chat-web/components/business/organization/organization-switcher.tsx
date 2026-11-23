@@ -130,7 +130,7 @@ export function OrganizationPicker({ onPicked }: { onPicked?: () => void }) {
 	const [error, setError] = useState<string | null>(null);
 
 	const createMutation = useMutation({
-		mutationFn: () => organizationsApi.create(newName.trim()),
+		mutationFn: () => organizationsApi.create({ name: newName.trim() }),
 		onSuccess: (created) => {
 			clearOrganizationScopedQueries(queryClient);
 			setActiveOrganization(created.id);

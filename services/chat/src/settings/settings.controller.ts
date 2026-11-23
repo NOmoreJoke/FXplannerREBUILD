@@ -23,6 +23,8 @@ import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
 import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { PermissionGuard } from "../authorization/guards/permission.guard";
+import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
 import {
 	SettingsErrorDto,
@@ -67,7 +69,8 @@ export class SettingsController {
 		description: "尚未完成首次设置（ONBOARDING_NOT_COMPLETED）",
 		type: SettingsErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard)
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("settings.read")
 	async getSettings(
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,

@@ -17,7 +17,8 @@ export function TransferOwnershipDialog({ target }: { target: MemberView }) {
 	const queryClient = useQueryClient();
 
 	const mutation = useMutation({
-		mutationFn: () => membersApi.transferOwnership(target.id),
+		mutationFn: () =>
+			membersApi.transferOwnership({ targetMembershipId: target.id }),
 		onSuccess: () => {
 			setOpen(false);
 			setError(null);

@@ -124,6 +124,7 @@ export function MemberTable() {
 							<td className="px-4 py-2.5">
 								<RoleSelect
 									member={member}
+									actorRole={current?.role ?? ""}
 									disabled={
 										!canUpdate ||
 										member.status !== "ACTIVE" ||

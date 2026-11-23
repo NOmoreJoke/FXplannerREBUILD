@@ -22,6 +22,8 @@ import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
 import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { PermissionGuard } from "../authorization/guards/permission.guard";
+import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
 import type { ReadScope } from "../authorization/organization-scope";
 // biome-ignore lint/style/useImportType: 必须值导入 DTO：type-only 导入会让 tsc 在 design:paramtypes 发出 Function，ValidationPipe 会对 @Param() 对象误转换导致字段丢失（500）
@@ -109,7 +111,8 @@ export class AccountController {
 			},
 		},
 	})
-	@UseGuards(BusinessOrgScopeGuard)
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("account.read")
 	async listAccounts(
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,
@@ -147,7 +150,8 @@ export class AccountController {
 		description: "该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND）",
 		type: AccountErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard)
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("account.read")
 	async getAccount(
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,
@@ -196,7 +200,8 @@ export class AccountController {
 		description: "该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND）",
 		type: AccountErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard)
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("account.read")
 	async getAllocations(
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,
@@ -238,7 +243,8 @@ export class AccountController {
 		description: "该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND）",
 		type: AccountErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard)
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("account.read")
 	async getLedger(
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,

@@ -26,6 +26,8 @@ import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
 import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { PermissionGuard } from "../authorization/guards/permission.guard";
+import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
 import {
 	CreateUsageDto,
@@ -128,7 +130,8 @@ export class UsageController {
 		description: "计划不存在或不属于本人（PLAN_NOT_FOUND，防枚举）",
 		type: UsageErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard)
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("usage.read")
 	async list(
 		@CurrentUser() user: User,
 		@CurrentActor() actor: ActorContext,

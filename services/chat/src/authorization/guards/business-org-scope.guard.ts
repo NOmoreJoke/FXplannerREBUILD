@@ -3,13 +3,15 @@ import {
 	type ExecutionContext,
 	Inject,
 	Injectable,
+	UnauthorizedException,
 } from "@nestjs/common";
 import { RequestAuthService } from "../../auth/request-auth.service";
 import { PrismaService } from "../../prisma/prisma.service";
-import type { OrganizationRole } from "../authorization.types";
+import { isOrganizationRole } from "../authorization.types";
 import {
 	OrganizationNotFoundException,
 	OrganizationRequiredException,
+	PermissionDeniedException,
 } from "../authorization.errors";
 import type { RequestWithActor } from "./organization-context.guard";
 
@@ -24,6 +26,11 @@ const CUID_PATTERN = /^c[a-z0-9]{24}$/;
  * - 无头：**兼容窗口回落**——用户恰好只有 1 个 ACTIVE 组织时映射到该组织；
  *   0 个或 ≥2 个组织仍严格 400 ORGANIZATION_REQUIRED（禁猜测默认组织，
  *   技术方案 §7.3「用户已有多个组织后禁止映射」）。
+ *
+ * Fail-closed 纪律（评审 I-13 / N-04）：
+ * - 未认证一律 401（正常链路 JwtAuthGuard 先行，此处为装配错误时的兜底）；
+ * - 库内角色值不在五角色枚举内一律 403（memberships.role 为非约束 TEXT，
+ *   禁止用 `as OrganizationRole` 断言把未知值放行进权限判定）。
  *
  * W22（Goal #3B 切写 + 前端全量带头）后本守卫收敛为严格语义或直接替换为
  * OrganizationContextGuard；业务 GET 以本守卫解析 request.actor。
@@ -41,7 +48,7 @@ export class BusinessOrgScopeGuard implements CanActivate {
 
 		const auth = await this.requestAuth.resolveBearerUser(request);
 		if (auth.status !== "authenticated") {
-			return true; // 交由守卫链中的 JwtAuthGuard 统一 401
+			throw new UnauthorizedException();
 		}
 
 		const header = request.headers["x-organization-id"];
@@ -54,17 +61,19 @@ export class BusinessOrgScopeGuard implements CanActivate {
 		if (typeof header === "string" && CUID_PATTERN.test(header.trim())) {
 			organizationId = header.trim();
 		} else if (typeof header === "undefined") {
-			// 兼容窗口：无头时回落到唯一 ACTIVE 组织
+			// 兼容窗口：无头时回落到唯一 ACTIVE 组织（take 2：≥2 即拒绝，不取首元素）
 			const memberships = await this.prisma.membership.findMany({
 				where: { userId: auth.user.id, status: "ACTIVE" },
 				select: { organizationId: true },
+				take: 2,
 			});
-			if (memberships.length !== 1 || !memberships[0]) {
+			const only = memberships.length === 1 ? memberships[0] : undefined;
+			if (!only) {
 				throw new OrganizationRequiredException(
 					"缺少组织上下文（X-Organization-Id），且无法唯一确定默认组织",
 				);
 			}
-			organizationId = memberships[0].organizationId;
+			organizationId = only.organizationId;
 		} else {
 			throw new OrganizationRequiredException();
 		}
@@ -78,12 +87,15 @@ export class BusinessOrgScopeGuard implements CanActivate {
 		if (!membership || membership.status !== "ACTIVE") {
 			throw new OrganizationNotFoundException();
 		}
+		if (!isOrganizationRole(membership.role)) {
+			throw new PermissionDeniedException("成员角色无效，拒绝访问");
+		}
 
 		request.actor = {
 			userId: auth.user.id,
 			organizationId,
 			membershipId: membership.id,
-			role: membership.role as OrganizationRole,
+			role: membership.role,
 			authMethod: "USER",
 		};
 		return true;

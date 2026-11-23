@@ -204,3 +204,78 @@ export class TransferOwnershipDto {
 	@IsNotEmpty()
 	targetMembershipId!: string;
 }
+
+// ─────────────────────────────────────────────────────────────
+// 变更结果 DTO（评审 I-17：响应契约与实际返回同形，前端零手写类型）
+// ─────────────────────────────────────────────────────────────
+
+/** 角色调整结果（PATCH /organizations/current/members/:id） */
+export class MemberRoleUpdateResultDto {
+	@ApiProperty({ description: "Membership id", type: String })
+	id!: string;
+
+	@ApiProperty({ description: "调整后的角色", enum: ASSIGNABLE_ROLES, type: String })
+	role!: string;
+
+	@ApiProperty({
+		description: "成员状态",
+		enum: ["ACTIVE", "DISABLED"],
+		type: String,
+	})
+	status!: string;
+}
+
+/** 成员移除结果（DELETE /organizations/current/members/:id） */
+export class MemberRemoveResultDto {
+	@ApiProperty({ description: "Membership id", type: String })
+	id!: string;
+
+	@ApiProperty({
+		description: "成员状态（移除后恒为 DISABLED，保留历史归属）",
+		enum: ["ACTIVE", "DISABLED"],
+		type: String,
+	})
+	status!: string;
+}
+
+/** 成员状态结果（POST /organizations/current/members/leave） */
+export class MemberStatusResultDto {
+	@ApiProperty({
+		description: "成员状态（退出后 DISABLED）",
+		enum: ["ACTIVE", "DISABLED"],
+		type: String,
+	})
+	status!: string;
+}
+
+/** 所有权转移结果（POST /organizations/current/transfer-ownership） */
+export class TransferOwnershipResultDto {
+	@ApiProperty({ description: "升为 OWNER 的 Membership id", type: String })
+	promotedId!: string;
+
+	@ApiProperty({ description: "降为 ADMIN 的 Membership id", type: String })
+	demotedId!: string;
+}
+
+/** 接受邀请结果（POST /organization-invitations/:token/accept） */
+export class InvitationAcceptResultDto {
+	@ApiProperty({ description: "新建或恢复的 Membership id", type: String })
+	membershipId!: string;
+
+	@ApiProperty({
+		description: "加入后的角色",
+		enum: INVITABLE_ROLES,
+		type: String,
+	})
+	role!: string;
+}
+
+/** 邀请终态结果（撤回/拒绝） */
+export class InvitationStatusResultDto {
+	@ApiProperty({
+		description: "邀请状态",
+		enum: ["REVOKED", "DECLINED"],
+		type: String,
+	})
+	status!: string;
+}

@@ -121,9 +121,8 @@ describe("AuditController（e2e）", () => {
 			(item: { action: string }) => item.action,
 		);
 		expect(actions).toContain("organization.create");
-		// 无敏感键明文（detail 白名单脱敏）
-		JSON.stringify(res.body.data).includes("tokenHash") === false;
-		expect(JSON.stringify(res.body.data)).not.toContain("token_hash");
+		// 审计视图不暴露任何 token/hash 类键（评审 N-07：原空转布尔表达式改为真断言）
+		expect(JSON.stringify(res.body.data)).not.toMatch(/token_?hash/i);
 
 		const page1 = await request(app.getHttpServer())
 			.get(`${auditUrl}?page=1&pageSize=1&action=organization.create`)

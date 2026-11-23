@@ -108,3 +108,59 @@ export class TransferConflictException extends HttpException {
 		);
 	}
 }
+
+/** 受邀邮箱已是组织有效成员（评审 I-02：禁止借邀请覆写既有成员角色） */
+export class MemberAlreadyActiveException extends HttpException {
+	constructor() {
+		super(
+			{
+				success: false,
+				code: "MEMBER_ALREADY_ACTIVE",
+				message: "该邮箱已是组织有效成员，无需重复邀请",
+			},
+			HttpStatus.CONFLICT,
+		);
+	}
+}
+
+/** 目标成员已非有效状态（评审 N-06：已移除成员不可调整角色，重新邀请可恢复） */
+export class MemberNotActiveException extends HttpException {
+	constructor() {
+		super(
+			{
+				success: false,
+				code: "MEMBER_NOT_ACTIVE",
+				message: "该成员已移除，不能调整角色；重新邀请可恢复",
+			},
+			HttpStatus.CONFLICT,
+		);
+	}
+}
+
+/** 成员关系已被并发修改（条件更新 0 命中；刷新后重试） */
+export class MembershipConflictException extends HttpException {
+	constructor() {
+		super(
+			{
+				success: false,
+				code: "MEMBERSHIP_CONFLICT",
+				message: "成员状态已被并发修改，请刷新后重试",
+			},
+			HttpStatus.CONFLICT,
+		);
+	}
+}
+
+/** 组织名称非法（trim 后为空或超 100 字符；服务层兜底，评审 N-02） */
+export class InvalidOrganizationNameException extends HttpException {
+	constructor() {
+		super(
+			{
+				success: false,
+				code: "ORGANIZATION_NAME_INVALID",
+				message: "组织名称须为 1~100 个字符",
+			},
+			HttpStatus.BAD_REQUEST,
+		);
+	}
+}

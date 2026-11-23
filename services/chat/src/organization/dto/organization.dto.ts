@@ -1,11 +1,18 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsNotEmpty, IsString, MaxLength } from "class-validator";
+import { Transform } from "class-transformer";
+import { IsNotEmpty, IsString, Matches, MaxLength } from "class-validator";
 
-/** 组织创建/改名入参（ORG-01：名称 1~100 字符） */
+/** 组织创建/改名入参（ORG-01：名称 1~100 字符；先 trim 再校验，纯空白拒绝——评审 N-02） */
 export class OrganizationUpsertDto {
-	@ApiProperty({ description: "组织名称（1~100 字符）", example: "张三的工作台" })
+	@ApiProperty({
+		description: "组织名称（1~100 字符；首尾空白自动裁剪，纯空白拒绝）",
+		example: "张三的工作台",
+		type: String,
+	})
+	@Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
 	@IsString()
 	@IsNotEmpty()
+	@Matches(/\S/, { message: "组织名称不能为空白" })
 	@MaxLength(100)
 	name!: string;
 }

@@ -3,11 +3,18 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { canManage } from "../authorization/permission-policy";
 import { PermissionDeniedException } from "../authorization/authorization.errors";
-import type { ActorContext } from "../authorization/authorization.types";
-import { isLastActiveOwner, isValidRole } from "./organization-rules";
+import {
+	isOrganizationRole,
+	type ActorContext,
+	type OrganizationRole,
+} from "../authorization/authorization.types";
+import { lockOrganizationMembership } from "./default-organization";
+import { isLastActiveOwner } from "./organization-rules";
 import {
 	InvalidRoleException,
 	LastOwnerRequiredException,
+	MembershipConflictException,
+	MemberNotActiveException,
 	MemberNotFoundException,
 	TransferConflictException,
 } from "./organization.errors";
@@ -17,8 +24,12 @@ import {
  *
  * 纪律：
  * - 移除 = DISABLED（保留历史归属与审计快照），不物理删除；
- * - 角色调整/移除资格统一走 canManage（Admin 不可管 Owner/Admin 互管）；
- * - 最后 Owner 退出/移除/降权一律 409 LAST_OWNER_REQUIRED；
+ * - 资格判定对「旧角色」与「新角色」双侧都走 canManage（评审 I-01：Admin 不得
+ *   借角色调整把普通成员提拔为自己无权管理的 Admin）；
+ * - 目标为 OWNER：单活跃 Owner 不变量下即操作者本人——Owner 自降/自移除 →
+ *   409 LAST_OWNER_REQUIRED（§6.3），Admin 对 Owner → 403（评审 I-04）；
+ * - 每个变更事务先取组织级 advisory 锁再读状态，并以「期望角色/状态」条件更新
+ *   落库（评审 I-06：READ COMMITTED 读后写竞态串行化，0 命中即 409 回滚）；
  * - 所有权转移事务顺序：**先降原 Owner 为 ADMIN，再升目标为 OWNER**
  *   （memberships_single_active_owner_uidx 部分唯一索引，GOAL W19 显式要求）；
  * - 全部变更同事务写审计。
@@ -51,46 +62,64 @@ export class MemberService {
 			email: m.user.email,
 			role: m.role,
 			status: m.status,
-			joinedAt: m.joinedAt,
+			joinedAt: m.joinedAt.toISOString(),
 		}));
 	}
 
-	/** 角色调整（member.update）：资格 canManage + 目标角色形状 + 最后 Owner 保护 */
+	/**
+	 * 角色调整（member.update）：
+	 * 资格 = canManage(actor → 旧角色) ∧ canManage(actor → 新角色)；禁调为 OWNER；
+	 * 目标 OWNER（即本人）→ 409 LAST_OWNER_REQUIRED；已移除成员不可调整（N-06）。
+	 */
 	async updateRole(
 		actor: ActorContext,
 		membershipId: string,
 		newRole: string,
+		requestId?: string | null,
 	): Promise<{ id: string; role: string; status: string }> {
-		if (!isValidRole(newRole) || newRole === "OWNER") {
+		if (!isOrganizationRole(newRole) || newRole === "OWNER") {
 			throw new InvalidRoleException("目标角色非法（禁止直接调整为 OWNER）");
 		}
 		return this.prisma.$transaction(async (tx) => {
+			await lockOrganizationMembership(tx, actor.organizationId);
 			const target = await tx.membership.findFirst({
 				where: { id: membershipId, organizationId: actor.organizationId },
 			});
 			if (!target) throw new MemberNotFoundException();
 
-			if (!canManage(actor.role, target.role as never, "update")) {
+			if (target.role === "OWNER") {
+				// 单活跃 Owner 不变量：目标 OWNER ⇒ 即操作者本人的自降
+				if (actor.role === "OWNER") throw new LastOwnerRequiredException();
+				throw new PermissionDeniedException(
+					"当前角色无权调整所有者（Admin 不可管理 Owner）",
+				);
+			}
+			if (!canManage(actor.role, target.role as OrganizationRole, "update")) {
 				throw new PermissionDeniedException(
 					"当前角色无权调整该成员（Admin 不可管理 Owner/Admin）",
 				);
 			}
-			const activeOwners = await tx.membership.count({
-				where: {
-					organizationId: actor.organizationId,
-					role: "OWNER",
-					status: "ACTIVE",
-				},
-			});
-			if (isLastActiveOwner(activeOwners, target.role, target.status)) {
-				throw new LastOwnerRequiredException();
+			// 新角色侧资格（I-01）：Admin 只能在其可管理范围内调整，不得提拔为 Admin
+			if (!canManage(actor.role, newRole, "update")) {
+				throw new PermissionDeniedException(
+					"当前角色无权将成员调整为该角色（Admin 不可提拔为 Admin）",
+				);
+			}
+			if (target.status !== "ACTIVE") {
+				throw new MemberNotActiveException();
 			}
 
-			const updated = await tx.membership.update({
-				where: { id: membershipId },
+			// 条件更新：角色与状态须与持锁后读到的一致（0 命中 = 并发修改）
+			const updated = await tx.membership.updateMany({
+				where: {
+					id: membershipId,
+					organizationId: actor.organizationId,
+					role: target.role,
+					status: target.status,
+				},
 				data: { role: newRole },
-				select: { id: true, role: true, status: true },
 			});
+			if (updated.count === 0) throw new MembershipConflictException();
 			await this.auditService.recordInTx(tx, {
 				organizationId: actor.organizationId,
 				actorUserId: actor.userId,
@@ -99,44 +128,52 @@ export class MemberService {
 				targetType: "membership",
 				targetId: membershipId,
 				result: "SUCCESS",
+				requestId: requestId ?? null,
 				detail: { before: { role: target.role }, after: { role: newRole } },
 			});
-			return updated;
+			return { id: membershipId, role: newRole, status: target.status };
 		});
 	}
 
-	/** 移除成员（member.remove）：DISABLED 保留历史（MEM-02.3/02.4） */
+	/** 移除成员（member.remove）：DISABLED 保留历史（MEM-02.3/02.4）；重复移除幂等 */
 	async removeMember(
 		actor: ActorContext,
 		membershipId: string,
+		requestId?: string | null,
 	): Promise<{ id: string; status: string }> {
 		return this.prisma.$transaction(async (tx) => {
+			await lockOrganizationMembership(tx, actor.organizationId);
 			const target = await tx.membership.findFirst({
 				where: { id: membershipId, organizationId: actor.organizationId },
 			});
 			if (!target) throw new MemberNotFoundException();
 
-			if (!canManage(actor.role, target.role as never, "remove")) {
+			if (target.role === "OWNER") {
+				if (actor.role === "OWNER") throw new LastOwnerRequiredException();
+				throw new PermissionDeniedException(
+					"当前角色无权移除所有者（Admin 不可管理 Owner）",
+				);
+			}
+			if (!canManage(actor.role, target.role as OrganizationRole, "remove")) {
 				throw new PermissionDeniedException(
 					"当前角色无权移除该成员（Admin 不可管理 Owner/Admin）",
 				);
 			}
-			const activeOwners = await tx.membership.count({
-				where: {
-					organizationId: actor.organizationId,
-					role: "OWNER",
-					status: "ACTIVE",
-				},
-			});
-			if (isLastActiveOwner(activeOwners, target.role, target.status)) {
-				throw new LastOwnerRequiredException();
+			if (target.status !== "ACTIVE") {
+				// 已移除：幂等返回既有状态，不重复写审计
+				return { id: membershipId, status: target.status };
 			}
 
-			const updated = await tx.membership.update({
-				where: { id: membershipId },
+			const updated = await tx.membership.updateMany({
+				where: {
+					id: membershipId,
+					organizationId: actor.organizationId,
+					role: target.role,
+					status: "ACTIVE",
+				},
 				data: { status: "DISABLED" },
-				select: { id: true, status: true },
 			});
+			if (updated.count === 0) throw new MembershipConflictException();
 			await this.auditService.recordInTx(tx, {
 				organizationId: actor.organizationId,
 				actorUserId: actor.userId,
@@ -145,35 +182,39 @@ export class MemberService {
 				targetType: "membership",
 				targetId: membershipId,
 				result: "SUCCESS",
+				requestId: requestId ?? null,
 				detail: { role: target.role },
 			});
-			return updated;
+			return { id: membershipId, status: "DISABLED" };
 		});
 	}
 
-	/** 主动退出（MEM-02.5）：最后 Owner 409；其余 DISABLED 自身成员关系 */
-	async leave(actor: ActorContext): Promise<{ status: string }> {
-		return this.prisma.$transaction(async (tx) => {
-			const activeOwners = await tx.membership.count({
-				where: {
-					organizationId: actor.organizationId,
-					role: "OWNER",
-					status: "ACTIVE",
-				},
-			});
+	/** 主动退出（MEM-02.5）：最后 Owner 409；重复退出幂等 */
+	async leave(
+		actor: ActorContext,
+		requestId?: string | null,
+	): Promise<{ status: string }> {
+		return this.prisma.$transaction(async (tx): Promise<{ status: string }> => {
+			await lockOrganizationMembership(tx, actor.organizationId);
 			const self = await tx.membership.findUnique({
 				where: { id: actor.membershipId },
 			});
 			if (!self || self.organizationId !== actor.organizationId) {
 				throw new MemberNotFoundException();
 			}
-			if (isLastActiveOwner(activeOwners, self.role, self.status)) {
+			if (self.status !== "ACTIVE") {
+				return { status: self.status }; // 已退出：幂等
+			}
+			// 单活跃 Owner 不变量下（memberships_single_active_owner_uidx），
+			// 持锁读到的 ACTIVE OWNER 即最后 Owner
+			if (isLastActiveOwner(1, self.role, self.status)) {
 				throw new LastOwnerRequiredException();
 			}
-			await tx.membership.update({
-				where: { id: actor.membershipId },
+			const updated = await tx.membership.updateMany({
+				where: { id: actor.membershipId, role: self.role, status: "ACTIVE" },
 				data: { status: "DISABLED" },
 			});
+			if (updated.count === 0) throw new MembershipConflictException();
 			await this.auditService.recordInTx(tx, {
 				organizationId: actor.organizationId,
 				actorUserId: actor.userId,
@@ -182,7 +223,8 @@ export class MemberService {
 				targetType: "membership",
 				targetId: actor.membershipId,
 				result: "SUCCESS",
-				detail: null,
+				requestId: requestId ?? null,
+				detail: { role: self.role },
 			});
 			return { status: "DISABLED" };
 		});
@@ -190,17 +232,20 @@ export class MemberService {
 
 	/**
 	 * 所有权转移（owner.transfer，MEM-02.2）：原 Owner 降为 ADMIN、目标升为 OWNER。
-	 * 事务内**先降后升**（部分唯一索引顺序；并发下违反即回滚，索引兜底双保险）。
+	 * 事务内持组织锁后重读双方状态 → 先降后升（部分唯一索引顺序）；任一侧状态与
+	 * 持锁后读到的不一致即 0 命中回滚（并发双提交的败方 409 TRANSFER_CONFLICT）。
 	 */
 	async transferOwnership(
 		actor: ActorContext,
 		targetMembershipId: string,
+		requestId?: string | null,
 	): Promise<{ promotedId: string; demotedId: string }> {
 		if (actor.role !== "OWNER") {
 			throw new PermissionDeniedException("仅所有者可转移所有权");
 		}
 		try {
 			return await this.prisma.$transaction(async (tx) => {
+				await lockOrganizationMembership(tx, actor.organizationId);
 				const target = await tx.membership.findFirst({
 					where: {
 						id: targetMembershipId,
@@ -215,17 +260,28 @@ export class MemberService {
 					throw new InvalidRoleException("仅有效成员可接任所有权");
 				}
 
-				// 先降原 Owner（释放部分唯一索引槽位），再升目标；
-				// 并发双提交时第二个事务的提升命中 memberships_single_active_owner_uidx
-				// → 唯一约束违规 → 整体回滚（事务外映射 409，对抗审 R1 [Nit]）
-				await tx.membership.update({
-					where: { id: actor.membershipId },
+				// 先降原 Owner（释放部分唯一索引槽位）：须仍为 ACTIVE OWNER，否则并发已变更
+				const demoted = await tx.membership.updateMany({
+					where: {
+						id: actor.membershipId,
+						organizationId: actor.organizationId,
+						role: "OWNER",
+						status: "ACTIVE",
+					},
 					data: { role: "ADMIN" },
 				});
-				await tx.membership.update({
-					where: { id: targetMembershipId },
+				if (demoted.count === 0) throw new TransferConflictException();
+				// 再升目标：角色/状态须与持锁后读到的一致
+				const promoted = await tx.membership.updateMany({
+					where: {
+						id: targetMembershipId,
+						organizationId: actor.organizationId,
+						role: target.role,
+						status: "ACTIVE",
+					},
 					data: { role: "OWNER" },
 				});
+				if (promoted.count === 0) throw new TransferConflictException();
 				await this.auditService.recordInTx(tx, {
 					organizationId: actor.organizationId,
 					actorUserId: actor.userId,
@@ -234,6 +290,7 @@ export class MemberService {
 					targetType: "membership",
 					targetId: targetMembershipId,
 					result: "SUCCESS",
+					requestId: requestId ?? null,
 					detail: {
 						fromMembershipId: actor.membershipId,
 						toMembershipId: targetMembershipId,

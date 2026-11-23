@@ -366,6 +366,17 @@ export default [
                 '**/src/data-request',
                 '**/src/data-request/**',
                 '**/data-request/**',
+                // 评审 N-01：organization → audit（同事务审计）为既定单向依赖，
+                // audit 作为叶子模块禁止反向引入 organization（防循环依赖）；rate/currency 同属业务模块
+                '**/src/organization',
+                '**/src/organization/**',
+                '**/organization/**',
+                '**/src/rate',
+                '**/src/rate/**',
+                '**/rate/**',
+                '**/src/currency',
+                '**/src/currency/**',
+                '**/currency/**',
               ],
               message:
                 '[架构红线] audit 禁止引入 ai 与业务模块，仅记录不参与业务决策；且严禁提供 update/delete 变更接口（技术方案 §5.1/§13.2）。',

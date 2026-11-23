@@ -3,9 +3,9 @@ import { Type } from "class-transformer";
 import {
 	IsIn,
 	IsInt,
-	IsISO8601,
 	IsOptional,
 	IsString,
+	Matches,
 	Max,
 	Min,
 } from "class-validator";
@@ -84,12 +84,21 @@ export class AuditLogViewDto {
 	createdAt!: string;
 }
 
+/**
+ * 严格 ISO 8601 日期时间（评审 N-03）：class-validator 的 @IsISO8601 会放行
+ * "2026-W01-1" 等周年/序数日写法，new Date() 得到 Invalid Date 后 500；
+ * 这里要求完整 YYYY-MM-DDTHH:mm:ss(.sss)Z|±HH:mm。
+ */
+const ISO_DATETIME_PATTERN =
+	/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
+
 /** 审计分页查询参数（AUDIT-03.1：按时间起止、成员、动作筛选；分页不返回全量） */
 export class ListAuditLogsQueryDto {
-	@ApiPropertyOptional({ description: "页码（从 1 起）", example: 1, type: Number })
+	@ApiPropertyOptional({ description: "页码（从 1 起，上限 10000）", example: 1, type: Number })
 	@Type(() => Number)
 	@IsInt()
 	@Min(1)
+	@Max(10_000)
 	@IsOptional()
 	page?: number;
 
@@ -106,20 +115,24 @@ export class ListAuditLogsQueryDto {
 	pageSize?: number;
 
 	@ApiPropertyOptional({
-		description: "起始时间（ISO 8601，含）",
+		description: "起始时间（ISO 8601 日期时间，含）",
 		example: "2026-11-23T00:00:00.000Z",
 		type: String,
 	})
-	@IsISO8601()
+	@Matches(ISO_DATETIME_PATTERN, {
+		message: "from 须为 ISO 8601 日期时间，如 2026-11-23T00:00:00.000Z",
+	})
 	@IsOptional()
 	from?: string;
 
 	@ApiPropertyOptional({
-		description: "截止时间（ISO 8601，含）",
-		example: "2026-11-23T23:59:59.000Z",
+		description: "截止时间（ISO 8601 日期时间，含）",
+		example: "2026-11-23T23:59:59.999Z",
 		type: String,
 	})
-	@IsISO8601()
+	@Matches(ISO_DATETIME_PATTERN, {
+		message: "to 须为 ISO 8601 日期时间，如 2026-11-23T23:59:59.999Z",
+	})
 	@IsOptional()
 	to?: string;
 

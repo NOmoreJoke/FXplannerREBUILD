@@ -4,9 +4,12 @@ import { AuditService } from "../audit/audit.service";
 import type { ActorContext } from "../authorization/authorization.types";
 import {
 	buildCapabilities,
+	isValidOrganizationName,
 	normalizeOrganizationName,
 } from "./organization-rules";
 import { OrganizationNotFoundException } from "../authorization/authorization.errors";
+import { InvalidOrganizationNameException } from "./organization.errors";
+import { ACTIVE_STATUSES } from "../data-request/data-request-rules";
 
 /**
  * 组织与当前组织视图服务（技术方案 §7.2；Goal #3A W17）。
@@ -16,8 +19,8 @@ import { OrganizationNotFoundException } from "../authorization/authorization.er
  *   （创建组织 + OWNER Membership + 空设置待建账 + 同事务审计，ORG-01.4/5）；
  * - 组织上下文端点：GET/PATCH /organizations/current（经 Guard 链鉴权后消费
  *   ActorContext，组织读取本身即限定 organizationId，§4.4.5）；
- * - 新用户注册的默认组织自动创建属 W22 兼容窗口收口项（GOAL-3A W17.4）：
- *   本期不触碰注册路径，见 Goal #3B。
+ * - 新用户默认组织兜底由 auth 模块经 default-organization.ts 在注册/OTP 首登
+ *   事务内完成（ORG-01.2；评审 I-09），本服务只负责显式新建与查询。
  */
 @Injectable()
 export class OrganizationService {
@@ -72,8 +75,8 @@ export class OrganizationService {
 		userId: string,
 		input: { name: string },
 		requestId?: string,
-	): Promise<{ id: string; name: string; role: string }> {
-		const name = normalizeOrganizationName(input.name);
+	): Promise<{ id: string; name: string; role: string; createdAt: string }> {
+		const name = this.assertValidName(input.name);
 		return this.prisma.$transaction(async (tx) => {
 			const organization = await tx.organization.create({
 				data: {
@@ -82,7 +85,7 @@ export class OrganizationService {
 						create: { userId, role: "OWNER", status: "ACTIVE" },
 					},
 				},
-				select: { id: true, name: true },
+				select: { id: true, name: true, createdAt: true },
 			});
 			// 不创建 OrganizationSettings：新组织独立待建账，不复制其他组织数据（ORG-01.5）
 			await this.auditService.recordInTx(tx, {
@@ -96,8 +99,22 @@ export class OrganizationService {
 				requestId: requestId ?? null,
 				detail: { name: organization.name },
 			});
-			return { id: organization.id, name: organization.name, role: "OWNER" };
+			return {
+				id: organization.id,
+				name: organization.name,
+				role: "OWNER",
+				createdAt: organization.createdAt.toISOString(),
+			};
 		});
+	}
+
+	/** 组织名称形状校验（评审 N-02：纯空白名在 DTO 层放行，服务层兜底拒绝） */
+	private assertValidName(raw: string): string {
+		const name = normalizeOrganizationName(raw);
+		if (!isValidOrganizationName(name)) {
+			throw new InvalidOrganizationNameException();
+		}
+		return name;
 	}
 
 	/** 当前组织详情 + capabilities + 组织锁 + 建账状态（organization.read） */
@@ -122,13 +139,17 @@ export class OrganizationService {
 		if (!organization) {
 			throw new OrganizationNotFoundException();
 		}
-		// 组织锁（Goal #3B 拆分后的组织数据请求状态；此处只读摘要）
+		// 组织锁（只读摘要；技术方案 §9 / data-request-rules）：
+		// 仅 CLEAR / DELETION 锁定组织账本（EXPORT 不锁写），进行中状态含 FAILED
+		// （失败保锁态，ACTIVE_STATUSES 单一真源）——评审 I-14
 		const activeLock = await this.prisma.dataRequest.findFirst({
 			where: {
 				organizationId: actor.organizationId,
 				scope: "ORGANIZATION",
-				status: { in: ["PENDING", "PROCESSING"] },
+				type: { in: ["CLEAR", "DELETION"] },
+				status: { in: [...ACTIVE_STATUSES] },
 			},
+			orderBy: { requestedAt: "desc" },
 			select: { type: true },
 		});
 		return {
@@ -153,7 +174,7 @@ export class OrganizationService {
 		input: { name: string },
 		requestId?: string,
 	): Promise<{ id: string; name: string }> {
-		const name = normalizeOrganizationName(input.name);
+		const name = this.assertValidName(input.name);
 		return this.prisma.$transaction(async (tx) => {
 			const before = await tx.organization.findUnique({
 				where: { id: actor.organizationId },

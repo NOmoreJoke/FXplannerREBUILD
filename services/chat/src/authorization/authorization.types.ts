@@ -6,12 +6,27 @@
  */
 
 /** 组织固定五角色（无自定义角色；组织内没有逐记录授权） */
-export type OrganizationRole =
-	| "OWNER"
-	| "ADMIN"
-	| "FINANCE"
-	| "OPERATOR"
-	| "VIEWER";
+export const ORGANIZATION_ROLES = [
+	"OWNER",
+	"ADMIN",
+	"FINANCE",
+	"OPERATOR",
+	"VIEWER",
+] as const;
+
+export type OrganizationRole = (typeof ORGANIZATION_ROLES)[number];
+
+/**
+ * 运行时角色合法性校验（评审 I-13）：memberships.role 为非约束 TEXT，
+ * Guard 构造 ActorContext 前必须校验——库内任何非法/未知角色值一律
+ * fail-closed（不进入权限判定），防止 `as OrganizationRole` 断言放行全量业务读。
+ */
+export function isOrganizationRole(value: unknown): value is OrganizationRole {
+	return (
+		typeof value === "string" &&
+		(ORGANIZATION_ROLES as readonly string[]).includes(value)
+	);
+}
 
 /**
  * 权限点全量枚举（技术方案 §6.1，28 项）。

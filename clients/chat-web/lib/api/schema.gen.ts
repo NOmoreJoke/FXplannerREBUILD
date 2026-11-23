@@ -954,13 +954,13 @@ export interface paths {
         };
         /**
          * 列出本人有效组织（个人端点，单/多组织路由依据）
-         * @description 返回当前登录用户全部 ACTIVE Membership 对应组织、角色、本位币与建账状态；无组织用户返回空列表（W22 兼容窗口前不自动建组）。
+         * @description 返回当前登录用户全部 ACTIVE Membership 对应组织、角色、本位币与建账状态。新用户在注册/验证码首登时即拥有一个默认组织（ORG-01.2）；MIG-A 之后、默认组织兜底之前注册的存量验证码账号可能为空列表（进入新建组织流程，其存量数据由 MIG-B 回填归属）。
          */
         get: operations["OrganizationController_list"];
         put?: never;
         /**
          * 创建组织（创建者 OWNER + 空设置待建账；同事务审计）
-         * @description 事务内创建 Organization + OWNER/ACTIVE Membership 并写组织创建审计；不复制任何既有组织数据或成员（ORG-01.4/5），新组织需独立完成首次设置。
+         * @description 事务内创建 Organization + OWNER/ACTIVE Membership 并写组织创建审计；不复制任何既有组织数据或成员（ORG-01.4/5），新组织需独立完成首次设置。名称 trim 后须为 1~100 字符（纯空白 400）。
          */
         post: operations["OrganizationController_create"];
         delete?: never;
@@ -1025,14 +1025,14 @@ export interface paths {
         post?: never;
         /**
          * 移除成员（DISABLED 保留历史归属；同事务审计）
-         * @description 移除后该成员立即失去组织访问权（下一次请求 404 ORGANIZATION_NOT_FOUND）；历史操作者信息保留为审计快照。最后 Owner 不可被移除。
+         * @description 移除后该成员立即失去组织访问权（下一次请求 404 ORGANIZATION_NOT_FOUND）；历史操作者信息保留为审计快照。Owner 自移除返回 409 LAST_OWNER_REQUIRED；重复移除幂等。
          */
         delete: operations["MemberController_remove"];
         options?: never;
         head?: never;
         /**
          * 调整成员角色（同事务审计）
-         * @description Owner 可调整任意非 Owner 成员；Admin 仅可调整普通角色（Finance/Operator/Viewer），不可管 Owner/Admin；最后 Owner 不可被降权（409 LAST_OWNER_REQUIRED）。
+         * @description Owner 可调整任意非 Owner 成员；Admin 仅可在普通角色（Finance/Operator/Viewer）之间调整——不可管理 Owner/Admin，也不可把成员提拔为 Admin。Owner 自降返回 409 LAST_OWNER_REQUIRED；已移除成员不可调整（409 MEMBER_NOT_ACTIVE）。
          */
         patch: operations["MemberController_updateRole"];
         trace?: never;
@@ -1048,7 +1048,7 @@ export interface paths {
         put?: never;
         /**
          * 主动退出组织（最后 Owner 409）
-         * @description 成员自助退出（DISABLED 自身成员关系）；组织仅剩一名活跃 Owner 时拒绝并要求先转移所有权。
+         * @description 成员自助退出（DISABLED 自身成员关系）；组织仅剩一名活跃 Owner 时拒绝并要求先转移所有权；重复退出幂等。
          */
         post: operations["MemberController_leave"];
         delete?: never;
@@ -1068,7 +1068,7 @@ export interface paths {
         put?: never;
         /**
          * 转移所有权（原 Owner 降为 ADMIN；先降后升保索引顺序）
-         * @description 仅 Owner 可发起；目标须为当前组织 ACTIVE 成员且非本人。事务内先将原 Owner 降为 ADMIN 再将目标升为 OWNER（memberships_single_active_owner_uidx 部分唯一索引顺序保护），同事务写审计；转移后新 Owner 权限立即生效。
+         * @description 仅 Owner 可发起；目标须为当前组织 ACTIVE 成员且非本人。事务内先取组织级锁并重读双方状态，先将原 Owner 降为 ADMIN 再将目标升为 OWNER（memberships_single_active_owner_uidx 部分唯一索引顺序保护），同事务写审计；转移后新 Owner 权限立即生效。并发双提交时第二个事务回滚并返回 409 TRANSFER_CONFLICT。
          */
         post: operations["MemberController_transfer"];
         delete?: never;
@@ -1092,7 +1092,7 @@ export interface paths {
         put?: never;
         /**
          * 创建邀请（原始 token 仅本次响应出现；同事务审计）
-         * @description Owner/Admin（Admin 限普通角色，禁邀 OWNER）按邮箱邀请，默认 7 天有效；同邮箱存在有效未过期邀请时幂等复用（reused=true，不重发 token）。服务端只存 token 的 SHA-256 hash。
+         * @description Owner/Admin（Admin 限普通角色，禁邀 OWNER）按邮箱邀请，默认 7 天有效；该邮箱已是组织有效成员时返回 409 MEMBER_ALREADY_ACTIVE。同邮箱存在有效未过期邀请时幂等复用（reused=true，不重发 token）。服务端只存 token 的 SHA-256 hash。
          */
         post: operations["InvitationController_create"];
         delete?: never;
@@ -1113,7 +1113,7 @@ export interface paths {
         post?: never;
         /**
          * 撤回有效邀请（同事务审计）
-         * @description 仅 OPEN 状态可撤回；已接受/拒绝/过期返回 409。
+         * @description 仅 OPEN 状态可撤回；资格按邀请自身角色判定（Admin 不可撤回 Owner 发出的 Admin 角色邀请）；已接受/拒绝/过期返回 409。
          */
         delete: operations["InvitationController_revoke"];
         options?: never;
@@ -1130,7 +1130,7 @@ export interface paths {
         };
         /**
          * 受邀摘要（登录个人端点；脱敏）
-         * @description 按 token 返回组织名、角色、邀请人显示名、有效期与状态；不含任何账户余额、交易明细或组织业务数据（MEM-01.7）。无效 token 统一 404（防枚举）。
+         * @description 按 token 返回组织名、角色、邀请人显示名、有效期与状态；不含任何账户余额、交易明细或组织业务数据（MEM-01.7）。仅受邀本人可读：登录邮箱或已验证的邮箱验证码标识须与受邀邮箱一致，否则 403 且不返回任何元数据。无效 token 统一 404（防枚举）。
          */
         get: operations["InvitationController_summary"];
         put?: never;
@@ -1151,8 +1151,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 接受邀请（登录 + 邮箱严格匹配；事务消费 + 恢复/新建成员关系）
-         * @description 登录邮箱须与受邀邮箱一致（trim+小写规范化）；并发双抢由条件更新保证仅产生一个有效 Membership；被移除（DISABLED）成员重新获邀按新角色恢复 ACTIVE。接受后同事务写审计。
+         * 接受邀请（登录 + 邮箱匹配；事务消费 + 恢复/新建成员关系）
+         * @description 登录身份须与受邀邮箱一致；组织锁内以完整开放态条件消费邀请，并发/已撤回/已拒绝/过期一律 409；被移除（DISABLED）成员重新获邀按新角色恢复 ACTIVE；已是有效成员返回 409 且不覆写既有角色。接受后同事务写审计。
          */
         post: operations["InvitationController_accept"];
         delete?: never;
@@ -1921,6 +1921,37 @@ export interface components {
              * @example 42
              */
             total: number;
+        };
+        ListAuditLogsQueryDto: {
+            /**
+             * @description 页码（从 1 起，上限 10000）
+             * @example 1
+             */
+            page?: number;
+            /**
+             * @description 每页条数（1-100，默认 20）
+             * @example 20
+             */
+            pageSize?: number;
+            /**
+             * @description 起始时间（ISO 8601 日期时间，含）
+             * @example 2026-11-23T00:00:00.000Z
+             */
+            from?: string;
+            /**
+             * @description 截止时间（ISO 8601 日期时间，含）
+             * @example 2026-11-23T23:59:59.999Z
+             */
+            to?: string;
+            /** @description 按操作者 userId 精确筛选 */
+            actorUserId?: string;
+            /** @description 按动作精确筛选 */
+            action?: string;
+            /**
+             * @description 按结果筛选
+             * @enum {string}
+             */
+            result?: "SUCCESS" | "DENIED" | "FAILED";
         };
         PlanInstallmentDto: {
             /**
@@ -3903,6 +3934,13 @@ export interface components {
             /** @description 组织数据请求锁状态 */
             dataRequestLock: components["schemas"]["OrganizationLockDto"];
         };
+        OrganizationUpsertDto: {
+            /**
+             * @description 组织名称（1~100 字符；首尾空白自动裁剪，纯空白拒绝）
+             * @example 张三的工作台
+             */
+            name: string;
+        };
         MemberViewDto: {
             /** @description Membership id */
             id: string;
@@ -3927,6 +3965,53 @@ export interface components {
              * @description 加入时间（UTC ISO）
              */
             joinedAt: string;
+        };
+        MemberRoleUpdateResultDto: {
+            /** @description Membership id */
+            id: string;
+            /**
+             * @description 调整后的角色
+             * @enum {string}
+             */
+            role: "ADMIN" | "FINANCE" | "OPERATOR" | "VIEWER";
+            /**
+             * @description 成员状态
+             * @enum {string}
+             */
+            status: "ACTIVE" | "DISABLED";
+        };
+        MemberRemoveResultDto: {
+            /** @description Membership id */
+            id: string;
+            /**
+             * @description 成员状态（移除后恒为 DISABLED，保留历史归属）
+             * @enum {string}
+             */
+            status: "ACTIVE" | "DISABLED";
+        };
+        MemberStatusResultDto: {
+            /**
+             * @description 成员状态（退出后 DISABLED）
+             * @enum {string}
+             */
+            status: "ACTIVE" | "DISABLED";
+        };
+        TransferOwnershipResultDto: {
+            /** @description 升为 OWNER 的 Membership id */
+            promotedId: string;
+            /** @description 降为 ADMIN 的 Membership id */
+            demotedId: string;
+        };
+        UpdateMemberDto: {
+            /**
+             * @description 新角色（禁止调整为 OWNER——所有权只走转移）
+             * @enum {string}
+             */
+            role: "ADMIN" | "FINANCE" | "OPERATOR" | "VIEWER";
+        };
+        TransferOwnershipDto: {
+            /** @description 接任成员的 Membership id */
+            targetMembershipId: string;
         };
         InvitationCreatedDto: {
             /** @description 邀请 id */
@@ -4000,6 +4085,34 @@ export interface components {
              * @enum {string}
              */
             status: "OPEN" | "ACCEPTED" | "DECLINED" | "REVOKED" | "EXPIRED";
+        };
+        InvitationAcceptResultDto: {
+            /** @description 新建或恢复的 Membership id */
+            membershipId: string;
+            /**
+             * @description 加入后的角色
+             * @enum {string}
+             */
+            role: "ADMIN" | "FINANCE" | "OPERATOR" | "VIEWER";
+        };
+        InvitationStatusResultDto: {
+            /**
+             * @description 邀请状态
+             * @enum {string}
+             */
+            status: "REVOKED" | "DECLINED";
+        };
+        CreateInvitationDto: {
+            /**
+             * @description 受邀邮箱
+             * @example finance@example.com
+             */
+            email: string;
+            /**
+             * @description 受邀角色（禁止 OWNER）
+             * @enum {string}
+             */
+            role: "ADMIN" | "FINANCE" | "OPERATOR" | "VIEWER";
         };
         ListConversationsQueryDto: {
             /**
@@ -4564,7 +4677,22 @@ export interface operations {
     };
     AuditController_listCurrent: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 按结果筛选 */
+                result?: "SUCCESS" | "DENIED" | "FAILED";
+                /** @description 按动作精确筛选 */
+                action?: string;
+                /** @description 按操作者 userId 精确筛选 */
+                actorUserId?: string;
+                /** @description 截止时间（ISO 8601 日期时间，含） */
+                to?: string;
+                /** @description 起始时间（ISO 8601 日期时间，含） */
+                from?: string;
+                /** @description 每页条数（1-100，默认 20） */
+                pageSize?: number;
+                /** @description 页码（从 1 起，上限 10000） */
+                page?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -5986,7 +6114,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationUpsertDto"];
+            };
+        };
         responses: {
             201: {
                 headers: {
@@ -6052,7 +6184,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationUpsertDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -6095,7 +6231,7 @@ export interface operations {
                     "application/json": components["schemas"]["MemberViewDto"][];
                 };
             };
-            /** @description 403 PERMISSION_DENIED（canManage 资格不足） */
+            /** @description 403 PERMISSION_DENIED（canManage 资格不足：Admin 不可管理 Owner/Admin，亦不可把成员提拔为 Admin） */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6109,7 +6245,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description 409 LAST_OWNER_REQUIRED（最后 Owner 保护） */
+            /** @description 409 LAST_OWNER_REQUIRED（最后 Owner 保护）/ MEMBER_NOT_ACTIVE / MEMBERSHIP_CONFLICT / TRANSFER_CONFLICT */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6132,10 +6268,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MemberViewDto"];
+                    "application/json": components["schemas"]["MemberRemoveResultDto"];
                 };
             };
-            /** @description 403 PERMISSION_DENIED（canManage 资格不足） */
+            /** @description 403 PERMISSION_DENIED（canManage 资格不足：Admin 不可管理 Owner/Admin，亦不可把成员提拔为 Admin） */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6149,7 +6285,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description 409 LAST_OWNER_REQUIRED（最后 Owner 保护） */
+            /** @description 409 LAST_OWNER_REQUIRED（最后 Owner 保护）/ MEMBER_NOT_ACTIVE / MEMBERSHIP_CONFLICT / TRANSFER_CONFLICT */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6165,17 +6301,21 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMemberDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MemberViewDto"];
+                    "application/json": components["schemas"]["MemberRoleUpdateResultDto"];
                 };
             };
-            /** @description 403 PERMISSION_DENIED（canManage 资格不足） */
+            /** @description 403 PERMISSION_DENIED（canManage 资格不足：Admin 不可管理 Owner/Admin，亦不可把成员提拔为 Admin） */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6189,7 +6329,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description 409 LAST_OWNER_REQUIRED（最后 Owner 保护） */
+            /** @description 409 LAST_OWNER_REQUIRED（最后 Owner 保护）/ MEMBER_NOT_ACTIVE / MEMBERSHIP_CONFLICT / TRANSFER_CONFLICT */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6207,7 +6347,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description 403 PERMISSION_DENIED（canManage 资格不足） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberStatusResultDto"];
+                };
+            };
+            /** @description 403 PERMISSION_DENIED（canManage 资格不足：Admin 不可管理 Owner/Admin，亦不可把成员提拔为 Admin） */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6237,15 +6385,21 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransferOwnershipDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["TransferOwnershipResultDto"];
+                };
             };
-            /** @description 403 PERMISSION_DENIED（canManage 资格不足） */
+            /** @description 403 PERMISSION_DENIED（canManage 资格不足：Admin 不可管理 Owner/Admin，亦不可把成员提拔为 Admin） */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6259,7 +6413,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description 409 LAST_OWNER_REQUIRED（最后 Owner 保护） */
+            /** @description 409 TRANSFER_CONFLICT（并发转移） */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6285,7 +6439,7 @@ export interface operations {
                     "application/json": components["schemas"]["InvitationViewDto"][];
                 };
             };
-            /** @description 403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH */
+            /** @description 403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH（受邀邮箱与登录身份不一致，不返回元数据） */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6299,7 +6453,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description 409 INVITATION_NOT_ACCEPTABLE（状态机） */
+            /** @description 409 INVITATION_NOT_ACCEPTABLE（状态机）/ MEMBER_ALREADY_ACTIVE（已是有效成员） */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6315,7 +6469,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInvitationDto"];
+            };
+        };
         responses: {
             201: {
                 headers: {
@@ -6325,7 +6483,7 @@ export interface operations {
                     "application/json": components["schemas"]["InvitationCreatedDto"];
                 };
             };
-            /** @description 403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH */
+            /** @description 403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH（受邀邮箱与登录身份不一致，不返回元数据） */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6339,7 +6497,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description 409 INVITATION_NOT_ACCEPTABLE（状态机） */
+            /** @description 409 INVITATION_NOT_ACCEPTABLE（状态机）/ MEMBER_ALREADY_ACTIVE（已是有效成员） */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6361,9 +6519,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["InvitationStatusResultDto"];
+                };
             };
-            /** @description 403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH */
+            /** @description 403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH（受邀邮箱与登录身份不一致，不返回元数据） */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6377,7 +6537,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description 409 INVITATION_NOT_ACCEPTABLE（状态机） */
+            /** @description 409 INVITATION_NOT_ACCEPTABLE（状态机）/ MEMBER_ALREADY_ACTIVE（已是有效成员） */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6390,7 +6550,10 @@ export interface operations {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                /** @description 邀请 token（创建邀请响应中一次性发放） */
+                token: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -6403,7 +6566,7 @@ export interface operations {
                     "application/json": components["schemas"]["InvitationSummaryDto"];
                 };
             };
-            /** @description 403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH */
+            /** @description 403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH（受邀邮箱与登录身份不一致，不返回元数据） */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6417,7 +6580,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description 409 INVITATION_NOT_ACCEPTABLE（状态机） */
+            /** @description 409 INVITATION_NOT_ACCEPTABLE（状态机）/ MEMBER_ALREADY_ACTIVE（已是有效成员） */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6430,7 +6593,10 @@ export interface operations {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                /** @description 邀请 token（创建邀请响应中一次性发放） */
+                token: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -6439,9 +6605,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["InvitationAcceptResultDto"];
+                };
             };
-            /** @description 403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH */
+            /** @description 403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH（受邀邮箱与登录身份不一致，不返回元数据） */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6455,7 +6623,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description 409 INVITATION_NOT_ACCEPTABLE（状态机） */
+            /** @description 409 INVITATION_NOT_ACCEPTABLE（状态机）/ MEMBER_ALREADY_ACTIVE（已是有效成员） */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6468,7 +6636,10 @@ export interface operations {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                /** @description 邀请 token（创建邀请响应中一次性发放） */
+                token: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -6477,9 +6648,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["InvitationStatusResultDto"];
+                };
             };
-            /** @description 403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH */
+            /** @description 403 PERMISSION_DENIED / INVITATION_EMAIL_MISMATCH（受邀邮箱与登录身份不一致，不返回元数据） */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6493,7 +6666,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description 409 INVITATION_NOT_ACCEPTABLE（状态机） */
+            /** @description 409 INVITATION_NOT_ACCEPTABLE（状态机）/ MEMBER_ALREADY_ACTIVE（已是有效成员） */
             409: {
                 headers: {
                     [name: string]: unknown;

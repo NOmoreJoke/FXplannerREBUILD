@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import {
 	ApiBearerAuth,
+	ApiBody,
 	ApiCreatedResponse,
 	ApiExtraModels,
 	ApiForbiddenResponse,
@@ -68,7 +69,7 @@ export class OrganizationController {
 	@ApiOperation({
 		summary: "列出本人有效组织（个人端点，单/多组织路由依据）",
 		description:
-			"返回当前登录用户全部 ACTIVE Membership 对应组织、角色、本位币与建账状态；无组织用户返回空列表（W22 兼容窗口前不自动建组）。",
+			"返回当前登录用户全部 ACTIVE Membership 对应组织、角色、本位币与建账状态。新用户在注册/验证码首登时即拥有一个默认组织（ORG-01.2）；MIG-A 之后、默认组织兜底之前注册的存量验证码账号可能为空列表（进入新建组织流程，其存量数据由 MIG-B 回填归属）。",
 	})
 	@ApiOkResponse({ type: [OrganizationViewDto] })
 	async list(@CurrentUser() user: User): Promise<{
@@ -87,8 +88,9 @@ export class OrganizationController {
 	@ApiOperation({
 		summary: "创建组织（创建者 OWNER + 空设置待建账；同事务审计）",
 		description:
-			"事务内创建 Organization + OWNER/ACTIVE Membership 并写组织创建审计；不复制任何既有组织数据或成员（ORG-01.4/5），新组织需独立完成首次设置。",
+			"事务内创建 Organization + OWNER/ACTIVE Membership 并写组织创建审计；不复制任何既有组织数据或成员（ORG-01.4/5），新组织需独立完成首次设置。名称 trim 后须为 1~100 字符（纯空白 400）。",
 	})
+	@ApiBody({ type: OrganizationUpsertDto })
 	@ApiCreatedResponse({ type: OrganizationViewDto })
 	async create(
 		@CurrentUser() user: User,
@@ -108,7 +110,7 @@ export class OrganizationController {
 				role: created.role,
 				baseCurrency: null,
 				onboardingCompleted: false,
-				createdAt: new Date().toISOString(),
+				createdAt: created.createdAt,
 			},
 			message: "组织创建成功",
 		};
@@ -143,6 +145,7 @@ export class OrganizationController {
 		description:
 			"仅 organization.update 权限（Owner/Admin）可改；同事务写入 organization.update 审计（含改名前后快照）。Operator/Viewer 403 PERMISSION_DENIED。",
 	})
+	@ApiBody({ type: OrganizationUpsertDto })
 	@ApiOkResponse({ type: OrganizationCurrentDto })
 	async updateCurrent(
 		@CurrentActor() actor: ActorContext,

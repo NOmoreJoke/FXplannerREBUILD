@@ -1,9 +1,11 @@
 import { Inject, Injectable } from "@nestjs/common";
+import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { canManage, normalizeEmail } from "../authorization/permission-policy";
 import { PermissionDeniedException } from "../authorization/authorization.errors";
-import type { ActorContext } from "../authorization/authorization.types";
+import type { ActorContext, OrganizationRole } from "../authorization/authorization.types";
+import { lockOrganizationMembership } from "./default-organization";
 import {
 	generateInvitationToken,
 	hashInvitationToken,
@@ -16,18 +18,32 @@ import {
 	InvitationEmailMismatchException,
 	InvitationNotAcceptableException,
 	InvitationNotFoundException,
+	MemberAlreadyActiveException,
 } from "./organization.errors";
+
+type Db = PrismaService | Prisma.TransactionClient;
+
+/** 登录用户身份视图（邮箱可能为空：纯 OTP 账号的邮箱在已验证的 OtpIdentity 上） */
+export interface InvitedUser {
+	id: string;
+	email: string | null;
+}
 
 /**
  * 邀请生命周期服务（需求 MEM-01；技术方案 §6.3/§13.2；W19）。
  *
  * 纪律：
  * - 原始 token 只在创建响应出现一次；库中仅存 SHA-256 hash，审计 detail 不含 token；
- * - 重复邀请同邮箱：存在有效未过期邀请时幂等返回既有（reused=true，token 不重复发放）；
- * - 接受：邮箱规范化严格匹配 + 状态开放 + 事务内条件消费（防并发双抢）+
- *   Membership upsert/恢复（DISABLED 成员重新获邀按新角色恢复 ACTIVE）；
- * - 并发接受唯一 Membership 由 @@unique([organizationId, userId]) 与
- *   acceptedAt 条件更新双保险兜底。
+ * - 受邀邮箱匹配 = 登录邮箱（密码账号）或已验证的邮箱 OTP 标识（规范化后比对）
+ *   ——摘要/接受/拒绝三端点一律先匹配再返回任何元数据（评审 I-05/I-09）；
+ * - 已是组织有效成员的邮箱不可被邀请，接受时也禁止覆写既有 ACTIVE 成员
+ *   （尤其严禁借邀请把 OWNER 降级致组织无主，评审 I-02）；DISABLED 成员重新
+ *   获邀按新角色恢复 ACTIVE；
+ * - 邀请的创建/撤回/接受/拒绝全部在组织级 advisory 锁内完成，状态迁移一律用
+ *   「完整开放态」条件更新（acceptedAt/declinedAt/revokedAt 为空且未过期），
+ *   消除读后写 TOCTOU（评审 I-07）；并发同邮箱创建由锁串行化（MEM-01.5）；
+ * - 撤回资格按邀请自身的角色判定（评审 I-03：Admin 不可撤回 Owner 发出的
+ *   Admin 角色邀请）。
  */
 @Injectable()
 export class InvitationService {
@@ -36,23 +52,52 @@ export class InvitationService {
 		@Inject(AuditService) private readonly auditService: AuditService,
 	) {}
 
-	private toRecord(row: {
-		id: string;
-		organizationId: string;
-		email: string;
-		role: string;
-		expiresAt: Date;
-		acceptedAt: Date | null;
-		declinedAt: Date | null;
-		revokedAt: Date | null;
-	}): InvitationRecord {
+	private toRecord(row: InvitationRecord): InvitationRecord {
 		return row;
 	}
 
-	/** 创建/幂等复用邀请（member.invite；禁邀 OWNER） */
+	/** 受邀邮箱与登录用户是否匹配（密码账号邮箱 ∨ 已验证的邮箱 OTP 标识） */
+	private async matchesInvitedEmail(
+		db: Db,
+		user: InvitedUser,
+		invitationEmail: string,
+	): Promise<boolean> {
+		const target = normalizeEmail(invitationEmail);
+		if (user.email !== null && normalizeEmail(user.email) === target) {
+			return true;
+		}
+		const identity = await db.otpIdentity.findFirst({
+			where: { userId: user.id, channel: "email", target },
+			select: { id: true },
+		});
+		return identity !== null;
+	}
+
+	/** 邮箱对应的账号 id 集合（密码账号按 User.email；OTP 账号按已验证邮箱标识） */
+	private async findUserIdsByEmail(
+		db: Db,
+		email: string,
+	): Promise<string[]> {
+		const [passwordUser, otpIdentities] = await Promise.all([
+			db.user.findUnique({ where: { email }, select: { id: true } }),
+			db.otpIdentity.findMany({
+				where: { channel: "email", target: email },
+				select: { userId: true },
+			}),
+		]);
+		const ids = new Set<string>(otpIdentities.map((row) => row.userId));
+		if (passwordUser) ids.add(passwordUser.id);
+		return [...ids];
+	}
+
+	/**
+	 * 创建/幂等复用邀请（member.invite；禁邀 OWNER）。
+	 * 组织锁内：已 ACTIVE 成员 → 409；同邮箱有效邀请 → 幂等复用（不重发 token）。
+	 */
 	async create(
 		actor: ActorContext,
 		input: { email: string; role: string },
+		requestId?: string | null,
 	): Promise<{
 		id: string;
 		email: string;
@@ -63,34 +108,49 @@ export class InvitationService {
 	}> {
 		const email = normalizeEmail(input.email);
 		// 资格：目标位按将加入后的角色判定（邀请 OWNER 一律拒绝，需求 7.1.1）
-		if (input.role === "OWNER" || !canManage(actor.role, input.role as never, "invite")) {
+		if (input.role === "OWNER" || !canManage(actor.role, input.role as OrganizationRole, "invite")) {
 			throw new PermissionDeniedException(
 				"当前角色不可发出该角色的邀请（禁邀 OWNER；Admin 仅可邀请普通角色）",
 			);
 		}
 
 		const now = new Date();
-		// 幂等复用：同 (org, email) 有效未过期邀请（MEM-01.5）
-		const existingRows = await this.prisma.organizationInvitation.findMany({
-			where: { organizationId: actor.organizationId, email },
-		});
-		const reusable = existingRows
-			.map((row) => this.toRecord(row))
-			.find((record) => isInvitationOpen(record, now));
-		if (reusable) {
-			// 复用不重发 token（原 token 已一次性发放；提示邀请人既有邀请仍有效）
-			return {
-				id: reusable.id,
-				email,
-				role: reusable.role,
-				expiresAt: reusable.expiresAt.toISOString(),
-				token: "",
-				reused: true,
-			};
-		}
-
 		const token = generateInvitationToken();
-		const created = await this.prisma.$transaction(async (tx) => {
+		const result = await this.prisma.$transaction(async (tx) => {
+			await lockOrganizationMembership(tx, actor.organizationId);
+
+			// I-02：已是有效成员 → 拒绝（禁止借邀请覆写既有成员角色）
+			const existingUserIds = await this.findUserIdsByEmail(tx, email);
+			if (existingUserIds.length > 0) {
+				const activeMembership = await tx.membership.findFirst({
+					where: {
+						organizationId: actor.organizationId,
+						userId: { in: existingUserIds },
+						status: "ACTIVE",
+					},
+					select: { id: true },
+				});
+				if (activeMembership) throw new MemberAlreadyActiveException();
+			}
+
+			// 幂等复用：同 (org, email) 有效未过期邀请（MEM-01.5；锁内判定，并发不产生多条）
+			const existingRows = await tx.organizationInvitation.findMany({
+				where: { organizationId: actor.organizationId, email },
+			});
+			const reusable = existingRows
+				.map((row) => this.toRecord(row))
+				.find((record) => isInvitationOpen(record, now));
+			if (reusable) {
+				return {
+					id: reusable.id,
+					email,
+					role: reusable.role,
+					expiresAt: reusable.expiresAt.toISOString(),
+					token: "",
+					reused: true,
+				};
+			}
+
 			const row = await tx.organizationInvitation.create({
 				data: {
 					organizationId: actor.organizationId,
@@ -109,18 +169,19 @@ export class InvitationService {
 				targetType: "invitation",
 				targetId: row.id,
 				result: "SUCCESS",
+				requestId: requestId ?? null,
 				detail: { email, role: input.role },
 			});
-			return row;
+			return {
+				id: row.id,
+				email,
+				role: row.role,
+				expiresAt: row.expiresAt.toISOString(),
+				token,
+				reused: false,
+			};
 		});
-		return {
-			id: created.id,
-			email,
-			role: created.role,
-			expiresAt: created.expiresAt.toISOString(),
-			token,
-			reused: false,
-		};
+		return result;
 	}
 
 	/** 当前组织邀请列表（member.read；不回吐 tokenHash；邀请人名内存 join——
@@ -163,26 +224,45 @@ export class InvitationService {
 		}));
 	}
 
-	/** 撤回有效邀请（member.invite） */
+	/**
+	 * 撤回有效邀请（member.invite）：资格按邀请自身角色；锁内以完整开放态条件更新，
+	 * 与并发 accept 互斥（同锁串行）且条件互斥（仅一方 0 命中）。
+	 */
 	async revoke(
 		actor: ActorContext,
 		invitationId: string,
+		requestId?: string | null,
 	): Promise<{ status: string }> {
 		if (!canManage(actor.role, "VIEWER", "invite")) {
 			throw new PermissionDeniedException("当前角色不可管理邀请");
 		}
 		return this.prisma.$transaction(async (tx) => {
+			await lockOrganizationMembership(tx, actor.organizationId);
 			const row = await tx.organizationInvitation.findFirst({
 				where: { id: invitationId, organizationId: actor.organizationId },
 			});
 			if (!row) throw new InvitationNotFoundException();
-			if (!isInvitationOpen(this.toRecord(row), new Date())) {
-				throw new InvitationNotAcceptableException("邀请已结束（接受/拒绝/撤回/过期）");
+			// I-03：按邀请角色判定资格（Admin 不可撤回 Owner 发出的 Admin 角色邀请）
+			if (!canManage(actor.role, row.role as OrganizationRole, "invite")) {
+				throw new PermissionDeniedException("当前角色无权撤回该角色的邀请");
 			}
-			await tx.organizationInvitation.update({
-				where: { id: invitationId },
-				data: { revokedAt: new Date() },
+			const now = new Date();
+			const revoked = await tx.organizationInvitation.updateMany({
+				where: {
+					id: invitationId,
+					organizationId: actor.organizationId,
+					acceptedAt: null,
+					declinedAt: null,
+					revokedAt: null,
+					expiresAt: { gt: now },
+				},
+				data: { revokedAt: now },
 			});
+			if (revoked.count === 0) {
+				throw new InvitationNotAcceptableException(
+					"邀请已结束（接受/拒绝/撤回/过期）",
+				);
+			}
 			await this.auditService.recordInTx(tx, {
 				organizationId: actor.organizationId,
 				actorUserId: actor.userId,
@@ -191,7 +271,8 @@ export class InvitationService {
 				targetType: "invitation",
 				targetId: invitationId,
 				result: "SUCCESS",
-				detail: { email: row.email },
+				requestId: requestId ?? null,
+				detail: { email: row.email, role: row.role },
 			});
 			return { status: "REVOKED" };
 		});
@@ -216,11 +297,18 @@ export class InvitationService {
 		return { row, organization, inviterName: inviter?.name ?? null };
 	}
 
-	/** 受邀摘要（登录个人端点；脱敏——无任何账户余额或业务明细，MEM-01.7） */
-	async getSummary(token: string) {
+	/**
+	 * 受邀摘要（登录个人端点；脱敏——无任何账户余额或业务明细，MEM-01.7）。
+	 * 仅返回本人可处理的邀请（技术方案 §7.2）：邮箱不匹配一律 403 且不返回
+	 * 任何组织/邀请人元数据（评审 I-05）。
+	 */
+	async getSummary(token: string, user: InvitedUser) {
 		const found = await this.findByToken(token);
 		if (!found || !found.organization) throw new InvitationNotFoundException();
 		const { row, organization, inviterName } = found;
+		if (!(await this.matchesInvitedEmail(this.prisma, user, row.email))) {
+			throw new InvitationEmailMismatchException();
+		}
 		return {
 			organizationId: organization.id,
 			organizationName: organization.name,
@@ -233,51 +321,77 @@ export class InvitationService {
 	}
 
 	/**
-	 * 接受邀请（登录 + 邮箱严格匹配）：事务内条件消费 + Membership upsert/恢复。
-	 * 并发双抢：两并发仅一方 updateMany 命中（acceptedAt IS NULL 条件），败方 409。
+	 * 接受邀请（登录 + 邮箱匹配）：
+	 * 组织锁内以完整开放态条件消费 → 新建 Membership 或恢复 DISABLED 成员；
+	 * 已 ACTIVE 成员一律 409（不覆写角色，事务回滚、邀请不被消费）。
 	 */
 	async accept(
 		token: string,
-		user: { id: string; email: string | null },
+		user: InvitedUser,
+		requestId?: string | null,
 	): Promise<{ membershipId: string; role: string }> {
 		const found = await this.findByToken(token);
 		if (!found) throw new InvitationNotFoundException();
 		const row = found.row;
-		if (normalizeEmail(user.email ?? "") !== normalizeEmail(row.email)) {
+		if (!(await this.matchesInvitedEmail(this.prisma, user, row.email))) {
 			throw new InvitationEmailMismatchException();
-		}
-		if (!isInvitationOpen(this.toRecord(row), new Date())) {
-			throw new InvitationNotAcceptableException(
-				"邀请已接受、被拒绝、被撤回或已过期",
-			);
 		}
 
 		return this.prisma.$transaction(async (tx) => {
-			// 条件消费：acceptedAt IS NULL 才置位（并发第二事务 0 命中 → 409）
+			await lockOrganizationMembership(tx, row.organizationId);
+			const now = new Date();
+			// 完整开放态条件消费：未接受/未拒绝/未撤回且未过期（I-07 TOCTOU）
 			const consumed = await tx.organizationInvitation.updateMany({
-				where: { id: row.id, acceptedAt: null },
-				data: { acceptedAt: new Date() },
+				where: {
+					id: row.id,
+					acceptedAt: null,
+					declinedAt: null,
+					revokedAt: null,
+					expiresAt: { gt: now },
+				},
+				data: { acceptedAt: now },
 			});
 			if (consumed.count === 0) {
-				throw new InvitationNotAcceptableException("邀请已被使用");
+				throw new InvitationNotAcceptableException(
+					"邀请已接受、被拒绝、被撤回或已过期",
+				);
 			}
 
-			// upsert/恢复 Membership：唯一 (organizationId, userId)；DISABLED 恢复为 ACTIVE + 新角色
-			const membership = await tx.membership.upsert({
-				where: {
-					organizationId_userId: {
-						organizationId: row.organizationId,
-						userId: user.id,
-					},
-				},
-				create: {
+			const membershipId = {
+				organizationId_userId: {
 					organizationId: row.organizationId,
 					userId: user.id,
-					role: row.role,
-					status: "ACTIVE",
 				},
-				update: { role: row.role, status: "ACTIVE" },
-			});
+			};
+			const existing = await tx.membership.findUnique({ where: membershipId });
+			if (existing?.status === "ACTIVE") {
+				// I-02：已是有效成员——禁止覆写角色（含 OWNER 降级）；回滚消费
+				throw new InvitationNotAcceptableException("你已是该组织的有效成员");
+			}
+
+			let membership: { id: string; role: string };
+			if (existing) {
+				// DISABLED → 按邀请角色恢复 ACTIVE（历史归属保留，MEM-02.4）
+				const restored = await tx.membership.updateMany({
+					where: { id: existing.id, status: "DISABLED" },
+					data: { role: row.role, status: "ACTIVE" },
+				});
+				if (restored.count === 0) {
+					throw new InvitationNotAcceptableException("成员状态已变化，请重试");
+				}
+				membership = { id: existing.id, role: row.role };
+			} else {
+				const created = await tx.membership.create({
+					data: {
+						organizationId: row.organizationId,
+						userId: user.id,
+						role: row.role,
+						status: "ACTIVE",
+					},
+					select: { id: true, role: true },
+				});
+				membership = created;
+			}
 			await this.auditService.recordInTx(tx, {
 				organizationId: row.organizationId,
 				actorUserId: user.id,
@@ -286,31 +400,39 @@ export class InvitationService {
 				targetType: "invitation",
 				targetId: row.id,
 				result: "SUCCESS",
+				requestId: requestId ?? null,
 				detail: { role: row.role },
 			});
 			return { membershipId: membership.id, role: membership.role };
 		});
 	}
 
-	/** 拒绝邀请（登录 + 邮箱匹配；拒绝不自动加入组织，MEM-01.6） */
+	/** 拒绝邀请（登录 + 邮箱匹配；拒绝不自动加入组织，MEM-01.6；重复拒绝幂等） */
 	async decline(
 		token: string,
-		user: { id: string; email: string | null },
+		user: InvitedUser,
+		requestId?: string | null,
 	): Promise<{ status: string }> {
 		const found = await this.findByToken(token);
 		if (!found) throw new InvitationNotFoundException();
 		const row = found.row;
-		if (normalizeEmail(user.email ?? "") !== normalizeEmail(row.email)) {
+		if (!(await this.matchesInvitedEmail(this.prisma, user, row.email))) {
 			throw new InvitationEmailMismatchException();
 		}
 		if (row.declinedAt !== null) return { status: "DECLINED" };
-		if (!isInvitationOpen(this.toRecord(row), new Date())) {
-			throw new InvitationNotAcceptableException("邀请已结束，无法拒绝");
-		}
+
 		await this.prisma.$transaction(async (tx) => {
+			await lockOrganizationMembership(tx, row.organizationId);
+			const now = new Date();
 			const updated = await tx.organizationInvitation.updateMany({
-				where: { id: row.id, declinedAt: null, acceptedAt: null },
-				data: { declinedAt: new Date() },
+				where: {
+					id: row.id,
+					acceptedAt: null,
+					declinedAt: null,
+					revokedAt: null,
+					expiresAt: { gt: now },
+				},
+				data: { declinedAt: now },
 			});
 			if (updated.count === 0) {
 				throw new InvitationNotAcceptableException("邀请状态已变化");
@@ -323,6 +445,7 @@ export class InvitationService {
 				targetType: "invitation",
 				targetId: row.id,
 				result: "SUCCESS",
+				requestId: requestId ?? null,
 				detail: null,
 			});
 		});

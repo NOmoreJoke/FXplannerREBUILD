@@ -5,28 +5,36 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { auditApi } from "@/lib/api/organizations";
 import { queryKeys } from "@/lib/api/query-keys";
 import { useCurrentOrganization } from "@/lib/hooks/use-organizations";
-import { AuditFilter, type AuditFilterState } from "./audit-filter";
+import { AuditFilter, type AuditFilterQuery } from "./audit-filter";
 import { PageLoading } from "@/components/base";
 
 /**
  * 审计日志表（需求 AUDIT-03；W21）：
  * - 只读分页（分页 + 时间/成员/动作/结果筛选；永不一次返回全组织历史）；
  * - 无任何编辑/删除入口（AUDIT-03.3）；
- * - 无 audit.read capability（Operator/Viewer）由页面层显示无权限提示。
+ * - 无 audit.read capability（Operator/Viewer）显示无权限提示。
+ * 组织上下文（capabilities）加载完成前先渲染加载态——评审 I-20：此前 capabilities
+ * 尚为 undefined 时即判「无权」，每次进入页面都闪现一次无权限提示。
  */
 export function AuditLogTable() {
 	const { data: current } = useCurrentOrganization();
 	const [page, setPage] = useState(1);
-	const [filter, setFilter] = useState<AuditFilterState>({});
+	const [filter, setFilter] = useState<AuditFilterQuery>({});
 
 	const canRead = current?.capabilities["audit.read"] === true;
 
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, isError, refetch } = useQuery({
 		queryKey: [...queryKeys.auditLogs.list(), page, filter],
 		queryFn: () => auditApi.list({ page, pageSize: 20, ...filter }),
 		enabled: Boolean(current) && canRead,
 		placeholderData: keepPreviousData,
+		retry: false,
 	});
+
+	// 组织详情未就绪：加载态（不能据此判定无权）
+	if (!current) {
+		return <PageLoading />;
+	}
 
 	if (!canRead) {
 		return (
@@ -39,6 +47,24 @@ export function AuditLogTable() {
 		);
 	}
 
+	if (isError && !data) {
+		return (
+			<div
+				role="alert"
+				className="space-y-2 rounded-xl border border-border p-6 text-center text-sm text-muted-foreground"
+			>
+				<p>审计记录加载失败</p>
+				<button
+					type="button"
+					onClick={() => void refetch()}
+					className="rounded-lg border border-border px-3 py-1.5 text-xs text-ink-500"
+				>
+					重试
+				</button>
+			</div>
+		);
+	}
+
 	if (isLoading && !data) {
 		return <PageLoading />;
 	}
@@ -48,7 +74,6 @@ export function AuditLogTable() {
 	return (
 		<div className="space-y-3" data-testid="audit-log-table">
 			<AuditFilter
-				value={filter}
 				onChange={(next) => {
 					setFilter(next);
 					setPage(1);
