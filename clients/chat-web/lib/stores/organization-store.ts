@@ -50,10 +50,19 @@ export const useOrganizationStore = create<OrganizationStore>()(
 			activeOrganizationSetAt: 0,
 			rejectedOrganizationIds: [],
 			setActiveOrganization: (organizationId) =>
-				set({
+				set((state) => ({
 					activeOrganizationId: organizationId,
 					activeOrganizationSetAt: organizationId === null ? 0 : Date.now(),
-				}),
+					// 显式选择即解除该组织的拒绝态（本会话内被移出后重新接受邀请的场景）。
+					// 路由分流的自动选中只选未被拒绝的组织，不会借此绕回拒绝态；
+					// 若服务端再次拒绝，会重新记入。
+					rejectedOrganizationIds:
+						organizationId === null
+							? state.rejectedOrganizationIds
+							: state.rejectedOrganizationIds.filter(
+									(id) => id !== organizationId,
+								),
+				})),
 			clearActiveOrganization: () =>
 				set({ activeOrganizationId: null, activeOrganizationSetAt: 0 }),
 			rejectOrganizationContext: (organizationId) =>

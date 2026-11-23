@@ -375,6 +375,36 @@ describe("useOrganizationRouting（受保护区的组织路由分流）", () => 
 		expect(result.current.status).toBe("ready");
 	});
 
+	it("被拒绝的组织在本会话内重新加入（再次接受邀请）后可以再次进入", async () => {
+		vi.mocked(organizationsApi.list).mockResolvedValue([
+			summary("org-a", "组织 A"),
+		]);
+		useOrganizationStore.setState({
+			activeOrganizationId: null,
+			activeOrganizationSetAt: 0,
+			rejectedOrganizationIds: ["org-a"],
+		});
+		const { wrapper } = wrapperFactory();
+		const { result, rerender } = renderHook(
+			() => ({
+				routing: useOrganizationRouting({ enabled: true }),
+				switchOrganization: useSwitchOrganization(),
+			}),
+			{ wrapper },
+		);
+		// 被移出后：不得自动选回
+		await waitFor(() => expect(result.current.routing.status).toBe("pick"));
+
+		// 再次接受邀请 → 应用显式选中该组织：拒绝态解除，可以进入
+		act(() => {
+			result.current.switchOrganization("org-a");
+		});
+		rerender();
+		await waitFor(() => expect(result.current.routing.status).toBe("ready"));
+		expect(useOrganizationStore.getState().activeOrganizationId).toBe("org-a");
+		expect(useOrganizationStore.getState().rejectedOrganizationIds).toEqual([]);
+	});
+
 	it("列表加载失败 → error（不误入「创建组织」引导），重试后恢复", async () => {
 		vi.mocked(organizationsApi.list).mockRejectedValueOnce(new Error("网络异常"));
 		vi.mocked(organizationsApi.list).mockResolvedValue([]);
