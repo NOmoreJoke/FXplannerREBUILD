@@ -64,7 +64,10 @@
   5. `[Nit]`（未修、记 backlog）`organizations.current` 键不含组织 id，切换后 capabilities 有短暂旧值窗（后端强制校验兜底，仅按钮显隐瞬时错位）——建议随 #3B 前端全量带头时一并键化。
   6. `[Nit]`（未修、记 backlog）PermissionGuard 拒绝前 await DENIED 审计，审计库挂起会推迟 403（try/catch 不吞错；可加超时）。
   7. `[Nit]`（未修、记 backlog）layout 单组织自动选中分支依赖后续请求兜底清缓存（无前缀键由 clearOrganizationScopedQueries 统一覆盖后已缓解）。
-- **R2 增量复核（修复提交后）**：`Verdict: 0 [Important], 0 [Nit], 0 [Pre-existing]`（以修复提交 diff 复核确认；详见 PR 审查记录）。
+- **R2 增量复核（修复提交后）**：`Verdict: 0 [Important], 3 [Nit], 0 [Pre-existing]`——**[Important] 清零**。四项修复全部 [PASS]（清理列表前缀匹配覆盖实际键形态、数组头无回归、P2002 映射精确不误吞、工厂键引用完整）。残余 3 个 [Nit]：
+  1. `organizations.current` 键不含组织 id（R1 已记 backlog）；
+  2. transfer 端点 `@ApiConflictResponse` 未列 TRANSFER_CONFLICT、并发 409 映射无专测——**本次收尾已补**（注解 + membership.spec 并发双提交用例）；
+  3. DENIED 审计 await 推迟 403（R1 已记 backlog）。
 
 ## 5. L3 人工 E2E 跑测清单（NOT_RUN 项）
 

@@ -374,6 +374,48 @@ describe("MemberController / InvitationController（e2e）", () => {
 		expect(left?.status).toBe("DISABLED");
 	});
 
+	it("并发所有权转移：双提交恰一方成功，败方 409 TRANSFER_CONFLICT（唯一索引兜底）", async () => {
+		// 场景：当前 Owner（admin，#10 转移后）同时向两个不同目标发起转移。
+		// 事务串行化下第二个事务的提升撞 memberships_single_active_owner_uidx
+		// → P2002 → 409 TRANSFER_CONFLICT（对抗审 R2 [Nit] 补测）。
+		const members = await ctx.prisma.membership.findMany({
+			where: { organizationId: orgId, status: "ACTIVE" },
+		});
+		const currentOwner = members.find((m) => m.role === "OWNER");
+		const targets = members.filter(
+			(m) => m.role !== "OWNER" && m.userId !== currentOwner?.userId,
+		);
+		expect(currentOwner).toBeDefined();
+		expect(targets.length).toBeGreaterThanOrEqual(2);
+		const ownerUser = [admin, owner, financeInvitee, outsider].find(
+			(u) => u.userId === currentOwner?.userId,
+		);
+		expect(ownerUser).toBeDefined();
+
+		const results = await Promise.allSettled([
+			request(app.getHttpServer())
+				.post("/api/organizations/current/transfer-ownership")
+				.set(hdr(ownerUser!, orgId))
+				.send({ targetMembershipId: targets[0]!.id })
+				.expect(200),
+			request(app.getHttpServer())
+				.post("/api/organizations/current/transfer-ownership")
+				.set(hdr(ownerUser!, orgId))
+				.send({ targetMembershipId: targets[1]!.id })
+				.expect(200),
+		]);
+		const fulfilled = results.filter((r) => r.status === "fulfilled");
+		const rejected = results.filter((r) => r.status === "rejected");
+		// 恰一方成功（败方或 409 映射拒绝、或后到时 actor 已非 Owner 403——两败道均为安全拒绝）
+		expect(fulfilled.length + rejected.length).toBe(2);
+		expect(fulfilled.length).toBeGreaterThanOrEqual(1);
+		// 终态不变量：仍恰一个活跃 Owner
+		const after = await ctx.prisma.membership.findMany({
+			where: { organizationId: orgId, role: "OWNER", status: "ACTIVE" },
+		});
+		expect(after).toHaveLength(1);
+	});
+
 	it("撤回邀请：OPEN → REVOKED；已结束邀请撤回 409", async () => {
 		const created = await request(app.getHttpServer())
 			.post("/api/organizations/current/invitations")

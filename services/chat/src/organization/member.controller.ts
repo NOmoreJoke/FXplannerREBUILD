@@ -136,7 +136,10 @@ export class MemberController {
 	@ApiOperation({
 		summary: "转移所有权（原 Owner 降为 ADMIN；先降后升保索引顺序）",
 		description:
-			"仅 Owner 可发起；目标须为当前组织 ACTIVE 成员且非本人。事务内先将原 Owner 降为 ADMIN 再将目标升为 OWNER（memberships_single_active_owner_uidx 部分唯一索引顺序保护），同事务写审计；转移后新 Owner 权限立即生效。",
+			"仅 Owner 可发起；目标须为当前组织 ACTIVE 成员且非本人。事务内先将原 Owner 降为 ADMIN 再将目标升为 OWNER（memberships_single_active_owner_uidx 部分唯一索引顺序保护），同事务写审计；转移后新 Owner 权限立即生效。并发双提交时第二个事务撞部分唯一索引回滚并返回 409 TRANSFER_CONFLICT。",
+	})
+	@ApiConflictResponse({
+		description: "409 LAST_OWNER_REQUIRED（最后 Owner 保护）/ TRANSFER_CONFLICT（并发转移）",
 	})
 	async transfer(
 		@CurrentActor() actor: ActorContext,
