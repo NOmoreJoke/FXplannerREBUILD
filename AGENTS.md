@@ -24,6 +24,8 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  └─ (protected)/               #   保护区（守卫在组内 layout.tsx）
 │  │     ├─ plans/                  #     换汇计划（new/ 创建、page 列表、[id]/ 详情）
 │  │     ├─ corrections/            #     更正与日志（new/ 更正页，targetType/targetId 由查询参数进入）
+│  │     ├─ organization/           #     ToB R1：组织信息/成员与邀请/审计分页
+│  │     ├─ invitations/[token]/    #     ToB R1：受邀摘要与接受/拒绝（登录后回跳）
 │  │     └─ projects/               #     示例业务页
 │  ├─ components/
 │  │  ├─ ui/                        # shadcn 原语
@@ -47,6 +49,9 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  ├─ app.module.ts              # 根模块（模块唯一注册点）
 │  │  ├─ app.controller.ts          # health / hello 探针
 │  │  ├─ auth/                      # L1：JWT 认证
+│  │  ├─ organization/              # ToB R1：组织、成员、邀请、组织设置与默认组织回填
+│  │  ├─ authorization/             # ToB R1：ActorContext、纯函数权限策略、组织上下文/权限 Guard
+│  │  ├─ audit/                     # ToB R1：审计同事务 writer 与只读分页查询（无 update/delete 接口）
 │  │  ├─ account/                   # 账户与分配只读视图
 │  │  ├─ ai/                        # AI 助手（会话、配额、汇率工具）
 │  │  ├─ correction/                # 更正与账本重放（FIFO）
@@ -128,6 +133,11 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | 单元测试         | 与源码同目录`<被测文件>.spec.ts`                                          |
 | E2E 用例         | `e2e/modules/<编号>-<模块>.spec.ts`                                       |
 | ToB 组织工作台与 Agent 规划 | `changes/tob-agent-workspace/` |
+| ToB R1 后端新模块（组织/成员/邀请/设置、权限策略与 Guard、审计） | `services/chat/src/{organization,authorization,audit}/`，在 `app.module.ts` 唯一注册；`authorization/` 仅纯函数与类型（IO 在 Guard/Service 层） |
+| 组织工作台前端页面 | `clients/chat-web/app/(protected)/organization/`（信息/成员/审计）、`clients/chat-web/app/(protected)/invitations/[token]/` |
+| 组织/审计业务组件 | `clients/chat-web/components/business/{organization,audit}/`，带 index.ts 桶文件 |
+| 组织上下文前端状态 | `clients/chat-web/lib/stores/organization-store.ts`（仅存 `activeOrganizationId`，严禁持久化 role/capabilities） |
+| 组织 E2E 用例 | `e2e/modules/15-organization.spec.ts`（Goal #3A W21 落盘骨架，人类启服后运行） |
 | MVP-F0 汇率回补与缓存迁移底稿 | `changes/realtime-rate/` |
 | 汇率缓存迁移完成记录与行归属 DDL | `services/chat/prisma/migrations/20261120090000_rate_cache_migration_receipt/` |
 | 汇率回源方向标记 DDL | `services/chat/prisma/migrations/20261120091000_rate_cache_canonical_write/` |

@@ -228,4 +228,151 @@ export default [
       ],
     },
   },
+  // ToB R1 后端模块单向依赖红线（技术方案 §4.1，Goal #3A W13）。
+  // 注意：flat config 对同一文件的 no-restricted-imports 按块整体替换、不合并，
+  // 因此 authorization/audit 的禁令块必须自包含全部禁入组（含 ai），不得依赖前块叠加。
+  {
+    files: [
+      'services/chat/src/organization/**/*.ts',
+      'services/chat/src/account/**/*.ts',
+      'services/chat/src/plan/**/*.ts',
+      'services/chat/src/transaction/**/*.ts',
+      'services/chat/src/usage/**/*.ts',
+      'services/chat/src/correction/**/*.ts',
+      'services/chat/src/reminder/**/*.ts',
+      'services/chat/src/report/**/*.ts',
+      'services/chat/src/home/**/*.ts',
+      'services/chat/src/onboarding/**/*.ts',
+      'services/chat/src/settings/**/*.ts',
+      'services/chat/src/data-request/**/*.ts',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/src/ai', '**/src/ai/**', '**/ai', '**/ai/**'],
+              message:
+                '[架构红线] 组织/业务模块禁止反向依赖 ai/；ai 只能单向消费业务模块公开 Service（技术方案 §4.1）。',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // authorization 仅可依赖 organization 的最小 Membership 读契约与 prisma/auth 类型，
+  // 禁止引入业务记账模块与 ai（权限层不得耦合业务实现）
+  {
+    files: ['services/chat/src/authorization/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: [
+                '**/src/ai',
+                '**/src/ai/**',
+                '**/ai',
+                '**/ai/**',
+                '**/src/account',
+                '**/src/account/**',
+                '**/account/**',
+                '**/src/plan',
+                '**/src/plan/**',
+                '**/plan/**',
+                '**/src/transaction',
+                '**/src/transaction/**',
+                '**/transaction/**',
+                '**/src/usage',
+                '**/src/usage/**',
+                '**/usage/**',
+                '**/src/correction',
+                '**/src/correction/**',
+                '**/correction/**',
+                '**/src/reminder',
+                '**/src/reminder/**',
+                '**/reminder/**',
+                '**/src/report',
+                '**/src/report/**',
+                '**/report/**',
+                '**/src/home',
+                '**/src/home/**',
+                '**/home/**',
+                '**/src/onboarding',
+                '**/src/onboarding/**',
+                '**/onboarding/**',
+                '**/src/settings',
+                '**/src/settings/**',
+                '**/settings/**',
+                '**/src/data-request',
+                '**/src/data-request/**',
+                '**/data-request/**',
+              ],
+              message:
+                '[架构红线] authorization 禁止引入 ai 与业务记账模块；仅允许 organization 最小 Membership 读契约与 prisma/auth 类型（技术方案 §4.1）。',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // audit 仅依赖 prisma 与 authorization 装饰器，禁止引入业务模块与 ai；
+  // 且不得提供任何 update/delete 变更接口（由 API 测试与审查兜底）
+  {
+    files: ['services/chat/src/audit/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: [
+                '**/src/ai',
+                '**/src/ai/**',
+                '**/ai',
+                '**/ai/**',
+                '**/src/account',
+                '**/src/account/**',
+                '**/account/**',
+                '**/src/plan',
+                '**/src/plan/**',
+                '**/plan/**',
+                '**/src/transaction',
+                '**/src/transaction/**',
+                '**/transaction/**',
+                '**/src/usage',
+                '**/src/usage/**',
+                '**/usage/**',
+                '**/src/correction',
+                '**/src/correction/**',
+                '**/correction/**',
+                '**/src/reminder',
+                '**/src/reminder/**',
+                '**/reminder/**',
+                '**/src/report',
+                '**/src/report/**',
+                '**/report/**',
+                '**/src/home',
+                '**/src/home/**',
+                '**/home/**',
+                '**/src/onboarding',
+                '**/src/onboarding/**',
+                '**/onboarding/**',
+                '**/src/settings',
+                '**/src/settings/**',
+                '**/settings/**',
+                '**/src/data-request',
+                '**/src/data-request/**',
+                '**/data-request/**',
+              ],
+              message:
+                '[架构红线] audit 禁止引入 ai 与业务模块，仅记录不参与业务决策；且严禁提供 update/delete 变更接口（技术方案 §5.1/§13.2）。',
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];
