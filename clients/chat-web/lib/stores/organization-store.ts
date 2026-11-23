@@ -17,19 +17,43 @@ import { persist } from "zustand/middleware";
 interface OrganizationStore {
 	/** 当前选中组织 id；null = 未选择（新建/选择引导态） */
 	activeOrganizationId: string | null;
+	/**
+	 * 本会话内被服务端判定不可访问的组织（400/404 组织上下文失效）。
+	 * 仅内存、不持久化；路由分流的自动选中与选择校验都跳过它们——否则
+	 * 单组织用户被移出后会陷入「清除选择 → 自动选回 → 再 404」的循环。
+	 */
+	rejectedOrganizationIds: string[];
 	/** 设置当前组织（登录后按服务端有效 Membership 路由时调用） */
 	setActiveOrganization: (organizationId: string | null) => void;
-	/** 清除选择（400/404 组织上下文失效时由 apiClient 调用） */
+	/** 清除选择（登出 / 401：换账号登录不得继承上一个账号的组织） */
 	clearActiveOrganization: () => void;
+	/**
+	 * 服务端拒绝某组织的上下文（评审 I-18）：记入拒绝集合；仅当它仍是当前
+	 * 选择时才清除——旧组织的迟到响应不得清掉用户刚切换到的新组织。
+	 */
+	rejectOrganizationContext: (organizationId: string | null) => void;
 }
 
 export const useOrganizationStore = create<OrganizationStore>()(
 	persist(
 		(set) => ({
 			activeOrganizationId: null,
+			rejectedOrganizationIds: [],
 			setActiveOrganization: (organizationId) =>
 				set({ activeOrganizationId: organizationId }),
 			clearActiveOrganization: () => set({ activeOrganizationId: null }),
+			rejectOrganizationContext: (organizationId) =>
+				set((state) => ({
+					rejectedOrganizationIds:
+						organizationId !== null &&
+						!state.rejectedOrganizationIds.includes(organizationId)
+							? [...state.rejectedOrganizationIds, organizationId]
+							: state.rejectedOrganizationIds,
+					activeOrganizationId:
+						state.activeOrganizationId === organizationId
+							? null
+							: state.activeOrganizationId,
+				})),
 		}),
 		{
 			name: "active-organization",

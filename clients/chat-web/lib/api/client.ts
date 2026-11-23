@@ -30,6 +30,21 @@ function resolveApiBaseUrl(): string {
 }
 const API_BASE_URL = resolveApiBaseUrl();
 
+/**
+ * 站内 API 地址构造的唯一出口（绕过 apiClient 的 fetch——SSE 流、文件下载——必须经此）：
+ * base 是启动时校验过的 API_BASE_URL（仅 http/https、无凭据），endpoint 只允许
+ * 以单个 / 开头的相对路径，调用方无法把请求引向其他主机（CWE-918）。
+ */
+export function buildApiUrl(endpoint: string): string {
+	if (typeof endpoint !== "string" || !endpoint.startsWith("/")) {
+		throw new Error(`endpoint 必须是以 / 开头的相对路径：${endpoint}`);
+	}
+	if (endpoint.startsWith("//")) {
+		throw new Error(`endpoint 不允许是协议相对 URL：${endpoint}`);
+	}
+	return `${API_BASE_URL}${endpoint}`;
+}
+
 interface RequestConfig extends RequestInit {
 	skipAuth?: boolean;
 }
@@ -99,6 +114,53 @@ export function getActiveOrganizationId(): string | null {
 	return useOrganizationStore.getState().activeOrganizationId;
 }
 
+/** 组织上下文失效错误码（400 未选/多组织未带头；404 选中组织已不可访问） */
+function isOrganizationContextError(status: number, code?: string): boolean {
+	return (
+		(status === 400 && code === "ORGANIZATION_REQUIRED") ||
+		(status === 404 && code === "ORGANIZATION_NOT_FOUND")
+	);
+}
+
+/**
+ * 处理组织上下文失效响应（ToB W20；技术方案 §10.1）。SSE 流与文件下载绕过
+ * apiClient，与这里共用本函数。
+ *
+ * 评审 I-18：
+ * - 仅当「发请求时携带的组织」仍是「当前选中的组织」才清除选择——旧组织的
+ *   迟到响应不得清掉用户刚切换到的新组织；被拒绝的组织一律记入会话级拒绝
+ *   集合，路由分流的自动选中不再选它（防「清除 → 自动选回 → 再 404」循环）；
+ * - 不做硬跳转：选择清空后，受保护区 layout 的组织路由分流自动进入选择态。
+ *
+ * @returns 命中组织上下文失效时返回待抛出的 ApiError，否则返回 null
+ */
+export async function consumeOrganizationContextError(
+	response: Response,
+	sentOrganizationId: string | null,
+): Promise<ApiError | null> {
+	if (response.status !== 400 && response.status !== 404) return null;
+	const body = await response
+		.clone()
+		.json()
+		.catch(() => ({}) as ApiErrorBody);
+	if (!isOrganizationContextError(response.status, body.code)) return null;
+	useOrganizationStore.getState().rejectOrganizationContext(sentOrganizationId);
+	return new ApiError(
+		body.message || "组织上下文失效，请重新选择组织",
+		response.status,
+		body.code,
+		body as Record<string, unknown>,
+	);
+}
+
+/** 401：凭证与组织选择一并清除（换账号登录不得继承上一个账号的组织上下文） */
+export function handleUnauthorized(): void {
+	if (typeof window !== "undefined") {
+		clearToken();
+	}
+	useOrganizationStore.getState().clearActiveOrganization();
+}
+
 export async function apiClient<T>(
 	endpoint: string,
 	config: RequestConfig = {},
@@ -106,19 +168,18 @@ export async function apiClient<T>(
 	const { skipAuth = false, ...fetchConfig } = config;
 
 	// endpoint 只允许站内相对路径：拒绝绝对 URL 与协议相对 URL，
-	// 防止调用方把请求转发到外部主机（CWE-918 整改）。
-	if (typeof endpoint !== "string" || !endpoint.startsWith("/")) {
-		throw new Error(`endpoint 必须是以 / 开头的相对路径：${endpoint}`);
-	}
-	if (endpoint.startsWith("//")) {
-		throw new Error(`endpoint 不允许是协议相对 URL：${endpoint}`);
-	}
+	// 防止调用方把请求转发到外部主机（CWE-918 整改；校验在 buildApiUrl 内）。
+	// 置于网络 try 之外：校验失败是调用方缺陷，不记为网络层错误。
+	const url = buildApiUrl(endpoint);
 
 	// 自动添加 Authorization Header
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
 		...(config.headers as Record<string, string>),
 	};
+
+	/** 实际注入的组织头（组织上下文失效处理据此判断是否仍为当前选择） */
+	let sentOrganizationId: string | null = null;
 
 	if (!skipAuth && typeof window !== "undefined") {
 		const token = getToken();
@@ -127,9 +188,9 @@ export async function apiClient<T>(
 		}
 		// 组织上下文头（ToB W20）：已有选中组织时对全部业务请求注入；
 		// 个人端点（/auth、/organizations、邀请 token 端点）后端不读此头，注入无害
-		const organizationId = getActiveOrganizationId();
-		if (organizationId) {
-			headers["X-Organization-Id"] = organizationId;
+		sentOrganizationId = getActiveOrganizationId();
+		if (sentOrganizationId) {
+			headers["X-Organization-Id"] = sentOrganizationId;
 		}
 	}
 
@@ -137,7 +198,7 @@ export async function apiClient<T>(
 
 	let response: Response;
 	try {
-		response = await fetch(`${API_BASE_URL}${endpoint}`, {
+		response = await fetch(url, {
 			...fetchConfig,
 			headers,
 		});
@@ -152,40 +213,19 @@ export async function apiClient<T>(
 		throw error;
 	}
 
-	// 处理 401 错误：只清理凭证并抛错，不做页面跳转（跳转统一由保护区 layout 处理）
+	// 处理 401 错误：只清理凭证与组织选择并抛错，不做页面跳转（跳转统一由保护区 layout 处理）
 	if (response.status === 401) {
-		if (typeof window !== "undefined") {
-			clearToken();
-		}
+		handleUnauthorized();
 		throw new ApiError("Token 无效或已过期", 401);
 	}
 
-	// 组织上下文失效处理（ToB W20；技术方案 §10.1）：
-	// - 400 ORGANIZATION_REQUIRED：清失效选择并引导组织选择（多组织未带头）；
-	// - 404 ORGANIZATION_NOT_FOUND：选中组织已不可访问（被移除/禁用）→
-	//   清选择并引导；缓存清理由 /organization 路由层挂载时统一执行。
-	if (
-		(response.status === 400 || response.status === 404) &&
-		typeof window !== "undefined"
-	) {
-		const orgError = await response
-			.clone()
-			.json()
-			.catch(() => ({}) as ApiErrorBody);
-		if (
-			(response.status === 400 && orgError.code === "ORGANIZATION_REQUIRED") ||
-			(response.status === 404 && orgError.code === "ORGANIZATION_NOT_FOUND")
-		) {
-			useOrganizationStore.getState().clearActiveOrganization();
-			if (!window.location.pathname.startsWith("/organization")) {
-				window.location.href = "/organization";
-			}
-			throw new ApiError(
-				orgError.message || "组织上下文失效，请重新选择组织",
-				response.status,
-				orgError.code,
-			);
-		}
+	// 组织上下文失效处理（评审 I-18，逻辑见 consumeOrganizationContextError）
+	const orgError = await consumeOrganizationContextError(
+		response,
+		sentOrganizationId,
+	);
+	if (orgError) {
+		throw orgError;
 	}
 
 	// 处理数据请求锁（account-data 技术方案 §8）：注销/清空处理中访问业务端点

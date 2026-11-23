@@ -91,14 +91,19 @@ export function LoginForm() {
 		} catch {
 			// 失败不阻塞登录流程；未建账用户完成建账时后端会再次校验并拦截
 		}
+		const safeTarget = safeRedirectPath(redirect);
 		let target: string;
 		try {
 			const status = await onboardingApi.getStatus();
 			target = status.completed
-				? (safeRedirectPath(redirect) ?? "/home")
-				: "/onboarding";
+				? (safeTarget ?? "/home")
+				: // 未建账先进向导，但把登录前的目标页带过去，建账完成后回跳——
+					// 否则受邀的新用户登录后回不到 /invitations/<token> 继续接受邀请
+					(safeTarget
+						? `/onboarding?redirect=${encodeURIComponent(safeTarget)}`
+						: "/onboarding");
 		} catch {
-			target = safeRedirectPath(redirect) ?? "/home";
+			target = safeTarget ?? "/home";
 		}
 		toast.success("登录成功");
 		router.push(target);

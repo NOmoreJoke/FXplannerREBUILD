@@ -2,10 +2,11 @@
 
 import { use, useState } from "react";
 import Link from "next/link";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invitationsApi } from "@/lib/api/organizations";
 import { queryKeys } from "@/lib/api/query-keys";
 import { getToken } from "@/lib/auth/token";
+import { useSwitchOrganization } from "@/lib/hooks/use-organizations";
 
 /**
  * 受邀摘要与接受/拒绝页（需求 MEM-01.3/01.6；§13 邀请接受页；W21）：
@@ -13,6 +14,9 @@ import { getToken } from "@/lib/auth/token";
  * - 展示脱敏摘要（组织名/角色/邀请人/有效期，无任何业务明细，MEM-01.7）；
  * - 邮箱不匹配（403）/ 状态冲突（409）如实展示服务端文案。
  * 摘要加载走 react-query（enabled 门控登录态），不裸写 useEffect。
+ *
+ * 接受成功后（外部评审前端批次）：经完整切换序列进入新组织（列表随之失效重拉）——
+ * 否则 30s staleTime 内「进入工作台」仍看不到刚加入的组织。
  */
 export default function InvitationTokenPage({
 	params,
@@ -22,6 +26,8 @@ export default function InvitationTokenPage({
 	const { token } = use(params);
 	const [resolved, setResolved] = useState<"accepted" | "declined" | null>(null);
 	const hasToken = Boolean(getToken());
+	const queryClient = useQueryClient();
+	const switchOrganization = useSwitchOrganization();
 
 	const summaryQuery = useQuery({
 		queryKey: queryKeys.organizationInvitation.summary(token),
@@ -39,8 +45,21 @@ export default function InvitationTokenPage({
 			await invitationsApi.decline(token);
 			return decision;
 		},
-		onSuccess: (decision) =>
-			setResolved(decision === "accept" ? "accepted" : "declined"),
+		onSuccess: (decision) => {
+			if (decision === "accept") {
+				const organizationId = summaryQuery.data?.organizationId;
+				if (organizationId) {
+					// 完整的切换序列（清旧组织缓存/中止在途请求与流 → 切选择 →
+					// 列表失效重拉），不得只写 store——否则旧组织的无前缀缓存会被带入
+					switchOrganization(organizationId);
+				} else {
+					void queryClient.invalidateQueries({
+						queryKey: queryKeys.organizations.list(),
+					});
+				}
+			}
+			setResolved(decision === "accept" ? "accepted" : "declined");
+		},
 	});
 
 	// 未登录兜底（layout 守卫已挡；此处仅渲染等待态兜底登出竞态，不重复跳转）

@@ -25,8 +25,12 @@ export function TransferOwnershipDialog({ target }: { target: MemberView }) {
 			void queryClient.invalidateQueries({
 				queryKey: queryKeys.members.list(),
 			});
+			// 组织详情键按组织 id 分桶：用词根失效；列表里的本人角色也随之变化
 			void queryClient.invalidateQueries({
-				queryKey: queryKeys.organizations.current(),
+				queryKey: queryKeys.organizations.currentStem,
+			});
+			void queryClient.invalidateQueries({
+				queryKey: queryKeys.organizations.list(),
 			});
 		},
 		onError: (err: Error) => setError(err.message),

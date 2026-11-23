@@ -2,10 +2,13 @@ import { captureApiError } from "@/lib/dev-log/monitor";
 import {
 	ApiError,
 	apiClient,
+	buildApiUrl,
+	consumeOrganizationContextError,
+	handleUnauthorized,
 	isExpectedControlFlowApiError,
 } from "@/lib/api/client";
 import type { components } from "@/lib/api/schema.gen";
-import { clearToken, getToken } from "@/lib/auth/token";
+import { getToken } from "@/lib/auth/token";
 import { getActiveOrganizationId } from "@/lib/api/client";
 
 /**
@@ -146,7 +149,7 @@ export async function streamMessage(
 	return parseSseStream(response.body!);
 }
 
-/** 发请求 + 响应校验（401 清 token、403 锁定跳转、非 2xx/非 event-stream → ApiError） */
+/** 发请求 + 响应校验（401 清凭证、组织上下文失效、403 锁定跳转、非 2xx/非 event-stream → ApiError） */
 async function openStreamResponse(
 	params: StreamMessageParams,
 ): Promise<Response> {
@@ -170,21 +173,20 @@ async function openStreamResponse(
 
 	let response: Response;
 	try {
-		response = await fetch(
-			`${process.env.NEXT_PUBLIC_API_BASE_URL}${endpoint}`,
-			{
-				method: "POST",
-				headers,
-				// modelKey 未选择时不进 body（与「缺省走服务端默认」契约对齐，非显式 null）
-				body: JSON.stringify({
-					content: params.content,
-					...(params.modelKey !== undefined
-						? { modelKey: params.modelKey }
-						: {}),
-				}),
-				signal: params.signal,
-			},
-		);
+		// 地址经 buildApiUrl 构造：base 启动时校验、endpoint 仅站内相对路径
+		// （此前直接拼接未校验的 env，与 apiClient 的 CWE-918 整改不一致）
+		response = await fetch(buildApiUrl(endpoint), {
+			method: "POST",
+			headers,
+			// modelKey 未选择时不进 body（与「缺省走服务端默认」契约对齐，非显式 null）
+			body: JSON.stringify({
+				content: params.content,
+				...(params.modelKey !== undefined
+					? { modelKey: params.modelKey }
+					: {}),
+			}),
+			signal: params.signal,
+		});
 	} catch (error) {
 		// 网络层失败（断网 / CORS / 服务不可用）：上报本地开发日志（与 apiClient 对齐）
 		captureApiError({
@@ -196,12 +198,21 @@ async function openStreamResponse(
 		throw error;
 	}
 
-	// 401：只清理凭证并抛错，跳转统一由保护区 layout 处理（与 apiClient 协议一致）
+	// 401：只清理凭证与组织选择并抛错，跳转统一由保护区 layout 处理（与 apiClient 协议一致）
 	if (response.status === 401) {
-		if (typeof window !== "undefined") {
-			clearToken();
-		}
+		handleUnauthorized();
 		throw new ApiError("Token 无效或已过期", 401);
+	}
+
+	// 组织上下文失效（400 ORGANIZATION_REQUIRED / 404 ORGANIZATION_NOT_FOUND）：
+	// 与 apiClient 同一处理，按**发起流时携带的组织**判定（评审 I-18）——此前 SSE
+	// 路径完全漏掉，被移出组织的用户只会看到一句报错，选择却不会被纠正
+	const orgError = await consumeOrganizationContextError(
+		response,
+		organizationId ?? null,
+	);
+	if (orgError) {
+		throw orgError;
 	}
 
 	// 403 数据请求锁（account-data 方案 §8）：与 apiClient 同一跳转协议

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCurrentOrganization } from "@/lib/hooks/use-organizations";
 import { organizationsApi } from "@/lib/api/organizations";
-import { queryKeys } from "@/lib/api/query-keys";
+import { invalidateBusinessKey, queryKeys } from "@/lib/api/query-keys";
 import { PageLoading } from "@/components/base";
 
 /**
@@ -23,12 +23,12 @@ export function OrganizationForm() {
 		onSuccess: () => {
 			setName(null);
 			setError(null);
-			void queryClient.invalidateQueries({
-				queryKey: queryKeys.organizations.current(),
-			});
-			void queryClient.invalidateQueries({
-				queryKey: queryKeys.organizations.list(),
-			});
+			// 组织详情键按组织 id 分桶：用词根失效，覆盖任意组织的详情缓存
+			invalidateBusinessKey(
+				queryClient,
+				queryKeys.organizations.currentStem,
+			);
+			invalidateBusinessKey(queryClient, queryKeys.organizations.list());
 		},
 		onError: (err: Error) => setError(err.message),
 	});

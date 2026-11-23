@@ -54,6 +54,11 @@ interface ChatStore {
 	setPendingUserContent: (content: string | null) => void;
 	/** 选择模型；传 null 回退「跟随服务端默认」（白名单缩编自愈也走此入口） */
 	setSelectedModel: (key: string | null) => void;
+	/**
+	 * 重置运行时态（保留 selectedModel 偏好）：切换组织/登出时调用——
+	 * 旧组织的会话选择、流式态与错误态不得带入新上下文。
+	 */
+	resetRuntime: () => void;
 }
 
 export const useChatStore = create<ChatStore>()(
@@ -132,6 +137,18 @@ export const useChatStore = create<ChatStore>()(
 			setPendingUserContent: (content) => set({ pendingUserContent: content }),
 
 			setSelectedModel: (key) => set({ selectedModel: key }),
+
+			resetRuntime: () =>
+				set({
+					activeConversationId: null,
+					streamingIds: [],
+					creatingStream: false,
+					streamTexts: {},
+					toolActiveIds: [],
+					errors: {},
+					newChatError: null,
+					pendingUserContent: null,
+				}),
 		}),
 		{
 			// key 与 LingJi 同名：同用户跨产品偏好语义一致
@@ -141,6 +158,25 @@ export const useChatStore = create<ChatStore>()(
 		},
 	),
 );
+
+/**
+ * 当前流的中断句柄（模块级而非 store 状态：AbortController 不进状态树、不参与渲染）。
+ * 切换组织/登出时由外部调 abortActiveStream——旧组织的流不得继续写入新上下文
+ * （评审 I-18）。use-chat 开流时登记、收尾时注销。
+ */
+let activeStreamAbort: AbortController | null = null;
+
+export function registerActiveStreamAbort(
+	controller: AbortController | null,
+): void {
+	activeStreamAbort = controller;
+}
+
+/** 中断当前流（无流时为空操作）；AbortError 由 use-chat 静默终止 */
+export function abortActiveStream(): void {
+	activeStreamAbort?.abort();
+	activeStreamAbort = null;
+}
 
 /** 发送前置检查（选择器）：任意流进行中（含创建中）→ true */
 export const selectAnyStreaming = (state: ChatStore): boolean =>

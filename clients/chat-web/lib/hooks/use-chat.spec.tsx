@@ -34,7 +34,8 @@ import { useChat } from "@/lib/hooks/use-chat";
 import { aiMessagesQueryKey } from "@/lib/hooks/use-conversations";
 import { chatApi, streamMessage } from "@/lib/api/chat";
 import { ApiError } from "@/lib/api/client";
-import { useChatStore } from "@/lib/stores/chat-store";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
+import { abortActiveStream, useChatStore } from "@/lib/stores/chat-store";
 import type {
 	AiMessageListData,
 	AiStreamEvent,
@@ -224,17 +225,62 @@ describe("useChat 新建会话流（activeId=null）", () => {
 			content: "你好呀",
 		});
 
-		// 权威收敛：消息 + 会话列表 invalidate
+		// 权威收敛：消息 + 会话列表失效，范围限定在**发起组织**的前缀键
+		// （此前用无前缀词根 ["ai","messages"]，前缀匹配命中不了带组织前缀的缓存——评审 I-19）
 		expect(invalidateSpy).toHaveBeenCalledWith({
-			queryKey: ["ai", "messages"],
+			queryKey: ["org", "org-test", "ai", "messages"],
 		});
 		expect(invalidateSpy).toHaveBeenCalledWith({
-			queryKey: ["ai", "conversations"],
+			queryKey: ["org", "org-test", "ai", "conversations"],
 		});
 
 		// 状态机回归 idle、流式文本已清理
 		expect(result.current.status).toBe("idle");
 		expect(result.current.streamText).toBeUndefined();
+	});
+
+	it("评审 I-18：流式中切换组织 → 流被中止，迟到帧不写入新组织的缓存", async () => {
+		hangMessagesFetch();
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		// 模拟忽略 abort 的慢响应：meta 已到，done 帧在切换组织后才到达
+		vi.mocked(streamMessage).mockImplementation(async () =>
+			(async function* () {
+				yield metaEvent;
+				await gate;
+				yield doneEvent("迟到的回复");
+			})(),
+		);
+		const { queryClient, wrapper } = createWrapper();
+		const { result } = renderHook(() => useChat(), { wrapper });
+
+		let sendPromise: Promise<void> = Promise.resolve();
+		act(() => {
+			sendPromise = result.current.send("你好");
+		});
+		await waitFor(() => expect(result.current.activeId).toBe("conv-1"));
+
+		// 用户切换组织：useSwitchOrganization 会中止当前流并切换选择
+		act(() => {
+			abortActiveStream();
+			useOrganizationStore.setState({ activeOrganizationId: "org-other" });
+		});
+		await act(async () => {
+			release();
+			await sendPromise;
+		});
+
+		// 迟到的 done 帧没有落进任何组织的缓存
+		const originKey = withOrgScope("org-test", queryKeys.ai.messages("conv-1"));
+		const newOrgKey = withOrgScope("org-other", queryKeys.ai.messages("conv-1"));
+		expect(queryClient.getQueryData(newOrgKey)).toBeUndefined();
+		const origin = queryClient.getQueryData<AiMessageListData>(originKey);
+		expect(origin?.items.map((item) => item.id)).toEqual(["msg-u1"]);
+		// 流已收尾：不再有进行中的流
+		expect(useChatStore.getState().streamingIds).toEqual([]);
+		expect(useChatStore.getState().creatingStream).toBe(false);
 	});
 
 	it("流式中的中间态：streamText 逐步拼接、status=streaming、anyStreaming 防重发", async () => {

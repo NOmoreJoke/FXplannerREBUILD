@@ -4,6 +4,12 @@
 export function maskSensitiveText(text: string): string {
 	return String(text)
 		.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer ***")
+		// 邀请 token 是一次性入组凭证，只应出现在邀请链接本身；URL/路径/Referer
+		// 进入日志前先脱敏（外部评审前端批次：/invitations/<token>、/organization-invitations/<token>）
+		.replace(
+			/\/(invitations|organization-invitations)\/[^\s/?#'"<>]+/gi,
+			"/$1/***",
+		)
 		.replace(
 			/(^|[?&\s"'])((?:access_?token|refresh_?token|token|password|secret)=)[^&\s"']+/gi,
 			"$1$2***",

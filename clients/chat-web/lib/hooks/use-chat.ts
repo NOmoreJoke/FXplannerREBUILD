@@ -19,8 +19,14 @@ import {
 	AI_MESSAGES_QUERY_STEM,
 	aiMessagesQueryKey,
 } from "@/lib/hooks/use-conversations";
-import { selectAnyStreaming, useChatStore } from "@/lib/stores/chat-store";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
+import {
+	registerActiveStreamAbort,
+	selectAnyStreaming,
+	useChatStore,
+} from "@/lib/stores/chat-store";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
+import { useOrganizationStore } from "@/lib/stores/organization-store";
 
 /**
  * 对话消费层（ai-assistant 方案 §5.2）：发送状态机 idle/streaming/error。
@@ -61,15 +67,15 @@ const isOptimistic = (message: AiMessage): boolean =>
 /**
  * 追问：把乐观用户消息的 id 修正为服务端 id（meta 帧 userMessageId）。
  * 独立成函数：switch case 内不做词法声明，流中 invalidate 也不产生重复。
+ * messagesKey 由调用方按**发起组织**组装（流式期间组织切换后不得再写新组织的键）。
  */
 function reconcileOptimisticMessage(
 	queryClient: QueryClient,
-	conversationId: string,
+	messagesKey: readonly unknown[],
 	userMessageId: string,
 	content: string,
 ): void {
-	const key = aiMessagesQueryKey(conversationId);
-	const prev = queryClient.getQueryData<AiMessageListData>(key);
+	const prev = queryClient.getQueryData<AiMessageListData>(messagesKey);
 	if (!prev) return;
 	const items = [...prev.items];
 	const index = items.findIndex(
@@ -77,7 +83,7 @@ function reconcileOptimisticMessage(
 	);
 	if (index !== -1) {
 		items[index] = { ...items[index], id: userMessageId };
-		queryClient.setQueryData<AiMessageListData>(key, { items });
+		queryClient.setQueryData<AiMessageListData>(messagesKey, { items });
 	}
 }
 
@@ -136,13 +142,22 @@ export function useChat() {
 			// 发送时刻的模型选择快照（getState 读一次，中途切换不影响本条请求）；
 			// null = 未选择，不传 modelKey（缺省走服务端默认回退）
 			const { selectedModel } = useChatStore.getState();
+			// 发送时刻的组织快照（评审 I-18）：流式期间的全部缓存写入都落在发起组织。
+			// 中途切换组织 → 流被 useSwitchOrganization 中止；即便有迟到帧，
+			// 也因键仍指向发起组织而不会写进新组织的缓存。
+			const sendOrgId = useOrganizationStore.getState().activeOrganizationId;
+			const messagesKey = (id: string): readonly unknown[] =>
+				withOrgScope(sendOrgId, queryKeys.ai.messages(id));
+			/** 组织已切换：当前流属于旧上下文，停止处理后续帧 */
+			const contextChanged = (): boolean =>
+				useOrganizationStore.getState().activeOrganizationId !== sendOrgId;
 
 			// 1. 乐观插入用户消息（新建挂 pending；追问写消息缓存）
 			if (isNew) {
 				setPendingUserContent(content);
 				setNewChatError(null);
 			} else {
-				const key = aiMessagesQueryKey(conversationId);
+				const key = messagesKey(conversationId);
 				const prev = queryClient.getQueryData<AiMessageListData>(key);
 				queryClient.setQueryData<AiMessageListData>(key, {
 					items: [
@@ -162,13 +177,15 @@ export function useChat() {
 			beginStream(conversationId);
 			const abort = new AbortController();
 			abortRef.current = abort;
+			// 登记到模块级注册表：切换组织时 useSwitchOrganization 可从外部中断本流
+			registerActiveStreamAbort(abort);
 
 			const rollbackOptimistic = () => {
 				if (isNew) {
 					setPendingUserContent(null);
 					return;
 				}
-				const key = aiMessagesQueryKey(conversationId);
+				const key = messagesKey(conversationId);
 				const prev = queryClient.getQueryData<AiMessageListData>(key);
 				if (prev) {
 					queryClient.setQueryData<AiMessageListData>(key, {
@@ -200,6 +217,7 @@ export function useChat() {
 				}
 				endStream(conversationId);
 				abortRef.current = null;
+				registerActiveStreamAbort(null);
 				return;
 			}
 
@@ -207,6 +225,8 @@ export function useChat() {
 			let currentId = conversationId;
 			try {
 				for await (const event of events) {
+					// 组织已切换：本流属于旧上下文，丢弃迟到帧并结束迭代
+					if (contextChanged()) break;
 					switch (event.type) {
 						case "meta": {
 							// meta 到达 = 用户消息已在服务端落库
@@ -217,7 +237,7 @@ export function useChat() {
 								setPendingUserContent(null);
 								// 预填消息缓存（零等待），done 后 invalidate 拉权威数据
 								queryClient.setQueryData<AiMessageListData>(
-									aiMessagesQueryKey(currentId),
+									messagesKey(currentId),
 									{
 										items: [
 											{
@@ -233,7 +253,7 @@ export function useChat() {
 								// 追问：乐观 id 修正为服务端 id（流中 invalidate 不产生重复）
 								reconcileOptimisticMessage(
 									queryClient,
-									currentId,
+									messagesKey(currentId),
 									event.userMessageId,
 									content,
 								);
@@ -248,7 +268,7 @@ export function useChat() {
 							break;
 						case "done": {
 							// 助手消息已在服务端落库：乐观项剔除 + 追加，零延迟呈现
-							const key = aiMessagesQueryKey(currentId!);
+							const key = messagesKey(currentId!);
 							const prev = queryClient.getQueryData<AiMessageListData>(key);
 							queryClient.setQueryData<AiMessageListData>(key, {
 								items: [
@@ -272,20 +292,23 @@ export function useChat() {
 					}
 				}
 			} finally {
-				// 4. 收尾：清流式态 + invalidate 权威收敛（用户消息已落库，服务端为准）
+				// 4. 收尾：清流式态 + invalidate 权威收敛（用户消息已落库，服务端为准）。
+				//    失效范围限定在**发起组织**的前缀键：无前缀词根匹配不到带前缀的键
+				//    （评审 I-19），全形态失效又会波及切换后的新组织
 				endStream(currentId);
 				if (currentId !== null) {
 					await queryClient.invalidateQueries({
-						queryKey: [...AI_MESSAGES_QUERY_STEM],
+						queryKey: withOrgScope(sendOrgId, [...AI_MESSAGES_QUERY_STEM]),
 					});
 				} else {
 					setPendingUserContent(null);
 				}
 				// 会话列表总是收敛（lastMessageAt/标题/计数；新建失败但已建会话的边缘场景也覆盖）
 				await queryClient.invalidateQueries({
-					queryKey: [...AI_CONVERSATIONS_QUERY_STEM],
+					queryKey: withOrgScope(sendOrgId, [...AI_CONVERSATIONS_QUERY_STEM]),
 				});
 				abortRef.current = null;
+				registerActiveStreamAbort(null);
 			}
 		},
 		[

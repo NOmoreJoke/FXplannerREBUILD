@@ -133,8 +133,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * 查询首次设置状态
-         * @description 完成态判定 / 条款确认进度 / 已保存设置 / 当前条款版本。只读无副作用。
+         * 查询首次设置状态（按当前组织）
+         * @description 完成态判定 / 条款确认进度 / 已保存设置 / 当前条款版本。只读无副作用。完成态与设置以当前组织为准（组织设置优先；兼容窗口内回落到默认组织所有者的个人设置）；条款确认进度为个人维度。无组织头的单组织用户回落到其默认组织，多组织须带 X-Organization-Id。
          */
         get: operations["OnboardingController_getStatus"];
         put?: never;
@@ -285,6 +285,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/organizations/current/audit-logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 当前组织审计日志（只读分页；Owner/Admin/Finance 可读）
+         * @description 按时间起止/操作者/动作/结果筛选的分页只读查询；无任何写/删接口（AUDIT-03.3）；Operator/Viewer 403 并落 DENIED 审计。
+         */
+        get: operations["AuditController_listCurrent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/home/state": {
         parameters: {
             query?: never;
@@ -317,26 +337,6 @@ export interface paths {
          * @description 按币种聚合剩余持仓（remainingQty > 0）：Σ剩余数量、Σ剩余持仓成本、平均单位成本，附本位币。口径：unitCost 以用户当前本位币计价（本位币买入价），本位币历史变更不重算；聚合在 SQL 层完成，仅返回 remainingQty > 0 的币种，按 currencyCode 升序。
          */
         get: operations["HomeController_getPortfolio"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/organizations/current/audit-logs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * 当前组织审计日志（只读分页；Owner/Admin/Finance 可读）
-         * @description 按时间起止/操作者/动作/结果筛选的分页只读查询；无任何写/删接口（AUDIT-03.3）；Operator/Viewer 403 并落 DENIED 审计。
-         */
-        get: operations["AuditController_listCurrent"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1745,6 +1745,92 @@ export interface components {
             /** @example 历史汇率查询成功 */
             message: string;
         };
+        AuditLogViewDto: {
+            /** @description 审计行 id */
+            id: string;
+            /** @description 组织 id */
+            organizationId: string;
+            /** @description 操作者 userId（系统动作为 null） */
+            actorUserId?: string | null;
+            /**
+             * @description 操作者类型
+             * @enum {string}
+             */
+            actorType: "USER" | "API" | "AGENT";
+            /** @description 动作（如 organization.update、member.invite） */
+            action: string;
+            /** @description 目标类型 */
+            targetType?: string | null;
+            /** @description 目标 id */
+            targetId?: string | null;
+            /**
+             * @description 结果
+             * @enum {string}
+             */
+            result: "SUCCESS" | "DENIED" | "FAILED";
+            /** @description 关联请求 id */
+            requestId?: string | null;
+            /** @description 关联 Agent 运行 id */
+            agentRunId?: string | null;
+            /** @description 脱敏后的白名单摘要（键值开放对象） */
+            detail?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Format: date-time
+             * @description 创建时间（UTC ISO）
+             */
+            createdAt: string;
+        };
+        AuditLogListDto: {
+            items: components["schemas"]["AuditLogViewDto"][];
+            /**
+             * @description 当前页码
+             * @example 1
+             */
+            page: number;
+            /**
+             * @description 每页条数
+             * @example 20
+             */
+            pageSize: number;
+            /**
+             * @description 总条数
+             * @example 42
+             */
+            total: number;
+        };
+        ListAuditLogsQueryDto: {
+            /**
+             * @description 页码（从 1 起，上限 10000）
+             * @example 1
+             */
+            page?: number;
+            /**
+             * @description 每页条数（1-100，默认 20）
+             * @example 20
+             */
+            pageSize?: number;
+            /**
+             * @description 起始时间（ISO 8601 日期时间，含）
+             * @example 2026-11-23T00:00:00.000Z
+             */
+            from?: string;
+            /**
+             * @description 截止时间（ISO 8601 日期时间，含）
+             * @example 2026-11-23T23:59:59.999Z
+             */
+            to?: string;
+            /** @description 按操作者 userId 精确筛选 */
+            actorUserId?: string;
+            /** @description 按动作精确筛选 */
+            action?: string;
+            /**
+             * @description 按结果筛选
+             * @enum {string}
+             */
+            result?: "SUCCESS" | "DENIED" | "FAILED";
+        };
         AccountSummaryDto: {
             /**
              * @description 币种代码（ISO 4217）
@@ -1866,92 +1952,6 @@ export interface components {
             totalRemainingCost: string;
             /** @description 分币种持仓聚合，仅含 remainingQty > 0 的币种，按 currencyCode 升序；无持仓为空数组 */
             byCurrency: components["schemas"]["PortfolioByCurrencyDto"][];
-        };
-        AuditLogViewDto: {
-            /** @description 审计行 id */
-            id: string;
-            /** @description 组织 id */
-            organizationId: string;
-            /** @description 操作者 userId（系统动作为 null） */
-            actorUserId?: string | null;
-            /**
-             * @description 操作者类型
-             * @enum {string}
-             */
-            actorType: "USER" | "API" | "AGENT";
-            /** @description 动作（如 organization.update、member.invite） */
-            action: string;
-            /** @description 目标类型 */
-            targetType?: string | null;
-            /** @description 目标 id */
-            targetId?: string | null;
-            /**
-             * @description 结果
-             * @enum {string}
-             */
-            result: "SUCCESS" | "DENIED" | "FAILED";
-            /** @description 关联请求 id */
-            requestId?: string | null;
-            /** @description 关联 Agent 运行 id */
-            agentRunId?: string | null;
-            /** @description 脱敏后的白名单摘要（键值开放对象） */
-            detail?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Format: date-time
-             * @description 创建时间（UTC ISO）
-             */
-            createdAt: string;
-        };
-        AuditLogListDto: {
-            items: components["schemas"]["AuditLogViewDto"][];
-            /**
-             * @description 当前页码
-             * @example 1
-             */
-            page: number;
-            /**
-             * @description 每页条数
-             * @example 20
-             */
-            pageSize: number;
-            /**
-             * @description 总条数
-             * @example 42
-             */
-            total: number;
-        };
-        ListAuditLogsQueryDto: {
-            /**
-             * @description 页码（从 1 起，上限 10000）
-             * @example 1
-             */
-            page?: number;
-            /**
-             * @description 每页条数（1-100，默认 20）
-             * @example 20
-             */
-            pageSize?: number;
-            /**
-             * @description 起始时间（ISO 8601 日期时间，含）
-             * @example 2026-11-23T00:00:00.000Z
-             */
-            from?: string;
-            /**
-             * @description 截止时间（ISO 8601 日期时间，含）
-             * @example 2026-11-23T23:59:59.999Z
-             */
-            to?: string;
-            /** @description 按操作者 userId 精确筛选 */
-            actorUserId?: string;
-            /** @description 按动作精确筛选 */
-            action?: string;
-            /**
-             * @description 按结果筛选
-             * @enum {string}
-             */
-            result?: "SUCCESS" | "DENIED" | "FAILED";
         };
         PlanInstallmentDto: {
             /**
@@ -4625,6 +4625,47 @@ export interface operations {
             };
         };
     };
+    AuditController_listCurrent: {
+        parameters: {
+            query?: {
+                /** @description 按结果筛选 */
+                result?: "SUCCESS" | "DENIED" | "FAILED";
+                /** @description 按动作精确筛选 */
+                action?: string;
+                /** @description 按操作者 userId 精确筛选 */
+                actorUserId?: string;
+                /** @description 截止时间（ISO 8601 日期时间，含） */
+                to?: string;
+                /** @description 起始时间（ISO 8601 日期时间，含） */
+                from?: string;
+                /** @description 每页条数（1-100，默认 20） */
+                pageSize?: number;
+                /** @description 页码（从 1 起，上限 10000） */
+                page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditLogListDto"];
+                };
+            };
+            /** @description 403 PERMISSION_DENIED（Operator/Viewer） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     HomeController_getState: {
         parameters: {
             query?: never;
@@ -4672,47 +4713,6 @@ export interface operations {
                         message?: string;
                     };
                 };
-            };
-        };
-    };
-    AuditController_listCurrent: {
-        parameters: {
-            query?: {
-                /** @description 按结果筛选 */
-                result?: "SUCCESS" | "DENIED" | "FAILED";
-                /** @description 按动作精确筛选 */
-                action?: string;
-                /** @description 按操作者 userId 精确筛选 */
-                actorUserId?: string;
-                /** @description 截止时间（ISO 8601 日期时间，含） */
-                to?: string;
-                /** @description 起始时间（ISO 8601 日期时间，含） */
-                from?: string;
-                /** @description 每页条数（1-100，默认 20） */
-                pageSize?: number;
-                /** @description 页码（从 1 起，上限 10000） */
-                page?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AuditLogListDto"];
-                };
-            };
-            /** @description 403 PERMISSION_DENIED（Operator/Viewer） */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
         };
     };

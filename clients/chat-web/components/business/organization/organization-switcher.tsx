@@ -1,15 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Building2, Check, ChevronsUpDown, Plus } from "lucide-react";
+import { Building2, Check, ChevronsUpDown, Plus, RefreshCw } from "lucide-react";
 import {
+	useCreateOrganization,
 	useOrganizations,
 	useSwitchOrganization,
 } from "@/lib/hooks/use-organizations";
-import { organizationsApi } from "@/lib/api/organizations";
-import { clearOrganizationScopedQueries, queryKeys } from "@/lib/api/query-keys";
-import { useOrganizationStore } from "@/lib/stores/organization-store";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import { cn } from "@/lib/utils";
 
 /**
@@ -22,9 +20,7 @@ import { cn } from "@/lib/utils";
 export function OrganizationSwitcher() {
 	const { data: organizations, isLoading } = useOrganizations();
 	const switchOrganization = useSwitchOrganization();
-	const activeOrganizationId = useOrganizationStore(
-		(s) => s.activeOrganizationId,
-	);
+	const activeOrganizationId = useActiveOrgId();
 	const [open, setOpen] = useState(false);
 
 	const active = organizations?.find((o) => o.id === activeOrganizationId);
@@ -117,30 +113,21 @@ export function OrganizationSwitcher() {
  * - ≥2 组织且未选：卡片列表选择；
  * - 0 组织：新建组织引导（创建后自动选中）。
  * 由 (protected)/layout 在组织上下文未就绪时整屏渲染（ORG-02.4 加载隔离）。
+ * 创建走 useCreateOrganization（清缓存 + 切换 + 列表失效的唯一步骤序列）。
  */
 export function OrganizationPicker({ onPicked }: { onPicked?: () => void }) {
 	const { data: organizations, isLoading } = useOrganizations();
 	const switchOrganization = useSwitchOrganization();
-	const queryClient = useQueryClient();
-	const setActiveOrganization = useOrganizationStore(
-		(s) => s.setActiveOrganization,
-	);
+	const createMutation = useCreateOrganization();
 	const [creating, setCreating] = useState(false);
 	const [newName, setNewName] = useState("");
-	const [error, setError] = useState<string | null>(null);
 
-	const createMutation = useMutation({
-		mutationFn: () => organizationsApi.create({ name: newName.trim() }),
-		onSuccess: (created) => {
-			clearOrganizationScopedQueries(queryClient);
-			setActiveOrganization(created.id);
-			void queryClient.invalidateQueries({
-				queryKey: queryKeys.organizations.list(),
-			});
-			onPicked?.();
-		},
-		onError: (err: Error) => setError(err.message),
-	});
+	const submitCreate = () => {
+		createMutation.mutate(
+			{ name: newName.trim() },
+			{ onSuccess: () => onPicked?.() },
+		);
+	};
 
 	if (isLoading) {
 		return (
@@ -193,16 +180,16 @@ export function OrganizationPicker({ onPicked }: { onPicked?: () => void }) {
 									className="w-full rounded-lg border border-border px-3 py-2 text-sm"
 									data-testid="organization-create-name"
 								/>
-								{error && (
+								{createMutation.error && (
 									<p role="alert" className="text-xs text-red-600">
-										{error}
+										{createMutation.error.message}
 									</p>
 								)}
 								<div className="flex gap-2">
 									<button
 										type="button"
 										disabled={!newName.trim() || createMutation.isPending}
-										onClick={() => createMutation.mutate()}
+										onClick={submitCreate}
 										className="flex-1 rounded-lg bg-mint-700 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
 										data-testid="organization-create-submit"
 									>
@@ -230,6 +217,37 @@ export function OrganizationPicker({ onPicked }: { onPicked?: () => void }) {
 						)}
 					</div>
 				)}
+			</div>
+		</div>
+	);
+}
+
+/**
+ * 组织列表加载失败（网络/服务不可用）：显式错误态 + 重试。
+ * 此前失败态会被当作「0 组织」而显示新建引导，或停留在无限加载。
+ */
+export function OrganizationRoutingError({ onRetry }: { onRetry: () => void }) {
+	return (
+		<div
+			className="flex min-h-screen items-center justify-center bg-background px-4"
+			data-testid="organization-routing-error"
+		>
+			<div className="w-full max-w-sm space-y-3 rounded-xl border border-border p-6 text-center">
+				<h1 className="text-base font-semibold text-foreground">
+					组织列表加载失败
+				</h1>
+				<p className="text-sm text-muted-foreground">
+					暂时无法获取你的组织，请检查网络后重试。
+				</p>
+				<button
+					type="button"
+					onClick={onRetry}
+					className="inline-flex items-center gap-2 rounded-lg bg-mint-700 px-4 py-2 text-sm font-medium text-white"
+					data-testid="organization-routing-retry"
+				>
+					<RefreshCw className="size-4" aria-hidden />
+					重试
+				</button>
 			</div>
 		</div>
 	);

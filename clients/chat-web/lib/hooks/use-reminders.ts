@@ -97,11 +97,19 @@ export function useMarkAllRemindersRead() {
 	});
 }
 
-/** 建账向导与数据权利进度页为受控拦截路由，顶栏提醒铃铛禁止触发 settings/reminders 请求 */
+/**
+ * 受控拦截路由：这些路由上顶栏提醒铃铛禁止触发任何业务请求。
+ * - /onboarding、/data-requests：建账向导与数据权利进度页本身是拦截态；
+ * - /invitations（评审 I-18）：受邀者可能尚无组织、或多组织但未选择——铃铛的
+ *   onboarding/settings/reminders 请求会收到 400 ORGANIZATION_REQUIRED，
+ *   此前会把人从邀请页重定向走，邀请流程对新用户直接断掉。
+ */
 export function isReminderBypassRoute(pathname: string | null | undefined): boolean {
 	if (!pathname) return false;
 	return (
-		pathname.startsWith("/onboarding") || pathname.startsWith("/data-requests")
+		pathname.startsWith("/onboarding") ||
+		pathname.startsWith("/data-requests") ||
+		pathname.startsWith("/invitations")
 	);
 }
 

@@ -50,6 +50,15 @@ export function resolveCrumbs(pathname: string): Crumb[] {
 		case "transactions":
 			if (second === "new") return [{ label: "快速录入" }];
 			return [{ label: "交易详情" }];
+		case "invitations":
+			// 邀请 token 是一次性凭证：不得出现在面包屑/截图/无障碍朗读里（外部评审前端批次）
+			return [{ label: "加入组织" }];
+		case "organization":
+			if (!second) return [{ label: "组织" }];
+			return [
+				{ label: "组织", href: "/organization" },
+				{ label: second === "audit" ? "审计记录" : "成员与邀请" },
+			];
 		default:
 			return [{ label: decodeURIComponent(second ?? root) }];
 	}

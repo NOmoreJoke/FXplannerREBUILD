@@ -256,13 +256,16 @@ describe("useReminderGate（未建账与锁定期请求门控，F1-3 / DEBT-06�
 		expect(remindersApi.list).not.toHaveBeenCalled();
 	});
 
-	it("/onboarding 与 /data-requests 路由：零 onboarding / settings / reminders 请求", () => {
+	it("/onboarding、/data-requests、/invitations 路由：零 onboarding / settings / reminders 请求", () => {
 		expect(isReminderBypassRoute("/onboarding")).toBe(true);
 		expect(isReminderBypassRoute("/onboarding?backfill=1")).toBe(true);
 		expect(isReminderBypassRoute("/data-requests")).toBe(true);
+		// 邀请页：受邀者可能尚无组织/未选组织，铃铛的业务请求会被 400 ORGANIZATION_REQUIRED
+		// 拒绝并把人从邀请页带走（外部评审前端批次）
+		expect(isReminderBypassRoute("/invitations/invite-token-123")).toBe(true);
 		expect(isReminderBypassRoute("/home")).toBe(false);
 
-		for (const path of ["/onboarding", "/data-requests"]) {
+		for (const path of ["/onboarding", "/data-requests", "/invitations/tok-1"]) {
 			const { result } = renderHook(() => useReminderGate(path), {
 				wrapper: createWrapper(),
 			});

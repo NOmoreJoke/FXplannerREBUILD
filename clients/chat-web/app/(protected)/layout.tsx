@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
 	ArrowLeftRight,
 	Bot,
+	Building2,
 	FileText,
 	Home,
 	LogOut,
@@ -17,13 +18,13 @@ import { authApi } from "@/lib/api/auth";
 import { getToken } from "@/lib/auth/token";
 import { redirectToLogin } from "@/lib/auth/redirect-to-login";
 import { useAuthStore } from "@/lib/stores/auth-store";
-import { useOrganizationStore } from "@/lib/stores/organization-store";
 import { useLogout } from "@/lib/query/hooks/use-auth";
-import { useOrganizations } from "@/lib/hooks/use-organizations";
+import { useOrganizationRouting } from "@/lib/hooks/use-organizations";
 import { AppBreadcrumb, PageLoading } from "@/components/base";
 import { ReminderBell } from "@/components/business/reminder";
 import {
 	OrganizationPicker,
+	OrganizationRoutingError,
 	OrganizationSwitcher,
 } from "@/components/business/organization";
 import { cn } from "@/lib/utils";
@@ -72,37 +73,30 @@ export default function ProtectedLayout({
 		void checkAuth();
 	}, [pathname, setUser, clearUser]);
 
-	// ToB R1 组织路由分流（W21；需求 ORG-00.3/ORG-02.4）：
-	// 单组织直达（自动选中）；多组织未选 → OrganizationPicker（整屏隔离，
-	// 不闪旧组织数据）；0 组织 → Picker 内新建引导。组织上下文未就绪前
-	// 业务页面不渲染（hooks enabled 门控 + 缓存清理双保险）。
+	// ToB R1 组织路由分流（W21；需求 ORG-00.3/ORG-02.4；评审 I-18）：
+	// 选择校验与单组织自动选中都在 useOrganizationRouting 内以受控副作用完成，
+	// 本组件不在渲染期写 store；认证未就绪（user 为空）不拉组织列表。
+	// ready = 单组织直达 / 多组织已选；pick = 多组织未选 → OrganizationPicker
+	// （整屏隔离，不闪旧组织数据）或 0 组织 → Picker 内新建引导；error = 列表
+	// 拉取失败 → 显式错误态与重试（不误入「创建组织」引导）。
+	// 组织上下文未就绪前业务页面不渲染（hooks enabled 门控 + 缓存清理双保险）。
 	// 豁免路由：/invitations/*（受邀者可能尚无任何组织，接受流程为个人端点）。
-	const organizationsQuery = useOrganizations();
-	const organizations = organizationsQuery.data;
-	const orgsLoading = organizationsQuery.isLoading;
-	const activeOrganizationId = useOrganizationStore(
-		(s) => s.activeOrganizationId,
-	);
-	const setActiveOrganization = useOrganizationStore(
-		(s) => s.setActiveOrganization,
-	);
-	const singleOrg = organizations?.length === 1 ? organizations[0] : null;
-	if (singleOrg && activeOrganizationId === null) {
-		// 渲染期外部 store 校正（React 渲染期 setState 同组件模式）：单组织自动选中
-		setActiveOrganization(singleOrg.id);
-	}
+	const routing = useOrganizationRouting({ enabled: Boolean(user) });
 
 	if (!user) {
 		return <PageLoading />;
 	}
 
 	const orglessRouteAllowed = pathname.startsWith("/invitations");
-	// 组织上下文就绪检查：认证已过但组织未就绪（加载中/待选择/待创建）
+	// 组织上下文就绪检查：认证已过但组织未就绪（加载中/待选择/待创建/加载失败）
 	if (!orglessRouteAllowed) {
-		if (orgsLoading) {
+		if (routing.status === "disabled" || routing.status === "loading") {
 			return <PageLoading />;
 		}
-		if (activeOrganizationId === null) {
+		if (routing.status === "error") {
+			return <OrganizationRoutingError onRetry={routing.retry} />;
+		}
+		if (routing.status === "pick") {
 			return <OrganizationPicker />;
 		}
 	}
@@ -208,5 +202,7 @@ const NAV_ITEMS = [
 	{ href: "/reports", label: "我的报告", icon: FileText },
 	{ href: "/market", label: "汇率行情", icon: TrendingUp },
 	{ href: "/chat", label: "AI 助手", icon: Bot },
+	// ToB R1：组织设置入口（信息/成员与邀请/审计；此前只能手输地址进入）
+	{ href: "/organization", label: "组织", icon: Building2 },
 	{ href: "/settings", label: "设置", icon: Settings },
 ] as const;
