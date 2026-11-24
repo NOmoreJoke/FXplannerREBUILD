@@ -13,8 +13,9 @@ import {
 	formatReportDate,
 	hasUsageQuantity,
 } from "@/components/business/report/plan-cost-summary-card";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import { reportsApi } from "@/lib/api/reports";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 
 /**
  * 单计划报告打印视图（reports 技术方案 §6/§7 方案 A：前端打印，零新增依赖）。
@@ -121,10 +122,12 @@ export function PlanReportPrintDialog({
 	open,
 	onClose,
 }: PlanReportPrintDialogProps) {
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
+	const orgId = useActiveOrgId();
 	const query = useQuery({
-		queryKey: queryKeys.reports.plan(planId),
+		queryKey: withOrgScope(orgId, queryKeys.reports.plan(planId)),
 		queryFn: () => reportsApi.getPlanReport(planId),
-		enabled: open,
+		enabled: orgId !== null && open,
 		retry: false,
 	});
 

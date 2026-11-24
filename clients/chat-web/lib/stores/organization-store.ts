@@ -34,8 +34,18 @@ interface OrganizationStore {
 	activeOrganizationSetAt: number;
 	/** 设置当前组织（登录后按服务端有效 Membership 路由时调用） */
 	setActiveOrganization: (organizationId: string | null) => void;
-	/** 清除选择（登出 / 401：换账号登录不得继承上一个账号的组织） */
+	/**
+	 * 清除选择（选择失效 / 退出组织后的回落）。**保留**会话级拒绝集合——
+	 * 被服务端拒绝过的组织仍不得被自动选回（否则陷入「清除 → 自动选回 → 再 404」循环）。
+	 */
 	clearActiveOrganization: () => void;
+	/**
+	 * 会话级重置（评审 R2-I10）：换账号 / 登出 / 401 时调用——选择与会话级拒绝集合
+	 * 一并清空。拒绝集合是「上一个账号在本会话被拒的组织」，新账号不得继承：
+	 * 否则新账号自己的组织可能因上一个账号的拒绝记录而无法被自动选中。
+	 * （统一入口见 lib/auth/session-reset.ts，业务代码不要单独调本方法）
+	 */
+	resetSession: () => void;
 	/**
 	 * 服务端拒绝某组织的上下文（评审 I-18）：记入拒绝集合；仅当它仍是当前
 	 * 选择时才清除——旧组织的迟到响应不得清掉用户刚切换到的新组织。
@@ -65,6 +75,12 @@ export const useOrganizationStore = create<OrganizationStore>()(
 				})),
 			clearActiveOrganization: () =>
 				set({ activeOrganizationId: null, activeOrganizationSetAt: 0 }),
+			resetSession: () =>
+				set({
+					activeOrganizationId: null,
+					activeOrganizationSetAt: 0,
+					rejectedOrganizationIds: [],
+				}),
 			rejectOrganizationContext: (organizationId) =>
 				set((state) => ({
 					rejectedOrganizationIds:

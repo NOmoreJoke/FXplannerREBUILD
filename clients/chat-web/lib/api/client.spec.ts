@@ -276,6 +276,42 @@ describe("apiClient & isExpectedControlFlowApiError", () => {
 		expect(useOrganizationStore.getState().activeOrganizationId).toBeNull();
 	});
 
+	it("R2-I10：401 走统一会话重置——会话级拒绝集合、聊天运行时态与在途 SSE 一并清空", async () => {
+		const { apiClient } = await import("@/lib/api/client");
+		const { useOrganizationStore } = await import(
+			"@/lib/stores/organization-store"
+		);
+		const { registerActiveStreamAbort, useChatStore } = await import(
+			"@/lib/stores/chat-store"
+		);
+		// 上一个账号留下的上下文：组织选择、本会话被拒的组织、选中的会话、在途的流
+		useOrganizationStore.setState({
+			activeOrganizationId: "org-a",
+			rejectedOrganizationIds: ["org-rejected"],
+		});
+		useChatStore.setState({ activeConversationId: "conv-a" });
+		const stream = new AbortController();
+		registerActiveStreamAbort(stream);
+		try {
+			fetchMock.mockResolvedValueOnce(Response.json({}, { status: 401 }));
+
+			await expect(apiClient("/home/state")).rejects.toMatchObject({
+				status: 401,
+			});
+
+			// 此前只清凭证与选择：拒绝集合与会话选择留在内存里，
+			// 同一会话内换账号后，新账号的组织可能因旧账号的拒绝记录而无法被自动选中
+			expect(useOrganizationStore.getState()).toMatchObject({
+				activeOrganizationId: null,
+				rejectedOrganizationIds: [],
+			});
+			expect(useChatStore.getState().activeConversationId).toBeNull();
+			expect(stream.signal.aborted).toBe(true);
+		} finally {
+			registerActiveStreamAbort(null);
+		}
+	});
+
 	it("buildApiUrl：地址构造的唯一出口——拒绝绝对/协议相对地址，且在发起网络请求前抛出", async () => {
 		const { apiClient, buildApiUrl } = await import("@/lib/api/client");
 

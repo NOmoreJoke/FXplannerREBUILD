@@ -7,10 +7,7 @@ import {
 	clearOrganizationScopedQueries,
 	queryKeys,
 } from "@/lib/api/query-keys";
-import {
-	abortActiveStream,
-	useChatStore,
-} from "@/lib/stores/chat-store";
+import { abortActiveStream } from "@/lib/stores/chat-store";
 import { useOrganizationStore } from "@/lib/stores/organization-store";
 
 /**
@@ -65,9 +62,8 @@ export function useSwitchOrganization() {
 		(nextOrganizationId: string) => {
 			// 1. 中止旧组织在途请求 + 清组织作用域缓存（公共汇率/认证/组织列表保留）
 			clearOrganizationScopedQueries(queryClient);
-			// 2. 中止旧组织的 SSE 流并重置聊天运行时态
+			// 2. 中止旧组织的 SSE 流并重置聊天运行时态（abortActiveStream 一步完成）
 			abortActiveStream();
-			useChatStore.getState().resetRuntime();
 			// 3. 切换选择（persist 落 localStorage，仅存选择不构成凭证）
 			setActiveOrganization(nextOrganizationId);
 			// 4. 组织列表失效重拉（角色/建账态可能已变化）；工作台键已被移除，
@@ -106,7 +102,6 @@ export function useLeaveOrganization() {
 		onSuccess: () => {
 			clearOrganizationScopedQueries(queryClient);
 			abortActiveStream();
-			useChatStore.getState().resetRuntime();
 			clearActiveOrganization();
 			void queryClient.invalidateQueries({
 				queryKey: queryKeys.organizations.list(),
@@ -133,6 +128,16 @@ export interface OrganizationRouting {
 }
 
 /**
+ * 不依赖组织上下文的受保护路由（评审 R3-I01）：/invitations/*——受邀者可能尚无任何
+ * 组织，接受流程走个人端点。受保护区布局对它免做组织路由分流，业务区边界对它不随
+ * 组织变化重挂载；两处共用本判定，不各写一份。按路径段匹配 /invitations 与
+ * /invitations/…，不含 /invitations-xxx 这类同前缀路径。
+ */
+export function isOrglessRouteAllowed(pathname: string): boolean {
+	return pathname === "/invitations" || pathname.startsWith("/invitations/");
+}
+
+/**
  * 受保护区的组织路由分流（需求 ORG-00.3/ORG-02.4；评审 I-18）。
  *
  * 选择校正是**受控副作用**（effect），不在渲染期写 store：
@@ -143,8 +148,11 @@ export interface OrganizationRouting {
  * 可选组织 = 本人组织 − 本会话被服务端拒绝的组织（store.rejectedOrganizationIds）。
  * 被拒绝时列表会重拉：成员关系/角色可能已变化，缓存里的列表不可信。
  *
- * 单组织用户首帧的 status 直接派生为 ready（选择随后由 effect 落到 store），
- * 避免选择页闪现；业务查询在 store 选择落地前保持 enabled=false，不发空头请求。
+ * 就绪（ready）必须以 store 里**已有选中组织**为前提（评审 R2-I10 / R2-I07）：
+ * 单组织用户的选择由 effect 落到 store，而子组件的 effect 先于父组件执行——
+ * 此前首帧直接派生 ready，业务页面会在选择落地前渲染并抢发不带 X-Organization-Id
+ * 的请求（多组织用户刚被拒绝一个组织时直接 400 ORGANIZATION_REQUIRED 并卡在错误态）。
+ * 现在选择落地前一律 loading（仍是加载态，不会闪现选择页）。
  */
 export function useOrganizationRouting(options: {
 	enabled: boolean;
@@ -232,7 +240,9 @@ export function useOrganizationRouting(options: {
 		// 携带该组织头由服务端校验；列表重拉后再做选择校验
 		status = "ready";
 	} else if (activeOrganizationId === null && selectable.length === 1) {
-		status = "ready";
+		// 唯一可选组织但选择尚未落到 store：上面的 effect 本轮就会自动选中。
+		// 在那之前保持加载态——业务页面不得在无组织上下文时渲染（评审 R2-I10）
+		status = "loading";
 	} else {
 		status = "pick";
 	}

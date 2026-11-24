@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { BellOff } from "lucide-react";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import { settingsApi } from "@/lib/api/settings";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import { useReminders } from "@/lib/hooks/use-reminders";
 import { utcPlus8DayStart } from "@/lib/utils";
 import { ReminderCard } from "./reminder-card";
@@ -23,9 +24,12 @@ import { ReminderCard } from "./reminder-card";
 const TODAY_LIMIT = 3;
 
 export function ReminderSection() {
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
+	const orgId = useActiveOrgId();
 	const settingsQuery = useQuery({
-		queryKey: queryKeys.settings.detail(),
+		queryKey: withOrgScope(orgId, queryKeys.settings.detail()),
 		queryFn: settingsApi.getSettings,
+		enabled: orgId !== null,
 		retry: false,
 	});
 	const reminderEnabled = settingsQuery.data?.reminderEnabled === true;

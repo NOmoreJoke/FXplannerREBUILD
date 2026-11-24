@@ -18,6 +18,46 @@ export function isDevLogEnabled(): boolean {
 }
 
 /**
+ * 事件内**全部字符串值**的深度脱敏（键不动）。
+ *
+ * 评审 R2-I12：此前只处理 message / exception / extra / breadcrumb.message 四处，
+ * 而带一次性邀请 token 的 URL 还会出现在 event.request.url（页面地址）、
+ * breadcrumb.data 的 url / from / to（fetch 与导航面包屑，如接受邀请的
+ * POST /api/organization-invitations/<token>/accept）等位置——访问邀请页期间的
+ * 任何报错都会把 token 明文带出浏览器。按字段枚举总会漏，这里整棵事件树过一遍。
+ */
+export function maskEventStrings(
+	value: unknown,
+	copies: WeakMap<object, unknown> = new WeakMap(),
+): unknown {
+	if (typeof value === "string") {
+		return maskSensitiveText(value);
+	}
+	if (value === null || typeof value !== "object") {
+		return value;
+	}
+	// 循环引用：回指到**已脱敏的副本**（不能回指原对象，否则环上的字符串没被脱敏）
+	const existing = copies.get(value);
+	if (existing !== undefined) {
+		return existing;
+	}
+	if (Array.isArray(value)) {
+		const list: unknown[] = [];
+		copies.set(value, list);
+		for (const item of value) {
+			list.push(maskEventStrings(item, copies));
+		}
+		return list;
+	}
+	const result: Record<string, unknown> = {};
+	copies.set(value, result);
+	for (const [key, inner] of Object.entries(value)) {
+		result[key] = maskEventStrings(inner, copies);
+	}
+	return result;
+}
+
+/**
  * 用 Sentry SDK 采集浏览器错误（JS 异常 / 未处理 Promise rejection / 面包屑），
  * 通过自定义 transport 转发到本地 dev-log-server，不上报任何第三方。
  */
@@ -81,7 +121,8 @@ export function initDevErrorMonitor(): void {
 					return next;
 				});
 			}
-			return event;
+			// 兜底：事件树里其余位置的字符串（request.url、breadcrumb.data.*、tags…）一并脱敏
+			return maskEventStrings(event) as typeof event;
 		},
 
 		transport: (options) =>
@@ -97,9 +138,14 @@ export function initDevErrorMonitor(): void {
 					keepalive: true,
 					body: JSON.stringify({
 						source: "sentry-browser",
-						pageUrl: window.location.href,
+						// 评审 R2-I12：页面地址不经过 beforeSend，必须在这里脱敏——
+						// 停在 /invitations/<token> 或 /login?redirect=%2Finvitations%2F<token>
+						// 时任何报错都会把地址栏里的一次性邀请 token 带出浏览器
+						pageUrl: maskSensitiveText(window.location.href),
 						timestamp: Date.now(),
-						envelope: body,
+						// 最后一道：序列化后的信封整体再过一遍（beforeSend 只看得到事件对象，
+						// 信封头等字段不经过它）
+						envelope: maskSensitiveText(body),
 					}),
 				}).catch(() => {
 					// 本地日志服务未启动时静默失败，不影响页面

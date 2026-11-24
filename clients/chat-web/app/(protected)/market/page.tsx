@@ -10,8 +10,9 @@ import {
 	RateChartPanel,
 } from "@/components/business/market";
 import { Button } from "@/components/ui/button";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import { settingsApi } from "@/lib/api/settings";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import {
 	useRateHistory,
 	type MarketPeriod,
@@ -25,9 +26,14 @@ import {
  * 数据拉取与合并由 useRateHistory 承载，展示由 business/market 组件承载。
  */
 export default function MarketPage() {
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）。
+	// 本位币随组织变化：下方 initializedRef 等页面本地状态由布局的组织作用域边界
+	// 在切换时整体重新挂载来重置
+	const orgId = useActiveOrgId();
 	const settingsQuery = useQuery({
-		queryKey: queryKeys.settings.detail(),
+		queryKey: withOrgScope(orgId, queryKeys.settings.detail()),
 		queryFn: settingsApi.getSettings,
+		enabled: orgId !== null,
 		retry: false, // 401 由 apiClient 统一处理；409/其余失败走错误分支
 	});
 	const base = settingsQuery.data?.baseCurrency ?? null;

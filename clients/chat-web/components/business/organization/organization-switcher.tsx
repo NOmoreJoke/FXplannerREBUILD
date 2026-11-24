@@ -114,8 +114,10 @@ export function OrganizationSwitcher() {
  * - 0 组织：新建组织引导（创建后自动选中）。
  * 由 (protected)/layout 在组织上下文未就绪时整屏渲染（ORG-02.4 加载隔离）。
  * 创建走 useCreateOrganization（清缓存 + 切换 + 列表失效的唯一步骤序列）。
+ * 创建成功后不派发「完成」回调：切换组织会让本组件被布局卸载，mutate 的调用点
+ * 回调只向仍挂载的观察者派发，挂上也不会执行（同评审 R3-I02 / R3-I01 的机制）。
  */
-export function OrganizationPicker({ onPicked }: { onPicked?: () => void }) {
+export function OrganizationPicker() {
 	const { data: organizations, isLoading } = useOrganizations();
 	const switchOrganization = useSwitchOrganization();
 	const createMutation = useCreateOrganization();
@@ -123,10 +125,7 @@ export function OrganizationPicker({ onPicked }: { onPicked?: () => void }) {
 	const [newName, setNewName] = useState("");
 
 	const submitCreate = () => {
-		createMutation.mutate(
-			{ name: newName.trim() },
-			{ onSuccess: () => onPicked?.() },
-		);
+		createMutation.mutate({ name: newName.trim() });
 	};
 
 	if (isLoading) {
@@ -154,7 +153,6 @@ export function OrganizationPicker({ onPicked }: { onPicked?: () => void }) {
 									className="flex w-full items-center justify-between rounded-xl border border-border px-4 py-3 text-left transition-colors hover:bg-muted"
 									onClick={() => {
 										switchOrganization(org.id);
-										onPicked?.();
 									}}
 								>
 									<span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">

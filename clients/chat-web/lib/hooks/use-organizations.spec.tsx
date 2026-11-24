@@ -25,6 +25,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+	isOrglessRouteAllowed,
 	useCreateOrganization,
 	useCurrentOrganization,
 	useLeaveOrganization,
@@ -39,6 +40,7 @@ import {
 	registerActiveStreamAbort,
 	useChatStore,
 } from "@/lib/stores/chat-store";
+import type { OrganizationRoutingStatus } from "@/lib/hooks/use-organizations";
 import type React from "react";
 
 /**
@@ -192,6 +194,10 @@ describe("useSwitchOrganization（切换）", () => {
 		queryClient.setQueryData(queryKeys.organizations.current("org-a"), {
 			stale: "current-a",
 		});
+		// 数据权利请求按设计不加组织前缀，但其进度视图随组织上下文请求——切换时同样清除
+		queryClient.setQueryData(queryKeys.dataRequests.current(), {
+			stale: "data-request",
+		});
 		queryClient.setQueryData(queryKeys.rates.supported(), { public: true });
 		const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
 
@@ -207,6 +213,9 @@ describe("useSwitchOrganization（切换）", () => {
 		).toBeUndefined();
 		expect(
 			queryClient.getQueryData(queryKeys.organizations.current("org-a")),
+		).toBeUndefined();
+		expect(
+			queryClient.getQueryData(queryKeys.dataRequests.current()),
 		).toBeUndefined();
 		// 公共缓存保留
 		expect(queryClient.getQueryData(queryKeys.rates.supported())).toBeDefined();
@@ -298,19 +307,72 @@ describe("useOrganizationRouting（受保护区的组织路由分流）", () => 
 		expect(useOrganizationStore.getState().activeOrganizationId).toBeNull();
 	});
 
-	it("单组织：首帧即 ready（选择页不闪现），选择由受控副作用落到 store", async () => {
+	it("单组织：选择落地前 loading（选择页不闪现，业务页面不抢发无组织头的请求），随后 ready", async () => {
 		vi.mocked(organizationsApi.list).mockResolvedValue([
 			summary("org-a", "组织 A"),
 		]);
 		const { wrapper } = wrapperFactory();
+		// 逐帧记录 (路由状态, store 选中组织)：ready 只能出现在选中组织之后
+		const frames: Array<[OrganizationRoutingStatus, string | null]> = [];
 		const { result } = renderHook(
-			() => useOrganizationRouting({ enabled: true }),
+			() => {
+				const routing = useOrganizationRouting({ enabled: true });
+				frames.push([
+					routing.status,
+					useOrganizationStore.getState().activeOrganizationId,
+				]);
+				return routing;
+			},
 			{ wrapper },
 		);
+
 		await waitFor(() => expect(result.current.status).toBe("ready"));
-		await waitFor(() =>
-			expect(useOrganizationStore.getState().activeOrganizationId).toBe("org-a"),
+		expect(useOrganizationStore.getState().activeOrganizationId).toBe("org-a");
+		// 此前列表一到位就判 ready：受保护区随即渲染业务页面并发请求，而 store 里
+		// 还没有组织（评审 R2-I10）。现在未选组织的帧只能是 loading / pick，不会是 ready
+		expect(
+			frames.every(([status, active]) => status !== "ready" || active !== null),
+		).toBe(true);
+		// 单组织不闪现选择页
+		expect(frames.map(([status]) => status)).not.toContain("pick");
+	});
+
+	it("R2-I10：多组织用户刚被拒绝一个组织 → 剩余唯一可选组织被自动选中，期间不抢发无组织头的请求", async () => {
+		vi.mocked(organizationsApi.list).mockResolvedValue([
+			summary("org-a", "组织 A"),
+			summary("org-b", "组织 B"),
+		]);
+		// 本会话内 org-a 被服务端拒绝（如已被移出），当前选择随之被清除
+		useOrganizationStore.setState({
+			activeOrganizationId: null,
+			activeOrganizationSetAt: 0,
+			rejectedOrganizationIds: ["org-a"],
+		});
+		const { wrapper } = wrapperFactory();
+		const frames: Array<[OrganizationRoutingStatus, string | null]> = [];
+		const { result } = renderHook(
+			() => {
+				const routing = useOrganizationRouting({ enabled: true });
+				frames.push([
+					routing.status,
+					useOrganizationStore.getState().activeOrganizationId,
+				]);
+				return routing;
+			},
+			{ wrapper },
 		);
+		// 此前列表一到位就判 ready：业务查询不带 X-Organization-Id 发出，双组织用户
+		// 被后端 400 ORGANIZATION_REQUIRED 拒绝并卡在错误态（评审 R2-I10）。
+		// 现在选择落地前只能是 loading / pick，不会是 ready
+		await waitFor(() => expect(result.current.status).toBe("ready"));
+		expect(
+			frames.every(([status, active]) => status !== "ready" || active !== null),
+		).toBe(true);
+		expect(useOrganizationStore.getState().activeOrganizationId).toBe("org-b");
+		// 被拒绝的组织不会被自动选中
+		expect(useOrganizationStore.getState().rejectedOrganizationIds).toEqual([
+			"org-a",
+		]);
 	});
 
 	it("持久化的选择不属于本人组织（换账号/被移出）→ 清除；剩余单组织则自动选中它", async () => {
@@ -496,5 +558,18 @@ describe("useCreateOrganization / useLeaveOrganization", () => {
 		expect(invalidateSpy).toHaveBeenCalledWith({
 			queryKey: queryKeys.organizations.list(),
 		});
+	});
+});
+
+describe("isOrglessRouteAllowed（评审 R3-I01）", () => {
+	it("/invitations 与 /invitations/… 豁免；同前缀的其他路径不豁免", () => {
+		expect(isOrglessRouteAllowed("/invitations")).toBe(true);
+		expect(isOrglessRouteAllowed("/invitations/tok_SECRET")).toBe(true);
+		expect(isOrglessRouteAllowed("/invitations/tok/accept")).toBe(true);
+		expect(isOrglessRouteAllowed("/")).toBe(false);
+		expect(isOrglessRouteAllowed("/home")).toBe(false);
+		expect(isOrglessRouteAllowed("/organization/members")).toBe(false);
+		// 原判定 startsWith("/invitations") 会把同前缀路径一并豁免
+		expect(isOrglessRouteAllowed("/invitations-old")).toBe(false);
 	});
 });

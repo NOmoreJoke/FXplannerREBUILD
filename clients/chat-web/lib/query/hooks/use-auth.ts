@@ -2,11 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AuthUser } from "@/lib/api/contract";
 import { authApi } from "@/lib/api/auth";
 import { queryKeys } from "@/lib/api/query-keys";
-import {
-	abortActiveStream,
-	useChatStore,
-} from "@/lib/stores/chat-store";
-import { useOrganizationStore } from "@/lib/stores/organization-store";
+import { resetSessionContext } from "@/lib/auth/session-reset";
 
 /**
  * 当前用户查询 Key
@@ -16,7 +12,7 @@ export const CURRENT_USER_QUERY_KEY = queryKeys.auth.me();
 /**
  * 查询当前用户信息
  * - 缓存 10 分钟
- * - 401 错误不重试（由 apiClient 自动跳转登录）
+ * - 401 错误不重试（由 apiClient 自动跳登录）
  */
 export function useCurrentUser() {
 	return useQuery<AuthUser>({
@@ -33,15 +29,13 @@ export function useCurrentUser() {
  * 评审 I-18：组织选择持久化在 localStorage（"active-organization"），不随
  * queryClient.clear() 失效——不清的话换账号登录会带着上一个账号的组织 id
  * 发请求。聊天运行时态与进行中的 SSE 流同样在此终结。
+ * 评审 R2-I10：与登录 / 注册 / 401 共用 resetSessionContext（唯一入口）。
  */
 export function useLogout() {
 	const queryClient = useQueryClient();
 
 	return () => {
 		authApi.logout();
-		abortActiveStream();
-		useChatStore.getState().resetRuntime();
-		useOrganizationStore.getState().clearActiveOrganization();
-		queryClient.clear(); // 清除所有缓存
+		resetSessionContext(queryClient);
 	};
 }

@@ -36,4 +36,70 @@ describe("maskSensitiveText（前端）", () => {
 		);
 		expect(maskSensitiveText("/invitations")).toBe("/invitations");
 	});
+
+	// 评审 R2-I12：此前只匹配明文斜杠，编码态的 token 原样落盘
+	describe("邀请 token 的 URL 编码态与 JSON 转义串", () => {
+		/** 工厂生成的占位邀请 token（base64url 字符集；非真实凭据） */
+		const inviteToken = () =>
+			`tok_${Math.random().toString(36).slice(2)}${Math.random()
+				.toString(36)
+				.slice(2)}`;
+
+		it("登录页回跳参数里的编码态路径脱敏（%2F 大小写不敏感），其余查询参数保留", () => {
+			const value = inviteToken();
+			expect(
+				maskSensitiveText(`/login?redirect=%2Finvitations%2F${value}&next=1`),
+			).toBe("/login?redirect=%2Finvitations%2F***&next=1");
+			expect(
+				maskSensitiveText(`Referer: /login?redirect=%2forganization-invitations%2f${value}`),
+			).toBe("Referer: /login?redirect=%2forganization-invitations%2f***");
+		});
+
+		// 评审 R3-I05：此前只匹配单层编码，多层编码（%252F、%25252F）的 token 原样落盘
+		it("多层编码态（%252F / %25252F）：redirect 参数被整体再编码时出现，同样脱敏", () => {
+			const value = inviteToken();
+			expect(
+				maskSensitiveText(`/onboarding?redirect=%252Finvitations%252F${value}`),
+			).toBe("/onboarding?redirect=%252Finvitations%252F***");
+			// 登录 → 向导 → 邀请页：redirect 参数被整体再编码一次
+			expect(
+				maskSensitiveText(
+					`/login?redirect=%2Fonboarding%3Fredirect%3D%252Finvitations%252F${value}`,
+				),
+			).toBe("/login?redirect=%2Fonboarding%3Fredirect%3D%252Finvitations%252F***");
+			expect(
+				maskSensitiveText(`redirect=%25252Finvitations%25252F${value}`),
+			).toBe("redirect=%25252Finvitations%25252F***");
+			expect(
+				maskSensitiveText(`redirect=%252forganization-invitations%252f${value}`),
+			).toBe("redirect=%252forganization-invitations%252f***");
+		});
+
+		it("多层编码规则不误伤无关路径", () => {
+			expect(maskSensitiveText("/login?redirect=%252Fhome%252Fsettings")).toBe(
+				"/login?redirect=%252Fhome%252Fsettings",
+			);
+		});
+
+		it("JSON 转义串：token 后面的 \" 不被吞掉——脱敏后仍是合法 JSON", () => {
+			const value = inviteToken();
+			// 字符集未排除反斜杠时，token 的匹配会连带吃掉结尾的 \"，留下未转义的引号撑坏 JSON
+			const masked = maskSensitiveText(
+				JSON.stringify({ url: `https://app.example.com/invitations/${value}` }),
+			);
+			expect(masked).not.toContain(value);
+			expect(JSON.parse(masked)).toEqual({
+				url: "https://app.example.com/invitations/***",
+			});
+		});
+
+		it("API 路径形态只脱敏 token 段，后续路径保留", () => {
+			const value = inviteToken();
+			expect(
+				maskSensitiveText(
+					`POST /api/organization-invitations/${value}/accept → 409`,
+				),
+			).toBe("POST /api/organization-invitations/***/accept → 409");
+		});
+	});
 });

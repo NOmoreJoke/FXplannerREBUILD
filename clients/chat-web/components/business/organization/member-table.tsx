@@ -3,7 +3,12 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { membersApi, type MemberView } from "@/lib/api/organizations";
-import { queryKeys } from "@/lib/api/query-keys";
+import {
+	invalidateBusinessKey,
+	queryKeys,
+	withOrgScope,
+} from "@/lib/api/query-keys";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import { useCurrentOrganization } from "@/lib/hooks/use-organizations";
 import { RoleSelect } from "./role-select";
 import { TransferOwnershipDialog } from "./transfer-ownership-dialog";
@@ -20,9 +25,7 @@ function RemoveMemberButton({ member }: { member: MemberView }) {
 		onSuccess: () => {
 			setConfirming(false);
 			setError(null);
-			void queryClient.invalidateQueries({
-				queryKey: queryKeys.members.list(),
-			});
+			invalidateBusinessKey(queryClient, queryKeys.members.list());
 		},
 		onError: (err: Error) => setError(err.message),
 	});
@@ -77,10 +80,12 @@ function RemoveMemberButton({ member }: { member: MemberView }) {
  */
 export function MemberTable() {
 	const { data: current } = useCurrentOrganization();
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
+	const orgId = useActiveOrgId();
 	const { data: members, isLoading } = useQuery({
-		queryKey: queryKeys.members.list(),
+		queryKey: withOrgScope(orgId, queryKeys.members.list()),
 		queryFn: () => membersApi.list(),
-		enabled: Boolean(current),
+		enabled: orgId !== null && Boolean(current),
 	});
 
 	if (isLoading) {

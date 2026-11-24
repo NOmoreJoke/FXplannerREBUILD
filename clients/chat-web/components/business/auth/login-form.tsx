@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
+import { useQueryClient } from "@tanstack/react-query";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Send } from "lucide-react";
@@ -13,8 +14,7 @@ import { authApi } from "@/lib/api/auth";
 import { onboardingApi } from "@/lib/api/onboarding";
 import { ApiError } from "@/lib/api/client";
 import { safeRedirectPath } from "@/lib/auth/safe-redirect-path";
-import { setToken } from "@/lib/auth/token";
-import { useAuthStore } from "@/lib/stores/auth-store";
+import { beginAuthenticatedSession } from "@/lib/auth/session-reset";
 import { useOtpCountdown } from "@/lib/hooks/use-otp-countdown";
 import { PasswordInput } from "@/components/base";
 
@@ -51,7 +51,7 @@ function getErrorMessage(error: unknown, fallback: string): string {
 export function LoginForm() {
 	const router = useRouter();
 	const searchParams = useSearchParams();
-	const setUser = useAuthStore((s) => s.setUser);
+	const queryClient = useQueryClient();
 	const redirect = searchParams.get("redirect");
 	const [mode, setMode] = useState<LoginMode>("password");
 	const [otpTarget, setOtpTarget] = useState("");
@@ -84,8 +84,15 @@ export function LoginForm() {
 	// 校验兜底，技术方案 §3.1）；再查 onboarding 状态分流：未建账进向导，
 	// 已建账回首页或登录前正在浏览的页面（状态查询失败不拦截，按已建账回跳）。
 	const finishLogin = async (result: AuthResponse) => {
-		setToken(result.accessToken);
-		setUser(result.user);
+		// 评审 R2-I10：写入新 token 之前重置会话上下文——上一个账号（凭证过期后停在
+		// 登录页）持久化的组织选择不得被继承。否则下面的建账状态查询会带着旧组织头
+		// 发出：新账号不是成员则 404 被吞、未建账的新用户被直接放进 /home 跳过向导；
+		// 恰好也是成员则静默继承上一个账号的组织选择（顺序见 beginAuthenticatedSession）
+		beginAuthenticatedSession({
+			accessToken: result.accessToken,
+			user: result.user,
+			queryClient,
+		});
 		try {
 			await onboardingApi.saveConsents({ age18Confirmed, termsConfirmed });
 		} catch {

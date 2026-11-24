@@ -4,6 +4,7 @@ import {
 	captureApiError,
 	initDevErrorMonitor,
 	isDevLogEnabled,
+	maskEventStrings,
 } from "./monitor";
 
 const DEV_LOG_URL = "http://localhost:8787/frontend-log";
@@ -79,5 +80,91 @@ describe("dev-log monitor", () => {
 		});
 		await Sentry.flush(500);
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	// 评审 R2-I12：此前 pageUrl 原样上报、breadcrumb.data 与 request.url 不过脱敏——
+	// 访问邀请页期间的任何报错都会把一次性邀请 token 明文带出浏览器
+	describe("一次性邀请 token 不出浏览器", () => {
+		/** 工厂生成的占位邀请 token（非真实凭据） */
+		const inviteToken = () =>
+			`tok_${Math.random().toString(36).slice(2)}${Math.random()
+				.toString(36)
+				.slice(2)}`;
+
+		afterEach(() => {
+			window.history.replaceState({}, "", "/");
+		});
+
+		it("页面地址、面包屑 data（fetch / 导航）与事件内任意位置的 token 全部脱敏，路径形状保留", async () => {
+			const value = inviteToken();
+			window.history.pushState({}, "", `/invitations/${value}`);
+			initDevErrorMonitor();
+			Sentry.addBreadcrumb({
+				category: "fetch",
+				data: {
+					method: "POST",
+					url: `/api/organization-invitations/${value}/accept`,
+					status_code: 409,
+				},
+			});
+			Sentry.addBreadcrumb({
+				category: "navigation",
+				data: {
+					from: `/login?redirect=%2Finvitations%2F${value}`,
+					to: `/invitations/${value}`,
+				},
+			});
+
+			captureApiError({
+				endpoint: `/api/organization-invitations/${value}/summary`,
+				method: "GET",
+				kind: "http",
+				status: 403,
+				message: "邀请不存在或已失效",
+			});
+			await Sentry.flush(2000);
+
+			const raw = (fetchMock.mock.calls.at(-1)?.[1] as RequestInit)
+				.body as string;
+			expect(raw).not.toContain(value);
+			const payload = JSON.parse(raw) as {
+				pageUrl: string;
+				envelope: string;
+			};
+			// pageUrl 不经过 beforeSend，由 transport 单独脱敏
+			expect(payload.pageUrl).toMatch(/\/invitations\/\*\*\*$/);
+			// 面包屑 data 里仍是可读的请求形状
+			expect(payload.envelope).toContain("/organization-invitations/***/accept");
+			expect(payload.envelope).toContain(
+				"/login?redirect=%2Finvitations%2F***",
+			);
+		});
+
+		it("maskEventStrings：深度遍历字符串值、键不动、循环引用不栈溢出", () => {
+			const value = inviteToken();
+			interface Probe {
+				request: { url: string; headers: { accept: string } };
+				breadcrumbs: Array<{ category: string; data: { url: string } }>;
+				self: Probe;
+			}
+			// 循环结构无法用对象字面量一次写全：先建再回指
+			const event = {
+				request: { url: `/invitations/${value}`, headers: { accept: "*/*" } },
+				breadcrumbs: [{ category: "fetch", data: { url: `/invitations/${value}` } }],
+			} as Probe;
+			event.self = event;
+			const masked = maskEventStrings(event) as Probe;
+			// 循环引用回指到脱敏后的副本（不栈溢出、不丢字段）；环上的字符串同样已脱敏
+			expect(masked.self).toBe(masked);
+			expect(masked.self.request).toEqual({
+				url: "/invitations/***",
+				headers: { accept: "*/*" },
+			});
+			expect(masked.breadcrumbs).toEqual([
+				{ category: "fetch", data: { url: "/invitations/***" } },
+			]);
+			// 键不动
+			expect(Object.keys(masked.request)).toEqual(["url", "headers"]);
+		});
 	});
 });

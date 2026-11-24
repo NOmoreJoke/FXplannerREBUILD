@@ -225,8 +225,11 @@ export function invalidateAfterDataRequestMutation(
 }
 
 /**
- * 随当前组织变化的**无前缀**键：这些域的查询尚未迁到带前缀键，缓存里存的
- * 就是上一个组织的数据，切换时必须显式移除（否则页面不卸载即残留旧组织数据）。
+ * 随当前组织变化、但仍以**无前缀**形态缓存的键（评审 R2-I07 起业务查询已逐个迁到
+ * withOrgScope；此处保留给按设计不加前缀的域与迁移前的残留形态），切换时必须显式移除。
+ * 数据权利请求（EXPORT/CLEAR/DELETION）是个人端点（Goal #3B 拆分组织 scope），键按
+ * 设计不加组织前缀，但其进度视图仍随当前组织上下文请求——切组织后不得残留上一个
+ * 组织上下文下的缓存。
  */
 const UNSCOPED_ORG_DATA_KEYS: readonly QueryKey[] = [
 	queryKeys.home.all,
@@ -246,6 +249,7 @@ const UNSCOPED_ORG_DATA_KEYS: readonly QueryKey[] = [
 	queryKeys.organizations.currentStem,
 	// 建账状态自 ToB R1 起按组织解析（组织偏好决定是否已建账），不再是公共缓存
 	queryKeys.onboarding.all,
+	queryKeys.dataRequests.all,
 ];
 
 /**
@@ -254,6 +258,12 @@ const UNSCOPED_ORG_DATA_KEYS: readonly QueryKey[] = [
  * 2. 再 removeQueries 清除：**任意组织**的带前缀缓存（旧组织数据不留存内存，
  *    切回时重新拉取）+ 随组织变化的无前缀键 + 组织详情；
  * 3. 公共缓存保留（汇率、币种/模型白名单、认证、组织列表——与当前组织无关）。
+ *
+ * 边界（评审 R2-I07）：removeQueries 只是把查询移出缓存，**不会通知仍挂载的
+ * QueryObserver**。未订阅组织 store 的组件不会因此重渲染，其观察者继续绑在已移除
+ * 的旧查询上——页面停在旧组织数据且零请求发往新组织。所以本函数不能单独保证
+ * 切换后页面刷新：受保护区的业务子树由 OrganizationScopeBoundary 按组织 key 重新
+ * 挂载（app/(protected)/layout.tsx），二者缺一不可。
  */
 export function clearOrganizationScopedQueries(queryClient: QueryClient): void {
 	const isOrganizationData: QueryPredicate = (query) =>

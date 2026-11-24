@@ -1,5 +1,6 @@
 import { captureApiError } from "@/lib/dev-log/monitor";
-import { clearToken, getToken } from "@/lib/auth/token";
+import { getToken } from "@/lib/auth/token";
+import { resetSessionContext } from "@/lib/auth/session-reset";
 import { useOrganizationStore } from "@/lib/stores/organization-store";
 
 // 从环境变量读取后端 API 地址（必需）。
@@ -153,12 +154,14 @@ export async function consumeOrganizationContextError(
 	);
 }
 
-/** 401：凭证与组织选择一并清除（换账号登录不得继承上一个账号的组织上下文） */
+/**
+ * 401：凭证与会话上下文一并清除（评审 R2-I10）——换账号登录不得继承上一个账号的
+ * 组织选择、会话级拒绝集合、在途 SSE 流与聊天运行时态。统一走 resetSessionContext。
+ * 查询缓存不在此清：401 之后经整页跳转进入登录页，内存态随页面重载消失；登录成功时
+ * resetSessionContext 还会再清一次。不做页面跳转（跳转统一由保护区 layout 处理）。
+ */
 export function handleUnauthorized(): void {
-	if (typeof window !== "undefined") {
-		clearToken();
-	}
-	useOrganizationStore.getState().clearActiveOrganization();
+	resetSessionContext();
 }
 
 export async function apiClient<T>(

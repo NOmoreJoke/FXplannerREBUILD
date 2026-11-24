@@ -22,6 +22,7 @@ import {
 import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import {
 	registerActiveStreamAbort,
+	releaseActiveStreamAbort,
 	selectAnyStreaming,
 	useChatStore,
 } from "@/lib/stores/chat-store";
@@ -206,18 +207,22 @@ export function useChat() {
 				});
 			} catch (streamError) {
 				// 请求未建立（409 busy / 429 / 400 / 网络失败）或建立前中断：
-				// 用户消息未落库，回滚乐观项无残留；错误态提示（abort 静默）
-				rollbackOptimistic();
-				if (!isAbortError(streamError)) {
-					if (isNew) {
-						setNewChatError(toErrorMessage(streamError));
-					} else {
-						setError(conversationId, toErrorMessage(streamError));
+				// 用户消息未落库，回滚乐观项无残留；错误态提示（abort 静默）。
+				// 归属判定（评审 R2-I09）：登记在册的仍是本流才清理运行时态——被切换组织
+				// 摘掉句柄的流，其状态已由 resetRuntime 清空，不得再写（可能已有新组织的流）
+				const ownsStream = releaseActiveStreamAbort(abort);
+				if (abortRef.current === abort) abortRef.current = null;
+				if (ownsStream) {
+					rollbackOptimistic();
+					if (!isAbortError(streamError) && !contextChanged()) {
+						if (isNew) {
+							setNewChatError(toErrorMessage(streamError));
+						} else {
+							setError(conversationId, toErrorMessage(streamError));
+						}
 					}
+					endStream(conversationId);
 				}
-				endStream(conversationId);
-				abortRef.current = null;
-				registerActiveStreamAbort(null);
 				return;
 			}
 
@@ -225,8 +230,10 @@ export function useChat() {
 			let currentId = conversationId;
 			try {
 				for await (const event of events) {
-					// 组织已切换：本流属于旧上下文，丢弃迟到帧并结束迭代
-					if (contextChanged()) break;
+					// 组织已切换，或本流已被外部中止：本流属于旧上下文，丢弃迟到帧并结束迭代。
+					// 只比对组织 id 不够（评审 R3-I04）：A→B→A 之后比较结果回到「未变化」，
+					// 被中止的旧流会把迟到帧写进同一会话上的新流；abort 信号是单调的，补上它
+					if (abort.signal.aborted || contextChanged()) break;
 					switch (event.type) {
 						case "meta": {
 							// meta 到达 = 用户消息已在服务端落库
@@ -285,30 +292,54 @@ export function useChat() {
 					}
 				}
 			} catch (loopError) {
-				if (!isAbortError(loopError)) {
-					// 流中断（网络断开等）：已收文本丢弃，错误态提示
+				// 流中断（网络断开等）：已收文本丢弃，错误态提示。
+				// 组织已切换或本流已被中止则不提示：前者是旧上下文的流，错误不得带进
+				// 新组织的会话视图；后者是用户主动停止或切换组织（评审 R3-I04）
+				if (
+					!isAbortError(loopError) &&
+					!abort.signal.aborted &&
+					!contextChanged()
+				) {
 					if (currentId !== null) {
 						setError(currentId, toErrorMessage(loopError));
 					}
 				}
 			} finally {
 				// 4. 收尾：清流式态 + invalidate 权威收敛（用户消息已落库，服务端为准）。
-				//    失效范围限定在**发起组织**的前缀键：无前缀词根匹配不到带前缀的键
-				//    （评审 I-19），全形态失效又会波及切换后的新组织
-				endStream(currentId);
-				if (currentId !== null) {
-					await queryClient.invalidateQueries({
-						queryKey: withOrgScope(sendOrgId, [...AI_MESSAGES_QUERY_STEM]),
-					});
-				} else {
-					setPendingUserContent(null);
+				//    评审 R2-I09：归属判定与注销必须在任何 await **之前**完成——下面的失效要等
+				//    网络往返，期间（同一组织或切换后的新组织）可能已开出另一条流。
+				//    评审 R3-I04：登记在册的已不是本流，只有两种情况——它被外部中止过
+				//    （abortActiveStream 同时重置运行时态，本流的流式态已不存在），或已有
+				//    后来者接管（同一会话 id 上现在是新流的流式态）。两种情况都不得再按
+				//    会话 id 清理，否则会截断新流、清掉它的流式文本并解锁输入框。
+				//    「外部中止必伴随运行时态重置」由 abortActiveStream 自身保证，不依赖
+				//    调用点；用户主动 stop() 不摘句柄，仍判归本流，照常清理。
+				const ownsStream = releaseActiveStreamAbort(abort);
+				if (abortRef.current === abort) abortRef.current = null;
+				if (ownsStream) {
+					if (currentId !== null) {
+						endStream(currentId);
+					} else {
+						// 创建中的流（meta 未到即结束）：清创建态与它的乐观消息——此刻没有后来者
+						endStream(null);
+						setPendingUserContent(null);
+					}
 				}
-				// 会话列表总是收敛（lastMessageAt/标题/计数；新建失败但已建会话的边缘场景也覆盖）
-				await queryClient.invalidateQueries({
-					queryKey: withOrgScope(sendOrgId, [...AI_CONVERSATIONS_QUERY_STEM]),
-				});
-				abortRef.current = null;
-				registerActiveStreamAbort(null);
+				// 失效范围限定在**发起组织**的前缀键：无前缀词根匹配不到带前缀的键
+				// （评审 I-19），全形态失效又会波及切换后的新组织。
+				// 组织已切换时发起组织的缓存已被移除，没有可失效的对象；本流已被取代时
+				// 同一会话的缓存是新流的，重拉会抹掉它的乐观消息（评审 R3-I04）
+				if (ownsStream && !contextChanged()) {
+					if (currentId !== null) {
+						await queryClient.invalidateQueries({
+							queryKey: withOrgScope(sendOrgId, [...AI_MESSAGES_QUERY_STEM]),
+						});
+					}
+					// 会话列表总是收敛（lastMessageAt/标题/计数；新建失败但已建会话的边缘场景也覆盖）
+					await queryClient.invalidateQueries({
+						queryKey: withOrgScope(sendOrgId, [...AI_CONVERSATIONS_QUERY_STEM]),
+					});
+				}
 			}
 		},
 		[

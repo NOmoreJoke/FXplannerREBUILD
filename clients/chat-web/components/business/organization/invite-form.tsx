@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { invitationsApi } from "@/lib/api/organizations";
 import type { components } from "@/lib/api/schema.gen";
-import { queryKeys } from "@/lib/api/query-keys";
+import { invalidateBusinessKey, queryKeys } from "@/lib/api/query-keys";
 import { useCurrentOrganization } from "@/lib/hooks/use-organizations";
 
 type InvitableRole = components["schemas"]["CreateInvitationDto"]["role"];
@@ -73,9 +73,7 @@ export function InviteForm() {
 					`${window.location.origin}/invitations/${created.token}`,
 				);
 			}
-			void queryClient.invalidateQueries({
-				queryKey: queryKeys.invitations.list(),
-			});
+			invalidateBusinessKey(queryClient, queryKeys.invitations.list());
 		},
 		onError: (err: Error) => {
 			setError(err.message);

@@ -121,20 +121,22 @@ export function isReminderBypassRoute(pathname: string | null | undefined): bool
  */
 export function useReminderGate(pathname: string | null | undefined) {
 	const isBypassed = isReminderBypassRoute(pathname);
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07 / R2-I10）
+	const orgId = useActiveOrgId();
 
 	const onboardingStatusQuery = useQuery({
-		queryKey: queryKeys.onboarding.status(),
+		queryKey: withOrgScope(orgId, queryKeys.onboarding.status()),
 		queryFn: onboardingApi.getStatus,
-		enabled: !isBypassed,
+		enabled: !isBypassed && orgId !== null,
 		staleTime: 5 * 60 * 1000,
 		retry: false,
 	});
 	const isOnboarded = onboardingStatusQuery.data?.completed === true;
 
 	const settingsQuery = useQuery({
-		queryKey: queryKeys.settings.detail(),
+		queryKey: withOrgScope(orgId, queryKeys.settings.detail()),
 		queryFn: settingsApi.getSettings,
-		enabled: !isBypassed && isOnboarded,
+		enabled: !isBypassed && orgId !== null && isOnboarded,
 		retry: false,
 	});
 	const reminderEnabled = settingsQuery.data?.reminderEnabled === true;

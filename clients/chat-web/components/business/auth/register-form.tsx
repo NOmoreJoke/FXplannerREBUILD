@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
+import { useQueryClient } from "@tanstack/react-query";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
@@ -11,8 +12,7 @@ import { authApi } from "@/lib/api/auth";
 import { onboardingApi } from "@/lib/api/onboarding";
 import { ApiError } from "@/lib/api/client";
 import { safeRedirectPath } from "@/lib/auth/safe-redirect-path";
-import { setToken } from "@/lib/auth/token";
-import { useAuthStore } from "@/lib/stores/auth-store";
+import { beginAuthenticatedSession } from "@/lib/auth/session-reset";
 import { PasswordInput } from "@/components/base";
 
 /**
@@ -37,12 +37,12 @@ type RegisterFormData = z.infer<typeof registerSchema>;
 export function RegisterForm() {
 	const router = useRouter();
 	const searchParams = useSearchParams();
-	const setUser = useAuthStore((s) => s.setUser);
+	const queryClient = useQueryClient();
 	const redirect = searchParams.get("redirect");
 	const [isLoading, setIsLoading] = useState(false);
 
 	// 合规勾选（FE-08：与登录页「登录即用」同级交互，两项独立、默认不勾）。
-	// 注册即登录：setToken 后随首次会话提交 saveConsents（失败不阻塞，
+	// 注册即登录：写入新会话后随首次会话提交 saveConsents（失败不阻塞，
 	// 未建账用户由建账后端校验兜底）。未全勾时拦截提交。
 	const [age18Confirmed, setAge18Confirmed] = useState(false);
 	const [termsConfirmed, setTermsConfirmed] = useState(false);
@@ -67,9 +67,14 @@ export function RegisterForm() {
 			setIsLoading(true);
 			const result = await authApi.register(data);
 
-			// token 只写 cookie（唯一事实来源），注册即登录
-			setToken(result.accessToken);
-			setUser(result.user);
+			// token 只写 cookie（唯一事实来源），注册即登录。
+			// 评审 R2-I10：与登录同口径——写入新 token 之前重置会话上下文，
+			// 上一个账号持久化的组织选择、聊天态与查询缓存不得带入新账号
+			beginAuthenticatedSession({
+				accessToken: result.accessToken,
+				user: result.user,
+				queryClient,
+			});
 
 			// 随注册会话提交合规确认（同登录页 finishLogin 语义；失败不阻塞，
 			// 未建账用户完成建账时后端会再次校验并拦截）

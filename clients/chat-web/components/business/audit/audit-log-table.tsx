@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { auditApi } from "@/lib/api/organizations";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import { useCurrentOrganization } from "@/lib/hooks/use-organizations";
 import { AuditFilter, type AuditFilterQuery } from "./audit-filter";
 import { PageLoading } from "@/components/base";
@@ -15,19 +16,27 @@ import { PageLoading } from "@/components/base";
  * - 无 audit.read capability（Operator/Viewer）显示无权限提示。
  * 组织上下文（capabilities）加载完成前先渲染加载态——评审 I-20：此前 capabilities
  * 尚为 undefined 时即判「无权」，每次进入页面都闪现一次无权限提示。
+ *
+ * 组织隔离（评审 R2-I08）：查询键按当前组织分桶，且占位数据只在**同一组织内**沿用
+ * （翻页/改筛选不闪白）。此前键不含组织且无条件 keepPreviousData：从组织 A 切到
+ * 组织 B（都有 audit.read）期间，回显的是 A 的审计记录并沿用 A 的筛选与页码。
+ * 筛选/页码等本地态的重置由布局的组织作用域边界（切换即重新挂载）保证。
  */
 export function AuditLogTable() {
 	const { data: current } = useCurrentOrganization();
+	const orgId = useActiveOrgId();
 	const [page, setPage] = useState(1);
 	const [filter, setFilter] = useState<AuditFilterQuery>({});
 
 	const canRead = current?.capabilities["audit.read"] === true;
 
 	const { data, isLoading, isError, refetch } = useQuery({
-		queryKey: [...queryKeys.auditLogs.list(), page, filter],
+		queryKey: withOrgScope(orgId, [...queryKeys.auditLogs.list(), page, filter]),
 		queryFn: () => auditApi.list({ page, pageSize: 20, ...filter }),
-		enabled: Boolean(current) && canRead,
-		placeholderData: keepPreviousData,
+		enabled: orgId !== null && Boolean(current) && canRead,
+		// 仅同一组织内沿用上一次数据：跨组织不把上一个组织的审计记录当占位
+		placeholderData: (previousData, previousQuery) =>
+			previousQuery?.queryKey[1] === orgId ? previousData : undefined,
 		retry: false,
 	});
 

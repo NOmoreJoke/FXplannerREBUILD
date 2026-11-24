@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { membersApi, type MemberView } from "@/lib/api/organizations";
-import { queryKeys } from "@/lib/api/query-keys";
+import { invalidateBusinessKey, queryKeys } from "@/lib/api/query-keys";
 
 /**
  * 所有权转移对话框（需求 MEM-02.2/ORG-03.3；W21）：
@@ -22,9 +22,7 @@ export function TransferOwnershipDialog({ target }: { target: MemberView }) {
 		onSuccess: () => {
 			setOpen(false);
 			setError(null);
-			void queryClient.invalidateQueries({
-				queryKey: queryKeys.members.list(),
-			});
+			invalidateBusinessKey(queryClient, queryKeys.members.list());
 			// 组织详情键按组织 id 分桶：用词根失效；列表里的本人角色也随之变化
 			void queryClient.invalidateQueries({
 				queryKey: queryKeys.organizations.currentStem,

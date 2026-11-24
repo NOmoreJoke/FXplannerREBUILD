@@ -2,7 +2,12 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invitationsApi } from "@/lib/api/organizations";
-import { queryKeys } from "@/lib/api/query-keys";
+import {
+	invalidateBusinessKey,
+	queryKeys,
+	withOrgScope,
+} from "@/lib/api/query-keys";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import { useCurrentOrganization } from "@/lib/hooks/use-organizations";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -20,18 +25,18 @@ const STATUS_LABELS: Record<string, string> = {
 export function InvitationList() {
 	const { data: current } = useCurrentOrganization();
 	const queryClient = useQueryClient();
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
+	const orgId = useActiveOrgId();
 	const { data: invitations, isLoading } = useQuery({
-		queryKey: queryKeys.invitations.list(),
+		queryKey: withOrgScope(orgId, queryKeys.invitations.list()),
 		queryFn: () => invitationsApi.list(),
-		enabled: Boolean(current),
+		enabled: orgId !== null && Boolean(current),
 	});
 
 	const revokeMutation = useMutation({
 		mutationFn: (id: string) => invitationsApi.revoke(id),
 		onSuccess: () => {
-			void queryClient.invalidateQueries({
-				queryKey: queryKeys.invitations.list(),
-			});
+			invalidateBusinessKey(queryClient, queryKeys.invitations.list());
 		},
 	});
 

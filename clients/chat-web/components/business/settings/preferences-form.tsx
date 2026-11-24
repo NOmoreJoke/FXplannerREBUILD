@@ -16,8 +16,13 @@ import {
 import { ApiError } from "@/lib/api/client";
 import type { SettingsView, UpdateSettingsReq } from "@/lib/api/contract";
 import { getCurrencyName } from "@/lib/api/currencies";
-import { queryKeys } from "@/lib/api/query-keys";
+import {
+	invalidateBusinessKey,
+	queryKeys,
+	withOrgScope,
+} from "@/lib/api/query-keys";
 import { settingsApi } from "@/lib/api/settings";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 
 /**
  * 偏好设置表单（规格模块 4：个人设置 + 偏好两分区，数据逻辑承载组件）
@@ -68,10 +73,14 @@ interface PreferencesFormState {
 export function PreferencesForm() {
 	const queryClient = useQueryClient();
 	const [form, setForm] = useState<PreferencesFormState | null>(null);
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）。表单本地态随布局的
+	// 组织作用域边界在切换时重新挂载而重置
+	const orgId = useActiveOrgId();
 
 	const query = useQuery({
-		queryKey: SETTINGS_QUERY_KEY,
+		queryKey: withOrgScope(orgId, SETTINGS_QUERY_KEY),
 		queryFn: settingsApi.getSettings,
+		enabled: orgId !== null,
 		retry: false, // 401 由 apiClient 统一处理；409/其余失败交给下方分支
 	});
 
@@ -91,7 +100,8 @@ export function PreferencesForm() {
 		mutationFn: settingsApi.updateSettings,
 		onSuccess: () => {
 			toast.success("设置已保存");
-			void queryClient.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY });
+			// 失效全部形态（无前缀 + 任意组织前缀），回读当前组织的设置
+			invalidateBusinessKey(queryClient, SETTINGS_QUERY_KEY);
 		},
 		onError: (error) => {
 			toast.error(

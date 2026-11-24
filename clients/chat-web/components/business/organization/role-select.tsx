@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { membersApi, type MemberView } from "@/lib/api/organizations";
 import type { components } from "@/lib/api/schema.gen";
-import { queryKeys } from "@/lib/api/query-keys";
+import { invalidateBusinessKey, queryKeys } from "@/lib/api/query-keys";
 
 type AssignableRole = components["schemas"]["UpdateMemberDto"]["role"];
 
@@ -56,9 +56,7 @@ export function RoleSelect({
 			membersApi.updateRole(member.id, { role }),
 		onSuccess: () => {
 			setError(null);
-			void queryClient.invalidateQueries({
-				queryKey: queryKeys.members.list(),
-			});
+			invalidateBusinessKey(queryClient, queryKeys.members.list());
 		},
 		onError: (err: Error) => setError(err.message),
 	});

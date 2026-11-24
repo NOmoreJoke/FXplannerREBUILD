@@ -24,11 +24,14 @@ export function LeaveOrganizationButton() {
 	}
 
 	const confirmLeave = () => {
-		leave.mutate(undefined, {
-			onSuccess: () => {
-				router.replace("/home");
-			},
-		});
+		// 导航不能放在 mutate 的调用点回调里（评审 R3-I02）：useLeaveOrganization 的
+		// hook 级 onSuccess 同步清空组织选择，受保护区布局随即整屏替换、卸载本组件；
+		// 调用点回调只向仍挂载的观察者派发，router.replace 永不执行——用户停留在
+		// 已无权访问的成员页。mutateAsync 的 Promise 与挂载态无关；失败态由 leave.error
+		// 展示，这里只需接住拒绝，避免未处理的 Promise 拒绝
+		void leave
+			.mutateAsync()
+			.then(() => router.replace("/home"), () => {});
 	};
 
 	return (

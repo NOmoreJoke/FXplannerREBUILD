@@ -25,9 +25,11 @@ vi.hoisted(() => {
 });
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { act } from "@testing-library/react";
 import { useOrganizationStore } from "@/lib/stores/organization-store";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import {
 	isReminderBypassRoute,
 	useMarkReminderRead,
@@ -116,6 +118,20 @@ const createWrapper = () => {
 	return ({ children }: { children: React.ReactNode }) => (
 		<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 	);
+};
+
+/** 同上，但同时暴露 QueryClient（断言缓存键形态用） */
+const createWrapperWithClient = () => {
+	const queryClient = new QueryClient({
+		defaultOptions: {
+			queries: { retry: false },
+			mutations: { retry: false },
+		},
+	});
+	const Wrapper = ({ children }: { children: React.ReactNode }) => (
+		<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+	);
+	return { queryClient, Wrapper };
 };
 
 describe("useReminders", () => {
@@ -244,6 +260,54 @@ describe("useMarkReminderRead", () => {
 describe("useReminderGate（未建账与锁定期请求门控，F1-3 / DEBT-06）", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		// 门控查询按组织门控且键按组织分桶（评审 R2-I07 / R2-I10）——显式选中组织，
+		// 不依赖前一个 describe 留下的 store 状态
+		useOrganizationStore.setState({
+			activeOrganizationId: "org-test",
+			activeOrganizationSetAt: 0,
+			rejectedOrganizationIds: [],
+		});
+	});
+
+	it("R2-I10：未选组织时零 onboarding / settings / reminders 请求（铃铛不得抢发无组织头的请求）", async () => {
+		useOrganizationStore.setState({ activeOrganizationId: null });
+		const { result } = renderHook(() => useReminderGate("/home"), {
+			wrapper: createWrapper(),
+		});
+		await act(async () => {
+			await Promise.resolve();
+		});
+		expect(onboardingApi.getStatus).not.toHaveBeenCalled();
+		expect(settingsApi.getSettings).not.toHaveBeenCalled();
+		expect(remindersApi.list).not.toHaveBeenCalled();
+		expect(result.current.isOnboarded).toBe(false);
+	});
+
+	it("R2-I07：门控查询键按组织分桶——切换组织后 onboarding/settings 重新拉取，不沿用上一个组织的缓存", async () => {
+		vi.mocked(onboardingApi.getStatus).mockResolvedValue({
+			completed: false,
+			requiredConsentsMet: true,
+			settings: null,
+			currentTermsVersion: "2026-01",
+		});
+		const { queryClient, Wrapper } = createWrapperWithClient();
+		const { rerender } = renderHook(() => useReminderGate("/home"), {
+			wrapper: Wrapper,
+		});
+		await waitFor(() => expect(onboardingApi.getStatus).toHaveBeenCalledTimes(1));
+		// 键不含组织时，这里读到的是无前缀键（上一个组织的缓存会被沿用）
+		expect(
+			queryClient.getQueryData(
+				withOrgScope("org-test", queryKeys.onboarding.status()),
+			),
+		).toMatchObject({ completed: false });
+
+		// 切到另一组织：门控按新组织键重新拉取建账状态（不同组织建账态不同）
+		act(() => {
+			useOrganizationStore.setState({ activeOrganizationId: "org-other" });
+		});
+		rerender();
+		await waitFor(() => expect(onboardingApi.getStatus).toHaveBeenCalledTimes(2));
 	});
 
 	it("useReminders({ enabled: false }) 不触发 GET /reminders", () => {
