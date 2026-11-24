@@ -187,7 +187,7 @@ export async function seedRegisterAndLogin(label: string): Promise<{
 	};
 }
 
-/** 完成初始化设置（POST consents + complete）：仅用于构造 baseCurrency */
+/** 完成初始化设置（POST consents + complete）：仅用于构造 baseCurrency（重试幂等） */
 export async function seedOnboarding(
 	token: string,
 	baseCurrency = "CNY",
@@ -197,17 +197,29 @@ export async function seedOnboarding(
 		token,
 		body: { age18Confirmed: true, termsConfirmed: true },
 	});
-	await api("/api/onboarding/complete", {
-		method: "POST",
-		token,
-		body: {
-			baseCurrency,
-			locale: "zh-CN",
-			region: "CN",
-			prepPreference: "balanced",
-			reminderEnabled: true,
-		},
-	});
+	try {
+		await api("/api/onboarding/complete", {
+			method: "POST",
+			token,
+			body: {
+				baseCurrency,
+				locale: "zh-CN",
+				region: "CN",
+				prepPreference: "balanced",
+				reminderEnabled: true,
+			},
+		});
+	} catch (error) {
+		// Playwright 重试复用同一次运行的测试用户时，首次设置已完成（409 ONBOARDING_ALREADY_COMPLETED）
+		// 视为幂等成功，不阻断 beforeAll（与 seedRegisterAndLogin 同口径）
+		const message = error instanceof Error ? error.message : String(error);
+		if (
+			!message.includes("ONBOARDING_ALREADY_COMPLETED") &&
+			!message.includes("首次设置已完成")
+		) {
+			throw error;
+		}
+	}
 }
 
 /** 录入一笔买入（汇率 1：本金 = 到账数量，fee=0），返回交易 id */

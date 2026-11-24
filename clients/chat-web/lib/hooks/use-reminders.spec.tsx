@@ -327,6 +327,11 @@ describe("useReminderGate（未建账与锁定期请求门控，F1-3 / DEBT-06�
 		// 邀请页：受邀者可能尚无组织/未选组织，铃铛的业务请求会被 400 ORGANIZATION_REQUIRED
 		// 拒绝并把人从邀请页带走（外部评审前端批次）
 		expect(isReminderBypassRoute("/invitations/invite-token-123")).toBe(true);
+		expect(isReminderBypassRoute("/invitations")).toBe(true);
+		// 按路径段匹配：同前缀的其他路径不误豁免（与 isOrglessRouteAllowed 同口径）
+		expect(isReminderBypassRoute("/invitations-old")).toBe(false);
+		expect(isReminderBypassRoute("/onboarding-test")).toBe(false);
+		expect(isReminderBypassRoute("/data-requests-v2")).toBe(false);
 		expect(isReminderBypassRoute("/home")).toBe(false);
 
 		for (const path of ["/onboarding", "/data-requests", "/invitations/tok-1"]) {

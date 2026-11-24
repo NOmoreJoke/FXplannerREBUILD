@@ -179,6 +179,14 @@ describe("AuditService：独立拒绝审计与只读分页", () => {
 				response: { code: "INVALID_AUDIT_TIME" },
 			});
 		}
+		// 独立用例自给数据：单独按 -t 过滤运行时不依赖前序用例的审计记录
+		await audit.recordStandalone({
+			organizationId,
+			actorUserId: userId,
+			actorType: "USER",
+			action: "test.r3-i06-edge",
+			result: "SUCCESS",
+		});
 		// 边界内的极值照常可用：UTC 年恰为 0001 与 9999
 		const edges = await audit.listAuditLogs(organizationId, {
 			from: "0001-01-01T00:00:00.000Z",

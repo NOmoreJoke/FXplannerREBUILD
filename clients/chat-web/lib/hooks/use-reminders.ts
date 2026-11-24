@@ -5,6 +5,7 @@ import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import { settingsApi } from "@/lib/api/settings";
 import type { ReminderItem } from "@/lib/api/contract";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
+import { isOrglessRouteAllowed } from "@/lib/hooks/use-organizations";
 import { useOrganizationStore } from "@/lib/stores/organization-store";
 
 /**
@@ -104,12 +105,17 @@ export function useMarkAllRemindersRead() {
  *   onboarding/settings/reminders 请求会收到 400 ORGANIZATION_REQUIRED，
  *   此前会把人从邀请页重定向走，邀请流程对新用户直接断掉。
  */
+function matchesRouteSegment(path: string, prefix: string): boolean {
+	return path === prefix || path.startsWith(`${prefix}/`);
+}
+
 export function isReminderBypassRoute(pathname: string | null | undefined): boolean {
 	if (!pathname) return false;
+	const path = pathname.split(/[?#]/, 1)[0] ?? "";
 	return (
-		pathname.startsWith("/onboarding") ||
-		pathname.startsWith("/data-requests") ||
-		pathname.startsWith("/invitations")
+		matchesRouteSegment(path, "/onboarding") ||
+		matchesRouteSegment(path, "/data-requests") ||
+		isOrglessRouteAllowed(path)
 	);
 }
 

@@ -188,13 +188,19 @@ async function openStreamResponse(
 			signal: params.signal,
 		});
 	} catch (error) {
-		// 网络层失败（断网 / CORS / 服务不可用）：上报本地开发日志（与 apiClient 对齐）
-		captureApiError({
-			endpoint,
-			method: "POST",
-			kind: "network",
-			message: error instanceof Error ? error.message : String(error),
-		});
+		// 主动中止（切换组织 / 用户点击停止）：属预期控制流，不记为网络故障
+		const isAborted =
+			params.signal?.aborted === true ||
+			(error instanceof Error && error.name === "AbortError");
+		if (!isAborted) {
+			// 网络层失败（断网 / CORS / 服务不可用）：上报本地开发日志（与 apiClient 对齐）
+			captureApiError({
+				endpoint,
+				method: "POST",
+				kind: "network",
+				message: error instanceof Error ? error.message : String(error),
+			});
+		}
 		throw error;
 	}
 

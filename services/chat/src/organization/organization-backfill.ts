@@ -102,6 +102,7 @@ interface OrphanCounts {
 	usage_lot_allocations: number;
 	usage_records: number;
 	plan_change_logs: number;
+	cost_lots: number;
 }
 
 /**
@@ -122,19 +123,26 @@ export async function assertNoOrphanRows(db: Db): Promise<OrphanCounts> {
 			(SELECT count(*) FROM usage_records u
 				LEFT JOIN plans p ON p.id = u.plan_id WHERE p.id IS NULL) AS usage_records,
 			(SELECT count(*) FROM plan_change_logs c
-				LEFT JOIN plans p ON p.id = c.plan_id WHERE p.id IS NULL) AS plan_change_logs
+				LEFT JOIN plans p ON p.id = c.plan_id WHERE p.id IS NULL) AS plan_change_logs,
+			(SELECT count(*) FROM cost_lots l
+				WHERE (l.source_type = 'INITIAL' AND NOT EXISTS (
+						SELECT 1 FROM initial_holdings h WHERE h.id = l.source_id))
+					OR (l.source_type = 'PURCHASE' AND NOT EXISTS (
+						SELECT 1 FROM transactions t WHERE t.id = l.source_id))) AS cost_lots
 	`;
 	const counts: OrphanCounts = {
 		plan_allocations: Number(rows[0]?.plan_allocations ?? 0n),
 		usage_lot_allocations: Number(rows[0]?.usage_lot_allocations ?? 0n),
 		usage_records: Number(rows[0]?.usage_records ?? 0n),
 		plan_change_logs: Number(rows[0]?.plan_change_logs ?? 0n),
+		cost_lots: Number(rows[0]?.cost_lots ?? 0n),
 	};
 	const total =
 		counts.plan_allocations +
 		counts.usage_lot_allocations +
 		counts.usage_records +
-		counts.plan_change_logs;
+		counts.plan_change_logs +
+		counts.cost_lots;
 	if (total > 0) {
 		throw new BackfillAnomalyError(
 			"MIG-B 孤儿派生行阻断：父记录缺失，禁止归组（技术方案 §12.2.5）",

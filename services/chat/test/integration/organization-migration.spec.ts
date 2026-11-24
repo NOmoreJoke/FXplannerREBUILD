@@ -677,6 +677,30 @@ describe("MIG-B 默认组织回填与核对", () => {
 				plan_allocations: 1,
 			}),
 		});
+
+		// CostLot 来源孤儿（PURCHASE 无交易行）同样在预检阶段阻断
+		const orphanLot = await db.costLot.create({
+			data: {
+				userId: orphanUserId,
+				currencyCode: "USD",
+				sourceType: "PURCHASE",
+				sourceId: `${RUN}-missing-tx`,
+				quantity: "1.0000",
+				remainingQty: "1.0000",
+				unitCost: "7.00000000",
+				totalCost: "7.0000",
+				acquiredAt: new Date(),
+			},
+		});
+		try {
+			await expect(
+				backfillDefaultOrganizations(db, { userIds: scopeUserIds() }),
+			).rejects.toMatchObject({
+				details: expect.objectContaining({ cost_lots: 1 }),
+			});
+		} finally {
+			await db.costLot.delete({ where: { id: orphanLot.id } });
+		}
 	});
 
 	test("跨组织父子不一致：核对显式报差异（§12.3.7）", async () => {

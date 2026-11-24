@@ -53,6 +53,11 @@ export class PermissionGuard implements CanActivate {
 		}
 
 		// DENIED 审计（尽力而为：审计异常不掩盖 403；仅纯读拒绝场景，独立写）
+		const rawRequestId = request.headers["x-request-id"];
+		const requestId =
+			typeof rawRequestId === "string" && rawRequestId.trim().length > 0
+				? rawRequestId.trim()
+				: null;
 		try {
 			await this.auditService.recordStandalone({
 				organizationId: actor.organizationId,
@@ -60,6 +65,7 @@ export class PermissionGuard implements CanActivate {
 				actorType: "USER",
 				action: `permission.denied.${required}`,
 				result: "DENIED",
+				requestId,
 				detail: { required, role: actor.role },
 			});
 		} catch (error) {

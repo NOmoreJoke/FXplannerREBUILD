@@ -286,13 +286,29 @@ describe("OrganizationController（e2e）", () => {
 	});
 
 	it("R3-N1：改名取锁后重读操作者——Guard 放行后被降权的 Admin 改名 → 403，不留成功审计", async () => {
-		const orgId = orgIds[0]!;
+		// 独立用例自给数据：单独按 -t 过滤运行时不依赖前序用例已创建组织与成员
+		let orgId = orgIds[0];
+		if (!orgId) {
+			const created = await request(app.getHttpServer())
+				.post("/api/organizations")
+				.set("Authorization", `Bearer ${owner.accessToken}`)
+				.send({ name: "锁内降权测试组织" })
+				.expect(201);
+			orgId = created.body.data.id as string;
+			orgIds.push(orgId);
+		}
 		const memberWhere = {
 			organizationId_userId: { organizationId: orgId, userId: member.userId },
 		};
-		await ctx.prisma.membership.update({
+		await ctx.prisma.membership.upsert({
 			where: memberWhere,
-			data: { role: "ADMIN" },
+			create: {
+				organizationId: orgId,
+				userId: member.userId,
+				role: "ADMIN",
+				status: "ACTIVE",
+			},
+			update: { role: "ADMIN", status: "ACTIVE" },
 		});
 		const auditWhere = { organizationId: orgId, action: "organization.update" };
 		const auditCountBefore = await ctx.prisma.auditLog.count({

@@ -474,4 +474,16 @@ describe("streamMessage（fetch + 响应校验协议）", () => {
 			(init.headers as Record<string, string>).Authorization,
 		).toBeUndefined();
 	});
+
+	it("主动中止（AbortError）：静默透传，不误报为 dev-log 网络错误", async () => {
+		const controller = new AbortController();
+		const abortError = new DOMException("Aborted", "AbortError");
+		fetchMock.mockRejectedValueOnce(abortError);
+		controller.abort();
+
+		await expect(
+			streamMessage({ content: "你好", signal: controller.signal }),
+		).rejects.toThrow("Aborted");
+		expect(captureApiError).not.toHaveBeenCalled();
+	});
 });
