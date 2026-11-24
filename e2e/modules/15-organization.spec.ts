@@ -5,6 +5,8 @@ import { saveScreenshot } from "../helpers/save-screenshot";
 import {
 	api,
 	injectLoginCookie,
+	seedOnboarding,
+	seedPlanWithAllocation,
 	seedRegisterAndLogin,
 } from "../helpers/api-seeder";
 import type { components } from "../../clients/chat-web/lib/api/schema.gen";
@@ -17,8 +19,12 @@ import type { components } from "../../clients/chat-web/lib/api/schema.gen";
  * 待人类启服验收」（AGENTS.md 服务禁令；验收后按实际 UI 细节修订定位器）。
  *
  * 串行依赖链（serial）：001–003 建组/邀请 → 004 受邀接受 → 005 角色调整 →
- * 006 审计留痕 → 007–008 受邀者的权限边界与退出 → 009–010 所有者的多组织与登出。
- * 前序状态缺失时直接断言失败，不用 test.skip 静默跳过。
+ * 006 审计留痕 → 007–007B 受邀者的权限边界与切换组织 → 008 受邀者退出 →
+ * 009–010 所有者的多组织与登出。前序状态缺失时直接断言失败，不用 test.skip 静默跳过。
+ *
+ * 夹具口径（评审 R2-I13）：beforeAll 为所有者与受邀者**都完成建账**。首页在未建账时
+ * 会立即 replace 到 /onboarding——不建账的话 T-ORG-002（在首页点侧栏）与 T-ORG-008
+ * （退出后断言停在 /home）都会与这次重定向竞态。
  *
  * 覆盖断言点（需求 §13/§15.1/§15.2）：
  * - T-ORG-001: 登录后单组织直达——侧栏组织切换器显示默认组织名（注册兜底建组）
@@ -28,6 +34,7 @@ import type { components } from "../../clients/chat-web/lib/api/schema.gen";
  * - T-ORG-005: 成员角色调整——Owner 将成员调整为 VIEWER，立即生效
  * - T-ORG-006: 审计页只读——组织创建/邀请/接受/角色调整留痕可见；无编辑入口
  * - T-ORG-007: 权限边界——多组织未选先进入选择页；Viewer 不显示审计入口，直接访问审计页显示无权限
+ * - T-ORG-007B: 切换组织后挂载态页面数据刷新——停在计划列表页切换组织，旧组织数据不残留
  * - T-ORG-008: 成员退出——Viewer 退出组织后回到单组织态
  * - T-ORG-009: 新建组织与切换——创建后进入新组织，可切回原组织
  * - T-ORG-010: 登出清除组织选择（换账号登录不得继承上一个账号的组织上下文）
@@ -57,6 +64,22 @@ async function pickOrganization(page: Page, orgName: string): Promise<void> {
 	await option.click();
 }
 
+/** 经多组织下拉切换器切换：先点开当前组织，再在选项里点目标组织 */
+async function switchOrganization(
+	page: Page,
+	currentOrgName: string,
+	targetOrgName: string,
+): Promise<void> {
+	const switcher = page.getByTestId("organization-switcher");
+	await switcher
+		.getByRole("button", { name: new RegExp(escapeRegExp(currentOrgName)) })
+		.click();
+	await switcher
+		.getByRole("option", { name: new RegExp(escapeRegExp(targetOrgName)) })
+		.getByRole("button")
+		.click();
+}
+
 test.describe("【组织工作台】切换 / 成员 / 邀请 / 审计", () => {
 	test.describe.configure({ mode: "serial" });
 
@@ -64,14 +87,29 @@ test.describe("【组织工作台】切换 / 成员 / 邀请 / 审计", () => {
 	let inviteeSeed: Seed;
 	/** 所有者注册兜底创建的默认组织名（侧栏/选择页/邀请摘要的共同锚点） */
 	let ownerOrgName = "";
+	/** 受邀者默认组织里的一条具名计划（T-ORG-007B：区分「当前显示的是哪个组织的数据」） */
+	let inviteePlanName = "";
 	let inviteUrl = "";
 
 	test.beforeAll(async () => {
 		seed = await seedRegisterAndLogin("org-owner");
 		inviteeSeed = await seedRegisterAndLogin("org-invitee");
+		// 两名用户此刻都只有一个组织：不带组织头的建账请求由后端映射到各自唯一的组织
+		await seedOnboarding(seed.accessToken, "CNY");
+		await seedOnboarding(inviteeSeed.accessToken, "CNY");
 		const ownerOrgs = await listOrganizations(seed.accessToken);
 		ownerOrgName = ownerOrgs[0]?.name ?? "";
 		expect(ownerOrgName.length).toBeGreaterThan(0);
+		// T-ORG-007B 的可见数据造在受邀者名下（评审 R3-I03）：计划写路径尚未组织化
+		// （Goal #3B），落库 organizationId = NULL，只在计划所有者自己的默认组织上下文可见；
+		// 受邀者在所有者组织是非默认上下文，看不到所有者的计划
+		inviteePlanName = `E2E 受邀者计划 ${Date.now()}`;
+		await seedPlanWithAllocation(
+			inviteeSeed.accessToken,
+			"USD",
+			"0",
+			inviteePlanName,
+		);
 	});
 
 	async function openProtected(page: Page, path: string, accessToken: string) {
@@ -247,6 +285,43 @@ test.describe("【组织工作台】切换 / 成员 / 邀请 / 审计", () => {
 		await logger.saveToFile();
 	});
 
+	test("T-ORG-007B: 切换组织后挂载态页面数据刷新——停在计划列表页切换，旧组织数据不残留", async ({
+		page,
+	}) => {
+		logger.log("action", "info", "开始：切换组织后的页面数据刷新");
+		logger.setupPageListeners(page);
+		// 受邀者现有两个**已建账**组织：自己的默认组织（有一条计划）+ 所有者的组织（对受邀者
+		// 而言没有可见计划）。评审 R3-I03：所有者的计划落库 organizationId = NULL（写路径尚未
+		// 组织化），只在所有者自己的默认组织上下文可见，受邀者读不到——可见数据因此造在
+		// 受邀者名下，本用例是「一边有计划、一边为空」的不对称形态。
+		// 评审 R2-I07：此前停在无前缀查询的页面上切换组织，页面会永久冻结在旧组织的数据
+		// 且零请求发往新组织——本用例要求不重载页面即完成数据切换
+		const inviteeOrgs = await listOrganizations(inviteeSeed.accessToken);
+		const ownOrg = inviteeOrgs.find((org) => org.name !== ownerOrgName);
+		expect(ownOrg).toBeDefined();
+
+		// 多组织未选 → 先经选择页进入自己的组织；计划列表可见那条计划
+		await openProtected(page, "/plans", inviteeSeed.accessToken);
+		await pickOrganization(page, ownOrg!.name);
+		await expect(page).toHaveURL(`${BASE_URL}/plans`);
+		const ownPlanCard = page
+			.locator('a[href^="/plans/"]:not([href="/plans/new"])')
+			.filter({ hasText: inviteePlanName });
+		await expect(ownPlanCard).toBeVisible();
+
+		// 经切换器切到所有者的组织：地址不变（没有整页跳转），旧组织的计划不再显示
+		await switchOrganization(page, ownOrg!.name, ownerOrgName);
+		await expect(page).toHaveURL(`${BASE_URL}/plans`);
+		await expect(page.getByText("还没有换汇计划")).toBeVisible();
+		await expect(page.getByText(inviteePlanName)).toHaveCount(0);
+
+		// 再切回：自己组织的数据随之回来
+		await switchOrganization(page, ownerOrgName, ownOrg!.name);
+		await expect(ownPlanCard).toBeVisible();
+		await saveScreenshot(page, "15-organization", "T-ORG-007B-switch-back");
+		await logger.saveToFile();
+	});
+
 	test("T-ORG-008: 成员退出——Viewer 退出组织后回到单组织态", async ({
 		page,
 	}) => {
@@ -306,6 +381,10 @@ test.describe("【组织工作台】切换 / 成员 / 邀请 / 审计", () => {
 		logger.log("action", "info", "开始：登出清除组织选择");
 		logger.setupPageListeners(page);
 		await openProtected(page, "/organization", seed.accessToken);
+		// T-ORG-009 之后所有者有两个组织，而本用例是全新浏览器上下文（无持久化选择）：
+		// 受保护区布局会先整屏渲染组织选择页——必须先选中组织，组织信息页才会出现
+		// （评审 R2-I13：此前缺这一步，本用例 100% 必挂）
+		await pickOrganization(page, ownerOrgName);
 		await expect(page.getByTestId("organization-form")).toBeVisible();
 
 		await page.getByRole("button", { name: "退出登录" }).click();

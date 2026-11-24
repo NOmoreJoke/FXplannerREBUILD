@@ -34,6 +34,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  ├─ hooks/                        # 自定义 hooks
 │  ├─ lib/
 │  │  ├─ api/                       # 后端 API 客户端
+│  │  ├─ auth/                      # 会话上下文重置、回跳地址白名单与跳转、token cookie
 │  │  ├─ dev-log/                   # 本地开发错误采集（@sentry/browser → dev-log-server）
 │  │  ├─ stores/                    # zustand 状态
 │  │  └─ utils.ts                   # 工具函数
@@ -94,7 +95,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │     └─ playwright-report/         # HTML 报告
 │
 ├─ infra/compose/                   # Docker Compose + Dockerfile
-├─ scripts/                         # 工程脚本（init / test / worktree / check-structure / lint-observe）+ __tests__/
+├─ scripts/                         # 工程脚本（init / test / worktree / check-structure / lint-observe）+ __tests__/（bun test：工具链与跨包一致性对照）
 ├─ changes/                         # ⛔ 变更文档唯一位置（需求/方案/验收），按功能名称分目录
 │  ├─ tob-agent-workspace/          # ToB 组织工作台与 Agent 需求和技术方案
 │  └─ realtime-rate/                # MVP-F0 汇率回补与缓存迁移实施底稿（Goal #1 任务 B/C 执行口径）
@@ -139,12 +140,20 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | 组织工作台前端页面 | `clients/chat-web/app/(protected)/organization/`（信息/成员/审计）、`clients/chat-web/app/(protected)/invitations/[token]/` |
 | 组织/审计业务组件 | `clients/chat-web/components/business/{organization,audit}/`，带 index.ts 桶文件 |
 | 组织上下文前端状态 | `clients/chat-web/lib/stores/organization-store.ts`（仅存 `activeOrganizationId`，严禁持久化 role/capabilities） |
+| 组织数据的查询作用域 | 键一律 `withOrgScope(orgId, …)` 且 `enabled: orgId !== null`（`useActiveOrgId()`）；失效走 `invalidateBusinessKey`；受保护区业务区整体包在 `OrganizationScopeBoundary` 内（切组织按 key 重新挂载——`removeQueries` 不通知挂载态的观察者，单靠清缓存页面会冻结在旧组织数据） |
+| 不依赖组织上下文的受保护路由 | `isOrglessRouteAllowed`（`clients/chat-web/lib/hooks/use-organizations.ts`）：路由分流免检、业务区边界传 `bypass` 不重挂载，两处共用同一判定；这类页面自己切换组织，重挂载会清掉页面内的结果态 |
+| 切换组织类回调里的后续动作 | hook 级回调同步改组织选择会让布局卸载调用方组件，`mutate(…, { onSuccess })` 的调用点回调不再派发——导航等后续动作用 `mutateAsync().then(…)` 或写进 hook 级回调，不依赖挂载态 |
+| 外部中止当前流 | 一律调 `abortActiveStream()`（`clients/chat-web/lib/stores/chat-store.ts`，同时重置聊天运行时态）；`use-chat` 收尾以句柄归属决定是否清理，只中止不重置会永久锁死输入框 |
+| 默认组织（个人工作台）判定 | `services/chat/src/authorization/default-organization.ts`：用户创建的最早组织；建组织必须嵌套写入（组织与首位成员同事务创建）；回填 / 核对 SQL 的 `defaults` CTE 与之同口径 |
+| 持锁写的操作者资格 | 组织锁内一律经 `lockOrganizationForActor` 重读操作者并以最新角色判定，不得沿用 Guard 放行时的 `actor.role`（等待锁期间可能已被降权 / 移除 / 失去所有权） |
+| 会话上下文重置 | `clients/chat-web/lib/auth/session-reset.ts`：登录 / 注册 / 登出 / 401 的唯一入口；业务代码不单独清组织选择、拒绝集合或聊天运行时态 |
 | 组织 E2E 用例 | `e2e/modules/15-organization.spec.ts`（Goal #3A W21 落盘骨架，人类启服后运行） |
 | MVP-F0 汇率回补与缓存迁移底稿 | `changes/realtime-rate/` |
 | 汇率缓存迁移完成记录与行归属 DDL | `services/chat/prisma/migrations/20261120090000_rate_cache_migration_receipt/` |
 | 汇率回源方向标记 DDL | `services/chat/prisma/migrations/20261120091000_rate_cache_canonical_write/` |
 | 验证与防回归规范 | `docs/VERIFY.md`（验证分级、属性/差分测试、Diff 触发检查）、`docs/FEATURE-MAP.md`（用户视角功能地图） |
 | 确定性静态护栏 | `eslint.config.mjs`（架构边界/禁定时器/禁新裸写 useEffect/money 零 IO）、`scripts/check-structure.ts`（目录与契约头守卫） |
+| 前端 / 服务端脱敏规则对照 | `clients/chat-web/lib/dev-log/mask.ts` 与 `packages/dev-log-server/src/mask.ts` 的邀请规则手工同步；`scripts/__tests__/mask-parity.spec.ts` 用同一组向量跑两份实现，改一处必须让对照用例通过 |
 | 迭代路线与工作流手册 | `docs/ITERATION-REFACTOR-ROADMAP-20261119.md`、`docs/VIBE-CODING-PLAYBOOK.md` |
 | 跨会话交接文档   | `docs/handoff/`（夜间批次产出：OVERNIGHT-* / 接力目标提示词：GOAL-* / 状态快照；需求/方案/验收仍归 `changes/`） |
 
