@@ -5,7 +5,10 @@ import { AuditService } from "../audit/audit.service";
 import { canManage, normalizeEmail } from "../authorization/permission-policy";
 import { PermissionDeniedException } from "../authorization/authorization.errors";
 import type { ActorContext, OrganizationRole } from "../authorization/authorization.types";
-import { lockOrganizationMembership } from "./default-organization";
+import {
+	lockOrganizationForActor,
+	lockOrganizationMembership,
+} from "./default-organization";
 import {
 	generateInvitationToken,
 	hashInvitationToken,
@@ -90,6 +93,21 @@ export class InvitationService {
 		return [...ids];
 	}
 
+	/** 邀请资格（禁邀 OWNER；Admin 仅可邀请普通角色）——锁前快速拒绝与锁内复验共用 */
+	private assertInviteEligibility(
+		actorRole: OrganizationRole,
+		targetRole: string,
+	): void {
+		if (
+			targetRole === "OWNER" ||
+			!canManage(actorRole, targetRole as OrganizationRole, "invite")
+		) {
+			throw new PermissionDeniedException(
+				"当前角色不可发出该角色的邀请（禁邀 OWNER；Admin 仅可邀请普通角色）",
+			);
+		}
+	}
+
 	/**
 	 * 创建/幂等复用邀请（member.invite；禁邀 OWNER）。
 	 * 组织锁内：已 ACTIVE 成员 → 409；同邮箱有效邀请 → 幂等复用（不重发 token）。
@@ -107,17 +125,15 @@ export class InvitationService {
 		reused: boolean;
 	}> {
 		const email = normalizeEmail(input.email);
-		// 资格：目标位按将加入后的角色判定（邀请 OWNER 一律拒绝，需求 7.1.1）
-		if (input.role === "OWNER" || !canManage(actor.role, input.role as OrganizationRole, "invite")) {
-			throw new PermissionDeniedException(
-				"当前角色不可发出该角色的邀请（禁邀 OWNER；Admin 仅可邀请普通角色）",
-			);
-		}
+		// 锁前快速拒绝（不产副作用）；锁内以最新角色复验（R2-I01）
+		this.assertInviteEligibility(actor.role, input.role);
 
 		const now = new Date();
 		const token = generateInvitationToken();
 		const result = await this.prisma.$transaction(async (tx) => {
-			await lockOrganizationMembership(tx, actor.organizationId);
+			// 锁内重读操作者：等待锁期间被降权/移除则 403/404（R2-I01）
+			const actorRole = await lockOrganizationForActor(tx, actor);
+			this.assertInviteEligibility(actorRole, input.role);
 
 			// I-02：已是有效成员 → 拒绝（禁止借邀请覆写既有成员角色）
 			const existingUserIds = await this.findUserIdsByEmail(tx, email);
@@ -237,13 +253,18 @@ export class InvitationService {
 			throw new PermissionDeniedException("当前角色不可管理邀请");
 		}
 		return this.prisma.$transaction(async (tx) => {
-			await lockOrganizationMembership(tx, actor.organizationId);
+			// 锁内重读操作者：等待锁期间被降权/移除则 403/404（R2-I01）
+			const actorRole = await lockOrganizationForActor(tx, actor);
+			// 先验总资格再查行：已无邀请管理权者对任意 id 统一 403，不泄露存在性
+			if (!canManage(actorRole, "VIEWER", "invite")) {
+				throw new PermissionDeniedException("当前角色不可管理邀请");
+			}
 			const row = await tx.organizationInvitation.findFirst({
 				where: { id: invitationId, organizationId: actor.organizationId },
 			});
 			if (!row) throw new InvitationNotFoundException();
 			// I-03：按邀请角色判定资格（Admin 不可撤回 Owner 发出的 Admin 角色邀请）
-			if (!canManage(actor.role, row.role as OrganizationRole, "invite")) {
+			if (!canManage(actorRole, row.role as OrganizationRole, "invite")) {
 				throw new PermissionDeniedException("当前角色无权撤回该角色的邀请");
 			}
 			const now = new Date();

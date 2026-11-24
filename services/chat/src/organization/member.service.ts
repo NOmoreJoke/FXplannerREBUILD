@@ -8,8 +8,12 @@ import {
 	type ActorContext,
 	type OrganizationRole,
 } from "../authorization/authorization.types";
-import { lockOrganizationMembership } from "./default-organization";
+import {
+	lockOrganizationForActor,
+	lockOrganizationMembership,
+} from "./default-organization";
 import { isLastActiveOwner } from "./organization-rules";
+import { materializeLegacyOrganizationSettings } from "./organization-preferences";
 import {
 	InvalidRoleException,
 	LastOwnerRequiredException,
@@ -30,8 +34,12 @@ import {
  *   409 LAST_OWNER_REQUIRED（§6.3），Admin 对 Owner → 403（评审 I-04）；
  * - 每个变更事务先取组织级 advisory 锁再读状态，并以「期望角色/状态」条件更新
  *   落库（评审 I-06：READ COMMITTED 读后写竞态串行化，0 命中即 409 回滚）；
+ * - 操作者资格在锁内以其最新角色复验（评审 R2-I01：等待锁期间被降权/移除的
+ *   操作者不得沿用 Guard 放行时的旧角色；经 lockOrganizationForActor 重读）；
  * - 所有权转移事务顺序：**先降原 Owner 为 ADMIN，再升目标为 OWNER**
  *   （memberships_single_active_owner_uidx 部分唯一索引，GOAL W19 显式要求）；
+ * - 转移前固化组织偏好：组织设置仍靠所有者个人设置回落时，先落成
+ *   OrganizationSettings（评审 R2-I03：回落以所有者为锚，换所有者即失效）；
  * - 全部变更同事务写审计。
  */
 @Injectable()
@@ -81,7 +89,8 @@ export class MemberService {
 			throw new InvalidRoleException("目标角色非法（禁止直接调整为 OWNER）");
 		}
 		return this.prisma.$transaction(async (tx) => {
-			await lockOrganizationMembership(tx, actor.organizationId);
+			// 锁内重读操作者：资格判定只用此刻的角色（R2-I01）
+			const actorRole = await lockOrganizationForActor(tx, actor);
 			const target = await tx.membership.findFirst({
 				where: { id: membershipId, organizationId: actor.organizationId },
 			});
@@ -89,18 +98,18 @@ export class MemberService {
 
 			if (target.role === "OWNER") {
 				// 单活跃 Owner 不变量：目标 OWNER ⇒ 即操作者本人的自降
-				if (actor.role === "OWNER") throw new LastOwnerRequiredException();
+				if (actorRole === "OWNER") throw new LastOwnerRequiredException();
 				throw new PermissionDeniedException(
 					"当前角色无权调整所有者（Admin 不可管理 Owner）",
 				);
 			}
-			if (!canManage(actor.role, target.role as OrganizationRole, "update")) {
+			if (!canManage(actorRole, target.role as OrganizationRole, "update")) {
 				throw new PermissionDeniedException(
 					"当前角色无权调整该成员（Admin 不可管理 Owner/Admin）",
 				);
 			}
 			// 新角色侧资格（I-01）：Admin 只能在其可管理范围内调整，不得提拔为 Admin
-			if (!canManage(actor.role, newRole, "update")) {
+			if (!canManage(actorRole, newRole, "update")) {
 				throw new PermissionDeniedException(
 					"当前角色无权将成员调整为该角色（Admin 不可提拔为 Admin）",
 				);
@@ -142,19 +151,20 @@ export class MemberService {
 		requestId?: string | null,
 	): Promise<{ id: string; status: string }> {
 		return this.prisma.$transaction(async (tx) => {
-			await lockOrganizationMembership(tx, actor.organizationId);
+			// 锁内重读操作者：资格判定只用此刻的角色（R2-I01）
+			const actorRole = await lockOrganizationForActor(tx, actor);
 			const target = await tx.membership.findFirst({
 				where: { id: membershipId, organizationId: actor.organizationId },
 			});
 			if (!target) throw new MemberNotFoundException();
 
 			if (target.role === "OWNER") {
-				if (actor.role === "OWNER") throw new LastOwnerRequiredException();
+				if (actorRole === "OWNER") throw new LastOwnerRequiredException();
 				throw new PermissionDeniedException(
 					"当前角色无权移除所有者（Admin 不可管理 Owner）",
 				);
 			}
-			if (!canManage(actor.role, target.role as OrganizationRole, "remove")) {
+			if (!canManage(actorRole, target.role as OrganizationRole, "remove")) {
 				throw new PermissionDeniedException(
 					"当前角色无权移除该成员（Admin 不可管理 Owner/Admin）",
 				);
@@ -260,6 +270,14 @@ export class MemberService {
 					throw new InvalidRoleException("仅有效成员可接任所有权");
 				}
 
+				// R2-I03：组织偏好若仍靠「所有者个人设置」兼容回落支撑，会随所有权一起
+				// 失效（新所有者的个人设置不代表本组织）——转移前先固化为本组织自己的设置
+				const settingsMaterialized =
+					await materializeLegacyOrganizationSettings(
+						tx,
+						actor.organizationId,
+					);
+
 				// 先降原 Owner（释放部分唯一索引槽位）：须仍为 ACTIVE OWNER，否则并发已变更
 				const demoted = await tx.membership.updateMany({
 					where: {
@@ -295,6 +313,7 @@ export class MemberService {
 						fromMembershipId: actor.membershipId,
 						toMembershipId: targetMembershipId,
 						toUserId: target.userId,
+						settingsMaterialized,
 					},
 				});
 				return {

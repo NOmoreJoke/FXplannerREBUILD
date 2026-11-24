@@ -95,13 +95,24 @@ export async function reconcileMigration(
 	}
 
 	// 1. 默认组织映射完整性：每个用户都有默认组织（回填前 = 全部用户，属预期）。
-	//    默认组织 = 最早的 ACTIVE OWNER 成员关系所属组织（与运行时判定同口径）。
+	//    默认组织 = 用户创建的最早组织（组织的第一个成员，且成员关系与组织同事务
+	//    创建），与运行时 resolveDefaultOrganizationId 同口径；defaults CTE 在本文件
+	//    出现 4 次，改一处须同步其余与运行时函数。
+	//    评审 R2-I05：以下各项一律 LEFT JOIN defaults——无默认组织的用户，其行不得被
+	//    内连接静默丢弃（此前整批假报 0 差异），一律计为未映射。
 	const [missingDefault] = await db.$queryRaw<Array<{ n: bigint }>>`
-		WITH defaults AS (
-			SELECT DISTINCT ON (m.user_id) m.user_id, m.organization_id
+		WITH first_members AS (
+			SELECT DISTINCT ON (m.organization_id)
+				m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
 			FROM memberships m
-			WHERE m.role = 'OWNER' AND m.status = 'ACTIVE'
-			ORDER BY m.user_id, m.joined_at ASC, m.created_at ASC
+			ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+		),
+		defaults AS (
+			SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+			FROM first_members f
+			JOIN organizations o ON o.id = f.organization_id
+			WHERE f.created_at = o.created_at
+			ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
 		)
 		SELECT count(*) AS n FROM users u
 		LEFT JOIN defaults d ON d.user_id = u.id
@@ -111,44 +122,51 @@ export async function reconcileMigration(
 
 	// 2. 行集恒等（§12.3.1–5、§12.3.7）：每张表的 organization_id 必须等于行用户的默认组织
 	const [mapped] = await db.$queryRaw<Array<RowMappedCounts>>`
-		WITH defaults AS (
-			SELECT DISTINCT ON (m.user_id) m.user_id, m.organization_id
+		WITH first_members AS (
+			SELECT DISTINCT ON (m.organization_id)
+				m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
 			FROM memberships m
-			WHERE m.role = 'OWNER' AND m.status = 'ACTIVE'
-			ORDER BY m.user_id, m.joined_at ASC, m.created_at ASC
+			ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+		),
+		defaults AS (
+			SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+			FROM first_members f
+			JOIN organizations o ON o.id = f.organization_id
+			WHERE f.created_at = o.created_at
+			ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
 		)
 		SELECT
-			(SELECT count(*) FROM accounts t JOIN defaults d ON d.user_id = t.user_id
-				WHERE t.organization_id IS DISTINCT FROM d.organization_id
+			(SELECT count(*) FROM accounts t LEFT JOIN defaults d ON d.user_id = t.user_id
+				WHERE (d.organization_id IS NULL OR t.organization_id IS DISTINCT FROM d.organization_id)
 					AND (NOT ${sharded} OR t.user_id = ANY(${ids}::text[]))) AS accounts,
-			(SELECT count(*) FROM transactions t JOIN defaults d ON d.user_id = t.user_id
-				WHERE t.organization_id IS DISTINCT FROM d.organization_id
+			(SELECT count(*) FROM transactions t LEFT JOIN defaults d ON d.user_id = t.user_id
+				WHERE (d.organization_id IS NULL OR t.organization_id IS DISTINCT FROM d.organization_id)
 					AND (NOT ${sharded} OR t.user_id = ANY(${ids}::text[]))) AS transactions,
-			(SELECT count(*) FROM initial_holdings t JOIN defaults d ON d.user_id = t.user_id
-				WHERE t.organization_id IS DISTINCT FROM d.organization_id
+			(SELECT count(*) FROM initial_holdings t LEFT JOIN defaults d ON d.user_id = t.user_id
+				WHERE (d.organization_id IS NULL OR t.organization_id IS DISTINCT FROM d.organization_id)
 					AND (NOT ${sharded} OR t.user_id = ANY(${ids}::text[]))) AS initial_holdings,
-			(SELECT count(*) FROM cost_lots t JOIN defaults d ON d.user_id = t.user_id
-				WHERE t.organization_id IS DISTINCT FROM d.organization_id
+			(SELECT count(*) FROM cost_lots t LEFT JOIN defaults d ON d.user_id = t.user_id
+				WHERE (d.organization_id IS NULL OR t.organization_id IS DISTINCT FROM d.organization_id)
 					AND (NOT ${sharded} OR t.user_id = ANY(${ids}::text[]))) AS cost_lots,
-			(SELECT count(*) FROM plans t JOIN defaults d ON d.user_id = t.user_id
-				WHERE t.organization_id IS DISTINCT FROM d.organization_id
+			(SELECT count(*) FROM plans t LEFT JOIN defaults d ON d.user_id = t.user_id
+				WHERE (d.organization_id IS NULL OR t.organization_id IS DISTINCT FROM d.organization_id)
 					AND (NOT ${sharded} OR t.user_id = ANY(${ids}::text[]))) AS plans,
-			(SELECT count(*) FROM usage_records t JOIN defaults d ON d.user_id = t.user_id
-				WHERE t.organization_id IS DISTINCT FROM d.organization_id
+			(SELECT count(*) FROM usage_records t LEFT JOIN defaults d ON d.user_id = t.user_id
+				WHERE (d.organization_id IS NULL OR t.organization_id IS DISTINCT FROM d.organization_id)
 					AND (NOT ${sharded} OR t.user_id = ANY(${ids}::text[]))) AS usage_records,
-			(SELECT count(*) FROM corrections t JOIN defaults d ON d.user_id = t.user_id
-				WHERE t.organization_id IS DISTINCT FROM d.organization_id
+			(SELECT count(*) FROM corrections t LEFT JOIN defaults d ON d.user_id = t.user_id
+				WHERE (d.organization_id IS NULL OR t.organization_id IS DISTINCT FROM d.organization_id)
 					AND (NOT ${sharded} OR t.user_id = ANY(${ids}::text[]))) AS corrections,
-			(SELECT count(*) FROM reminders t JOIN defaults d ON d.user_id = t.user_id
-				WHERE t.organization_id IS DISTINCT FROM d.organization_id
+			(SELECT count(*) FROM reminders t LEFT JOIN defaults d ON d.user_id = t.user_id
+				WHERE (d.organization_id IS NULL OR t.organization_id IS DISTINCT FROM d.organization_id)
 					AND (NOT ${sharded} OR t.user_id = ANY(${ids}::text[]))) AS reminders,
-			(SELECT count(*) FROM ai_conversations t JOIN defaults d ON d.user_id = t.user_id
-				WHERE t.organization_id IS DISTINCT FROM d.organization_id
+			(SELECT count(*) FROM ai_conversations t LEFT JOIN defaults d ON d.user_id = t.user_id
+				WHERE (d.organization_id IS NULL OR t.organization_id IS DISTINCT FROM d.organization_id)
 					AND (NOT ${sharded} OR t.user_id = ANY(${ids}::text[]))) AS ai_conversations,
 			(SELECT count(*) FROM plan_change_logs c
 				JOIN plans p ON p.id = c.plan_id
-				JOIN defaults d ON d.user_id = p.user_id
-				WHERE c.organization_id IS DISTINCT FROM d.organization_id
+				LEFT JOIN defaults d ON d.user_id = p.user_id
+				WHERE (d.organization_id IS NULL OR c.organization_id IS DISTINCT FROM d.organization_id)
 					AND (NOT ${sharded} OR p.user_id = ANY(${ids}::text[]))) AS plan_change_logs`;
 	for (const table of ROW_MAPPED_TABLES) {
 		expectZero(`row_mapping.${table}`, mapped?.[table] ?? 0n);
@@ -245,21 +263,30 @@ export async function reconcileMigration(
 	}
 
 	// 5. DataRequest 语义映射（§12.2.7）：EXPORT/DELETION 为 PERSONAL 且不挂组织；
-	//    历史 CLEAR 归属默认组织（scope=ORGANIZATION）
+	//    历史 CLEAR 归属默认组织（scope=ORGANIZATION）。
+	//    defaults CTE 同第 1 项口径；无默认组织的用户的数据请求计为未映射（R2-I05）
 	const [dataRequests] = await db.$queryRaw<Array<{ n: bigint }>>`
-		WITH defaults AS (
-			SELECT DISTINCT ON (m.user_id) m.user_id, m.organization_id
+		WITH first_members AS (
+			SELECT DISTINCT ON (m.organization_id)
+				m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
 			FROM memberships m
-			WHERE m.role = 'OWNER' AND m.status = 'ACTIVE'
-			ORDER BY m.user_id, m.joined_at ASC, m.created_at ASC
+			ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+		),
+		defaults AS (
+			SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+			FROM first_members f
+			JOIN organizations o ON o.id = f.organization_id
+			WHERE f.created_at = o.created_at
+			ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
 		)
 		SELECT count(*) AS n FROM data_requests r
-		JOIN defaults d ON d.user_id = r.user_id
-		WHERE ((r.type IN ('EXPORT', 'DELETION')
-				AND (r.scope <> 'PERSONAL' OR r.organization_id IS NOT NULL))
-			OR (r.type = 'CLEAR'
-				AND (r.scope <> 'ORGANIZATION'
-					OR r.organization_id IS DISTINCT FROM d.organization_id)))
+		LEFT JOIN defaults d ON d.user_id = r.user_id
+		WHERE (d.organization_id IS NULL
+			OR ((r.type IN ('EXPORT', 'DELETION')
+					AND (r.scope <> 'PERSONAL' OR r.organization_id IS NOT NULL))
+				OR (r.type = 'CLEAR'
+					AND (r.scope <> 'ORGANIZATION'
+						OR r.organization_id IS DISTINCT FROM d.organization_id))))
 			AND (NOT ${sharded} OR r.user_id = ANY(${ids}::text[]))`;
 	expectZero("data_request.scope_mapping", dataRequests?.n ?? 0n);
 
@@ -274,17 +301,26 @@ export async function reconcileMigration(
 	expectZero("reminder_read.parity", reminderReads?.n ?? 0n);
 
 	// 7. 组织设置与记账起点（§12.3.6）：有 UserSettings 的用户，其默认组织必有
-	//    同值的 OrganizationSettings（迁移复制不丢不改）
+	//    同值的 OrganizationSettings（迁移复制不丢不改）。
+	//    defaults CTE 同第 1 项口径；无默认组织的用户的个人设置计为「缺组织设置」
+	//    （回填会为其新建组织并复制，与 dry-run 的 organizationSettingsCreated 同口径，R2-I05）
 	const [settings] = await db.$queryRaw<Array<{ mismatch: bigint; missing: bigint }>>`
-		WITH defaults AS (
-			SELECT DISTINCT ON (m.user_id) m.user_id, m.organization_id
+		WITH first_members AS (
+			SELECT DISTINCT ON (m.organization_id)
+				m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
 			FROM memberships m
-			WHERE m.role = 'OWNER' AND m.status = 'ACTIVE'
-			ORDER BY m.user_id, m.joined_at ASC, m.created_at ASC
+			ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+		),
+		defaults AS (
+			SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+			FROM first_members f
+			JOIN organizations o ON o.id = f.organization_id
+			WHERE f.created_at = o.created_at
+			ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
 		)
 		SELECT
 			(SELECT count(*) FROM user_settings s
-				JOIN defaults d ON d.user_id = s.user_id
+				LEFT JOIN defaults d ON d.user_id = s.user_id
 				JOIN organization_settings o ON o.organization_id = d.organization_id
 				WHERE (o.base_currency <> s.base_currency
 						OR o.prep_preference <> s.prep_preference
@@ -292,10 +328,10 @@ export async function reconcileMigration(
 						OR o.ledger_started_at IS DISTINCT FROM s.ledger_started_at)
 					AND (NOT ${sharded} OR s.user_id = ANY(${ids}::text[]))) AS mismatch,
 			(SELECT count(*) FROM user_settings s
-				JOIN defaults d ON d.user_id = s.user_id
-				WHERE NOT EXISTS (
+				LEFT JOIN defaults d ON d.user_id = s.user_id
+				WHERE (d.organization_id IS NULL OR NOT EXISTS (
 						SELECT 1 FROM organization_settings o
-						WHERE o.organization_id = d.organization_id)
+						WHERE o.organization_id = d.organization_id))
 					AND (NOT ${sharded} OR s.user_id = ANY(${ids}::text[]))) AS missing`;
 	expectZero("settings_parity.value_mismatch", settings?.mismatch ?? 0n);
 	expectZero("settings_parity.missing", settings?.missing ?? 0n);

@@ -1,11 +1,49 @@
 import { describe, expect, it } from "vitest";
+import fc from "fast-check";
 import { Prisma } from "@prisma/client";
 
 import {
 	AUDIT_DETAIL_MAX_BYTES,
 	isSensitiveKey,
 	sanitizeAuditDetail,
+	SENSITIVE_PHRASES,
 } from "./audit-sanitizer";
+
+/** 是否含落单的 UTF-16 代理项（PostgreSQL JSONB 会拒绝，整条业务事务随之回滚） */
+function hasLoneSurrogate(value: string): boolean {
+	for (let index = 0; index < value.length; index += 1) {
+		const unit = value.charCodeAt(index);
+		if (unit >= 0xd800 && unit <= 0xdbff) {
+			const next = value.charCodeAt(index + 1);
+			if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+			index += 1;
+		} else if (unit >= 0xdc00 && unit <= 0xdfff) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * 取出产出值里的全部字符串并断言良构。必须检查值本身而不是 JSON.stringify 的结果：
+ * JSON.stringify 会把落单代理项转义成 \\udXXX 文本，先序列化再检查永远查不到缺陷。
+ */
+function expectWellFormedUtf16(value: unknown, label: string): void {
+	const strings: string[] = [];
+	const collect = (node: unknown) => {
+		if (typeof node === "string") strings.push(node);
+		else if (Array.isArray(node)) node.forEach(collect);
+		else if (node !== null && typeof node === "object") {
+			Object.values(node).forEach(collect);
+		}
+	};
+	collect(value);
+	for (const text of strings) {
+		expect(hasLoneSurrogate(text), `${label}：${JSON.stringify(text.slice(0, 40))}…`).toBe(
+			false,
+		);
+	}
+}
 
 /**
  * 审计脱敏防愚弄测试（AUDIT-02 / §13.2；W16 必配；评审 I-14 词根匹配）。
@@ -63,6 +101,302 @@ describe("isSensitiveKey：按词匹配（覆盖仓内真实字段名，不误�
 		]) {
 			expect(isSensitiveKey(key), `键 ${key} 不应判敏感`).toBe(false);
 		}
+	});
+
+	it("R2-I04：缩写 + 大写词、复数、凭据头名此前全部漏网，现全部命中", () => {
+		for (const key of [
+			// 缩写边界未拆：otpcode / smscode / devcode / jwttoken / httpsecret 不在词表
+			"OTPCode",
+			"SMSCode",
+			"DEVCode",
+			"JWTToken",
+			"HTTPSecret",
+			"IDToken",
+			"APIKey",
+			"XAPIKey",
+			// 复数形态
+			"cookies",
+			"secrets",
+			"passwords",
+			"passcodes",
+			// 凭据头名 / 复合词
+			"bearer",
+			"AuthorizationBearer",
+			"accessKey",
+			"secretKey",
+			"clientSecret",
+			"signingSecret",
+			"X-API-Key",
+			"jwt",
+			"JWT",
+			"jwtToken",
+			"otpCode",
+			"xapikey",
+		]) {
+			expect(isSensitiveKey(key), `键 ${key} 应判敏感`).toBe(true);
+		}
+	});
+
+	it("R2-I04：补缩写切词后，业务键不被误伤（缩写 + 词 / *Key / *Code / *Count）", () => {
+		for (const key of [
+			"currencyCode",
+			"errorCode",
+			"httpStatus",
+			"UTCOffset",
+			"ISOCode",
+			"FXRate",
+			"USDAmount",
+			"dedupKey",
+			"idempotencyKey",
+			"sortKey",
+			"keyName",
+			"changeCount",
+			"planCode",
+			"inviteCount",
+			"smsProvider",
+		]) {
+			expect(isSensitiveKey(key), `键 ${key} 不应判敏感`).toBe(false);
+		}
+	});
+
+	// 评审 R3-N4：切词后「key2 / keys」不是词表里的「key」，带序号 / 复数的复合键漏网
+	it("R3-N4：带序号后缀 / 名词复数的复合键命中", () => {
+		for (const key of [
+			"apiKey2",
+			"apiKey_2",
+			"API_KEY2",
+			"apiKeys",
+			"accessKeys",
+			"accessKey3",
+			"privateKeys",
+			"privateKey2",
+			"sessionKeys",
+			"sessionIds",
+			"sessionKey2",
+			"authCodes",
+			"authCode2",
+			"devCodes",
+			"smsCodes",
+			"emailCodes",
+			"verificationCodes",
+			"invitationCodes",
+			"loginCodes",
+			"securityCodes",
+			"idTokens",
+			"xapiKeys",
+			// 单词表的词带序号
+			"cvv2",
+			"otp2",
+			"pwd1",
+			"secretKey2",
+		]) {
+			expect(isSensitiveKey(key), `键 ${key} 应判敏感`).toBe(true);
+		}
+		// 序号 / 复数本身不构成敏感：复合词仍须含敏感词
+		for (const key of [
+			"keys",
+			"key2",
+			"ids",
+			"id2",
+			"accounts",
+			"indexes",
+			"codes",
+			"count2",
+			"page2",
+			"limit2",
+			"orgKeys",
+			"cacheKeys",
+		]) {
+			expect(isSensitiveKey(key), `键 ${key} 不应判敏感`).toBe(false);
+		}
+	});
+});
+
+describe("isSensitiveKey：词形归一的属性测试（评审 R3-N4）", () => {
+	/** 两词的拼接风格：直接相连 / 驼峰 / 下划线 / 中划线 */
+	const joinStyles = [
+		(head: string, tail: string) => `${head}${tail}`,
+		(head: string, tail: string) =>
+			`${head}${tail.charAt(0).toUpperCase()}${tail.slice(1)}`,
+		(head: string, tail: string) => `${head}_${tail}`,
+		(head: string, tail: string) => `${head}-${tail}`,
+	];
+	const withOrdinal = (word: string, ordinal: number) =>
+		word + (ordinal === 0 ? "" : String(ordinal));
+
+	it("任一敏感短语：任一词带序号、末词带复数（序号在复数前或后）→ 任意拼接风格都判敏感", () => {
+		fc.assert(
+			fc.property(
+				fc.constantFrom(...SENSITIVE_PHRASES),
+				fc.nat(999),
+				fc.nat(999),
+				fc.constantFrom("", "s", "es"),
+				fc.boolean(),
+				fc.nat(joinStyles.length - 1),
+				(phrase, headOrdinal, tailOrdinal, plural, pluralFirst, styleIndex) => {
+					const [head, tail] = phrase.split(" ") as [string, string];
+					// 全小写直接相连时词与词之间没有可切分的边界：词首序号只对带分隔信息的
+					// 风格（驼峰 / 下划线 / 中划线）生成——api1key 不是真实的键名形态
+					const headWord =
+						styleIndex === 0 ? head : withOrdinal(head, headOrdinal);
+					const tailWord = pluralFirst
+						? withOrdinal(`${tail}${plural}`, tailOrdinal)
+						: `${withOrdinal(tail, tailOrdinal)}${plural}`;
+					const key = joinStyles[styleIndex]!(headWord, tailWord);
+					expect(isSensitiveKey(key), `键 ${key}`).toBe(true);
+				},
+			),
+		);
+	});
+
+	it("对偶：不含敏感词的业务复合键，加序号 / 复数后仍不判敏感", () => {
+		const businessWords = [
+			"currency",
+			"account",
+			"count",
+			"page",
+			"limit",
+			"status",
+			"error",
+			"plan",
+			"rate",
+			"amount",
+			"index",
+			"usage",
+			"name",
+			"total",
+		];
+		fc.assert(
+			fc.property(
+				fc.constantFrom(...businessWords),
+				fc.constantFrom(...businessWords),
+				fc.nat(999),
+				fc.nat(999),
+				fc.constantFrom("", "s", "es"),
+				fc.boolean(),
+				fc.constantFrom(...joinStyles),
+				(head, tail, headOrdinal, tailOrdinal, plural, pluralFirst, join) => {
+					const tailWord = pluralFirst
+						? withOrdinal(`${tail}${plural}`, tailOrdinal)
+						: `${withOrdinal(tail, tailOrdinal)}${plural}`;
+					const key = join(withOrdinal(head, headOrdinal), tailWord);
+					expect(isSensitiveKey(key), `键 ${key}`).toBe(false);
+				},
+			),
+		);
+	});
+});
+
+describe("sanitizeAuditDetail：产出必须是合法 JSON 值（评审 R2-I04「永不阻断业务写」）", () => {
+	/** 模拟 Prisma 对 JSONB detail 的校验：任何非 JSON 值都会让 create 被拒绝 */
+	function assertJsonRoundTrip(value: unknown): unknown {
+		const serialized = JSON.stringify(value);
+		expect(serialized).toBeDefined();
+		return JSON.parse(serialized);
+	}
+
+	it("NaN / Infinity / -Infinity → null；function / Symbol → null", () => {
+		const result = sanitizeAuditDetail({
+			notANumber: Number.NaN,
+			positive: Number.POSITIVE_INFINITY,
+			negative: Number.NEGATIVE_INFINITY,
+			fn: () => "leak",
+			symbol: Symbol("leak"),
+			fine: 1.5,
+			zero: 0,
+			text: "x",
+		}) as Record<string, unknown>;
+		expect(result).toEqual({
+			notANumber: null,
+			positive: null,
+			negative: null,
+			fn: null,
+			symbol: null,
+			fine: 1.5,
+			zero: 0,
+			text: "x",
+		});
+		expect(JSON.stringify(result)).not.toContain("leak");
+		// 嵌套与数组内同样成立（数组里的 undefined / function 按 JSON 语义为 null）
+		const nested = sanitizeAuditDetail({
+			list: [Number.NaN, undefined, () => 1, Symbol("s"), 2],
+			deep: { inner: { value: Number.POSITIVE_INFINITY } },
+		}) as Record<string, unknown>;
+		expect(nested.list).toEqual([null, null, null, null, 2]);
+		expect(nested.deep).toEqual({ inner: { value: null } });
+		expect(assertJsonRoundTrip(result)).toEqual(result);
+	});
+
+	it("任意二进制视图 / ArrayBuffer → [BINARY]，不以十进制明文串化", () => {
+		const secretBytes = [7, 5, 3, 9, 1];
+		const result = sanitizeAuditDetail({
+			buffer: Buffer.from(secretBytes),
+			uint8: new Uint8Array(secretBytes),
+			int32: new Int32Array(secretBytes),
+			float64: new Float64Array([1.25, 2.5]),
+			dataView: new DataView(new Uint8Array(secretBytes).buffer),
+			arrayBuffer: new Uint8Array(secretBytes).buffer,
+		}) as Record<string, unknown>;
+		expect(Object.values(result)).toEqual(
+			Array.from({ length: 6 }, () => "[BINARY]"),
+		);
+		expect(JSON.stringify(result)).not.toContain("7,5,3");
+		expect(JSON.stringify(result)).not.toContain("1.25");
+	});
+
+	it("自有 __proto__ 键被跳过：不改写原型、不产生污染、其余键照常保留", () => {
+		// JSON.parse 会把 "__proto__" 作为自有可枚举键保留（对象字面量写法不会）
+		const hostile = JSON.parse(
+			'{"__proto__":{"polluted":"yes","role":"OWNER"},"safe":1}',
+		) as Record<string, unknown>;
+		expect(Object.prototype.hasOwnProperty.call(hostile, "__proto__")).toBe(true);
+		const result = sanitizeAuditDetail(hostile) as Record<string, unknown>;
+		expect(Object.keys(result)).toEqual(["safe"]);
+		expect(result.safe).toBe(1);
+		expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+		expect((result as { polluted?: unknown }).polluted).toBeUndefined();
+		expect((result as { role?: unknown }).role).toBeUndefined();
+		// 嵌套层同样跳过
+		const nested = sanitizeAuditDetail({
+			outer: JSON.parse('{"__proto__":{"x":1},"kept":2}'),
+		}) as { outer: Record<string, unknown> };
+		expect(Object.keys(nested.outer)).toEqual(["kept"]);
+	});
+
+	it("toJSON 抛错或返回自身、无原型对象：单值占位，不拖垮整条 detail、不无限递归", () => {
+		// 类实例（原型不是 Object.prototype）才走 toJSON 分支
+		class SelfReferential {
+			toJSON(this: unknown) {
+				return this;
+			}
+		}
+		class Throwing {
+			toJSON(): never {
+				throw new Error("boom");
+			}
+		}
+		/** 无 toJSON、且转字符串会抛错的类实例 */
+		class Unprintable {
+			toString(): never {
+				throw new Error("unprintable");
+			}
+		}
+		// 无原型对象按普通对象枚举（不是类实例分支），其属性照常保留
+		const nullProto = Object.create(null) as Record<string, unknown>;
+		nullProto.kept = 2;
+		const result = sanitizeAuditDetail({
+			self: new SelfReferential(),
+			throwing: new Throwing(),
+			unprintable: new Unprintable(),
+			nullProto,
+			planId: "p1",
+		}) as Record<string, unknown>;
+		expect(result.planId).toBe("p1");
+		// toJSON 返回自身：靠深度上限终止，不会栈溢出
+		expect(result.self).toBe("[TRUNCATED]");
+		expect(result.throwing).toBe("[UNSERIALIZABLE]");
+		expect(result.unprintable).toBe("[UNSERIALIZABLE]");
+		expect(result.nullProto).toEqual({ kept: 2 });
 	});
 });
 
@@ -207,6 +541,24 @@ describe("sanitizeAuditDetail：深度与字节上限", () => {
 		expect(result.a.b.c.d).toBe("[TRUNCATED]");
 	});
 
+	it("深度上限 − 1 处的 Decimal 不被多计一层而截断；上限处的容器仍截断", () => {
+		// 顶层调用深度为 0：a 的值在深度 1、b 的值在深度 2、c 与 flag 的值在深度 3（上限 4）
+		const result = sanitizeAuditDetail({
+			a: { b: { c: new Prisma.Decimal("1234.5000"), flag: true } },
+			// d 的值在深度 4
+			over: { b: { c: { d: new Prisma.Decimal("1") } } },
+		}) as {
+			a: { b: { c: unknown; flag: unknown } };
+			over: { b: { c: { d: unknown } } };
+		};
+		// 与 Decimal 同深度的兄弟标量保留；修复前 Decimal 经 toJSON 多计一层，其字符串值
+		// 落在深度 4 而被截断为 [TRUNCATED]
+		expect(result.a.b.flag).toBe(true);
+		expect(result.a.b.c).toBe("1234.5");
+		// 深度 4 处的对象（含 Decimal）仍整体截断
+		expect(result.over.b.c.d).toBe("[TRUNCATED]");
+	});
+
 	it("超大 detail 先有损压缩再降级 preview，字节不超上限且不抛错", () => {
 		const huge = {
 			blob: "x".repeat(10_000),
@@ -218,6 +570,51 @@ describe("sanitizeAuditDetail：深度与字节上限", () => {
 		expect(bytes).toBeLessThanOrEqual(AUDIT_DETAIL_MAX_BYTES);
 		// 敏感键即便走降级路径也不泄露原文
 		expect(JSON.stringify(result)).not.toContain("leak");
+	});
+
+	// 评审 R3-P1：按 UTF-16 单元截断会把 4 字节 emoji 的代理对截成两半
+	it("R3-P1：有损压缩与降级预览按码点截断——不把 emoji 代理对截成两半", () => {
+		const emoji = "\u{1F600}".repeat(300);
+		// 值前缀长度取遍一个周期：旧实现按 UTF-16 单元截断，切点是否落在代理对中间
+		// 取决于其前面单元数的奇偶——只测一种前缀会因奇偶碰巧而假绿
+		for (const prefixLength of [0, 1, 2, 3, 4, 5]) {
+			const value = `${"x".repeat(prefixLength)}${emoji}`;
+			const detail = Object.fromEntries(
+				Array.from({ length: 12 }, (_, index) => [`note${index}`, value]),
+			);
+			const result = sanitizeAuditDetail(detail);
+			const label = `值前缀长度 ${prefixLength}`;
+			// 两条截断路径都被走到：先有损压缩（仍超限）→ 降级预览
+			expect((result as Record<string, unknown>).truncated, label).toBe(true);
+			expectWellFormedUtf16(result, label);
+			expect(Buffer.byteLength(JSON.stringify(result)), label).toBeLessThanOrEqual(
+				AUDIT_DETAIL_MAX_BYTES,
+			);
+		}
+	});
+
+	it("R3-P1 属性：任意文本、任意规模的 detail，产出都是良构 UTF-16 且不超字节上限", () => {
+		// 约一半取值是 4 字节字符（UTF-16 下占两个单元），保证切点经常落在其内部
+		const text = fc
+			.array(
+				fc.constantFrom("😀", "🎉", "𝒳", "🇨🇳", "a", "b", "中", " "),
+				{ maxLength: 300 },
+			)
+			.map((chars) => chars.join(""));
+		fc.assert(
+			fc.property(text, fc.integer({ min: 1, max: 16 }), fc.nat(7), (value, fields, prefixLength) => {
+				const prefixed = `${"x".repeat(prefixLength)}${value}`;
+				const detail = Object.fromEntries(
+					Array.from({ length: fields }, (_, index) => [`k${index}`, prefixed]),
+				);
+				const label = `值 ${JSON.stringify(prefixed)}（${fields} 个字段）`;
+				const result = sanitizeAuditDetail(detail);
+				expectWellFormedUtf16(result, label);
+				expect(Buffer.byteLength(JSON.stringify(result)), label).toBeLessThanOrEqual(
+					AUDIT_DETAIL_MAX_BYTES,
+				);
+			}),
+		);
 	});
 
 	it("循环引用被深度截断安全终止（可序列化、不抛错、不泄露无限嵌套）", () => {

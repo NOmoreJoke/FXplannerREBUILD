@@ -7,9 +7,14 @@ import {
 	isValidOrganizationName,
 	normalizeOrganizationName,
 } from "./organization-rules";
-import { OrganizationNotFoundException } from "../authorization/authorization.errors";
+import {
+	OrganizationNotFoundException,
+	PermissionDeniedException,
+} from "../authorization/authorization.errors";
+import { can } from "../authorization/permission-policy";
 import { InvalidOrganizationNameException } from "./organization.errors";
 import { resolveOrganizationPreferences } from "./organization-preferences";
+import { lockOrganizationForActor } from "./default-organization";
 import { ACTIVE_STATUSES } from "../data-request/data-request-rules";
 
 /**
@@ -175,6 +180,14 @@ export class OrganizationService {
 	): Promise<{ id: string; name: string }> {
 		const name = this.assertValidName(input.name);
 		return this.prisma.$transaction(async (tx) => {
+			// 取组织锁后重读操作者（评审 R3-N1）：请求在锁上等待期间，Guard 放行时所依据
+			// 的角色可能已被并发的降权 / 移除改写。资格只用此刻的角色判定，不沿用
+			// actor.role——已不是有效成员 → 404（lockOrganizationForActor），已无权限 → 403。
+			// 与 updateRole / removeMember / invitation 同一纪律（R2-I01）
+			const actorRole = await lockOrganizationForActor(tx, actor);
+			if (!can(actorRole, "organization.update")) {
+				throw new PermissionDeniedException();
+			}
 			const before = await tx.organization.findUnique({
 				where: { id: actor.organizationId },
 				select: { name: true },

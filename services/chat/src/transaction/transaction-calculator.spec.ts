@@ -11,6 +11,7 @@ import {
 	assertRateDecimalPlaces,
 	assertSelfConsistent,
 	assertTransactedAtInRange,
+	assertValidTransactedAt,
 	parseAmountOrThrow,
 	parseFeeAmount,
 	parsePositiveAmount,
@@ -334,6 +335,37 @@ describe("日期上下界（方案 §4.6，UTC+8 日界；vi.setSystemTime 固�
 			).toThrow(/晚于今天/);
 		} finally {
 			unfreezeNow();
+		}
+	});
+
+	// 评审 R3-I06 同类面：DTO 放行的松散写法解析成 Invalid Date，范围校验对 NaN 的比较恒为假
+	it("Invalid Date 穿得过范围校验——须由 assertValidTransactedAt 拦截", () => {
+		const invalid = new Date("2026-W01-1");
+		expect(Number.isNaN(invalid.getTime())).toBe(true);
+		expect(() => assertTransactedAtInRange(invalid, new Date(), null)).not.toThrow();
+
+		expect(() => assertValidTransactedAt(invalid)).toThrow(/有效的 ISO 8601/);
+		expect(errorCode(() => assertValidTransactedAt(invalid))).toBe(
+			"INVALID_TRANSACTION_PARAMS",
+		);
+	});
+
+	it("换算为 UTC 后年份越界 → 拒绝；边界内的极值 → 放行", () => {
+		// 0000 年在日历上不存在；带时区的值按换算后的 UTC 年判断
+		for (const value of [
+			"0000-01-01T00:00:00.000Z",
+			"0001-01-01T00:00:00.000+01:00", // UTC 年 0
+			"9999-12-31T23:59:59.999-01:00", // UTC 年 10000
+		]) {
+			expect(() => assertValidTransactedAt(new Date(value)), value).toThrow(
+				/有效的 ISO 8601/,
+			);
+		}
+		for (const value of [
+			"0001-01-01T00:00:00.000Z",
+			"9999-12-31T23:59:59.999+01:00", // UTC 年 9999
+		]) {
+			expect(() => assertValidTransactedAt(new Date(value)), value).not.toThrow();
 		}
 	});
 });

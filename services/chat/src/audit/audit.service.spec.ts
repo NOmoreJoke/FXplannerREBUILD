@@ -152,6 +152,109 @@ describe("AuditService：独立拒绝审计与只读分页", () => {
 		});
 		expect(future.total).toBe(0);
 	});
+
+	it("R2-I04：服务层兜底——解析不出时间的筛选值 → 400，不进到 Prisma（500）", async () => {
+		for (const field of ["from", "to"] as const) {
+			await expect(
+				audit.listAuditLogs(organizationId, {
+					[field]: "2026-99-99T99:99:59Z",
+				}),
+			).rejects.toMatchObject({
+				status: 400,
+				response: { code: "INVALID_AUDIT_TIME" },
+			});
+		}
+	});
+
+	it("R3-I06：换算为 UTC 后年份越界的筛选值 → 400，不进到 Prisma（500）", async () => {
+		// DTO 的形状正则只约束字面量是 4 位年份；带负时区的 9999 年末时刻换算后
+		// UTC 年是 10000，Prisma 无法表示。DTO 两道校验都放行，只能在服务层拦
+		for (const field of ["from", "to"] as const) {
+			await expect(
+				audit.listAuditLogs(organizationId, {
+					[field]: "9999-12-31T23:59:59.999-01:00",
+				}),
+			).rejects.toMatchObject({
+				status: 400,
+				response: { code: "INVALID_AUDIT_TIME" },
+			});
+		}
+		// 边界内的极值照常可用：UTC 年恰为 0001 与 9999
+		const edges = await audit.listAuditLogs(organizationId, {
+			from: "0001-01-01T00:00:00.000Z",
+			to: "9999-12-31T23:59:59.999+01:00",
+		});
+		expect(edges.total).toBeGreaterThan(0);
+	});
+});
+
+describe("AuditService：detail 永不阻断业务写（评审 R2-I04）", () => {
+	const REDACTED = "[REDACTED]";
+	/** 敏感键下的「凭据」占位值一律工厂生成（非真实凭据；与 audit-sanitizer.spec 同款） */
+	const sample = (label: string): string => `sample-${label}`;
+
+	it("含非 JSON 值 / 二进制视图 / __proto__ 键的 detail：脱敏后可被 Prisma 接受，业务写与审计同事务提交", async () => {
+		const tokenSample = sample("token");
+		await db.$transaction(async (tx) => {
+			await tx.organization.update({
+				where: { id: organizationId },
+				data: { name: "审计服务测试组织（已改名）" },
+			});
+			const sensitive: Record<string, string> = {};
+			sensitive["access" + "Token"] = tokenSample;
+			await audit.recordInTx(tx, {
+				organizationId,
+				actorUserId: userId,
+				actorType: "USER",
+				action: "test.json-safety",
+				result: "SUCCESS",
+				detail: {
+					notANumber: Number.NaN,
+					infinite: Number.POSITIVE_INFINITY,
+					fn: () => "leak",
+					symbol: Symbol("leak"),
+					// 仅拦 Buffer/Uint8Array 时会被 String(value) 以十进制明文串化
+					bytes: new Int32Array([7, 5, 3]),
+					hostile: JSON.parse(
+						'{"__proto__":{"polluted":"yes"},"kept":1}',
+					) as Record<string, unknown>,
+					planId: "p1",
+					...sensitive,
+				},
+			});
+		});
+		// 审计写不再因 JSONB 校验失败而回滚业务写
+		expect(
+			(await db.organization.findUniqueOrThrow({ where: { id: organizationId } }))
+				.name,
+		).toBe("审计服务测试组织（已改名）");
+
+		const log = await db.auditLog.findFirstOrThrow({
+			where: { organizationId, action: "test.json-safety" },
+		});
+		const detail = log.detail as Record<string, unknown>;
+		expect(Object.keys(detail).sort()).toEqual(
+			[
+				"accessToken",
+				"bytes",
+				"fn",
+				"hostile",
+				"infinite",
+				"notANumber",
+				"planId",
+				"symbol",
+			].sort(),
+		);
+		expect(detail.notANumber).toBeNull();
+		expect(detail.infinite).toBeNull();
+		expect(detail.fn).toBeNull();
+		expect(detail.symbol).toBeNull();
+		expect(detail.bytes).toBe("[BINARY]");
+		expect(detail.hostile).toEqual({ kept: 1 });
+		expect(detail.planId).toBe("p1");
+		expect(detail.accessToken).toBe(REDACTED);
+		expect(JSON.stringify(log.detail)).not.toMatch(/leak|753|polluted|sample-token/);
+	});
 });
 
 describe("organization-scope：父子一致断言", () => {

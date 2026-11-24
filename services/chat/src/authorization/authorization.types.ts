@@ -85,10 +85,11 @@ export interface ActorContext {
 	role: OrganizationRole;
 	authMethod: ActorAuthMethod;
 	/**
-	 * 当前组织是否为该用户的默认组织（最早的 ACTIVE OWNER 成员关系所属组织，
-	 * 见 default-organization.ts）。兼容窗口的存量回落（organizationId IS NULL 的
-	 * 旧写路径行、未迁入 OrganizationSettings 的个人设置）仅在默认组织生效
-	 * （评审 I-08：严禁渗入用户后来新建或受邀加入的其他组织）。
+	 * 当前组织是否为该用户的默认组织（该用户创建的最早组织，见
+	 * default-organization.ts；不随所有权转移漂移，评审 R2-I03）。兼容窗口的存量
+	 * 回落（organizationId IS NULL 的旧写路径行、未迁入 OrganizationSettings 的
+	 * 个人设置）仅在默认组织生效（评审 I-08：严禁渗入用户后来新建或受邀加入的
+	 * 其他组织）。
 	 */
 	isDefaultOrganization: boolean;
 }

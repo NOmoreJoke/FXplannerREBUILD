@@ -117,7 +117,9 @@ export class PlanController {
 	}
 
 	// 只读预览（@Post 但不落库）：与业务 GET 同一守卫链（评审 I-12——禁离职成员/
-	// 跨组织上下文取快照，禁 Viewer 绕过 plan.create 权限点）
+	// 跨组织上下文取快照，禁 Viewer 绕过 plan.create 权限点），并同样以 actor 作为
+	// 读作用域（评审 R2-I02——此前只传 user.id，守卫形同虚设：带其他组织头仍返回
+	// 本人在该组织的余额 caps，受邀成员则命中自己的空账本）
 	@Post("schedule-preview")
 	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
 	@RequiresPermission("plan.create")
@@ -144,10 +146,11 @@ export class PlanController {
 	})
 	@HttpCode(HttpStatus.OK)
 	async preview(
-		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
 		@Body() dto: SchedulePreviewDto,
 	) {
-		const data = await this.planService.preview(user.id, dto);
+		const scope: ReadScope = actor;
+		const data = await this.planService.preview(scope, dto);
 		return { success: true, data, message: "排期预览生成成功" };
 	}
 
@@ -280,12 +283,13 @@ export class PlanController {
 		type: PlanErrorDto,
 	})
 	async previewAdjust(
-		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
 		@Param("id") id: string,
 		@Body() dto: AdjustPreviewDto,
 	) {
-		return this.withLog("POST /plans/:id/adjust-preview", user.id, id, () =>
-			this.planService.previewAdjust(user.id, id, dto),
+		const scope: ReadScope = actor;
+		return this.withLog("POST /plans/:id/adjust-preview", actor.userId, id, () =>
+			this.planService.previewAdjust(scope, id, dto),
 		).then(
 			(data) => ({ success: true, data, message: "修改预览生成成功" }),
 		);

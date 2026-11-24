@@ -1,7 +1,52 @@
-import { Inject, Injectable } from "@nestjs/common";
+import {
+	HttpException,
+	HttpStatus,
+	Inject,
+	Injectable,
+} from "@nestjs/common";
 import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { sanitizeAuditDetail } from "./audit-sanitizer";
+
+/**
+ * 审计时间筛选参数解析（评审 R2-I04 服务层兜底）：DTO 已同时按形状与日历有效性
+ * 校验；这里拦住绕过 DTO 的调用路径（内部调用、校验管道配置变化），把解析不出
+ * 时间的值转成 400，而不是让 Invalid Date 进到 Prisma 抛校验错误（HTTP 500）。
+ *
+ * 年份按**换算为 UTC 之后**的值校验（评审 R3-I06）：DTO 的形状正则只约束字面量是
+ * 4 位年份，带时区的值换算后可能越界——"9999-12-31T23:59:59.999-01:00" 的 UTC 年
+ * 是 10000，DTO 两道校验都放行，Prisma 无法表示而抛未知错误。上界 9999 与 Prisma 的
+ * 实际支持范围一致（UTC 年 9999 可查询）；下界排除日历上不存在的 0000 年。
+ */
+function parseAuditFilterTime(
+	value: string | undefined,
+	field: "from" | "to",
+): Date | undefined {
+	if (value === undefined) return undefined;
+	const parsed = new Date(value);
+	if (Number.isNaN(parsed.getTime())) {
+		throw new HttpException(
+			{
+				success: false,
+				code: "INVALID_AUDIT_TIME",
+				message: `${field} 须为有效的 ISO 8601 日期时间`,
+			},
+			HttpStatus.BAD_REQUEST,
+		);
+	}
+	const utcYear = parsed.getUTCFullYear();
+	if (utcYear < 1 || utcYear > 9999) {
+		throw new HttpException(
+			{
+				success: false,
+				code: "INVALID_AUDIT_TIME",
+				message: `${field} 超出可查询的时间范围（换算为 UTC 后年份须在 0001–9999 内）`,
+			},
+			HttpStatus.BAD_REQUEST,
+		);
+	}
+	return parsed;
+}
 
 /**
  * 审计写入与只读查询（技术方案 §5.1 / §13.1 / AUDIT-01..03；Goal #3A W16）。
@@ -98,13 +143,15 @@ export class AuditService {
 	}> {
 		const page = query.page ?? 1;
 		const pageSize = query.pageSize ?? 20;
+		const from = parseAuditFilterTime(query.from, "from");
+		const to = parseAuditFilterTime(query.to, "to");
 		const where: Prisma.AuditLogWhereInput = {
 			organizationId,
-			...(query.from || query.to
+			...(from || to
 				? {
 						createdAt: {
-							...(query.from ? { gte: new Date(query.from) } : {}),
-							...(query.to ? { lte: new Date(query.to) } : {}),
+							...(from ? { gte: from } : {}),
+							...(to ? { lte: to } : {}),
 						},
 					}
 				: {}),

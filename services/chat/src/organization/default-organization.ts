@@ -1,5 +1,14 @@
 import type { Prisma } from "@prisma/client";
 import { sanitizeAuditDetail } from "../audit/audit-sanitizer";
+import {
+	isOrganizationRole,
+	type ActorContext,
+	type OrganizationRole,
+} from "../authorization/authorization.types";
+import {
+	OrganizationNotFoundException,
+	PermissionDeniedException,
+} from "../authorization/authorization.errors";
 
 type Tx = Prisma.TransactionClient;
 
@@ -27,6 +36,46 @@ export async function lockOrganizationMembership(
 ): Promise<void> {
 	const key = `membership:${organizationId}`;
 	await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+}
+
+/**
+ * 持锁写路径的操作者锁内快照（评审 R2-I01）：取组织锁后重读操作者成员行，
+ * 返回此刻的角色。
+ *
+ * OrganizationContextGuard 在进锁前构造 actor；请求在组织锁上等待期间，并发的
+ * 降权 / 移除 / 所有权转移可能已经提交。持锁事务若继续信任锁前的 actor.role，
+ * 被移除的 Admin 醒来后仍会以旧角色写库并留下 SUCCESS 审计。
+ *
+ * 纪律：凡以 actor 做资格判定（can / canManage）的持锁事务一律经本函数取锁，
+ * 之后的资格判定只用返回的最新角色——actor 仅继续提供 userId / membershipId。
+ * 拒绝口径与 OrganizationContextGuard 一致：
+ * - 成员行不存在 / 不属于当前组织 / 已非 ACTIVE → 404 ORGANIZATION_NOT_FOUND；
+ * - 库内角色值非法 → 403 PERMISSION_DENIED（fail-closed，同评审 I-13）。
+ *
+ * 不适用于：无组织 actor 的个人端点（邀请接受/拒绝只传 userId，用
+ * lockOrganizationMembership）；owner.transfer 的操作者校验由
+ * 「role = OWNER 且 ACTIVE」条件更新原子完成（败方 409 TRANSFER_CONFLICT）。
+ */
+export async function lockOrganizationForActor(
+	tx: Tx,
+	actor: Pick<ActorContext, "organizationId" | "membershipId">,
+): Promise<OrganizationRole> {
+	await lockOrganizationMembership(tx, actor.organizationId);
+	const self = await tx.membership.findUnique({
+		where: { id: actor.membershipId },
+		select: { organizationId: true, role: true, status: true },
+	});
+	if (
+		!self ||
+		self.organizationId !== actor.organizationId ||
+		self.status !== "ACTIVE"
+	) {
+		throw new OrganizationNotFoundException();
+	}
+	if (!isOrganizationRole(self.role)) {
+		throw new PermissionDeniedException("成员角色无效，拒绝访问");
+	}
+	return self.role;
 }
 
 /**

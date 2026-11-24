@@ -10,7 +10,10 @@ import {
 	type TestUser,
 } from "../helpers/test-app";
 import { TEST_PASSWORD } from "../fixtures/test-credentials";
-import { runBehindAdvisoryLock } from "../helpers/postgres-lock-barrier";
+import {
+	raceBehindAdvisoryLock,
+	runBehindAdvisoryLock,
+} from "../helpers/postgres-lock-barrier";
 import {
 	generateInvitationToken,
 	hashInvitationToken,
@@ -418,17 +421,19 @@ describe("MemberController / InvitationController（e2e）", () => {
 		expect(ownerUser).toBeDefined();
 
 		// 不用 .expect(200)：直接读取两端响应状态，断言「恰一方 200、败方必为 409」
-		// （评审 I-06：原 toBeGreaterThanOrEqual(1) 弱断言在双 200 时也能刷绿）
-		const [first, second] = await Promise.all([
+		// （评审 I-06：原 toBeGreaterThanOrEqual(1) 弱断言在双 200 时也能刷绿）。
+		// 经锁屏障竞争（评审 R2-I06）：裸 Promise.all 下次请求可能在本请求提交后才进
+		// Guard，被合法拒为 403；屏障保证双请求均以 OWNER 身份通过 Guard 后才在锁内竞争。
+		const transferTo = (targetId: string) => () =>
 			request(app.getHttpServer())
 				.post("/api/organizations/current/transfer-ownership")
 				.set(hdr(ownerUser!, orgId))
-				.send({ targetMembershipId: targets[0]!.id }),
-			request(app.getHttpServer())
-				.post("/api/organizations/current/transfer-ownership")
-				.set(hdr(ownerUser!, orgId))
-				.send({ targetMembershipId: targets[1]!.id }),
-		]);
+				.send({ targetMembershipId: targetId });
+		const [first, second] = await raceBehindAdvisoryLock(
+			ctx.prisma,
+			`membership:${orgId}`,
+			[transferTo(targets[0]!.id), transferTo(targets[1]!.id)],
+		);
 		const statuses = [first.status, second.status].sort();
 		expect(statuses).toEqual([200, 409]);
 		const loser = first.status === 409 ? first : second;
@@ -923,7 +928,13 @@ describe("评审修复回归：RBAC、邀请状态机与成员并发", () => {
 				.post(TRANSFER)
 				.set(hdr(ownerA, orgId))
 				.send({ targetMembershipId: adminMember?.id });
-		const [first, second] = await Promise.all([transfer(), transfer()]);
+		// 经锁屏障竞争（评审 R2-I06）：双请求均以 OWNER 身份通过 Guard 后才在锁内竞争，
+		// 败方结果只取决于锁内条件更新，不会出现「晚进 Guard → 403」的合法竞态
+		const [first, second] = await raceBehindAdvisoryLock(
+			ctx.prisma,
+			ORG_LOCK_KEY(),
+			[transfer, transfer],
+		);
 		expect([first.status, second.status].sort()).toEqual([200, 409]);
 		const loser = first.status === 409 ? first : second;
 		expect(loser.body.code).toBe("TRANSFER_CONFLICT");
@@ -936,5 +947,389 @@ describe("评审修复回归：RBAC、邀请状态机与成员并发", () => {
 			where: { organizationId: orgId, action: "owner.transfer" },
 		});
 		expect(transferAudits).toBe(1);
+	});
+});
+
+/**
+ * 外部评审 R2 回归（R2-I01）：持锁写路径在锁内重读操作者。
+ *
+ * 复现口径：请求以「降权/移除/所有权转移之前」的身份通过 OrganizationContextGuard，
+ * 随后阻塞在组织 advisory 锁上（锁屏障保证 Guard 读取发生在屏障持锁期间）；
+ * 屏障持锁期间直改数据库模拟并发变更已提交，再放行。
+ * 修复前这 4 个方法拿到锁后沿用锁前的 actor.role，被移除的 Admin 仍能写库并留下
+ * SUCCESS 审计；修复后拒绝且不留任何写入痕迹。
+ */
+describe("R2 回归：等待组织锁期间操作者被降权 / 移除 / 失去所有权", () => {
+	let ctx: TestContext;
+	let app: INestApplication;
+	const userIds: string[] = [];
+	const orgIds: string[] = [];
+
+	let ownerO: TestUser;
+	let adminA: TestUser;
+	let financeF: TestUser;
+	let viewerV: TestUser;
+	/** 非成员：仅作为受邀邮箱 */
+	let inviteeX: TestUser;
+	let inviteeY: TestUser;
+	let inviteeZ: TestUser;
+	let orgId: string;
+	/** 由在职 Owner 发出的 ADMIN 角色邀请（R2-I01 + I-03：原 Owner 失去所有权后不可撤回） */
+	let adminRoleInvitationId: string;
+	/** 由在职 Owner 发出的 VIEWER 角色邀请（Admin 本有权撤回：只有被降权才会 403） */
+	let viewerRoleInvitationId: string;
+
+	const MEMBERS = "/api/organizations/current/members";
+	const INVITES = "/api/organizations/current/invitations";
+	const ORG_LOCK_KEY = () => `membership:${orgId}`;
+
+	const membershipOf = (userId: string) =>
+		ctx.prisma.membership.findFirst({ where: { organizationId: orgId, userId } });
+	const patchRole = (actor: TestUser, membershipId: string, role: string) =>
+		request(app.getHttpServer())
+			.patch(`${MEMBERS}/${membershipId}`)
+			.set(hdr(actor, orgId))
+			.send({ role });
+	const removeMember = (actor: TestUser, membershipId: string) =>
+		request(app.getHttpServer())
+			.delete(`${MEMBERS}/${membershipId}`)
+			.set(hdr(actor, orgId));
+	const postInvite = (actor: TestUser, email: string, role: string) =>
+		request(app.getHttpServer())
+			.post(INVITES)
+			.set(hdr(actor, orgId))
+			.send({ email, role });
+	const revokeInvite = (actor: TestUser, id: string) =>
+		request(app.getHttpServer())
+			.delete(`${INVITES}/${id}`)
+			.set(hdr(actor, orgId));
+	const successAudits = (action: string, actorUserId: string) =>
+		ctx.prisma.auditLog.count({
+			where: { organizationId: orgId, action, actorUserId, result: "SUCCESS" },
+		});
+
+	/** 每个用例从确定的角色态出发（上一用例失败时不把残留带进下一用例） */
+	async function resetMembers(): Promise<void> {
+		const ids = {
+			owner: (await membershipOf(ownerO.userId))!.id,
+			admin: (await membershipOf(adminA.userId))!.id,
+			finance: (await membershipOf(financeF.userId))!.id,
+			viewer: (await membershipOf(viewerV.userId))!.id,
+		};
+		await ctx.prisma.$transaction(async (tx) => {
+			// 先撤走他人身上的 OWNER（模拟转移后异常残留），再恢复原 Owner——
+			// 顺序不可反，否则撞 memberships_single_active_owner_uidx
+			await tx.membership.updateMany({
+				where: {
+					organizationId: orgId,
+					role: "OWNER",
+					id: { not: ids.owner },
+				},
+				data: { role: "FINANCE" },
+			});
+			await tx.membership.update({
+				where: { id: ids.owner },
+				data: { role: "OWNER", status: "ACTIVE" },
+			});
+			await tx.membership.update({
+				where: { id: ids.admin },
+				data: { role: "ADMIN", status: "ACTIVE" },
+			});
+			await tx.membership.update({
+				where: { id: ids.finance },
+				data: { role: "FINANCE", status: "ACTIVE" },
+			});
+			await tx.membership.update({
+				where: { id: ids.viewer },
+				data: { role: "VIEWER", status: "ACTIVE" },
+			});
+		});
+	}
+
+	/** 模拟「并发所有权转移已提交」：原 Owner 降为 ADMIN，financeF 升为 OWNER */
+	async function commitOwnershipTransfer(): Promise<void> {
+		await ctx.prisma.membership.update({
+			where: { id: (await membershipOf(ownerO.userId))!.id },
+			data: { role: "ADMIN" },
+		});
+		await ctx.prisma.membership.update({
+			where: { id: (await membershipOf(financeF.userId))!.id },
+			data: { role: "OWNER" },
+		});
+	}
+
+	beforeAll(async () => {
+		ctx = await createTestApp();
+		app = ctx.app;
+		ownerO = await registerUser(app, "r2-owner", userIds);
+		adminA = await registerUser(app, "r2-admin", userIds);
+		financeF = await registerUser(app, "r2-finance", userIds);
+		viewerV = await registerUser(app, "r2-viewer", userIds);
+		inviteeX = await registerUser(app, "r2-invitee-x", userIds);
+		inviteeY = await registerUser(app, "r2-invitee-y", userIds);
+		inviteeZ = await registerUser(app, "r2-invitee-z", userIds);
+
+		const created = await request(app.getHttpServer())
+			.post("/api/organizations")
+			.set(bearer(ownerO.accessToken))
+			.send({ name: "R2 锁内重读回归组织" })
+			.expect(201);
+		orgId = created.body.data.id;
+		orgIds.push(orgId);
+		await seedMember(ctx, orgId, adminA.userId, "ADMIN");
+		await seedMember(ctx, orgId, financeF.userId, "FINANCE");
+		await seedMember(ctx, orgId, viewerV.userId, "VIEWER");
+
+		const adminInvited = await postInvite(ownerO, inviteeY.email, "ADMIN").expect(
+			201,
+		);
+		adminRoleInvitationId = adminInvited.body.data.id;
+		const viewerInvited = await postInvite(
+			ownerO,
+			inviteeZ.email,
+			"VIEWER",
+		).expect(201);
+		viewerRoleInvitationId = viewerInvited.body.data.id;
+	});
+
+	beforeEach(async () => {
+		await resetMembers();
+	});
+
+	afterAll(async () => {
+		await ctx.prisma.auditLog.deleteMany({
+			where: { organizationId: { in: orgIds } },
+		});
+		await ctx.prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
+		for (const userId of userIds) {
+			await cleanupUser(ctx.prisma, userId);
+		}
+		await app.close();
+	});
+
+	it("R2-I01：等待锁期间被移除（DISABLED）的 Admin 发邀请 → 404，零邀请行、零 SUCCESS 审计", async () => {
+		const adminMember = (await membershipOf(adminA.userId))!;
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			ORG_LOCK_KEY(),
+			() => postInvite(adminA, inviteeX.email, "VIEWER"),
+			async () => {
+				// adminA 的邀请请求已过 Guard 并阻塞在组织锁上：此刻 Owner 移除 adminA 已提交
+				await ctx.prisma.membership.update({
+					where: { id: adminMember.id },
+					data: { status: "DISABLED" },
+				});
+			},
+		);
+		expect(res.status).toBe(404);
+		expect(res.body.code).toBe("ORGANIZATION_NOT_FOUND");
+		expect(
+			await ctx.prisma.organizationInvitation.count({
+				where: { organizationId: orgId, email: inviteeX.email },
+			}),
+		).toBe(0);
+		expect(await successAudits("invitation.create", adminA.userId)).toBe(0);
+	});
+
+	it("R2-I01：等待锁期间被降权（ADMIN → VIEWER）的 Admin 发邀请 → 403，零邀请行、零 SUCCESS 审计", async () => {
+		const adminMember = (await membershipOf(adminA.userId))!;
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			ORG_LOCK_KEY(),
+			() => postInvite(adminA, inviteeX.email, "VIEWER"),
+			async () => {
+				await ctx.prisma.membership.update({
+					where: { id: adminMember.id },
+					data: { role: "VIEWER" },
+				});
+			},
+		);
+		expect(res.status).toBe(403);
+		expect(res.body.code).toBe("PERMISSION_DENIED");
+		expect(
+			await ctx.prisma.organizationInvitation.count({
+				where: { organizationId: orgId, email: inviteeX.email },
+			}),
+		).toBe(0);
+		expect(await successAudits("invitation.create", adminA.userId)).toBe(0);
+	});
+
+	it("R2-I01：等待锁期间被降权的 Admin 调整成员角色 → 403，目标角色未变、零 SUCCESS 审计", async () => {
+		const adminMember = (await membershipOf(adminA.userId))!;
+		const viewerMember = (await membershipOf(viewerV.userId))!;
+		// ADMIN → FINANCE 本是 Admin 可做的调整；降权为 VIEWER 后不再有 member.update
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			ORG_LOCK_KEY(),
+			() => patchRole(adminA, viewerMember.id, "FINANCE"),
+			async () => {
+				await ctx.prisma.membership.update({
+					where: { id: adminMember.id },
+					data: { role: "VIEWER" },
+				});
+			},
+		);
+		expect(res.status).toBe(403);
+		expect(res.body.code).toBe("PERMISSION_DENIED");
+		expect((await membershipOf(viewerV.userId))?.role).toBe("VIEWER");
+		expect(await successAudits("member.update", adminA.userId)).toBe(0);
+	});
+
+	it("R2-I01：等待锁期间被降权的 Admin 移除成员 → 403，目标仍 ACTIVE、零 SUCCESS 审计", async () => {
+		const adminMember = (await membershipOf(adminA.userId))!;
+		const viewerMember = (await membershipOf(viewerV.userId))!;
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			ORG_LOCK_KEY(),
+			() => removeMember(adminA, viewerMember.id),
+			async () => {
+				await ctx.prisma.membership.update({
+					where: { id: adminMember.id },
+					data: { role: "VIEWER" },
+				});
+			},
+		);
+		expect(res.status).toBe(403);
+		expect(res.body.code).toBe("PERMISSION_DENIED");
+		const target = await membershipOf(viewerV.userId);
+		expect(target?.status).toBe("ACTIVE");
+		expect(target?.role).toBe("VIEWER");
+		expect(await successAudits("member.remove", adminA.userId)).toBe(0);
+	});
+
+	it("R2-I01：等待锁期间被移除（DISABLED）的 Admin 移除成员 → 404，目标仍 ACTIVE", async () => {
+		const adminMember = (await membershipOf(adminA.userId))!;
+		const viewerMember = (await membershipOf(viewerV.userId))!;
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			ORG_LOCK_KEY(),
+			() => removeMember(adminA, viewerMember.id),
+			async () => {
+				await ctx.prisma.membership.update({
+					where: { id: adminMember.id },
+					data: { status: "DISABLED" },
+				});
+			},
+		);
+		expect(res.status).toBe(404);
+		expect(res.body.code).toBe("ORGANIZATION_NOT_FOUND");
+		const target = await membershipOf(viewerV.userId);
+		expect(target?.status).toBe("ACTIVE");
+		expect(await successAudits("member.remove", adminA.userId)).toBe(0);
+	});
+
+	it("R2-I01：等待锁期间被降权的 Admin 撤回邀请 → 403，邀请仍未被撤回", async () => {
+		// 目标是 VIEWER 角色邀请：Admin 本有权撤回，只有锁内发现已被降权才会 403
+		const adminMember = (await membershipOf(adminA.userId))!;
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			ORG_LOCK_KEY(),
+			() => revokeInvite(adminA, viewerRoleInvitationId),
+			async () => {
+				await ctx.prisma.membership.update({
+					where: { id: adminMember.id },
+					data: { role: "VIEWER" },
+				});
+			},
+		);
+		expect(res.status).toBe(403);
+		expect(res.body.code).toBe("PERMISSION_DENIED");
+		const row = await ctx.prisma.organizationInvitation.findUnique({
+			where: { id: viewerRoleInvitationId },
+		});
+		expect(row?.revokedAt).toBeNull();
+		expect(await successAudits("invitation.revoke", adminA.userId)).toBe(0);
+	});
+
+	it("R2-I01：等待锁期间被移除（DISABLED）的 Admin 撤回邀请 → 404，邀请仍未被撤回", async () => {
+		const adminMember = (await membershipOf(adminA.userId))!;
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			ORG_LOCK_KEY(),
+			() => revokeInvite(adminA, viewerRoleInvitationId),
+			async () => {
+				await ctx.prisma.membership.update({
+					where: { id: adminMember.id },
+					data: { status: "DISABLED" },
+				});
+			},
+		);
+		expect(res.status).toBe(404);
+		expect(res.body.code).toBe("ORGANIZATION_NOT_FOUND");
+		const row = await ctx.prisma.organizationInvitation.findUnique({
+			where: { id: viewerRoleInvitationId },
+		});
+		expect(row?.revokedAt).toBeNull();
+		expect(await successAudits("invitation.revoke", adminA.userId)).toBe(0);
+	});
+
+	it("R2-I01：所有权转移提交后，原 Owner 不得再以锁前 OWNER 身份把成员提拔为 ADMIN", async () => {
+		const viewerMember = (await membershipOf(viewerV.userId))!;
+		// 锁前 actor.role = OWNER（Guard 已放行）；锁内实为 ADMIN（I-01：Admin 不可提拔 Admin）
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			ORG_LOCK_KEY(),
+			() => patchRole(ownerO, viewerMember.id, "ADMIN"),
+			commitOwnershipTransfer,
+		);
+		expect(res.status).toBe(403);
+		expect(res.body.code).toBe("PERMISSION_DENIED");
+		expect((await membershipOf(viewerV.userId))?.role).toBe("VIEWER");
+		expect(await successAudits("member.update", ownerO.userId)).toBe(0);
+	});
+
+	it("R2-I01：所有权转移提交后，原 Owner 不得再发出 ADMIN 角色邀请", async () => {
+		// beforeAll 里在职 Owner 已合法发出 1 条 ADMIN 邀请：断言的是「不新增」
+		const auditsBefore = await successAudits("invitation.create", ownerO.userId);
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			ORG_LOCK_KEY(),
+			() => postInvite(ownerO, inviteeX.email, "ADMIN"),
+			commitOwnershipTransfer,
+		);
+		expect(res.status).toBe(403);
+		expect(res.body.code).toBe("PERMISSION_DENIED");
+		expect(
+			await ctx.prisma.organizationInvitation.count({
+				where: { organizationId: orgId, email: inviteeX.email },
+			}),
+		).toBe(0);
+		expect(await successAudits("invitation.create", ownerO.userId)).toBe(
+			auditsBefore,
+		);
+	});
+
+	it("R2-I01 + I-03：所有权转移提交后，原 Owner 不得撤回 ADMIN 角色邀请", async () => {
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			ORG_LOCK_KEY(),
+			() => revokeInvite(ownerO, adminRoleInvitationId),
+			commitOwnershipTransfer,
+		);
+		expect(res.status).toBe(403);
+		expect(res.body.code).toBe("PERMISSION_DENIED");
+		const row = await ctx.prisma.organizationInvitation.findUnique({
+			where: { id: adminRoleInvitationId },
+		});
+		expect(row?.revokedAt).toBeNull();
+		expect(await successAudits("invitation.revoke", ownerO.userId)).toBe(0);
+	});
+
+	it("对照：未被降权/移除的 Admin 等锁后仍可正常发邀请（修复未误伤合法写）", async () => {
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			ORG_LOCK_KEY(),
+			() => postInvite(adminA, inviteeX.email, "VIEWER"),
+			async () => {
+				// 持锁期间只有无关变更（改组织名），adminA 的成员行未变
+				await ctx.prisma.organization.update({
+					where: { id: orgId },
+					data: { name: "R2 锁内重读回归组织（改名）" },
+				});
+			},
+		);
+		expect(res.status).toBe(201);
+		expect(res.body.data.role).toBe("VIEWER");
+		expect(await successAudits("invitation.create", adminA.userId)).toBe(1);
 	});
 });

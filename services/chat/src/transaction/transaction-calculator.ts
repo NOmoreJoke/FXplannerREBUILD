@@ -208,3 +208,20 @@ export function assertTransactedAtInRange(
 		throw new TransactionInvalidParamsException("交易日期不能早于账本起点");
 	}
 }
+
+/**
+ * 交易日期须是有效时刻，且换算为 UTC 后年份在 0001–9999 内（评审 R3-I06 同类面）。
+ *
+ * DTO 的 @IsISO8601 未开 strict，会放行周年 / 基本格式写法（如 "2026-W01-1"），
+ * new Date() 得 Invalid Date；上面的范围校验对 NaN 的比较恒为假，无效值会一路带到
+ * Prisma 抛校验错误（HTTP 500）。与 usage 的 parseUsedAt 同口径，在进入事务前拦截。
+ * 0000 年在日历上不存在（PostgreSQL 无 0 年）；带时区的值按换算后的 UTC 年判断。
+ */
+export function assertValidTransactedAt(transactedAt: Date): void {
+	const year = transactedAt.getUTCFullYear();
+	if (Number.isNaN(transactedAt.getTime()) || year < 1 || year > 9999) {
+		throw new TransactionInvalidParamsException(
+			"交易日期必须是有效的 ISO 8601 日期",
+		);
+	}
+}

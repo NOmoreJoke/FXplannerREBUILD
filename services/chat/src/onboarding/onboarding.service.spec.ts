@@ -39,12 +39,12 @@ function createPrismaMock() {
 		findUnique: vi.fn().mockResolvedValue(null),
 	};
 	const membership = {
-		findFirst: vi.fn((args: { where: Record<string, unknown> }) =>
-			"organizationId" in args.where
-				? Promise.resolve({ userId: "u1" })
-				: Promise.resolve({ organizationId: "org-default" }),
-		),
+		// 组织的活跃 Owner（resolveOrganizationPreferences）
+		findFirst: vi.fn(() => Promise.resolve({ userId: "u1" })),
 	};
+	// 默认组织解析 resolveDefaultOrganizationId 走原生 SQL（评审 R2-I03）：
+	// u1 创建的最早组织 = org-default
+	const $queryRaw = vi.fn(async () => [{ organizationId: "org-default" }]);
 	const termsConsent = {
 		count: vi.fn(),
 		upsert: vi.fn(),
@@ -64,6 +64,7 @@ function createPrismaMock() {
 		userSettings,
 		organizationSettings,
 		membership,
+		$queryRaw,
 		termsConsent,
 		initialHolding,
 		costLot,
@@ -253,10 +254,8 @@ describe("OnboardingService", () => {
 
 		it("已建账用户切到其新建的（未建账）组织：completed=false——不回落创建者的个人设置", async () => {
 			prisma.userSettings.findUnique.mockResolvedValue(onboardedRow);
-			// u1 的默认组织是 org-default；当前请求的组织 org-new 不是默认组织
-			prisma.membership.findFirst.mockImplementation((args: { where: Record<string, unknown> }) =>
-				Promise.resolve("organizationId" in args.where ? { userId: "u1" } : { organizationId: "org-default" }),
-			);
+			// u1 的默认组织是 org-default（见 createPrismaMock 的 $queryRaw）；
+			// 当前请求的组织 org-new 不是默认组织 → 不回落
 			prisma.termsConsent.count.mockResolvedValue(2);
 
 			const status = await service.getStatus({ userId: "u1", organizationId: "org-new" });

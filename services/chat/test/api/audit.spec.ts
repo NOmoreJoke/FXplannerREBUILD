@@ -133,6 +133,69 @@ describe("AuditController（e2e）", () => {
 		expect(page1.body.data.items[0].action).toBe("organization.create");
 	});
 
+	it("R2-I04：时间筛选须为真实存在的时间——越界值 400，而非 500 或静默顺延", async () => {
+		const get = (query: string) =>
+			request(app.getHttpServer())
+				.get(`${auditUrl}${query}`)
+				.set("Authorization", `Bearer ${owner.accessToken}`)
+				.set("X-Organization-Id", orgIds[0]!);
+		const messagesOf = (res: { body: { message?: unknown } }) =>
+			Array.isArray(res.body.message)
+				? res.body.message.join(" ")
+				: String(res.body.message);
+
+		// 位数正确但日历不存在：此前 new Date() 得 Invalid Date → Prisma 校验错误 → 500
+		for (const query of [
+			"?from=2026-99-99T99:99:59Z",
+			"?to=2026-13-01T00:00:00Z",
+			"?to=2026-11-23T24:00:00Z",
+			"?from=2026-11-23T23:59:60Z",
+			"?from=2026-02-29T00:00:00Z", // 非闰年
+		]) {
+			const res = await get(query).expect(400);
+			expect(messagesOf(res), query).toMatch(/须为/);
+		}
+		// 此前被静默顺延成 3 月 3 日：返回 200，但筛选区间并非用户所指
+		const rolled = await get(
+			`?from=${encodeURIComponent("2026-02-31T00:00:00.000Z")}`,
+		).expect(400);
+		expect(messagesOf(rolled)).toMatch(/须为/);
+		// 形状松散写法仍被拒（评审 N-03 回归：IsISO8601 单独会放行它们）
+		for (const query of ["?from=2026-W01-1", "?from=20261123T000000Z", "?from=2026-11-23"]) {
+			const res = await get(query).expect(400);
+			expect(messagesOf(res), query).toMatch(/须为/);
+		}
+
+		// 合法时间（含带偏移的写法）照常 200
+		const ok = await get(
+			`?from=${encodeURIComponent("2020-01-01T00:00:00.000Z")}&to=${encodeURIComponent("2030-12-31T23:59:59.999Z")}`,
+		).expect(200);
+		expect(ok.body.data.total).toBeGreaterThanOrEqual(1);
+		await get(
+			`?from=${encodeURIComponent("2020-01-01T08:00:00+08:00")}`,
+		).expect(200);
+	});
+
+	it("R3-I06：换算为 UTC 后年份越界的时间 → 400，而非 500", async () => {
+		const get = (query: string) =>
+			request(app.getHttpServer())
+				.get(`${auditUrl}${query}`)
+				.set("Authorization", `Bearer ${owner.accessToken}`)
+				.set("X-Organization-Id", orgIds[0]!);
+
+		// 带负时区的 9999 年末时刻：字面量是合法的 4 位年份，两道 DTO 校验都放行，
+		// 换算后 UTC 年为 10000，Prisma 无法表示——此前抛未知错误变 500
+		const overflow = encodeURIComponent("9999-12-31T23:59:59.999-01:00");
+		for (const query of [`?from=${overflow}`, `?to=${overflow}`]) {
+			const res = await get(query).expect(400);
+			expect(res.body.code, query).toBe("INVALID_AUDIT_TIME");
+		}
+		// 边界内的极值照常：UTC 年恰为 9999
+		await get(
+			`?from=${encodeURIComponent("2020-01-01T00:00:00.000Z")}&to=${encodeURIComponent("9999-12-31T23:59:59.999+01:00")}`,
+		).expect(200);
+	});
+
 	it("Admin 可读（DB 直建成员）", async () => {
 		const admin = await registerUser("admin");
 		await ctx.prisma.membership.create({

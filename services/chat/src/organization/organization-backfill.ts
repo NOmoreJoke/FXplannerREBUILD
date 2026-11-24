@@ -283,8 +283,9 @@ async function backfillUser(
 	reminderReadsCreated: number;
 	dataRequestsRescoped: number;
 }> {
-	// 默认组织 = 最早的 ACTIVE OWNER 成员关系（与运行时 resolveDefaultOrganizationId
-	// 同口径；用户可同时是多个组织的 Owner，取「最早」才是 MIG-B 的默认组织）
+	// 默认组织 = 用户创建的最早组织（与运行时 resolveDefaultOrganizationId 同口径；
+	// 用户可同时创建多个组织，取「最早」才是 MIG-B 的默认组织。受邀加入的组织不算：
+	// 尚无个人工作台的存量用户在此解析为 null，由下方新建，fail-closed）
 	let organizationId = await resolveDefaultOrganizationId(tx, user.id);
 	let organizationCreated = false;
 	if (organizationId === null) {
@@ -435,17 +436,32 @@ export async function backfillDefaultOrganizations(
 	};
 
 	if (options.dryRun) {
-		const owners = await prisma.membership.findMany({
-			where: { role: "OWNER", status: "ACTIVE", userId: { in: userIds } },
-			select: { userId: true },
-		});
-		const ownerUserIds = new Set(owners.map((m) => m.userId));
+		// 分片绑定参数：全库模式绑定空数组——既不把全库用户 id 展开成绑定参数
+		// （超 32,767 个即突破 PostgreSQL 上限，评审 R2-I05），也让 ANY 恒假
+		const shardIds = sharded ? userIds : [];
+		// 已有默认组织的用户：与 resolveDefaultOrganizationId 同口径（组织的第一个成员，
+		// 且成员关系与组织同事务创建 = 创建者）。真实写入对每个尚无默认组织的用户新建
+		// 组织 + 首个 OWNER 成员关系
+		const withDefault = await prisma.$queryRaw<Array<{ userId: string }>>`
+			WITH first_members AS (
+				SELECT DISTINCT ON (m.organization_id)
+					m.organization_id, m.user_id, m.created_at, m.id
+				FROM memberships m
+				ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+			)
+			SELECT DISTINCT f.user_id AS "userId"
+			FROM first_members f
+			JOIN organizations o ON o.id = f.organization_id
+			WHERE f.created_at = o.created_at
+				AND (NOT ${sharded} OR f.user_id = ANY(${shardIds}::text[]))`;
+		const defaultUserIds = new Set(withDefault.map((row) => row.userId));
 		summary.organizationsCreated = users.filter(
-			(u) => !ownerUserIds.has(u.id),
+			(u) => !defaultUserIds.has(u.id),
 		).length;
-		summary.usersSkippedIdempotent = users.filter((u) =>
-			ownerUserIds.has(u.id),
-		).length;
+		summary.usersSkippedIdempotent =
+			users.length - summary.organizationsCreated;
+		// 组织与首个 OWNER 成员关系 1:1 同建（此前 dry-run 恒为 0，评审 R2-I05）
+		summary.ownerMembershipsCreated = summary.organizationsCreated;
 
 		// 待回填行：organizationId IS NULL 的用户行
 		const legacyRows = { organizationId: null, ...userScope };
@@ -474,15 +490,35 @@ export async function backfillDefaultOrganizations(
 		});
 		summary.rowsBackfilled.aiConversations =
 			await prisma.aiConversation.count({ where: legacyRows });
-		// PlanChangeLog 无 userId 列：经父 Plan 归属
-		summary.rowsBackfilled.planChangeLogs =
-			await prisma.planChangeLog.count({
-				where: {
-					organizationId: null,
-					plan: sharded ? { userId: { in: userIds } } : {},
-				},
-			});
-		// 待映射数据请求：与 rescopeLegacyDataRequests 的写入条件逐项一致
+		// PlanChangeLog 无 userId 列：经父 Plan 归属。与 backfillUserRows 的写入条件逐项
+		// 一致——父计划尚未挂组织，或已挂该用户的默认组织（回填重跑）；父计划已挂其他
+		// 组织的变更日志不会被写入，也不计入（评审 R2-I05）。defaults CTE 与
+		// resolveDefaultOrganizationId 同口径，改一处须同步另一处
+		const [changeLogs] = await prisma.$queryRaw<Array<{ n: bigint }>>`
+			WITH first_members AS (
+				SELECT DISTINCT ON (m.organization_id)
+					m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
+				FROM memberships m
+				ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+			),
+			defaults AS (
+				SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+				FROM first_members f
+				JOIN organizations o ON o.id = f.organization_id
+				WHERE f.created_at = o.created_at
+				ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
+			)
+			SELECT count(*) AS n
+			FROM plan_change_logs c
+			JOIN plans p ON p.id = c.plan_id
+			LEFT JOIN defaults d ON d.user_id = p.user_id
+			WHERE c.organization_id IS NULL
+				AND (p.organization_id IS NULL OR p.organization_id = d.organization_id)
+				AND (NOT ${sharded} OR p.user_id = ANY(${shardIds}::text[]))`;
+		summary.rowsBackfilled.planChangeLogs = Number(changeLogs?.n ?? 0n);
+		// 待映射数据请求：与 rescopeLegacyDataRequests 的写入条件逐项一致——
+		// EXPORT/DELETION 且非 PERSONAL；历史 CLEAR 一律映射（含 scope 已是
+		// ORGANIZATION 但尚未挂组织的行，此前漏计，评审 R2-I05）
 		summary.dataRequestsRescoped = await prisma.dataRequest.count({
 			where: {
 				organizationId: null,
@@ -492,31 +528,43 @@ export async function backfillDefaultOrganizations(
 						type: { in: ["EXPORT", "DELETION"] },
 						scope: { not: "PERSONAL" },
 					},
-					{ type: "CLEAR", scope: { not: "ORGANIZATION" } },
+					{ type: "CLEAR" },
 				],
 			},
 		});
-		// 待补建的已读行：已读但尚无成员级已读行
-		summary.reminderReadsCreated = await prisma.reminder.count({
-			where: {
-				...userScope,
-				readAt: { not: null },
-				readStates: { none: {} },
-			},
-		});
-		// 待补建的组织设置：有个人设置、而（尚不存在的）默认组织无组织设置
+		// 待补建的已读行：行主已读、但尚无**行主本人**的成员级已读行（与真实写入的
+		// createMany 条件及 reconcileMigration 的 reminder_read.parity 同口径；
+		// 此前用「无任何已读行」估算，他人已读时会漏计，评审 R2-I05）
+		const [readParity] = await prisma.$queryRaw<Array<{ n: bigint }>>`
+			SELECT count(*) AS n FROM reminders r
+			WHERE r.read_at IS NOT NULL
+				AND NOT EXISTS (
+					SELECT 1 FROM reminder_reads rr
+					WHERE rr.reminder_id = r.id AND rr.user_id = r.user_id)
+				AND (NOT ${sharded} OR r.user_id = ANY(${shardIds}::text[]))`;
+		summary.reminderReadsCreated = Number(readParity?.n ?? 0n);
+		// 待补建的组织设置：有个人设置、而（尚不存在的）默认组织无组织设置。
+		// defaults CTE 与 resolveDefaultOrganizationId 同口径（用户创建的最早组织：
+		// 组织的第一个成员且成员关系与组织同事务创建），改一处须同步另一处
 		const [settingsToCreate] = await prisma.$queryRaw<Array<{ n: bigint }>>`
-			WITH defaults AS (
-				SELECT DISTINCT ON (m.user_id) m.user_id, m.organization_id
+			WITH first_members AS (
+				SELECT DISTINCT ON (m.organization_id)
+					m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
 				FROM memberships m
-				WHERE m.role = 'OWNER' AND m.status = 'ACTIVE'
-				ORDER BY m.user_id, m.joined_at ASC, m.created_at ASC
+				ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+			),
+			defaults AS (
+				SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+				FROM first_members f
+				JOIN organizations o ON o.id = f.organization_id
+				WHERE f.created_at = o.created_at
+				ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
 			)
 			SELECT count(*) AS n FROM user_settings s
 			LEFT JOIN defaults d ON d.user_id = s.user_id
 			LEFT JOIN organization_settings o ON o.organization_id = d.organization_id
 			WHERE o.organization_id IS NULL
-				AND (NOT ${sharded} OR s.user_id = ANY(${userIds}::text[]))`;
+				AND (NOT ${sharded} OR s.user_id = ANY(${shardIds}::text[]))`;
 		summary.organizationSettingsCreated = Number(settingsToCreate?.n ?? 0n);
 		return summary;
 	}

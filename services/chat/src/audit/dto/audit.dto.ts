@@ -3,6 +3,7 @@ import { Type } from "class-transformer";
 import {
 	IsIn,
 	IsInt,
+	IsISO8601,
 	IsOptional,
 	IsString,
 	Matches,
@@ -85,12 +86,25 @@ export class AuditLogViewDto {
 }
 
 /**
- * 严格 ISO 8601 日期时间（评审 N-03）：class-validator 的 @IsISO8601 会放行
+ * 严格 ISO 8601 日期时间的**形状**（评审 N-03）：class-validator 的 @IsISO8601 会放行
  * "2026-W01-1" 等周年/序数日写法，new Date() 得到 Invalid Date 后 500；
  * 这里要求完整 YYYY-MM-DDTHH:mm:ss(.sss)Z|±HH:mm。
+ *
+ * 形状之外还须是**真实存在的时间**（评审 R2-I04）：本正则只约束位数，
+ * "2026-99-99T99:99:99Z" 与 "2026-02-31T00:00:00Z" 都能通过——前者 new Date() 得
+ * Invalid Date，令 Prisma 抛校验错误（HTTP 500）；后者被静默顺延成 3 月 3 日。
+ * 故 from/to 同时挂 @IsISO8601({ strict: true })（按日历校验月/日/时/分/秒）。
+ * 两者互补：正则挡掉 IsISO8601 放行的松散写法，IsISO8601 挡掉正则放行的越界日期。
+ * 服务层另有兜底（audit.service.ts parseAuditFilterTime），并补上两道校验都管不到的
+ * 一类：带时区的值换算为 UTC 后年份越界（评审 R3-I06，如 9999 年末的负时区时刻）。
  */
 const ISO_DATETIME_PATTERN =
 	/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
+
+/** 日历有效性校验（须在形状校验之后阅读：两道校验同时挂在 from / to 上） */
+const IS_REAL_CALENDAR_TIME = {
+	message: "须为真实存在的时间：月/日/时/分/秒越界（如 2 月 30 日、25 点）会被拒绝",
+};
 
 /** 审计分页查询参数（AUDIT-03.1：按时间起止、成员、动作筛选；分页不返回全量） */
 export class ListAuditLogsQueryDto {
@@ -122,6 +136,7 @@ export class ListAuditLogsQueryDto {
 	@Matches(ISO_DATETIME_PATTERN, {
 		message: "from 须为 ISO 8601 日期时间，如 2026-11-23T00:00:00.000Z",
 	})
+	@IsISO8601({ strict: true }, IS_REAL_CALENDAR_TIME)
 	@IsOptional()
 	from?: string;
 
@@ -133,6 +148,7 @@ export class ListAuditLogsQueryDto {
 	@Matches(ISO_DATETIME_PATTERN, {
 		message: "to 须为 ISO 8601 日期时间，如 2026-11-23T23:59:59.999Z",
 	})
+	@IsISO8601({ strict: true }, IS_REAL_CALENDAR_TIME)
 	@IsOptional()
 	to?: string;
 

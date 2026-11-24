@@ -36,20 +36,19 @@ function createPrismaMock(overrides: {
 		findUnique: vi.fn().mockResolvedValue(overrides.organizationSettings ?? null),
 	};
 	const membership = {
-		// 两种查询形状：按组织找活跃 Owner / 按用户找最早的活跃 OWNER 成员关系（默认组织）
-		findFirst: vi.fn((args: { where: Record<string, unknown> }) =>
-			"organizationId" in args.where
-				? Promise.resolve(
-						overrides.ownerUserId ? { userId: overrides.ownerUserId } : null,
-					)
-				: Promise.resolve(
-						overrides.ownerDefaultOrganizationId
-							? { organizationId: overrides.ownerDefaultOrganizationId }
-							: null,
-					),
+		// 组织的活跃 Owner（resolveOrganizationPreferences）
+		findFirst: vi.fn(() =>
+			Promise.resolve(overrides.ownerUserId ? { userId: overrides.ownerUserId } : null),
 		),
 	};
-	return { userSettings, organizationSettings, membership };
+	// 所有者的默认组织（resolveDefaultOrganizationId 走原生 SQL，评审 R2-I03）：
+	// 无 = 该用户尚未创建任何组织
+	const $queryRaw = vi.fn(async () =>
+		overrides.ownerDefaultOrganizationId
+			? [{ organizationId: overrides.ownerDefaultOrganizationId }]
+			: [],
+	);
+	return { userSettings, organizationSettings, membership, $queryRaw };
 }
 
 const orgSettingsRow = {

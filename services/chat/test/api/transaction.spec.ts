@@ -347,6 +347,20 @@ describe("TransactionController（接口）", () => {
 		}
 	});
 
+	it("#11b 无效日期：DTO 放行的松散写法 → 400，而非 500（评审 R3-I06 同类面）", async () => {
+		// DTO 的 @IsISO8601 未开 strict，会放行周年 / 基本格式写法；new Date() 得
+		// Invalid Date，而日期范围校验对 NaN 的比较恒为假——此前无效值一路带到
+		// Prisma 抛校验错误（HTTP 500）。与 usage.parseUsedAt 同口径在服务层拦截
+		for (const transactedAt of ["2026-W01-1", "20261123", "20261123T000000Z"]) {
+			const res = await postTx(userA, {
+				...simpleBody("GBP", "100"),
+				transactedAt,
+			}).expect(400);
+			expect(res.body.code, transactedAt).toBe("INVALID_TRANSACTION_PARAMS");
+			expect(res.body.message, transactedAt).toContain("有效的 ISO 8601");
+		}
+	});
+
 	it("#12 JPY 传入 2 位小数 quantity：400（超币种精度，JPY 必须整数）", async () => {
 		const res = await postTx(userA, {
 			currencyCode: "JPY",

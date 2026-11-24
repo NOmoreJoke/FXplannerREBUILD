@@ -5,6 +5,7 @@ import {
 	backfillDefaultOrganizations,
 } from "../../src/organization/organization-backfill";
 import { reconcileMigration } from "../../src/organization/organization-reconcile";
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
 import { cleanupUser } from "../helpers/test-app";
 
 /**
@@ -976,7 +977,7 @@ describe("MIG-B 默认组织回填与核对", () => {
 		expect(result.diffs).toEqual([]);
 	});
 
-	test("评审 I-15：多组织用户回填到「最早」的 OWNER 组织（与运行时默认组织同口径）", async () => {
+	test("评审 I-15 / R2-I03：多组织用户回填到其「创建得最早」的组织（与运行时默认组织同口径）", async () => {
 		const later = new Date("2026-02-01T00:00:00.000Z");
 		// 先插入「较晚加入」的组织（物理顺序在前），再插入「最早加入」的组织：
 		// 不带 orderBy 的 findFirst 通常按物理顺序返回较晚者 → 映射到错误的组织
@@ -1001,18 +1002,336 @@ describe("MIG-B 默认组织回填与核对", () => {
 			data: { userId: earliestOwnerUserId, currencyCode: "GBP", balance: "5.0000" },
 		});
 
+		// 运行时与回填同口径：都是创建得最早的组织
+		expect(await resolveDefaultOrganizationId(db, earliestOwnerUserId)).toBe(earliestOrg.id);
+
 		const run = await backfillDefaultOrganizations(db, {
 			userIds: [earliestOwnerUserId],
 		});
 		expect(run.organizationsCreated).toBe(0);
+		expect(run.ownerMembershipsCreated).toBe(0);
 		expect(run.usersSkippedIdempotent).toBe(1);
 		const mapped = await db.account.findUnique({ where: { id: account.id } });
 		expect(mapped?.organizationId).toBe(earliestOrg.id);
-		// 回填不得为「已有 OWNER 组织」的用户再建组织
+		// 回填不得为「已有个人工作台」的用户再建组织
 		expect(await db.membership.count({ where: { userId: earliestOwnerUserId } })).toBe(2);
 
 		// 全部演练用户收尾：行集恒等（多组织用户的存量行归默认组织，而非任一 OWNER 组织）
 		const result = await reconcileMigration(db, { userIds: allUserIds() });
 		expect(result.diffs).toEqual([]);
+	});
+
+	test("R2-I03：默认组织 = 用户创建的最早组织——受邀加入不算；所有权转移后不漂移", async () => {
+		const userId = await createUser("creator", "创建者演练用户");
+		const managed: string[] = [];
+		try {
+			// 尚无个人工作台：解析为 null（fail-closed——不回落，回填时新建）
+			expect(await resolveDefaultOrganizationId(db, userId)).toBeNull();
+
+			// 先受邀加入他人组织（crossOrgId 由前面的用例在数秒前创建）：成员关系晚于
+			// 组织创建 → 不是默认组织
+			const invited = await db.membership.create({
+				data: { organizationId: crossOrgId, userId, role: "FINANCE", status: "ACTIVE" },
+			});
+			const hostRow = await db.organization.findUniqueOrThrow({ where: { id: crossOrgId } });
+			expect(invited.createdAt.getTime()).toBeGreaterThan(hostRow.createdAt.getTime());
+			expect(await resolveDefaultOrganizationId(db, userId)).toBeNull();
+
+			// 回填为其新建个人工作台：存量行归入新组织，而不是受邀组织
+			const account = await db.account.create({
+				data: { userId, currencyCode: "USD", balance: "8.0000" },
+			});
+			const run = await backfillDefaultOrganizations(db, { userIds: [userId] });
+			expect(run).toMatchObject({ organizationsCreated: 1, ownerMembershipsCreated: 1 });
+			const workspaceId = await resolveDefaultOrganizationId(db, userId);
+			expect(workspaceId).not.toBeNull();
+			expect(workspaceId).not.toBe(crossOrgId);
+			managed.push(workspaceId!);
+			expect(
+				(await db.account.findUniqueOrThrow({ where: { id: account.id } })).organizationId,
+			).toBe(workspaceId);
+
+			// 不变量：个人工作台的首个成员关系与组织同事务创建（默认组织判定的依据）
+			const workspaceMembership = await db.membership.findFirstOrThrow({
+				where: { userId, organizationId: workspaceId! },
+				include: { organization: true },
+			});
+			expect(workspaceMembership.createdAt.getTime()).toBe(
+				workspaceMembership.organization.createdAt.getTime(),
+			);
+
+			// 所有权转移：用户降为 ADMIN、他人接任 OWNER → 默认组织不漂移
+			const successorId = await createUser("successor", "接任演练用户");
+			try {
+				await db.$transaction([
+					db.membership.updateMany({
+						where: { userId, organizationId: workspaceId!, role: "OWNER", status: "ACTIVE" },
+						data: { role: "ADMIN" },
+					}),
+					db.membership.create({
+						data: { organizationId: workspaceId!, userId: successorId, role: "OWNER", status: "ACTIVE" },
+					}),
+				]);
+				expect(
+					(await db.membership.findFirst({ where: { userId, organizationId: workspaceId! } }))?.role,
+				).toBe("ADMIN");
+				// 用户随后新建组织并成为其 OWNER：旧口径（最早的 ACTIVE OWNER）会漂移到它
+				const laterOrg = await db.organization.create({
+					data: {
+						name: `转移后新建的组织 ${RUN}`,
+						memberships: {
+							create: { userId, role: "OWNER", status: "ACTIVE" },
+						},
+					},
+				});
+				managed.push(laterOrg.id);
+				expect(await resolveDefaultOrganizationId(db, userId)).toBe(workspaceId);
+
+				// 回填重跑：幂等，不新建组织；存量行仍归个人工作台
+				const rerun = await backfillDefaultOrganizations(db, { userIds: [userId] });
+				expect(rerun).toMatchObject({ organizationsCreated: 0, ownerMembershipsCreated: 0 });
+				expect(
+					(await db.account.findUniqueOrThrow({ where: { id: account.id } })).organizationId,
+				).toBe(workspaceId);
+				// dry-run 估算与之一致（无待建组织）
+				const dry = await backfillDefaultOrganizations(db, {
+					dryRun: true,
+					userIds: [userId],
+				});
+				expect(dry).toMatchObject({
+					organizationsCreated: 0,
+					ownerMembershipsCreated: 0,
+					usersSkippedIdempotent: 1,
+				});
+				expect(await reconcileMigration(db, { userIds: [userId] })).toMatchObject({ diffs: [] });
+			} finally {
+				await db.membership.deleteMany({ where: { userId: successorId } });
+				await db.user.delete({ where: { id: successorId } }).catch(() => {});
+			}
+		} finally {
+			await db.membership.deleteMany({ where: { userId, organizationId: crossOrgId } });
+			await db.organization.deleteMany({ where: { id: { in: managed } } }).catch(() => {});
+			await cleanupUser(db as CleanupDb, userId);
+		}
+	});
+
+	test("R2-I03：创建者判定排除「组织创建的同一瞬间后插入」的成员（第一个成员条件）", async () => {
+		const creatorId = await createUser("same-ms-creator", "同毫秒创建者");
+		const latecomerId = await createUser("same-ms-late", "同毫秒后来者");
+		try {
+			const sharedOrg = await db.organization.create({
+				data: {
+					name: `同毫秒插入演练 ${RUN}`,
+					memberships: {
+						create: { userId: creatorId, role: "OWNER", status: "ACTIVE" },
+					},
+				},
+			});
+			// 确定性复现「组织创建的同一毫秒内又插入了另一名成员」：直写库的夹具 / 种子
+			// 常见。仅凭 created_at 相等会把后来者误判为创建者；创建者的 id 先生成，
+			// 后来者按 (created_at, id) 排在其后，不是第一个成员
+			await db.membership.create({
+				data: {
+					organizationId: sharedOrg.id,
+					userId: latecomerId,
+					role: "FINANCE",
+					status: "ACTIVE",
+					createdAt: sharedOrg.createdAt,
+					joinedAt: sharedOrg.createdAt,
+				},
+			});
+			const creatorMembership = await db.membership.findFirstOrThrow({
+				where: { organizationId: sharedOrg.id, userId: creatorId },
+			});
+			const latecomerMembership = await db.membership.findFirstOrThrow({
+				where: { organizationId: sharedOrg.id, userId: latecomerId },
+			});
+			expect(latecomerMembership.createdAt.getTime()).toBe(
+				creatorMembership.createdAt.getTime(),
+			);
+
+			expect(await resolveDefaultOrganizationId(db, latecomerId)).toBeNull();
+			expect(await resolveDefaultOrganizationId(db, creatorId)).toBe(sharedOrg.id);
+			// dry-run 与真实回填同口径：只为后来者新建个人工作台
+			const dry = await backfillDefaultOrganizations(db, {
+				dryRun: true,
+				userIds: [creatorId, latecomerId],
+			});
+			expect(dry).toMatchObject({ organizationsCreated: 1, usersSkippedIdempotent: 1 });
+			const run = await backfillDefaultOrganizations(db, {
+				userIds: [creatorId, latecomerId],
+			});
+			expect(run).toMatchObject({ organizationsCreated: 1, ownerMembershipsCreated: 1 });
+			expect(await resolveDefaultOrganizationId(db, latecomerId)).not.toBe(sharedOrg.id);
+			expect(await resolveDefaultOrganizationId(db, creatorId)).toBe(sharedOrg.id);
+			expect(
+				await reconcileMigration(db, { userIds: [creatorId, latecomerId] }),
+			).toMatchObject({ diffs: [] });
+		} finally {
+			await cleanupUser(db as CleanupDb, creatorId);
+			await cleanupUser(db as CleanupDb, latecomerId);
+		}
+	});
+
+	test("R2-I05：全库 dry-run 不按用户 id 绑定参数，且零写入", async () => {
+		const [orgCountBefore, membershipCountBefore] = await Promise.all([
+			db.organization.count(),
+			db.membership.count(),
+		]);
+		const dry = await backfillDefaultOrganizations(db, { dryRun: true });
+		// 全库模式：处理全部用户；组织与首个 OWNER 成员关系 1:1（此前恒 0）
+		expect(dry.chunksCommitted).toBe(0);
+		expect(dry.usersProcessed).toBeGreaterThanOrEqual(allUserIds().length);
+		expect(dry.ownerMembershipsCreated).toBe(dry.organizationsCreated);
+		expect(dry.organizationsCreated + dry.usersSkippedIdempotent).toBe(dry.usersProcessed);
+		expect(Object.values(dry.rowsBackfilled).every((count) => Number.isInteger(count) && count >= 0)).toBe(true);
+
+		// dry-run 零写入
+		expect(await db.organization.count()).toBe(orgCountBefore);
+		expect(await db.membership.count()).toBe(membershipCountBefore);
+	});
+
+	test("R2-I05：dry-run 估算与实际写入逐项一致（含此前漂移的 4 处）", async () => {
+		const driftUserId = await createUser("drift", "估算漂移演练用户");
+		const otherUserId = await createUser("drift-other", "他人已读演练用户");
+		const foreignOrg = await db.organization.create({
+			data: { name: `父计划已挂的其他组织 ${RUN}` },
+		});
+		const T1 = new Date("2026-03-01T00:00:00.000Z");
+		try {
+			// ① 历史 CLEAR：scope 已是 ORGANIZATION 但尚未挂组织（此前 dry-run 漏计）
+			await db.dataRequest.create({
+				data: {
+					userId: driftUserId, type: "CLEAR", scope: "ORGANIZATION", status: "COMPLETED",
+					requestedAt: T1, dueAt: T1,
+				},
+			});
+			// ② 已读提醒：他人已有已读行、行主本人没有（此前 dry-run 用「无任何已读行」估算 → 漏计）
+			const reminder = await db.reminder.create({
+				data: {
+					userId: driftUserId, type: "PLAN_DUE", dedupKey: `${RUN}-drift-due`,
+					scheduledFor: T1, readAt: T1,
+				},
+			});
+			await db.reminderRead.create({
+				data: { reminderId: reminder.id, userId: otherUserId, readAt: T1 },
+			});
+
+			const expected = {
+				organizationsCreated: 1,
+				ownerMembershipsCreated: 1, // ③ 此前 dry-run 恒为 0
+				usersSkippedIdempotent: 0,
+				organizationSettingsCreated: 0,
+				reminderReadsCreated: 1,
+				dataRequestsRescoped: 1,
+			};
+			const dry = await backfillDefaultOrganizations(db, { dryRun: true, userIds: [driftUserId] });
+			expect(dry).toMatchObject(expected);
+			expect(dry.rowsBackfilled.planChangeLogs).toBe(0);
+			const run = await backfillDefaultOrganizations(db, { userIds: [driftUserId] });
+			expect(run).toMatchObject(expected);
+			expect(run.rowsBackfilled.planChangeLogs).toBe(0);
+			expect(
+				(await db.reminderRead.findFirst({ where: { reminderId: reminder.id, userId: driftUserId } })),
+			).not.toBeNull();
+
+			// ④ PlanChangeLog 经父计划归属：父计划已挂其他组织的不写入也不计入；
+			//    父计划已挂默认组织的（回填重跑）写入并计入
+			const workspaceId = await resolveDefaultOrganizationId(db, driftUserId);
+			expect(workspaceId).not.toBeNull();
+			const planBase = {
+				userId: driftUserId, targetCurrency: "USD", targetAmount: "1.0000",
+				expectUseDate: T1, latestPrepDate: T1,
+			};
+			const logBase = {
+				changeType: "COMPLETED", beforeTarget: "1.0000", afterTarget: "1.0000",
+				beforeAlloc: "0.0000", afterAlloc: "0.0000", beforeSnapshot: {}, afterSnapshot: {},
+			};
+			const foreignPlan = await db.plan.create({
+				data: { ...planBase, organizationId: foreignOrg.id },
+			});
+			const foreignLog = await db.planChangeLog.create({
+				data: { ...logBase, planId: foreignPlan.id },
+			});
+			const ownPlan = await db.plan.create({
+				data: { ...planBase, organizationId: workspaceId! },
+			});
+			const ownLog = await db.planChangeLog.create({
+				data: { ...logBase, planId: ownPlan.id },
+			});
+
+			const dryAgain = await backfillDefaultOrganizations(db, {
+				dryRun: true,
+				userIds: [driftUserId],
+			});
+			expect(dryAgain.rowsBackfilled.planChangeLogs).toBe(1);
+			const rerun = await backfillDefaultOrganizations(db, { userIds: [driftUserId] });
+			expect(rerun.rowsBackfilled.planChangeLogs).toBe(1);
+			expect((await db.planChangeLog.findUniqueOrThrow({ where: { id: ownLog.id } })).organizationId).toBe(workspaceId);
+			expect((await db.planChangeLog.findUniqueOrThrow({ where: { id: foreignLog.id } })).organizationId).toBeNull();
+
+			// 清理「已挂其他组织」的演练行（它们按设计不属于默认组织，不参与行集恒等）
+			await db.planChangeLog.delete({ where: { id: foreignLog.id } });
+			await db.plan.delete({ where: { id: foreignPlan.id } });
+			expect(await reconcileMigration(db, { userIds: [driftUserId] })).toMatchObject({ diffs: [] });
+		} finally {
+			await db.organization.delete({ where: { id: foreignOrg.id } }).catch(() => {});
+			await cleanupUser(db as CleanupDb, driftUserId);
+			await cleanupUser(db as CleanupDb, otherUserId);
+		}
+	});
+
+	test("R2-I05：核对不再静默丢弃无默认组织用户的行——误标 / 未映射 / 缺设置逐项报出", async () => {
+		const strayId = await createUser("stray-rows", "无组织带数据演练用户");
+		const foreignOrg = await db.organization.create({
+			data: { name: `被误标的组织 ${RUN}` },
+		});
+		const T1 = new Date("2026-03-01T00:00:00.000Z");
+		try {
+			await db.userSettings.create({
+				data: {
+					userId: strayId, baseCurrency: "CNY", locale: "zh-CN", region: "CN",
+					prepPreference: "balanced", reminderEnabled: true, ledgerStartedAt: T1,
+				},
+			});
+			await db.account.createMany({
+				data: [
+					// 误标到其他组织
+					{ userId: strayId, currencyCode: "USD", balance: "1.0000", organizationId: foreignOrg.id },
+					// 尚未映射
+					{ userId: strayId, currencyCode: "CHF", balance: "2.0000" },
+				],
+			});
+			await db.dataRequest.create({
+				data: {
+					userId: strayId, type: "EXPORT", scope: "PERSONAL", status: "COMPLETED",
+					requestedAt: T1, dueAt: T1,
+				},
+			});
+
+			const result = await reconcileMigration(db, { userIds: [strayId] });
+			// 此前 INNER JOIN defaults 把该用户全部行丢弃，只报得出 default_org.missing
+			const byScope = Object.fromEntries(result.diffs.map((diff) => [diff.scope, diff.right]));
+			expect(byScope).toMatchObject({
+				"default_org.missing": 1,
+				"row_mapping.accounts": 2,
+				"data_request.scope_mapping": 1,
+				"settings_parity.missing": 1,
+			});
+
+			// 回填后：新建个人工作台 + 复制设置 + 行归位（误标行不改写，仍如实报出）
+			const run = await backfillDefaultOrganizations(db, { userIds: [strayId] });
+			expect(run.organizationsCreated).toBe(1);
+			const workspaceId = await resolveDefaultOrganizationId(db, strayId);
+			expect(workspaceId).not.toBe(foreignOrg.id);
+			const after = await reconcileMigration(db, { userIds: [strayId] });
+			expect(after.diffs).toEqual([
+				{ scope: "row_mapping.accounts", left: 0, right: 1 },
+			]);
+		} finally {
+			await db.account.deleteMany({ where: { userId: strayId } });
+			await db.organization.delete({ where: { id: foreignOrg.id } }).catch(() => {});
+			await cleanupUser(db as CleanupDb, strayId);
+		}
 	});
 });

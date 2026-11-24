@@ -17,6 +17,7 @@ import {
 	assertRateDecimalPlaces,
 	assertSelfConsistent,
 	assertTransactedAtInRange,
+	assertValidTransactedAt,
 	parseFeeAmount,
 	parsePositiveAmount,
 	TransactionInvalidParamsException,
@@ -206,6 +207,8 @@ export class TransactionService {
 		const feeAmount = parseFeeAmount(dto.feeAmount);
 
 		const transactedAt = new Date(dto.transactedAt);
+		// 无效 / 越界日期在查库之前拦截（评审 R3-I06 同类面）：DTO 会放行解析不出时间的写法
+		assertValidTransactedAt(transactedAt);
 		// 日期上下界：UTC+8 口径不晚于今天；不早于账本起点（未设置时不校验下界）
 		const settings = await this.prisma.userSettings.findUnique({
 			where: { userId },

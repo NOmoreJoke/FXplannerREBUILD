@@ -8,6 +8,7 @@ import {
 	type TestUser,
 } from "../helpers/test-app";
 import { TEST_PASSWORD } from "../fixtures/test-credentials";
+import { runBehindAdvisoryLock } from "../helpers/postgres-lock-barrier";
 
 /**
  * 接口测试 ↔ src/organization/organization.controller.ts（技术方案 §7.2）
@@ -282,6 +283,52 @@ describe("OrganizationController（e2e）", () => {
 			.set("Authorization", `Bearer ${member.accessToken}`)
 			.set("X-Organization-Id", orgId)
 			.expect(200);
+	});
+
+	it("R3-N1：改名取锁后重读操作者——Guard 放行后被降权的 Admin 改名 → 403，不留成功审计", async () => {
+		const orgId = orgIds[0]!;
+		const memberWhere = {
+			organizationId_userId: { organizationId: orgId, userId: member.userId },
+		};
+		await ctx.prisma.membership.update({
+			where: memberWhere,
+			data: { role: "ADMIN" },
+		});
+		const auditWhere = { organizationId: orgId, action: "organization.update" };
+		const auditCountBefore = await ctx.prisma.auditLog.count({
+			where: auditWhere,
+		});
+
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			`membership:${orgId}`,
+			() =>
+				request(app.getHttpServer())
+					.patch("/api/organizations/current")
+					.set("Authorization", `Bearer ${member.accessToken}`)
+					.set("X-Organization-Id", orgId)
+					.send({ name: "锁内降权后的改名" }),
+			async () => {
+				// 改名请求已阻塞在组织锁上：此刻并发的降权已提交
+				await ctx.prisma.membership.update({
+					where: memberWhere,
+					data: { role: "VIEWER" },
+				});
+			},
+		);
+
+		// 资格只用锁内重读到的最新角色：请求以 ADMIN 身份通过 Guard，但此刻已是 VIEWER
+		expect(res.status).toBe(403);
+		expect(res.body.code).toBe("PERMISSION_DENIED");
+		const organization = await ctx.prisma.organization.findUnique({
+			where: { id: orgId },
+			select: { name: true },
+		});
+		expect(organization?.name).not.toBe("锁内降权后的改名");
+		const auditCountAfter = await ctx.prisma.auditLog.count({
+			where: auditWhere,
+		});
+		expect(auditCountAfter).toBe(auditCountBefore);
 	});
 
 	it("Operator/Viewer 调 PATCH /current → 403 PERMISSION_DENIED", async () => {

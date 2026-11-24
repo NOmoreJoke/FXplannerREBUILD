@@ -1,5 +1,6 @@
 import request from "supertest";
 import type { INestApplication } from "@nestjs/common";
+import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	cleanupUser,
@@ -9,6 +10,9 @@ import {
 } from "../helpers/test-app";
 import { TEST_PASSWORD } from "../fixtures/test-credentials";
 import { ensureOnboarded } from "../helpers/onboarding-helper";
+import { backfillDefaultOrganizations } from "../../src/organization/organization-backfill";
+import { reconcileMigration } from "../../src/organization/organization-reconcile";
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
 
 /**
  * 组织只读隔离集成测试（GOAL-3A W18；技术方案 §14.2 通用矩阵 + 需求 15.2.11）
@@ -484,6 +488,47 @@ function utc8Midday(offsetDays: number): Date {
 	return new Date(day * 86_400_000 - 8 * 60 * 60 * 1000);
 }
 
+/** 注册并登录测试用户（R2 回归两个 describe 共用；userIds 供 afterAll 的 cleanupUser 收尾） */
+async function registerR2User(
+	app: INestApplication,
+	label: string,
+	userIds: string[],
+): Promise<TestUser> {
+	const email = `r2-${label}-${Date.now()}-${Math.random()
+		.toString(36)
+		.slice(2, 8)}@example.com`;
+	await request(app.getHttpServer())
+		.post("/api/auth/register")
+		.send({ email, password: TEST_PASSWORD, name: label })
+		.expect(201);
+	const login = await request(app.getHttpServer())
+		.post("/api/auth/login")
+		.send({ email, password: TEST_PASSWORD })
+		.expect(200);
+	const user: TestUser = {
+		email,
+		password: TEST_PASSWORD,
+		accessToken: login.body.data.accessToken,
+		userId: login.body.data.user.id,
+	};
+	userIds.push(user.userId);
+	return user;
+}
+
+/** 当前用户的默认组织（注册兜底建的 OWNER 成员关系），并入用例托管列表供 afterAll 清理 */
+async function trackDefaultOrg(
+	prisma: TestContext["prisma"],
+	userId: string,
+	orgIds: string[],
+): Promise<string> {
+	const membership = await prisma.membership.findFirst({
+		where: { userId, role: "OWNER", status: "ACTIVE" },
+	});
+	if (!membership) throw new Error("注册兜底未建默认组织");
+	orgIds.push(membership.organizationId);
+	return membership.organizationId;
+}
+
 /**
  * 外部评审修复回归（Goal #3A R1）：兼容窗口回落的作用域与组织偏好真相来源。
  *
@@ -843,5 +888,513 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 			expect(row.organizationId).toBe(orgA);
 			expect(row.userId).toBe(u1.userId);
 		}
+	});
+});
+
+/**
+ * 外部评审 R2 回归（R2-I02）：三个只读 @Post 预览端点的读作用域。
+ *
+ * 修复前三个预览只把 user.id 传给服务，BusinessOrgScopeGuard 形同虚设：
+ * - 携带其他组织头仍按本人 userId 直查 → 带出本人别的组织的余额 caps / 账本重放（IDOR）；
+ * - 受邀成员按自己的 userId 查 → 目标 404 或按自己的空账本计算。
+ * 修复后预览与业务 GET 同口径：目标归属、账户/计划/账本行按 compatReadWhere(scope)，
+ * 本位币取组织偏好（resolveOrganizationPreferences）。
+ *
+ * 构造：Org A（Owner U1，默认组织、个人本位币 CNY；组织行 USD 账户 1000 + 计划分配 200
+ * + 两笔买入；另有一条仅本人在默认组织可见的存量 NULL 行 EUR 300）；U2 为 A 的 FINANCE；
+ * Org B = U1 新建的空组织；Org C = U3 的默认组织（本位币 USD），U1 以 FINANCE 加入。
+ */
+describe("R2 回归：只读预览端点按组织作用域读取（R2-I02）", () => {
+	let ctx: TestContext;
+	let app: INestApplication;
+	const userIds: string[] = [];
+	const orgIds: string[] = [];
+
+	let ownerA: TestUser;
+	let financeA: TestUser;
+	let ownerC: TestUser;
+	let orgA: string;
+	let orgB: string;
+	let orgC: string;
+	let planA: { id: string };
+	let txnA: { id: string };
+
+	const headers = (user: TestUser, org: string) => ({
+		Authorization: `Bearer ${user.accessToken}`,
+		"X-Organization-Id": org,
+	});
+	/** 排期预览请求体（远期用途日，断言不依赖时钟） */
+	const scheduleBody = (targetCurrency: string) => ({
+		targetCurrency,
+		targetAmount: "100",
+		expectUseDate: new Date(Date.now() + 60 * 86_400_000).toISOString(),
+		prepLeadDays: 3,
+		pacePreference: "balanced",
+	});
+	const post = (url: string, user: TestUser, org: string, body: unknown) =>
+		request(app.getHttpServer()).post(url).set(headers(user, org)).send(body);
+	const registerUser = (label: string) => registerR2User(app, label, userIds);
+
+	/** 组织行买入（模拟 MIG-B 回填后的归属；手续费未知 → 预览可做手续费补录） */
+	async function seedPurchase(
+		quantity: string,
+		principalAmount: string,
+	): Promise<{ id: string }> {
+		return ctx.prisma.transaction.create({
+			data: {
+				userId: ownerA.userId,
+				organizationId: orgA,
+				createdById: ownerA.userId,
+				currencyCode: "USD",
+				quantity,
+				principalAmount,
+				feeAmount: null,
+				exchangeRate: "7.2000000000",
+				rateSource: "identity",
+				rateObservedAt: new Date(Date.now() - 10 * 86_400_000),
+				transactedAt: new Date(Date.now() - 9 * 86_400_000),
+			},
+			select: { id: true },
+		});
+	}
+
+	beforeAll(async () => {
+		ctx = await createTestApp();
+		app = ctx.app;
+		ownerA = await registerUser("owner-a");
+		financeA = await registerUser("finance-a");
+		ownerC = await registerUser("owner-c");
+
+		// Org A：U1 的默认组织，个人本位币 CNY
+		orgA = await trackDefaultOrg(ctx.prisma, ownerA.userId, orgIds);
+		await ctx.prisma.membership.create({
+			data: { organizationId: orgA, userId: financeA.userId, role: "FINANCE", status: "ACTIVE" },
+		});
+		await ensureOnboarded(ctx.prisma, ownerA.userId, "CNY");
+		await ctx.prisma.account.create({
+			data: {
+				userId: ownerA.userId,
+				organizationId: orgA,
+				createdById: ownerA.userId,
+				currencyCode: "USD",
+				balance: "1000.0000",
+			},
+		});
+		planA = await ctx.prisma.plan.create({
+			data: {
+				userId: ownerA.userId,
+				organizationId: orgA,
+				createdById: ownerA.userId,
+				targetCurrency: "USD",
+				targetAmount: "500.0000",
+				expectUseDate: new Date(Date.now() + 60 * 86_400_000),
+				prepLeadDays: 3,
+				latestPrepDate: new Date(Date.now() + 57 * 86_400_000),
+				status: "ACTIVE",
+			},
+			select: { id: true },
+		});
+		await ctx.prisma.planAllocation.create({
+			data: { planId: planA.id, amount: "200.0000", usedAmount: "0.0000" },
+		});
+		// 账本事件合计 = 账户余额 1000（600 + 400）：重放余额与分配 200 自洽，不触发 V2' 拦截
+		txnA = await seedPurchase("600.0000", "4320.0000");
+		await seedPurchase("400.0000", "2880.0000");
+		// 存量 NULL 行（旧写路径）：逻辑上属默认组织 A，且仅本人可见
+		await ctx.prisma.account.create({
+			data: { userId: ownerA.userId, currencyCode: "EUR", balance: "300.0000" },
+		});
+
+		// Org B：U1 新建的空组织（未建账）
+		const createdB = await request(app.getHttpServer())
+			.post("/api/organizations")
+			.set("Authorization", `Bearer ${ownerA.accessToken}`)
+			.send({ name: "U1 新建的组织 B" })
+			.expect(201);
+		orgB = createdB.body.data.id;
+		orgIds.push(orgB);
+
+		// Org C：U3 的默认组织，本位币 USD；U1 以 FINANCE 加入（个人本位币仍是 CNY）
+		orgC = await trackDefaultOrg(ctx.prisma, ownerC.userId, orgIds);
+		await ctx.prisma.membership.create({
+			data: { organizationId: orgC, userId: ownerA.userId, role: "FINANCE", status: "ACTIVE" },
+		});
+		await ensureOnboarded(ctx.prisma, ownerC.userId, "USD");
+	}, 30_000);
+
+	afterAll(async () => {
+		await ctx.prisma.auditLog.deleteMany({
+			where: { organizationId: { in: orgIds } },
+		});
+		await ctx.prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
+		for (const userId of userIds) {
+			await cleanupUser(ctx.prisma, userId);
+		}
+		await app.close();
+	});
+
+	it("R2-I02：带 Org B 头做排期预览，不带出 Org A 的余额 caps 与存量 NULL 行", async () => {
+		const inB = await post("/api/plans/schedule-preview", ownerA, orgB, scheduleBody("USD")).expect(
+			200,
+		);
+		// Org B 无账户无计划：caps 归零，而不是本人 Org A 的 800 / 100
+		expect(inB.body.data.caps).toEqual({
+			allocatableBalance: "0.0000",
+			maxAllocatable: "0.0000",
+		});
+		// 存量 NULL 行（EUR 300）逻辑上属默认组织 A：在 B 的上下文同样不可见
+		const inBNull = await post(
+			"/api/plans/schedule-preview",
+			ownerA,
+			orgB,
+			scheduleBody("EUR"),
+		).expect(200);
+		expect(inBNull.body.data.caps.allocatableBalance).toBe("0.0000");
+	});
+
+	it("R2-I02：带 Org B 头对 Org A 的计划做修改预览 → 404 PLAN_NOT_FOUND", async () => {
+		const res = await post(`/api/plans/${planA.id}/adjust-preview`, ownerA, orgB, {
+			newAllocAmount: "250",
+		}).expect(404);
+		expect(res.body.code).toBe("PLAN_NOT_FOUND");
+	});
+
+	it("R2-I02：带 Org B 头对 Org A 的交易做更正预览 → 404，不返回账本重放结果", async () => {
+		const res = await post("/api/corrections/preview", ownerA, orgB, {
+			targetType: "TRANSACTION",
+			targetId: txnA.id,
+			baseVersion: 1,
+			reason: "手续费当时漏填",
+			changes: { feeAmount: "10.00" },
+		}).expect(404);
+		expect(res.body.code).toBe("CORRECTION_TARGET_NOT_FOUND");
+		expect(res.body.data).toBeUndefined();
+	});
+
+	it("对照：所有者在默认组织 A 内的三个预览不变（组织行 + 本人存量 NULL 行均可见）", async () => {
+		const schedule = await post(
+			"/api/plans/schedule-preview",
+			ownerA,
+			orgA,
+			scheduleBody("USD"),
+		).expect(200);
+		expect(schedule.body.data.caps).toEqual({
+			allocatableBalance: "800.0000", // 1000 − 计划分配 200
+			maxAllocatable: "100.0000", // min(800, 还需准备 100)
+		});
+		// 本人存量 NULL 行在默认组织上下文可见
+		const legacy = await post(
+			"/api/plans/schedule-preview",
+			ownerA,
+			orgA,
+			scheduleBody("EUR"),
+		).expect(200);
+		expect(legacy.body.data.caps.allocatableBalance).toBe("300.0000");
+
+		const adjust = await post(`/api/plans/${planA.id}/adjust-preview`, ownerA, orgA, {
+			newAllocAmount: "250",
+		}).expect(200);
+		expect(adjust.body.data.caps.unallocatedBalance).toBe("800.0000");
+
+		const correction = await post("/api/corrections/preview", ownerA, orgA, {
+			targetType: "TRANSACTION",
+			targetId: txnA.id,
+			baseVersion: 1,
+			reason: "手续费当时漏填",
+			changes: { feeAmount: "10.00" },
+		}).expect(200);
+		expect(correction.body.data.blockers).toEqual([]);
+		expect(correction.body.data.impacts.balances).toEqual([
+			{ currencyCode: "USD", before: "1000.0000", after: "1000.0000" },
+		]);
+	});
+
+	it("R2-I02：受邀 FINANCE 成员的更正预览按组织账本重放（含同组织其他买入），blockers 为空", async () => {
+		const correction = await post("/api/corrections/preview", financeA, orgA, {
+			targetType: "TRANSACTION",
+			targetId: txnA.id,
+			baseVersion: 1,
+			reason: "手续费当时漏填",
+			changes: { feeAmount: "10.00" },
+		}).expect(200);
+		// 重放范围 = 组织账本（600 + 400 两笔买入），不是成员自己的空账本
+		expect(correction.body.data.impacts.balances).toEqual([
+			{ currencyCode: "USD", before: "1000.0000", after: "1000.0000" },
+		]);
+		expect(correction.body.data.blockers).toEqual([]);
+		expect(correction.body.data.after.totalCost).toBe("4330.0000");
+	});
+
+	it("R2-I02：受邀 FINANCE 成员的排期预览按组织账本计算——不是自己的空账本，也不含行主的存量 NULL 行", async () => {
+		const schedule = await post(
+			"/api/plans/schedule-preview",
+			financeA,
+			orgA,
+			scheduleBody("USD"),
+		).expect(200);
+		// 与所有者的结果一致（组织行跨成员共享）
+		expect(schedule.body.data.caps).toEqual({
+			allocatableBalance: "800.0000",
+			maxAllocatable: "100.0000",
+		});
+		// 行主的 NULL 行仅本人可见：成员在 A 看不到 EUR 300
+		const legacy = await post(
+			"/api/plans/schedule-preview",
+			financeA,
+			orgA,
+			scheduleBody("EUR"),
+		).expect(200);
+		expect(legacy.body.data.caps.allocatableBalance).toBe("0.0000");
+	});
+
+	it("R2-I02：受邀 FINANCE 成员可对组织的计划做修改预览，caps 取组织账户余额", async () => {
+		const adjust = await post(`/api/plans/${planA.id}/adjust-preview`, financeA, orgA, {
+			newAllocAmount: "250",
+		}).expect(200);
+		expect(adjust.body.data.valid).toBe(true);
+		expect(adjust.body.data.before.allocAmount).toBe("200.0000");
+		expect(adjust.body.data.caps.unallocatedBalance).toBe("800.0000");
+	});
+
+	it("R2-I02：预览的本位币取组织偏好——成员在组织 C 预览 C 的本位币 USD → 400，而非沿用个人本位币 CNY", async () => {
+		const res = await post(
+			"/api/plans/schedule-preview",
+			ownerA,
+			orgC,
+			scheduleBody("USD"),
+		).expect(400);
+		expect(res.body.code).toBe("INVALID_PLAN_PARAMS");
+		expect(res.body.message).toContain("本位币");
+	});
+});
+
+/**
+ * 外部评审 R2 回归（R2-I03）：所有权转移后默认组织不漂移。
+ *
+ * 修复前默认组织 =「最早的 ACTIVE OWNER 成员关系」：原所有者 A 把默认组织 A 转给 B 后，
+ * A 最早的 ACTIVE OWNER 变成他后建的组织 C，于是
+ * - A 的个人设置成了组织 C 的偏好（C 瞬间「已建账」并向 C 的成员带出 A 的本位币）；
+ * - A 写下的存量 NULL 行从 A 消失、出现在 C；
+ * - 组织 A 失去「所有者个人设置」回落，变回未建账（全端点 409）；
+ * - MIG-B 重跑把 A 的行灌进 C。
+ * 修复后默认组织 =「该用户创建的最早的组织」（见 authorization/default-organization.ts），
+ * 且转移前把仍靠回落支撑的组织偏好固化为 OrganizationSettings。
+ *
+ * 构造：组织 A = A 的注册兜底组织（已建账 CNY，尚无 OrganizationSettings，即 OWNER_LEGACY；
+ * 另有一条 A 的存量 NULL 行 EUR 300）；B 为 A 的 ADMIN 成员（接任者）；F 为 A 的 FINANCE
+ * 成员，同时被邀入 A 显式新建的空组织 C。
+ */
+describe("R2 回归：所有权转移后默认组织不漂移（R2-I03）", () => {
+	let ctx: TestContext;
+	let app: INestApplication;
+	const db = new PrismaClient();
+	const userIds: string[] = [];
+	const orgIds: string[] = [];
+
+	let ownerA: TestUser;
+	let successorB: TestUser;
+	let memberF: TestUser;
+	let orgA: string;
+	let orgC: string;
+	/** A 的存量 NULL 行（旧写路径产生）：逻辑上属其默认组织 A */
+	let legacyAccountId: string;
+
+	const TRANSFER = "/api/organizations/current/transfer-ownership";
+	const headers = (user: TestUser, org: string) => ({
+		Authorization: `Bearer ${user.accessToken}`,
+		"X-Organization-Id": org,
+	});
+	const get = (url: string, user: TestUser, org: string) =>
+		request(app.getHttpServer()).get(url).set(headers(user, org));
+	/** GET /organizations/current 的 data */
+	const current = async (user: TestUser, org: string) => {
+		const res = await get("/api/organizations/current", user, org).expect(200);
+		return res.body.data as {
+			role: string;
+			onboardingCompleted: boolean;
+			baseCurrency: string | null;
+		};
+	};
+	const usd = expect.objectContaining({ currencyCode: "EUR", balance: "300.0000" });
+
+	beforeAll(async () => {
+		ctx = await createTestApp();
+		app = ctx.app;
+		ownerA = await registerR2User(app, "drift-owner", userIds);
+		successorB = await registerR2User(app, "drift-successor", userIds);
+		memberF = await registerR2User(app, "drift-member", userIds);
+
+		// 组织 A：A 的默认组织，已建账但设置仍是个人设置（无 OrganizationSettings）
+		orgA = await trackDefaultOrg(ctx.prisma, ownerA.userId, orgIds);
+		await ensureOnboarded(ctx.prisma, ownerA.userId, "CNY");
+		await ctx.prisma.membership.create({
+			data: { organizationId: orgA, userId: successorB.userId, role: "ADMIN", status: "ACTIVE" },
+		});
+		await ctx.prisma.membership.create({
+			data: { organizationId: orgA, userId: memberF.userId, role: "FINANCE", status: "ACTIVE" },
+		});
+		const legacy = await ctx.prisma.account.create({
+			data: { userId: ownerA.userId, currencyCode: "EUR", balance: "300.0000" },
+		});
+		legacyAccountId = legacy.id;
+
+		// 组织 C：A 显式新建的空组织，F 以 FINANCE 加入
+		const createdC = await request(app.getHttpServer())
+			.post("/api/organizations")
+			.set("Authorization", `Bearer ${ownerA.accessToken}`)
+			.send({ name: "A 后建的组织 C" })
+			.expect(201);
+		orgC = createdC.body.data.id;
+		orgIds.push(orgC);
+		await ctx.prisma.membership.create({
+			data: { organizationId: orgC, userId: memberF.userId, role: "FINANCE", status: "ACTIVE" },
+		});
+	}, 30_000);
+
+	afterAll(async () => {
+		await ctx.prisma.auditLog.deleteMany({
+			where: { organizationId: { in: orgIds } },
+		});
+		await ctx.prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
+		for (const userId of userIds) {
+			await cleanupUser(ctx.prisma, userId);
+		}
+		await app.close();
+		await db.$disconnect();
+	});
+
+	it("R2-I03：默认组织按「创建者」识别——兜底组织与显式新建组织的首个成员关系都与组织同事务创建", async () => {
+		for (const orgId of [orgA, orgC]) {
+			const membership = await ctx.prisma.membership.findFirstOrThrow({
+				where: { userId: ownerA.userId, organizationId: orgId },
+				include: { organization: true },
+			});
+			// 默认组织判定的依据：成员关系与组织 created_at 恒等（Postgres 事务时间）
+			expect(membership.createdAt.getTime(), orgId).toBe(
+				membership.organization.createdAt.getTime(),
+			);
+		}
+		expect(await resolveDefaultOrganizationId(db, ownerA.userId)).toBe(orgA);
+		// 接任者与受邀成员在 A 的成员关系不是创建者关系：他们的默认组织是各自的兜底组织
+		const successorDefault = await resolveDefaultOrganizationId(db, successorB.userId);
+		expect(successorDefault).not.toBeNull();
+		expect(successorDefault).not.toBe(orgA);
+	});
+
+	it("R2-I03：转移前基线——组织 A 靠原所有者个人设置回落为已建账；组织 C 未建账", async () => {
+		expect(await current(ownerA, orgA)).toMatchObject({
+			onboardingCompleted: true,
+			baseCurrency: "CNY",
+		});
+		expect(await current(memberF, orgC)).toMatchObject({
+			onboardingCompleted: false,
+			baseCurrency: null,
+		});
+		// A 的存量 NULL 行在默认组织 A 的上下文里对 A 本人可见
+		const accounts = await get("/api/accounts", ownerA, orgA).expect(200);
+		expect(accounts.body.data.accounts).toEqual([usd]);
+	});
+
+	it("R2-I03：转移后——组织 A 固化自己的设置，原所有者的默认组织仍是 A，组织 C 不继承", async () => {
+		const successorMembership = await ctx.prisma.membership.findFirstOrThrow({
+			where: { organizationId: orgA, userId: successorB.userId },
+		});
+		const transferred = await request(app.getHttpServer())
+			.post(TRANSFER)
+			.set(headers(ownerA, orgA))
+			.send({ targetMembershipId: successorMembership.id })
+			.expect(200);
+		expect(transferred.body.data.promotedId).toBe(successorMembership.id);
+
+		// 组织 A：新所有者与成员照常读到已建账与本位币（此前转移后变 409）
+		expect(await current(successorB, orgA)).toMatchObject({
+			role: "OWNER",
+			onboardingCompleted: true,
+			baseCurrency: "CNY",
+		});
+		const settings = await get("/api/settings", memberF, orgA).expect(200);
+		expect(settings.body.data.baseCurrency).toBe("CNY");
+		// 组织 A 的偏好已是组织自己的行，不再依赖任何人的个人设置；审计留痕
+		expect(
+			await ctx.prisma.organizationSettings.findUnique({ where: { organizationId: orgA } }),
+		).toMatchObject({ baseCurrency: "CNY" });
+		const audit = await ctx.prisma.auditLog.findFirst({
+			where: { organizationId: orgA, action: "owner.transfer" },
+			orderBy: { createdAt: "desc" },
+		});
+		expect(audit?.detail).toMatchObject({ settingsMaterialized: true });
+
+		// 原所有者（现为 ADMIN）：默认组织仍是 A，自己的存量 NULL 行留在原处
+		expect(await resolveDefaultOrganizationId(db, ownerA.userId)).toBe(orgA);
+		const stillThere = await get("/api/accounts", ownerA, orgA).expect(200);
+		expect(stillThere.body.data.accounts).toEqual([usd]);
+
+		// 组织 C：不继承原所有者的个人设置与存量行（此前瞬间变已建账并带出 EUR 300）
+		expect(await current(memberF, orgC)).toMatchObject({
+			onboardingCompleted: false,
+			baseCurrency: null,
+		});
+		const inC = await get("/api/accounts", ownerA, orgC).expect(200);
+		expect(inC.body.data.accounts).toEqual([]);
+
+		// 组织列表口径一致
+		const list = await request(app.getHttpServer())
+			.get("/api/organizations")
+			.set("Authorization", `Bearer ${ownerA.accessToken}`)
+			.expect(200);
+		const byId = new Map(
+			list.body.data.map((item: { id: string }) => [item.id, item] as const),
+		);
+		expect(byId.get(orgA)).toMatchObject({
+			role: "ADMIN",
+			onboardingCompleted: true,
+			baseCurrency: "CNY",
+		});
+		expect(byId.get(orgC)).toMatchObject({
+			role: "OWNER",
+			onboardingCompleted: false,
+			baseCurrency: null,
+		});
+	});
+
+	it("R2-I03：MIG-B 重跑把原所有者的存量行归回组织 A，而不是他后建的组织 C", async () => {
+		const run = await backfillDefaultOrganizations(db, { userIds: [ownerA.userId] });
+		expect(run.organizationsCreated).toBe(0);
+		expect(
+			(await db.account.findUniqueOrThrow({ where: { id: legacyAccountId } }))
+				.organizationId,
+		).toBe(orgA);
+		// 行归位后对组织 A 全体成员可见（组织行跨成员共享）
+		const forMember = await get("/api/accounts", memberF, orgA).expect(200);
+		expect(forMember.body.data.accounts.map((a: { currencyCode: string }) => a.currencyCode)).toContain("EUR");
+		expect(await reconcileMigration(db, { userIds: [ownerA.userId] })).toMatchObject({
+			diffs: [],
+		});
+	});
+
+	it("R2-I03：组织已有自己的设置时，再转移不重复固化（不覆盖组织设置）", async () => {
+		// 模拟组织化写路径已独立修改过组织设置：转移不得用任何人的个人设置覆盖
+		await db.organizationSettings.update({
+			where: { organizationId: orgA },
+			data: { baseCurrency: "USD" },
+		});
+		const ownerMembership = await ctx.prisma.membership.findFirstOrThrow({
+			where: { organizationId: orgA, userId: ownerA.userId },
+		});
+		const back = await request(app.getHttpServer())
+			.post(TRANSFER)
+			.set(headers(successorB, orgA))
+			.send({ targetMembershipId: ownerMembership.id })
+			.expect(200);
+		expect(back.body.data.promotedId).toBe(ownerMembership.id);
+		const audit = await ctx.prisma.auditLog.findFirst({
+			where: { organizationId: orgA, action: "owner.transfer" },
+			orderBy: { createdAt: "desc" },
+		});
+		expect(audit?.detail).toMatchObject({ settingsMaterialized: false });
+		expect(await current(ownerA, orgA)).toMatchObject({
+			role: "OWNER",
+			baseCurrency: "USD",
+		});
 	});
 });

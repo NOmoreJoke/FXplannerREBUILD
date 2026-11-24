@@ -77,8 +77,8 @@ type CompatBranch =
  *
  * 评审 I-08：NULL 分支**仅在默认组织上下文**拼接。此前它对任何组织无条件生效，
  *   用户新建组织 B 或受邀加入组织 C 后，其个人未迁移记录会整批渗入 B/C。
- *   `isDefaultOrganization` 由 Guard 按最早的 ACTIVE OWNER 成员关系判定
- *   （default-organization.ts）；缺省一律不带回落。
+ *   `isDefaultOrganization` 由 Guard 按「该用户创建的最早组织」判定
+ *   （default-organization.ts；不随所有权转移漂移，评审 R2-I03）；缺省一律不带回落。
  */
 export function compatReadWhere(scope: ReadScope): { OR: CompatBranch[] } {
 	const branches: CompatBranch[] = [{ organizationId: scope.organizationId }];

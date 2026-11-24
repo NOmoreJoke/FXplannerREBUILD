@@ -63,7 +63,9 @@ export class CorrectionController {
 	) {}
 
 	// 只读预览（@Post 但不落库）：与业务 GET 同一守卫链（评审 I-12——禁离职成员/
-	// 跨组织上下文取账本重放快照，禁 Operator/Viewer 绕过 correction.preview 权限点）
+	// 跨组织上下文取账本重放快照，禁 Operator/Viewer 绕过 correction.preview 权限点），
+	// 并同样以 actor 作为读作用域（评审 R2-I02——此前只传 user.id，守卫形同虚设：
+	// 带其他组织头仍返回本人别的组织的账本重放，受邀成员则按自己的空账本重放）
 	@Post("preview")
 	@HttpCode(HttpStatus.OK)
 	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
@@ -98,11 +100,8 @@ export class CorrectionController {
 		description: "预览后目标已被其他修改更新（CORRECTION_TARGET_CHANGED）",
 		type: CorrectionErrorDto,
 	})
-	async preview(
-		@CurrentUser() user: User,
-		@Body() dto: CorrectionRequestDto,
-	) {
-		const data = await this.correctionService.preview(user.id, dto);
+	async preview(@CurrentActor() actor: ActorContext, @Body() dto: CorrectionRequestDto) {
+		const data = await this.correctionService.preview(actor, dto);
 		return { success: true, data, message: "影响预览成功" };
 	}
 
