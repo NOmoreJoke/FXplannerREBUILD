@@ -6,8 +6,9 @@ import { BellOff, CircleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ReminderCard } from "@/components/business/reminder";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import { settingsApi } from "@/lib/api/settings";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import {
 	useMarkAllRemindersRead,
 	useReminders,
@@ -25,9 +26,12 @@ import {
  */
 export default function RemindersPage() {
 	const markAllRead = useMarkAllRemindersRead();
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
+	const orgId = useActiveOrgId();
 	const settingsQuery = useQuery({
-		queryKey: queryKeys.settings.detail(),
+		queryKey: withOrgScope(orgId, queryKeys.settings.detail()),
 		queryFn: settingsApi.getSettings,
+		enabled: orgId !== null,
 		retry: false,
 	});
 

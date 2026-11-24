@@ -115,7 +115,9 @@ function OnboardingWizard() {
 			});
 			toast.success("建账完成");
 			refreshAfterOnboarding();
-			router.replace("/home");
+			// 与上方「已建账」分支同口径：回登录前来源页（如 /invitations/<token>）。
+			// 此前硬编码 /home——未建账的受邀者建账完成后就丢失了邀请页（评审 R2-I11）
+			router.replace(safeRedirectPath(redirect) ?? "/home");
 		} catch (error) {
 			toast.error(
 				error instanceof ApiError ? error.message : "建账失败，请稍后重试",

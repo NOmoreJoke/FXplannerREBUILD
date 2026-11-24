@@ -4,6 +4,7 @@ import { ensureOnboarded } from "../helpers/onboarding-helper";
 import { orderLedgerRequests } from "../helpers/postgres-lock-barrier";
 import {
 	bearer,
+	cleanupUser,
 	createTestApp,
 	createTestUser,
 	type TestContext,
@@ -94,20 +95,10 @@ describe("计划与账本写入串行化（W6-02）", () => {
 	afterEach(async () => {
 		try {
 			if (!userId) return;
-			const where = { userId };
-			const [plans, usages] = await Promise.all([
-				ctx.prisma.plan.findMany({ where, select: { id: true } }),
-				ctx.prisma.usageRecord.findMany({ where, select: { id: true } }),
-			]);
-			await ctx.prisma.$transaction([
-				ctx.prisma.usageLotAllocation.deleteMany({
-					where: { usageId: { in: usages.map(({ id }) => id) } },
-				}),
-				ctx.prisma.planAllocation.deleteMany({
-					where: { planId: { in: plans.map(({ id }) => id) } },
-				}),
-				ctx.prisma.user.delete({ where: { id: userId } }),
-			]);
+			// cleanupUser：裸外键派生行清理 + 回收注册兜底创建的默认组织（及其审计行）
+			// + 删除用户。此前直接 user.delete：Membership 随用户级联而组织不级联，
+			// 每次全量跑在共享本地库留下 8 条无成员的孤儿组织（实测定位的残留来源）。
+			await cleanupUser(ctx.prisma, userId);
 		} finally {
 			await ctx.app.close();
 		}

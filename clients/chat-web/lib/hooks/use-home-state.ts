@@ -3,9 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import { differenceInCalendarDays, parseISO } from "date-fns";
 import Decimal from "decimal.js";
 import { fetchHomePortfolio, homeApi } from "@/lib/api/home";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import type { HomePortfolioData } from "@/lib/api/home";
 import type { HomeState, PlanSummary } from "@/lib/api/contract";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 
 /**
  * 首页状态查询 Key
@@ -177,16 +178,20 @@ function deriveDashboard(
  * 其余 → 正常首页；!hasInitialHoldings → 叠加补录初始持仓引导卡。
  */
 export function useHomeState() {
+	// ToB W20：组织作用域缓存键 + 未选组织不发业务请求（需求 15.1.3 切组织隔离）
+	const orgId = useActiveOrgId();
 	const stateQuery = useQuery<HomeState>({
-		queryKey: HOME_STATE_QUERY_KEY,
+		queryKey: withOrgScope(orgId, HOME_STATE_QUERY_KEY),
 		queryFn: homeApi.getState,
+		enabled: orgId !== null,
 		staleTime: 5 * 60 * 1000, // 与全局默认一致；纯只读数据，允许秒级陈旧（方案 §2）
 		retry: false, // 401 由 apiClient 统一跳登录，其余失败直接交给页面错误态
 	});
 
 	const portfolioQuery = useQuery<HomePortfolioData>({
-		queryKey: HOME_PORTFOLIO_QUERY_KEY,
+		queryKey: withOrgScope(orgId, HOME_PORTFOLIO_QUERY_KEY),
 		queryFn: fetchHomePortfolio,
+		enabled: orgId !== null,
 		staleTime: 5 * 60 * 1000, // 与 state 同策略；纯只读聚合数据
 		retry: false, // 失败静默降级（见 deriveDashboard），不进入页面错误态
 	});

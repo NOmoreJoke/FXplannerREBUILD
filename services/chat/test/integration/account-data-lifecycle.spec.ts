@@ -34,6 +34,13 @@ describe("AccountData 生命周期（integration）", () => {
 	let env: DataRequestTestEnv;
 	let app: INestApplication;
 	const userIds: string[] = [];
+	/**
+	 * 注销用例里被业务流程物理删除的用户所遗留的默认组织。
+	 * Membership 随用户级联而组织不级联——用户独占的默认组织会留下无成员的空壳。
+	 * （产品侧「最后 Owner 保护 / 注销前组织处置」属 Goal #3B W26；此处仅回收
+	 * 用例自己造出来的那一条，否则每次全量跑在共享本地库留下一条孤儿组织。）
+	 */
+	const orphanedOrgIds: string[] = [];
 
 	async function onboardedUser(label: string): Promise<TestUser> {
 		const created = await request(app.getHttpServer())
@@ -96,6 +103,11 @@ describe("AccountData 生命周期（integration）", () => {
 	afterAll(async () => {
 		for (const userId of userIds) {
 			await cleanupUser(env.prisma, userId);
+		}
+		// 审计日志对组织无外键，须先于组织显式清理
+		for (const organizationId of orphanedOrgIds) {
+			await env.prisma.auditLog.deleteMany({ where: { organizationId } });
+			await env.prisma.organization.deleteMany({ where: { id: organizationId } });
 		}
 		await app.close();
 	});
@@ -227,7 +239,12 @@ describe("AccountData 生命周期（integration）", () => {
 			.expect(200);
 		expect(await env.prisma.plan.count({ where: { userId: user.userId } })).toBe(1);
 
-		// 再次提交 → 到期推进 → 物理删除
+		// 再次提交 → 到期推进 → 物理删除（先记下其组织：用户删除后无法再反查）
+		const ownedOrgs = await env.prisma.membership.findMany({
+			where: { userId: user.userId },
+			select: { organizationId: true },
+		});
+		orphanedOrgIds.push(...ownedOrgs.map(({ organizationId }) => organizationId));
 		const again = await submitRequest(user, "DELETION");
 		await env.prisma.dataRequest.update({
 			where: { id: (again as { id: string }).id },

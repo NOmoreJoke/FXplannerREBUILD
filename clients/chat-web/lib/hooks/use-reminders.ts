@@ -1,9 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { onboardingApi } from "@/lib/api/onboarding";
 import { remindersApi } from "@/lib/api/reminders";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import { settingsApi } from "@/lib/api/settings";
 import type { ReminderItem } from "@/lib/api/contract";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
+import { isOrglessRouteAllowed } from "@/lib/hooks/use-organizations";
+import { useOrganizationStore } from "@/lib/stores/organization-store";
 
 /**
  * 提醒数据消费层（reminders 技术方案 §8）：一个 hook 对齐 use-home-state 范式。
@@ -15,6 +18,14 @@ import type { ReminderItem } from "@/lib/api/contract";
 
 /** 提醒列表查询 Key（[domain, action] 约定） */
 export const REMINDERS_QUERY_KEY = queryKeys.reminders.list();
+
+/** 组织作用域提醒 Key（mutation 失效时按当前组织组装——切换时缓存已被清空） */
+function remindersScopedKey(): readonly unknown[] {
+	return withOrgScope(
+		useOrganizationStore.getState().activeOrganizationId,
+		REMINDERS_QUERY_KEY,
+	);
+}
 
 export interface UseRemindersOptions {
 	/** 是否允许触发查询（未建账 / 数据锁路由 / 提醒关闭时传 false 避免无效请求） */
@@ -39,10 +50,12 @@ export function useReminders(
 	options?: UseRemindersOptions,
 ): UseRemindersResult {
 	const enabled = options?.enabled ?? true;
+	// ToB W20：组织作用域缓存键 + 未选组织不发业务请求
+	const orgId = useActiveOrgId();
 	const query = useQuery({
-		queryKey: REMINDERS_QUERY_KEY,
+		queryKey: withOrgScope(orgId, REMINDERS_QUERY_KEY),
 		queryFn: remindersApi.list,
-		enabled,
+		enabled: enabled && orgId !== null,
 		staleTime: 30 * 1000, // 容忍秒级陈旧；写操作后由已读 mutation invalidate 精确刷新
 		retry: false, // 401 由 apiClient 统一处理；消费方（首页区块）静默降级
 	});
@@ -69,7 +82,7 @@ export function useMarkReminderRead() {
 	return useMutation({
 		mutationFn: (id: string) => remindersApi.markRead(id),
 		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: REMINDERS_QUERY_KEY });
+			void queryClient.invalidateQueries({ queryKey: remindersScopedKey() });
 		},
 	});
 }
@@ -80,16 +93,29 @@ export function useMarkAllRemindersRead() {
 	return useMutation({
 		mutationFn: () => remindersApi.markAllRead(),
 		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: REMINDERS_QUERY_KEY });
+			void queryClient.invalidateQueries({ queryKey: remindersScopedKey() });
 		},
 	});
 }
 
-/** 建账向导与数据权利进度页为受控拦截路由，顶栏提醒铃铛禁止触发 settings/reminders 请求 */
+/**
+ * 受控拦截路由：这些路由上顶栏提醒铃铛禁止触发任何业务请求。
+ * - /onboarding、/data-requests：建账向导与数据权利进度页本身是拦截态；
+ * - /invitations（评审 I-18）：受邀者可能尚无组织、或多组织但未选择——铃铛的
+ *   onboarding/settings/reminders 请求会收到 400 ORGANIZATION_REQUIRED，
+ *   此前会把人从邀请页重定向走，邀请流程对新用户直接断掉。
+ */
+function matchesRouteSegment(path: string, prefix: string): boolean {
+	return path === prefix || path.startsWith(`${prefix}/`);
+}
+
 export function isReminderBypassRoute(pathname: string | null | undefined): boolean {
 	if (!pathname) return false;
+	const path = pathname.split(/[?#]/, 1)[0] ?? "";
 	return (
-		pathname.startsWith("/onboarding") || pathname.startsWith("/data-requests")
+		matchesRouteSegment(path, "/onboarding") ||
+		matchesRouteSegment(path, "/data-requests") ||
+		isOrglessRouteAllowed(path)
 	);
 }
 
@@ -101,20 +127,22 @@ export function isReminderBypassRoute(pathname: string | null | undefined): bool
  */
 export function useReminderGate(pathname: string | null | undefined) {
 	const isBypassed = isReminderBypassRoute(pathname);
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07 / R2-I10）
+	const orgId = useActiveOrgId();
 
 	const onboardingStatusQuery = useQuery({
-		queryKey: queryKeys.onboarding.status(),
+		queryKey: withOrgScope(orgId, queryKeys.onboarding.status()),
 		queryFn: onboardingApi.getStatus,
-		enabled: !isBypassed,
+		enabled: !isBypassed && orgId !== null,
 		staleTime: 5 * 60 * 1000,
 		retry: false,
 	});
 	const isOnboarded = onboardingStatusQuery.data?.completed === true;
 
 	const settingsQuery = useQuery({
-		queryKey: queryKeys.settings.detail(),
+		queryKey: withOrgScope(orgId, queryKeys.settings.detail()),
 		queryFn: settingsApi.getSettings,
-		enabled: !isBypassed && isOnboarded,
+		enabled: !isBypassed && orgId !== null && isOnboarded,
 		retry: false,
 	});
 	const reminderEnabled = settingsQuery.data?.reminderEnabled === true;

@@ -28,6 +28,12 @@ import {
 import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
+import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { PermissionGuard } from "../authorization/guards/permission.guard";
+import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
+import type { ActorContext } from "../authorization/authorization.types";
+import type { ReadScope } from "../authorization/organization-scope";
 import {
 	AdjustCapsDto,
 	AdjustImpactDto,
@@ -110,7 +116,13 @@ export class PlanController {
 		}
 	}
 
+	// 只读预览（@Post 但不落库）：与业务 GET 同一守卫链（评审 I-12——禁离职成员/
+	// 跨组织上下文取快照，禁 Viewer 绕过 plan.create 权限点），并同样以 actor 作为
+	// 读作用域（评审 R2-I02——此前只传 user.id，守卫形同虚设：带其他组织头仍返回
+	// 本人在该组织的余额 caps，受邀成员则命中自己的空账本）
 	@Post("schedule-preview")
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("plan.create")
 	@ApiOperation({
 		summary: "分批排期预览（只读，不落库）",
 		description:
@@ -134,10 +146,11 @@ export class PlanController {
 	})
 	@HttpCode(HttpStatus.OK)
 	async preview(
-		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
 		@Body() dto: SchedulePreviewDto,
 	) {
-		const data = await this.planService.preview(user.id, dto);
+		const scope: ReadScope = actor;
+		const data = await this.planService.preview(scope, dto);
 		return { success: true, data, message: "排期预览生成成功" };
 	}
 
@@ -185,9 +198,16 @@ export class PlanController {
 		description: "status 非法（不在三值枚举内），无模块 code",
 		type: PlanErrorDto,
 	})
-	async list(@CurrentUser() user: User, @Query() query: PlanListQueryDto) {
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("plan.read")
+	async list(
+		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
+		@Query() query: PlanListQueryDto,
+	) {
+		const scope: ReadScope = actor;
 		return this.withLog(`GET /plans status=${query.status ?? "ALL"}`, user.id, null, () =>
-			this.planService.list(user.id, query.status),
+			this.planService.list(scope, query.status),
 		).then(
 			(data) => ({ success: true, data, message: "计划列表获取成功" }),
 		);
@@ -213,9 +233,16 @@ export class PlanController {
 		description: "计划不存在或不属于本人（PLAN_NOT_FOUND）",
 		type: PlanErrorDto,
 	})
-	async getDetail(@CurrentUser() user: User, @Param("id") id: string) {
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("plan.read")
+	async getDetail(
+		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
+		@Param("id") id: string,
+	) {
+		const scope: ReadScope = actor;
 		return this.withLog("GET /plans/:id", user.id, id, () =>
-			this.planService.getDetail(user.id, id),
+			this.planService.getDetail(scope, id),
 		).then(
 			(data) => ({ success: true, data, message: "计划详情获取成功" }),
 		);
@@ -223,6 +250,8 @@ export class PlanController {
 
 	@Post(":id/adjust-preview")
 	@HttpCode(HttpStatus.OK)
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("plan.adjust")
 	@ApiOperation({
 		summary: "修改预览（只读，不落库）",
 		description:
@@ -254,12 +283,13 @@ export class PlanController {
 		type: PlanErrorDto,
 	})
 	async previewAdjust(
-		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
 		@Param("id") id: string,
 		@Body() dto: AdjustPreviewDto,
 	) {
-		return this.withLog("POST /plans/:id/adjust-preview", user.id, id, () =>
-			this.planService.previewAdjust(user.id, id, dto),
+		const scope: ReadScope = actor;
+		return this.withLog("POST /plans/:id/adjust-preview", actor.userId, id, () =>
+			this.planService.previewAdjust(scope, id, dto),
 		).then(
 			(data) => ({ success: true, data, message: "修改预览生成成功" }),
 		);

@@ -12,7 +12,12 @@ import { Button } from "@/components/ui/button";
 import type { CreatePlanReq } from "@/lib/api/contract";
 import { onboardingApi } from "@/lib/api/onboarding";
 import { plansApi } from "@/lib/api/plans";
-import { invalidateAfterLedgerMutation, queryKeys } from "@/lib/api/query-keys";
+import {
+	invalidateAfterLedgerMutation,
+	queryKeys,
+	withOrgScope,
+} from "@/lib/api/query-keys";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import { toPacePreference, usePlanForm } from "@/lib/hooks/use-plan-form";
 import { useSchedulePreview } from "@/lib/hooks/use-schedule-preview";
 
@@ -43,9 +48,11 @@ export default function NewPlanPage() {
 	}, [preview.caps, form.setCaps]);
 
 	// 首次设置的节奏偏好回填为默认节奏；用户已手动改过（touched）则不覆盖
+	const orgId = useActiveOrgId();
 	const statusQuery = useQuery({
-		queryKey: queryKeys.onboarding.status(),
+		queryKey: withOrgScope(orgId, queryKeys.onboarding.status()),
 		queryFn: () => onboardingApi.getStatus(),
+		enabled: orgId !== null,
 		retry: false, // 401 由 apiClient 统一跳登录，其余失败静默用默认节奏
 	});
 	// 首次设置的节奏偏好回填为默认节奏；用户已手动改过（touched）则不覆盖。

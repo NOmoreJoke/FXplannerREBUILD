@@ -487,6 +487,9 @@ describe("AccountController（接口）", () => {
 		};
 
 		// 真实 Plan 查询返回后，等取消接口完成提交，再让分配请求继续读取。
+		// W18 组织隔离：分配明细的 Plan 查询已从 { userId, targetCurrency } 改为
+		// 组织作用域形状（targetCurrency + compatReadWhere OR 分支），钩子按新形状匹配；
+		// 该请求内仅此一处 Plan.findMany（Guard 只查 Membership），匹配仍精确。
 		let cancelPending = true;
 		ctx.prisma.$use(async (params, next) => {
 			const result = await next(params);
@@ -494,8 +497,8 @@ describe("AccountController（接口）", () => {
 				cancelPending &&
 				params.model === "Plan" &&
 				params.action === "findMany" &&
-				params.args.where?.userId === user.userId &&
-				params.args.where?.targetCurrency === currency
+				params.args.where?.targetCurrency === currency &&
+				Array.isArray(params.args.where?.OR)
 			) {
 				cancelPending = false;
 				await cancelPlan(user, planId).expect(200);

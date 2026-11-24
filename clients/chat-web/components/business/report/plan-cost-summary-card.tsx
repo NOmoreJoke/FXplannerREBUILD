@@ -9,9 +9,10 @@ import { FileDown, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PlanReportPrintDialog } from "@/components/business/report/plan-report-print-view";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import { reportsApi } from "@/lib/api/reports";
 import type { PlanReport } from "@/lib/api/contract";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 
 /**
  * 计划成本摘要卡（reports 技术方案 §6 plan-cost-summary-card）。
@@ -253,9 +254,12 @@ export function PlanCostSummaryCard({
  * 404（理论不可达——详情页已确认计划存在）静默隐藏。
  */
 export function PlanReportSection({ planId }: { planId: string }) {
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
+	const orgId = useActiveOrgId();
 	const query = useQuery({
-		queryKey: queryKeys.reports.plan(planId),
+		queryKey: withOrgScope(orgId, queryKeys.reports.plan(planId)),
 		queryFn: () => reportsApi.getPlanReport(planId),
+		enabled: orgId !== null,
 		retry: false,
 	});
 	const [printOpen, setPrintOpen] = useState(false);

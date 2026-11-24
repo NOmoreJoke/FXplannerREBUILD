@@ -35,6 +35,9 @@ function createPrismaMock() {
 	const prisma = {
 		otpIdentity,
 		user,
+		// ORG-01.2 默认组织兜底（评审 I-09）：新 OTP 用户同事务建组织 + 组织创建审计
+		organization: { create: vi.fn().mockResolvedValue({ id: "org-default" }) },
+		auditLog: { create: vi.fn().mockResolvedValue({}) },
 		$transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) =>
 			callback(prisma),
 		),
@@ -86,6 +89,8 @@ describe("AuthService OTP account", () => {
 			user: { id: passwordUser.id, email: "bound@example.com" },
 		});
 		expect(result.user).not.toHaveProperty("passwordHash");
+		// 密码账号在注册时已有默认组织：绑定登录不重复建组织
+		expect(prisma.organization.create).not.toHaveBeenCalled();
 	});
 
 	it("phone 渠道不匹配密码账号（无手机号列），仍创建独立 OTP 账号", async () => {
@@ -105,6 +110,17 @@ describe("AuthService OTP account", () => {
 		expect(prisma.user.create).toHaveBeenCalledWith({ data: {} });
 		expect(result.user.id).toBe(otpUser.id);
 		expect(result.user.email).toBeNull();
+		// 手机号渠道无邮箱可取名 → 默认组织兜底仍执行（组织名回落「我的的工作台」）
+		expect(prisma.organization.create).toHaveBeenCalledWith({
+			data: expect.objectContaining({
+				name: "我的的工作台",
+				memberships: {
+					create: { userId: otpUser.id, role: "OWNER", status: "ACTIVE" },
+				},
+			}),
+			select: { id: true, name: true, createdAt: true },
+		});
+		expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
 	});
 
 	it("首次 OTP 验证创建没有邮箱和密码的独立账号", async () => {
@@ -128,6 +144,24 @@ describe("AuthService OTP account", () => {
 				channel: "email",
 				target: "otp@example.com",
 			},
+		});
+		// ORG-01.2（评审 I-09）：新用户同事务获得唯一默认组织（OWNER），组织名取邮箱前缀
+		expect(prisma.organization.create).toHaveBeenCalledWith({
+			data: expect.objectContaining({
+				name: "otp的工作台",
+				memberships: {
+					create: { userId: otpUser.id, role: "OWNER", status: "ACTIVE" },
+				},
+			}),
+			select: { id: true, name: true, createdAt: true },
+		});
+		expect(prisma.auditLog.create).toHaveBeenCalledWith({
+			data: expect.objectContaining({
+				organizationId: "org-default",
+				actorUserId: otpUser.id,
+				action: "organization.create",
+				result: "SUCCESS",
+			}),
 		});
 		expect(result).toMatchObject({
 			accessToken: MOCK_OTP_ACCESS_TOKEN,
@@ -160,6 +194,8 @@ describe("AuthService OTP account", () => {
 		expect(prisma.user.findUnique).not.toHaveBeenCalled();
 		expect(prisma.user.create).not.toHaveBeenCalled();
 		expect(prisma.otpIdentity.create).not.toHaveBeenCalled();
+		// 既有账号不重复建默认组织
+		expect(prisma.organization.create).not.toHaveBeenCalled();
 		expect(result.user.id).toBe(otpUser.id);
 	});
 });

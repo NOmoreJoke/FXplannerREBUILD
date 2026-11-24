@@ -5,7 +5,8 @@ import Link from "next/link";
 import { CircleAlert, Plus } from "lucide-react";
 import { accountsApi, type AccountListItem } from "@/lib/api/accounts";
 import { getCurrencyName } from "@/lib/api/currencies";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -25,9 +26,13 @@ import {
  * 空态引导去录入；认证守卫在 (protected)/layout.tsx（勿在此重复）。
  */
 export default function AccountsPage() {
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07：键不含组织时，
+	// 切换组织的缓存清理不会通知挂载态的观察者）
+	const orgId = useActiveOrgId();
 	const query = useQuery({
-		queryKey: queryKeys.accounts.list(),
+		queryKey: withOrgScope(orgId, queryKeys.accounts.list()),
 		queryFn: () => accountsApi.list(),
+		enabled: orgId !== null,
 	});
 
 	if (query.isLoading) {

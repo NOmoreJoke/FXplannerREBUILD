@@ -6,10 +6,11 @@ import { useParams } from "next/navigation";
 import { CircleAlert } from "lucide-react";
 import { TransactionDetail } from "@/components/business/transaction";
 import { ApiError } from "@/lib/api/client";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { transactionsApi } from "@/lib/api/transactions";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 
 /**
  * 交易详情页（changes/transaction-entry/技术方案.md §5.2）
@@ -21,11 +22,13 @@ import { transactionsApi } from "@/lib/api/transactions";
 export default function TransactionDetailPage() {
 	const params = useParams<{ id: string }>();
 	const id = params?.id;
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
+	const orgId = useActiveOrgId();
 
 	const query = useQuery({
-		queryKey: queryKeys.transactions.detail(id),
+		queryKey: withOrgScope(orgId, queryKeys.transactions.detail(id)),
 		queryFn: () => transactionsApi.detail(id as string),
-		enabled: typeof id === "string" && id !== "",
+		enabled: orgId !== null && typeof id === "string" && id !== "",
 		retry: false, // 401 由 apiClient 统一跳登录；404 直接进提示态
 	});
 

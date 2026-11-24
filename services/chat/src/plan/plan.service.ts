@@ -10,6 +10,10 @@ import { Prisma } from "@prisma/client";
 import { lockLedgerAccounts, lockPlanAccount } from "../prisma/ledger-write-lock";
 import { PrismaService } from "../prisma/prisma.service";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
+import {
+	compatReadWhere,
+	type ReadScope,
+} from "../authorization/organization-scope";
 import type {
 	AdjustPreviewDto,
 	AdjustPreviewResultDto,
@@ -52,6 +56,7 @@ import {
 	type ComputeAdjustPreviewInput,
 } from "./plan-calculator";
 import { computeFundStatus } from "../usage/usage-calculator";
+import { resolveOrganizationPreferences } from "../organization/organization-preferences";
 
 /**
  * 模块错误（错误响应统一 { code, message }，风格与 onboarding 模块一致）。
@@ -141,6 +146,15 @@ interface AllocatableCaps {
 /** 列表服务端兑底条数（§4.1：个人工具无分页，limit 100 防御） */
 const PLAN_LIST_LIMIT = 100;
 
+/**
+ * 账本行归属过滤（W18 兼容窗口；评审 R2-I02）：
+ * - 传入 scope（只读预览）：按组织作用域——组织行跨成员共享 + 默认组织的存量 NULL 行；
+ * - 不传（create / adjust 等写路径）：沿用 `{ userId }`，写侧 Actor 化随 Goal #3B 收口。
+ */
+function ledgerWhere(scope: ReadScope | undefined, userId: string) {
+	return scope ? compatReadWhere(scope) : { userId };
+}
+
 /** 解析后的排期入参（全部规范化：币种大写、日期 UTC 0 点、金额 Decimal） */
 interface ParsedPlanParams {
 	targetCurrency: string;
@@ -164,17 +178,25 @@ export class PlanService {
 	 * allocatedAmount（计入已有外币）与 create 同口径参与分批总额
 	 * （分批总额 = 目标 − 已使用 − allocatedAmount），保证预览与落库排期一致；
 	 * 超余额上限不在此拦（caps 随响应返回由前端预检，create 事务内权威重检）。
+	 *
+	 * 读作用域（评审 R2-I02）：本位币取组织偏好，caps 按当前组织的账户与计划计算
+	 * ——与业务 GET 同口径。此前按请求者 userId 直查：受邀成员命中自己的空账本
+	 * （caps 恒 0），而携带其他组织头时又会带出本人别的组织的余额（跨组织泄露）。
 	 */
 	async preview(
-		userId: string,
+		scope: ReadScope,
 		dto: SchedulePreviewDto,
 	): Promise<SchedulePreviewResultDto> {
-		// 目标币种 ≠ 本位币（建账后才有值；preview 不拦未建账，缺 settings 跳过比对）
-		const settings = await this.prisma.userSettings.findUnique({
-			where: { userId },
-			select: { baseCurrency: true },
-		});
-		const params = this.parsePlanParams(dto, settings?.baseCurrency ?? null);
+		// 目标币种 ≠ 本位币（组织偏好：OrganizationSettings 优先，默认组织兼容回落到
+		// 所有者个人设置；preview 不拦未建账，缺偏好跳过比对）
+		const preferences = await resolveOrganizationPreferences(
+			this.prisma,
+			scope.organizationId,
+		);
+		const params = this.parsePlanParams(
+			dto,
+			preferences?.baseCurrency ?? null,
+		);
 		const allocatedAmount =
 			dto.allocatedAmount !== undefined && dto.allocatedAmount !== null
 				? this.parseNonNegativeAmount(dto.allocatedAmount, "分配金额")
@@ -193,9 +215,10 @@ export class PlanService {
 		});
 		const caps = await this.computeCaps(
 			this.prisma,
-			userId,
+			scope.userId,
 			params.targetCurrency,
 			params.targetAmount,
+			scope,
 		);
 		return {
 			latestPrepDate: latestPrepDate.toISOString(),
@@ -323,11 +346,11 @@ export class PlanService {
 	 * 派生量（剩余分配/缺口）复用 plan-calculator.computeDerived，禁止另行实现公式。
 	 */
 	async list(
-		userId: string,
+		scope: ReadScope,
 		status?: string,
 	): Promise<{ items: PlanListItemDto[] }> {
 		const plans = await this.prisma.plan.findMany({
-			where: { userId, ...(status ? { status } : {}) },
+			where: { ...compatReadWhere(scope), ...(status ? { status } : {}) },
 			orderBy: { updatedAt: "desc" },
 			take: PLAN_LIST_LIMIT,
 		});
@@ -372,16 +395,44 @@ export class PlanService {
 	}
 
 	/**
-	 * 计划详情（GET /api/plans/:id，§4.2）：归属校验（非本人与不存在均 404，防枚举）。
-	 * canModify/canCancel/canComplete/canReopen 由服务端按状态与数据计算，前端据此显隐按钮。
+	 * 计划详情（GET /api/plans/:id，§4.2；W18 组织隔离）：组织作用域归属校验
+	 * （组织外与不存在均 404，防枚举）。canModify/canCancel/canComplete/canReopen
+	 * 由服务端按状态与数据计算，前端据此显隐按钮。
 	 */
-	async getDetail(userId: string, planId: string): Promise<PlanDetailDto> {
+	async getDetail(scope: ReadScope, planId: string): Promise<PlanDetailDto> {
+		const plan = await this.prisma.plan.findFirst({
+			where: { id: planId, ...compatReadWhere(scope) },
+		});
+		if (!plan) {
+			throw new PlanNotFoundException();
+		}
+		return this.buildDetail(plan);
+	}
+
+	/**
+	 * 写路径收尾详情（原 getDetail 语义）：事务提交后按 { id, userId } 重读，
+	 * 含本次写入的变更记录；写路径 organizationId 语义随 Goal #3B Actor 化收口。
+	 */
+	private async detailAfterWrite(
+		userId: string,
+		planId: string,
+	): Promise<PlanDetailDto> {
 		const plan = await this.prisma.plan.findFirst({
 			where: { id: planId, userId },
 		});
 		if (!plan) {
 			throw new PlanNotFoundException();
 		}
+		return this.buildDetail(plan);
+	}
+
+	/**
+	 * 详情组装（写路径复用）：adjust/complete/cancel 事务内已按 { id, userId }
+	 * 校验并持有 plan 行，直接组装详情，不重复归属查询（写路径 OrganizationId
+	 * 语义随 Goal #3B Actor 化收口）。
+	 */
+	private async buildDetail(plan: Plan): Promise<PlanDetailDto> {
+		const planId = plan.id;
 		const [allocation, installments, changeLogs] = await Promise.all([
 			this.prisma.planAllocation.findUnique({ where: { planId } }),
 			this.prisma.planInstallment.findMany({
@@ -462,17 +513,21 @@ export class PlanService {
 	 * 计算全部委托 plan-calculator.computeAdjustPreview（预览/提交共用，杜绝公式漂移）；
 	 * 仅 ACTIVE 可预览；COMPLETED 严格完成态 + 调高目标返回 valid + reopen 标记；
 	 * CANCELLED / COMPLETED 非重开场景 → 409 PLAN_INVALID_TRANSITION（calculator 拦截 4）。
+	 *
+	 * 读作用域（评审 R2-I02）：计划归属、账户余额与同币种其他计划分配均按当前组织
+	 * 读取——与 GET /plans/:id 同口径（跨组织 404；受邀成员看到的是组织账本）。
 	 */
 	async previewAdjust(
-		userId: string,
+		scope: ReadScope,
 		planId: string,
 		dto: AdjustPreviewDto,
 	): Promise<AdjustPreviewResultDto> {
 		const { change } = this.parseAdjustChange(dto);
 		const { plan, allocation, context } = await this.loadAdjustContext(
 			this.prisma,
-			userId,
+			scope.userId,
 			planId,
+			scope,
 		);
 		const result = this.computeAdjustPreviewOrThrow({
 			plan: this.toAdjustPlanState(plan, allocation),
@@ -611,7 +666,7 @@ export class PlanService {
 				});
 			}
 		});
-		return this.getDetail(userId, planId);
+		return this.detailAfterWrite(userId, planId);
 	}
 
 	/**
@@ -674,7 +729,7 @@ export class PlanService {
 				},
 			});
 		});
-		return this.getDetail(userId, planId);
+		return this.detailAfterWrite(userId, planId);
 	}
 
 	/**
@@ -736,7 +791,7 @@ export class PlanService {
 				},
 			});
 		});
-		return this.getDetail(userId, planId);
+		return this.detailAfterWrite(userId, planId);
 	}
 
 // ────────────────────────── 私有辅助 ──────────────────────────
@@ -823,17 +878,20 @@ private toAdjustPlanState(
  * 计划（404 归属校验）→ 分配行（1:1，缺行防御性 404）→ 同币种账户余额 →
  * 同币种「其他」计划分配快照（computeCaps otherPlanAllocations 必须按 targetCurrency 过滤）。
  * db 传 PrismaService 或事务客户端均可。
+ * 归属过滤见 ledgerWhere：预览传 scope（组织作用域），提交修改不传（{ userId }）。
  */
 private async loadAdjustContext(
 	db: CapsDb,
 	userId: string,
 	planId: string,
+	scope?: ReadScope,
 ): Promise<{
 	plan: Plan;
 	allocation: PlanAllocation;
 	context: AdjustPreviewContext;
 }> {
-	const plan = await db.plan.findFirst({ where: { id: planId, userId } });
+	const owner = ledgerWhere(scope, userId);
+	const plan = await db.plan.findFirst({ where: { id: planId, ...owner } });
 	if (!plan) {
 		throw new PlanNotFoundException();
 	}
@@ -844,19 +902,14 @@ private async loadAdjustContext(
 		throw new PlanNotFoundException(); // 创建事务保证 1:1，此处防御性兑底
 	}
 	const [account, siblingPlans] = await Promise.all([
-		db.account.findUnique({
-			where: {
-				userId_currencyCode: {
-					userId,
-					currencyCode: plan.targetCurrency,
-				},
-			},
+		db.account.findFirst({
+			where: { currencyCode: plan.targetCurrency, ...owner },
 		}),
 		db.plan.findMany({
 			where: {
-				userId,
 				targetCurrency: plan.targetCurrency,
 				id: { not: planId },
+				...owner,
 			},
 			select: { id: true },
 		}),
@@ -1317,19 +1370,21 @@ private parseAdjustChange(dto: AdjustPreviewDto): {
 	 * 逐位一致（存量回归 test/api/plan.spec.ts 锁定）；used > 0 域以新口径为准。
 	 * 事务内调用即为「创建时重检余额」（并发安全的权威防线）。
 	 * MVP 无取消/停用入口（方案 §11），所有计划恒 ACTIVE，故不作 status 过滤。
+	 * 归属过滤见 ledgerWhere：预览传 scope（组织作用域），创建事务不传（{ userId }）。
 	 */
 	private async computeCaps(
 		db: CapsDb,
 		userId: string,
 		currencyCode: string,
 		targetAmount: Prisma.Decimal,
+		scope?: ReadScope,
 	): Promise<AllocatableCaps> {
+		const owner = ledgerWhere(scope, userId);
 		const [account, plans] = await Promise.all([
-			db.account.findUnique({
-				where: { userId_currencyCode: { userId, currencyCode } },
-			}),
+			// (userId, currencyCode) 唯一：不传 scope 时与原 findUnique 等价
+			db.account.findFirst({ where: { currencyCode, ...owner } }),
 			db.plan.findMany({
-				where: { userId, targetCurrency: currencyCode },
+				where: { targetCurrency: currencyCode, ...owner },
 				select: { id: true },
 			}),
 		]);

@@ -8,7 +8,8 @@ import type {
 	CorrectionTargetType,
 } from "@/lib/api/contract";
 import { correctionsApi } from "@/lib/api/corrections";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -31,9 +32,15 @@ export function CorrectionHistoryList({
 }: CorrectionHistoryListProps) {
 	const isUsage = targetType === "USAGE";
 	const [page, setPage] = useState(1);
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
+	const orgId = useActiveOrgId();
 	const query = useQuery({
-		queryKey: queryKeys.corrections.list(targetType, targetId, page),
+		queryKey: withOrgScope(
+			orgId,
+			queryKeys.corrections.list(targetType, targetId, page),
+		),
 		queryFn: () => correctionsApi.list(targetType, targetId, page),
+		enabled: orgId !== null,
 		staleTime: isUsage ? 0 : undefined,
 		placeholderData: isUsage ? keepPreviousData : undefined,
 	});

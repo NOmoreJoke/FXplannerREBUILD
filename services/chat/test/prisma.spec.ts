@@ -311,4 +311,286 @@ describe("数据库基础设施测试", () => {
 			expect(readBack?.failReason).toBe("使用后余额不足以覆盖现有分配");
 		});
 	});
+
+	describe("ToB R1 MIG-A 增量", () => {
+		const migOrgIds: string[] = [];
+		const migUserIds: string[] = [];
+		const migCurrency = "M1A";
+		const migPlanId = "miga-plan-null-org";
+
+		afterAll(async () => {
+			await prisma.membership.deleteMany({
+				where: { organizationId: { in: migOrgIds } },
+			});
+			await prisma.organizationInvitation.deleteMany({
+				where: { organizationId: { in: migOrgIds } },
+			});
+			await prisma.organizationSettings.deleteMany({
+				where: { organizationId: { in: migOrgIds } },
+			});
+			await prisma.organization.deleteMany({
+				where: { id: { in: migOrgIds } },
+			});
+			await prisma.user.deleteMany({ where: { id: { in: migUserIds } } });
+			// 个人流程锁定测试的清理（内层 afterAll 先于外层 testUserId 清理执行）
+			await prisma.transaction.deleteMany({
+				where: { userId: testUserId, currencyCode: migCurrency },
+			});
+			await prisma.planAllocation.deleteMany({ where: { planId: migPlanId } });
+			await prisma.plan.deleteMany({
+				where: { userId: testUserId, id: migPlanId },
+			});
+			await prisma.account.deleteMany({
+				where: { userId: testUserId, currencyCode: migCurrency },
+			});
+		});
+
+		test("部分唯一索引 memberships_single_active_owner_uidx 阻断同组织双活跃 OWNER", async () => {
+			const org = await prisma.organization.create({
+				data: { name: "MIG-A 单 Owner 唯一性测试组织" },
+			});
+			migOrgIds.push(org.id);
+			const owner1 = await prisma.user.create({
+				data: {
+					email: `miga-owner1-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
+				},
+			});
+			const owner2 = await prisma.user.create({
+				data: {
+					email: `miga-owner2-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
+				},
+			});
+			migUserIds.push(owner1.id, owner2.id);
+
+			await prisma.membership.create({
+				data: {
+					organizationId: org.id,
+					userId: owner1.id,
+					role: "OWNER",
+					status: "ACTIVE",
+				},
+			});
+			// 第二个 OWNER+ACTIVE 违反部分唯一索引（Prisma 以底层唯一冲突抛错）
+			await expect(
+				prisma.membership.create({
+					data: {
+						organizationId: org.id,
+						userId: owner2.id,
+						role: "OWNER",
+						status: "ACTIVE",
+					},
+				}),
+			).rejects.toThrow();
+
+			// 先降原 Owner（转移所有权顺序保护）→ 新 Owner 可 ACTIVE
+			await prisma.membership.update({
+				where: {
+					organizationId_userId: { organizationId: org.id, userId: owner1.id },
+				},
+				data: { role: "ADMIN" },
+			});
+			await expect(
+				prisma.membership.create({
+					data: {
+						organizationId: org.id,
+						userId: owner2.id,
+						role: "OWNER",
+						status: "ACTIVE",
+					},
+				}),
+			).resolves.toBeDefined();
+
+			// DISABLED 的 OWNER 不占唯一索引（禁用 Owner 不阻断新 Owner）
+			await prisma.membership.update({
+				where: {
+					organizationId_userId: { organizationId: org.id, userId: owner2.id },
+				},
+				data: { status: "DISABLED" },
+			});
+			const owner3 = await prisma.user.create({
+				data: {
+					email: `miga-owner3-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
+				},
+			});
+			migUserIds.push(owner3.id);
+			await expect(
+				prisma.membership.create({
+					data: {
+						organizationId: org.id,
+						userId: owner3.id,
+						role: "OWNER",
+						status: "ACTIVE",
+					},
+				}),
+			).resolves.toBeDefined();
+		});
+
+		test("OrganizationInvitation.tokenHash 唯一", async () => {
+			const org = await prisma.organization.create({
+				data: { name: "MIG-A 邀请唯一性测试组织" },
+			});
+			migOrgIds.push(org.id);
+			const inviter = await prisma.user.create({
+				data: {
+					email: `miga-inviter-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
+				},
+			});
+			migUserIds.push(inviter.id);
+
+			await prisma.organizationInvitation.create({
+				data: {
+					organizationId: org.id,
+					email: "miga-invitee@example.com",
+					role: "FINANCE",
+					tokenHash: "miga-token-hash-unique-probe",
+					invitedById: inviter.id,
+					expiresAt: new Date(Date.now() + 7 * 86_400_000),
+				},
+			});
+			await expect(
+				prisma.organizationInvitation.create({
+					data: {
+						organizationId: org.id,
+						email: "miga-invitee-2@example.com",
+						role: "OPERATOR",
+						tokenHash: "miga-token-hash-unique-probe",
+						invitedById: inviter.id,
+						expiresAt: new Date(Date.now() + 7 * 86_400_000),
+					},
+				}),
+			).rejects.toThrow();
+		});
+
+		test("新增可空租户列不影响既有个人建账/写入流程（NULL 往返）", async () => {
+			// 不带 organizationId/createdById 写入 → 成功且读回 NULL（个人 MVP 路径零破坏）
+			const account = await prisma.account.create({
+				data: {
+					userId: testUserId,
+					currencyCode: migCurrency,
+					balance: "77.0000",
+				},
+			});
+			const accountRead = await prisma.account.findUnique({
+				where: { id: account.id },
+			});
+			expect(accountRead?.organizationId).toBeNull();
+			expect(accountRead?.createdById).toBeNull();
+
+			const transaction = await prisma.transaction.create({
+				data: {
+					userId: testUserId,
+					currencyCode: migCurrency,
+					quantity: "10.0000",
+					principalAmount: "650.0000",
+					exchangeRate: "6.5000000000",
+					rateSource: "identity",
+					rateObservedAt: new Date(Date.UTC(2024, 0, 1, 12, 0, 0)),
+					transactedAt: new Date(Date.UTC(2024, 0, 2, 12, 0, 0)),
+				},
+			});
+			expect(transaction.organizationId).toBeNull();
+			expect(transaction.createdById).toBeNull();
+
+			const plan = await prisma.plan.create({
+				data: {
+					id: migPlanId,
+					userId: testUserId,
+					targetCurrency: migCurrency,
+					targetAmount: "100.0000",
+					expectUseDate: new Date(Date.UTC(2024, 1, 1)),
+					latestPrepDate: new Date(Date.UTC(2024, 0, 25)),
+				},
+			});
+			expect(plan.organizationId).toBeNull();
+			expect(plan.createdById).toBeNull();
+
+			// DataRequest.scope 默认 PERSONAL；organizationId 可空
+			const dataRequest = await prisma.dataRequest.create({
+				data: {
+					userId: testUserId,
+					type: "EXPORT",
+					requestedAt: new Date(),
+					dueAt: new Date(Date.now() + 86_400_000),
+				},
+			});
+			expect(dataRequest.scope).toBe("PERSONAL");
+			expect(dataRequest.organizationId).toBeNull();
+			await prisma.dataRequest.delete({ where: { id: dataRequest.id } });
+		});
+	});
+
+	describe("ToB R1 评审跟进（N-09 跟进索引 / N-11 ReminderRead 唯一性）", () => {
+		const readStateUserIds: string[] = [];
+		let sharedReminderId = "";
+
+		afterAll(async () => {
+			if (sharedReminderId) {
+				await prisma.reminder
+					.deleteMany({ where: { id: sharedReminderId } })
+					.catch(() => {});
+			}
+			await prisma.user.deleteMany({ where: { id: { in: readStateUserIds } } });
+		});
+
+		test("ReminderRead(reminderId, userId) 唯一：同成员重复已读被拒，不同成员互不干扰", async () => {
+			const owner = await prisma.user.create({
+				data: {
+					email: `rr-owner-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
+				},
+			});
+			const member = await prisma.user.create({
+				data: {
+					email: `rr-member-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
+				},
+			});
+			readStateUserIds.push(owner.id, member.id);
+			const reminder = await prisma.reminder.create({
+				data: {
+					userId: owner.id,
+					type: "PLAN_DUE",
+					dedupKey: `rr-${Date.now()}`,
+					scheduledFor: observedAt,
+				},
+			});
+			sharedReminderId = reminder.id;
+
+			const readAt = new Date(Date.UTC(2026, 10, 23, 1, 0, 0));
+			await prisma.reminderRead.create({
+				data: { reminderId: reminder.id, userId: owner.id, readAt },
+			});
+			// 同一成员对同一提醒的重复已读行 → 唯一约束拒绝（LEDGER-03 / MIG-B 幂等兜底）
+			await expect(
+				prisma.reminderRead.create({
+					data: { reminderId: reminder.id, userId: owner.id, readAt },
+				}),
+			).rejects.toMatchObject({ code: "P2002" });
+			// 另一成员的已读态是独立行：一人已读不清除他人未读
+			await expect(
+				prisma.reminderRead.create({
+					data: { reminderId: reminder.id, userId: member.id, readAt },
+				}),
+			).resolves.toBeDefined();
+			expect(
+				await prisma.reminderRead.count({ where: { reminderId: reminder.id } }),
+			).toBe(2);
+		});
+
+		test("N-09 跟进索引已随迁移落库（reminder_reads.user_id / ai_conversations 组织打头）", async () => {
+			const rows = await prisma.$queryRaw<Array<{ indexname: string }>>`
+				SELECT indexname FROM pg_indexes
+				WHERE schemaname = 'public'
+					AND indexname IN ('reminder_reads_user_id_idx', 'ai_conversations_organization_id_last_message_at_idx')
+			`;
+			expect(rows.map((row) => row.indexname).sort()).toEqual([
+				"ai_conversations_organization_id_last_message_at_idx",
+				"reminder_reads_user_id_idx",
+			]);
+		});
+	});
 });

@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AuthorizationModule } from "../authorization/authorization.module";
 import { ReportController } from "./report.controller";
 import { ReportService } from "./report.service";
 
@@ -9,6 +10,7 @@ import { ReportService } from "./report.service";
  * 在 app.module.ts 注册一次（模块唯一注册点）。
  */
 @Module({
+	imports: [AuthorizationModule],
 	controllers: [ReportController],
 	providers: [ReportService],
 })

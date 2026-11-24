@@ -89,3 +89,55 @@ gate 对 **services/chat 包内**「发出请求且携带 env 派生数据」的
 4. **遗留**：§4.1「给插件提 issue/升级」仍是唯一根治路径（诉求追加：提供 gate 告警
    模式或 finding 级豁免配置；`git-gate uninstall` 应同步解除插件层 commit/push 拦截
    或明示两层关系）。在插件升级前，凡命中 §3 误报类别的提交均须照本节格式留痕。
+
+## 7. 2026-11-24 拦截记录与核实：ToB R1 Part A 终验提交被拦
+
+背景：终验会话在 ZCode 中提交 Goal #3A 的后端一组（32 个文件，均在 `services/chat/`，
+提交前测试全绿）。`git commit` 被 PreToolUse(Bash) 门禁在执行前拦截，命令未运行，仓库无变化。
+首次被拦时未走 §5 通道；用户授权后做了深度扫描与逐条核实（第 3–6 项）。
+
+1. **拦截原文**：`Mimosa L3 在 commit 前发现 128 个高危、21 个中危，最高等级 high`。展示 12 条，
+   全部在 `services/chat/test/api/ai-chat.spec.ts`（不在本次暂存集内）：`createTestUser 是 ssrf
+   入口` ×5（行 300 / 301 / 1072 / 1115 / 1158）、`post 是 ssrf 入口` ×6（行 388 / 502 / 516 /
+   720 / 802 / 1090）、`localTestFetch 是 ssrf 入口` ×1（行 956）。门禁注明「本次覆盖不完整」。
+   展示项属于 §3 的类别（server 包内发请求的测试 helper 被提升为 SSRF 入口）。
+2. **未放行的原因**：§6.2 的基线是 111 high / 19 medium，本次 128 / 21，多出 17 条高危、
+   2 条中危；展示项只有 12 条，其余 116 条高危的归属无法从门禁输出确认。自 `999a5b2`（§6
+   记录当日）以来 `services/chat` 改动 172 个文件，测试代码新增 `createTestUser(` 调用 9 处、
+   `.post(` 调用 138 处——与 §3 同类的调用点明显变多，但这只是范围统计，**不能证明**剩余条目
+   都属于该类别。`AGENTS.md` 的豁免以「命中已记录的结构性误报类别」为前提，本会话无法核实。
+3. **深度扫描（用户授权，21:56，仅静态）**：scan `scan-2026-11-24T13-56-29.855Z-408777cad512`，
+   seal `sha256:e11c6d165727a3905a09d6a89035c7c79f7a92dbd1c2904612e0ba66811c0824`，产物在
+   `~/.mimosa/security-scans/project-2c39922dfe6996ff4df5d86c/`。运行状态 `inconclusive`、覆盖
+   `partial`（validation 阶段 partial，调用图部分不完整）。15 条 finding：13 条业务逻辑候选
+   （9 HIGH / 4 MEDIUM，全部 `inconclusive`、`verdictEffect: none`）+ 2 条跨文件告警。另用 CLI
+   做确定性扫描（native，579 文件，覆盖 complete）：直接命中 0，跨文件告警 21 条（19 条在
+   测试 / E2E 代码，2 条把排序误读为 MongoDB 操作）。
+4. **逐条核实（读代码，只针对扫描给出的候选）**：
+
+   | 位置 | 扫描判断 | 核实 |
+   | --- | --- | --- |
+   | `services/chat/src/data-request/data-request.controller.ts:135` | HIGH 整块请求对象进入写入 | `@Body()` 为 `CreateDataRequestDto`；非本分支改动 |
+   | `services/chat/src/organization/invitation.controller.ts:91` | HIGH 同上 | `CreateInvitationDto`（email、role 限可邀角色）；`OrganizationContextGuard` + `PermissionGuard` + `member.invite` |
+   | `services/chat/src/organization/organization.controller.ts:87`、`:139` | HIGH 同上 | `OrganizationUpsertDto` 仅 `name`；`:139` 另有 `organization.update` |
+   | `services/chat/src/plan/plan.controller.ts:157` | HIGH 同上 | `CreatePlanDto` 为计划参数字段 |
+   | `services/chat/src/settings/settings.controller.ts:84` | HIGH 同上 | `UpdateSettingsDto` 白名单四字段 |
+   | `services/chat/src/transaction/transaction.controller.ts:55` | HIGH 同上 | `CreateTransactionDto` 显式字段 |
+   | `services/chat/src/usage/usage.controller.ts:82` | HIGH 同上 | `CreateUsageDto`（amount、usedAt、remark） |
+   | `services/chat/src/rate/rate.controller.ts:62` | HIGH 资源标识来自请求、无租户绑定 | 公开参考数据接口，按币种查询，无租户概念；非本分支改动 |
+   | `services/chat/src/ai/ai.controller.ts:251` | MEDIUM 删除会话未见权限检查 | 类级 `JwtAuthGuard`；服务层 `assertOwned(id, userId)`，非本人 404 |
+   | `services/chat/src/organization/invitation.controller.ts:152`、`:168`、`:190` | MEDIUM 邀请令牌端点未见权限检查 | 类级 `JwtAuthGuard`；服务层 `matchesInvitedEmail` 不符 403、令牌按 hash 查不到 404、接受 / 拒绝在组织锁内按完整开放态条件消费。受邀者此时尚非成员，本就不适用角色模型 |
+   | `services/chat/src/organization/member.controller.ts:135` | MEDIUM 跨文件 SSRF 告警 | 链条另一端是 `test/api/membership.spec.ts:993` 的 supertest 助手（§3 类别） |
+
+   全局 `ValidationPipe({ whitelist: true })`（`services/chat/src/main.ts:17`）剥掉 DTO 未声明的
+   字段；服务层没有任何把整个 DTO 展开进数据库写入的写法。结论：**扫描给出的候选无一成立**。
+5. **依赖**：`clients/chat-web/package.json:30` 把 `next` 锁在 `16.2.3`，命中 GHSA-6gpp-xcg3-4w24 /
+   CVE-2026-64642，修复版本 `16.2.11`；`gateEligible: false`，不参与门禁。非本分支改动，未处理。
+6. **结论与边界**：未发现本分支产品代码存在可利用问题。但这只覆盖扫描器给出的候选，不是完整
+   安全审计（深度扫描覆盖 `partial`）；本分支改的是认证与权限代码，按约定仍须人工复核。门禁的
+   128 条高危三个途径（深度扫描、CLI 扫描、`status` 台账）都没有复现，无法逐条列出；能看到的
+   12 条全部属于 §3 类别。
+7. **处置**：用户查看核实结果后，决定按 `AGENTS.md` 门禁政策豁免放行。本次 4 个提交（`fb07201`、
+   `c6fecbf`、`83f36f1` 及 E2E + 文档提交）与推送均经 §5 既有通道执行，每条提交说明都写明豁免
+   原因并指向本节；未新增任何旁路工具进仓。
+8. **附注**：拦截时 `e2e/test-results/` 存在（E2E 产物），已按 §2.3 清理。本会话被拦 1 次。

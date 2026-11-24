@@ -16,6 +16,11 @@ import {
 import { lockLedgerAccounts } from "../prisma/ledger-write-lock";
 import { PrismaService } from "../prisma/prisma.service";
 import { RateService } from "../rate/rate.service";
+import { resolveOrganizationPreferences } from "../organization/organization-preferences";
+import {
+	compatReadWhere,
+	type ReadScope,
+} from "../authorization/organization-scope";
 import { replayCurrencyLedger, type LedgerEvent, type ReplayResult } from "./ledger-replay";
 import {
 	assertCorrectionBasics,
@@ -173,6 +178,10 @@ type CorrectionDb = Pick<
 	| "planAllocation"
 	| "userSettings"
 	| "account"
+	// resolveOrganizationPreferences 的最小数据面（只读预览取组织偏好）
+	| "organizationSettings"
+	| "membership"
+	| "$queryRaw"
 >;
 
 /** evaluate 的完整产物：preview 序列化为 CorrectionPreviewDto，apply 据此落库 */
@@ -229,6 +238,15 @@ interface UsageAllocationAudit {
 const PAGE_SIZE = 20;
 const USAGE_IMPACT_CHANGED = "使用更正的影响已变化或缺少确认，请重新查看影响后再提交";
 
+/**
+ * 账本行归属过滤（W18 兼容窗口；评审 R2-I02）：
+ * - 传入 scope（只读预览）：按组织作用域——组织行跨成员共享 + 默认组织的存量 NULL 行；
+ * - 不传（apply 写路径）：沿用 `{ userId }`，写侧 Actor 化随 Goal #3B 收口。
+ */
+function ledgerWhere(scope: ReadScope | undefined, userId: string) {
+	return scope ? compatReadWhere(scope) : { userId };
+}
+
 @Injectable()
 export class CorrectionService {
 	constructor(
@@ -242,21 +260,28 @@ export class CorrectionService {
 	/**
 	 * 影响预览（POST /api/corrections/preview，方案 §6.1）：全程只读，不落任何业务行
 	 * （验收场景 22）。V1/V2/V3 收集为 blockers 返回 200；V0/V4/RATE 类直接以 400 抛出。
+	 *
+	 * 读作用域（评审 R2-I02）：目标归属、组织偏好与账本重放范围均按当前组织读取
+	 * ——与 GET /corrections/target 同口径。此前按请求者 userId 直查：携带其他组织头
+	 * 仍返回本人别的组织的账本重放结果（跨组织泄露），受邀成员则按自己的空账本
+	 * 重放（余额恒 0 / 误报资金不足）。
 	 */
 	async preview(
-		userId: string,
+		scope: ReadScope,
 		dto: CorrectionRequestDto,
 	): Promise<CorrectionPreviewDto> {
 		this.assertSupportedTargetType(dto.targetType);
 		if (dto.targetType === "USAGE") {
 			const evaluation = await this.prisma.$transaction(
-				(tx) => this.evaluate(tx, userId, dto, "preview"),
+				(tx) => this.evaluate(tx, scope.userId, dto, "preview", scope),
 				{ isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
 			);
 			const preview = this.buildPreview(evaluation);
 			return { ...preview, expectedUsageImpact: this.usageImpactFingerprint(dto, preview) };
 		}
-		return this.buildPreview(await this.evaluate(this.prisma, userId, dto, "preview"));
+		return this.buildPreview(
+			await this.evaluate(this.prisma, scope.userId, dto, "preview", scope),
+		);
 	}
 
 	private buildPreview(evaluation: Evaluation): CorrectionPreviewDto {
@@ -345,7 +370,7 @@ export class CorrectionService {
 
 	/** 修改记录列表（GET /api/corrections，方案 §6.3）：createdAt 倒序分页，含 APPLIED 与 FAILED */
 	async list(
-		userId: string,
+		scope: ReadScope,
 		targetTypeRaw: string | undefined,
 		targetId: string | undefined,
 		pageRaw: string | undefined,
@@ -356,9 +381,15 @@ export class CorrectionService {
 		const targetType = this.parseTargetType(targetTypeRaw);
 		this.assertSupportedTargetType(targetType);
 		const page = parsePage(pageRaw);
-		// 目标存在性校验：非本人与不存在一律 404（不泄露存在性，验收场景 20）
-		await this.loadTarget(this.prisma, userId, targetType, targetId);
-		const where = { userId, targetType, targetId };
+		// 目标存在性校验：组织作用域外与不存在一律 404（不泄露存在性，验收场景 20）
+		await this.loadTarget(
+			this.prisma,
+			scope.userId,
+			targetType,
+			targetId,
+			scope,
+		);
+		const where = { targetType, targetId, ...compatReadWhere(scope) };
 		const [total, rows] = await Promise.all([
 			this.prisma.correction.count({ where }),
 			this.prisma.correction.findMany({
@@ -388,7 +419,7 @@ export class CorrectionService {
 
 	/** 目标当前内容（GET /api/corrections/target）：更正页表单初值与乐观校验基准的数据源 */
 	async getTarget(
-		userId: string,
+		scope: ReadScope,
 		targetTypeRaw: string | undefined,
 		targetId: string | undefined,
 	): Promise<{
@@ -401,7 +432,13 @@ export class CorrectionService {
 		}
 		const targetType = this.parseTargetType(targetTypeRaw);
 		this.assertSupportedTargetType(targetType);
-		const target = await this.loadTarget(this.prisma, userId, targetType, targetId);
+		const target = await this.loadTarget(
+			this.prisma,
+			scope.userId,
+			targetType,
+			targetId,
+			scope,
+		);
 		return {
 			targetType,
 			targetId,
@@ -508,38 +545,50 @@ export class CorrectionService {
 	/**
 	 * 只读评估：加载目标 → 乐观校验 → 解析变更 → V0 静态校验 → 受影响币种全量重放
 	 * （before/after 各一次，纯内存）→ V1/V2/V3 收集为 failures。不改任何数据。
+	 * scope 仅预览传入（组织作用域读取）；apply 不传，沿用请求者 userId 口径。
 	 */
 	private async evaluate(
 		db: CorrectionDb,
 		userId: string,
 		dto: CorrectionRequestDto,
 		mode: "preview" | "apply",
+		scope?: ReadScope,
 	): Promise<Evaluation> {
-		const target = await this.loadTarget(db, userId, dto.targetType, dto.targetId);
+		const target = await this.loadTarget(
+			db,
+			userId,
+			dto.targetType,
+			dto.targetId,
+			scope,
+		);
 		this.assertOptimisticMatch(dto, target);
-		const settings = await db.userSettings.findUnique({ where: { userId } });
+		// 本位币 / 记账起点：预览取组织偏好（OrganizationSettings 优先，默认组织兼容回落
+		// 到所有者个人设置——受邀成员没有自己的 UserSettings）；apply 沿用请求者个人设置
+		const settings = scope
+			? await resolveOrganizationPreferences(db, scope.organizationId)
+			: await db.userSettings.findUnique({ where: { userId } });
 		if (dto.targetType === "TRANSACTION") {
 			return this.evaluateTransaction(
 				db,
-				userId,
 				dto,
 				target.transaction!,
 				settings,
+				scope,
 			);
 		}
 		if (dto.targetType === "USAGE") {
-			return this.evaluateUsage(db, userId, dto, target.usage!, settings);
+			return this.evaluateUsage(db, dto, target.usage!, settings, scope);
 		}
-		return this.evaluateHolding(db, userId, dto, target.holding!, settings, mode);
+		return this.evaluateHolding(db, dto, target.holding!, settings, mode, scope);
 	}
 
 	/** 交易更正评估：变更解析 → 受影响币种重放（改币种时两币种各自全量）→ 校验 → 影响面 */
 	private async evaluateTransaction(
 		db: CorrectionDb,
-		userId: string,
 		dto: CorrectionRequestDto,
 		original: TransactionModel,
 		settings: { baseCurrency: string; ledgerStartedAt: Date | null } | null,
+		scope?: ReadScope,
 	): Promise<Evaluation> {
 		const changes = parseCorrectionChanges(dto.changes as Record<string, unknown>, {
 			targetType: "TRANSACTION",
@@ -570,13 +619,18 @@ export class CorrectionService {
 		const affectedCurrencies = currencyChanged
 			? [original.currencyCode, changes.currencyCode!]
 			: [original.currencyCode];
-		const context = await this.loadLedgerContexts(db, userId, affectedCurrencies);
+		const context = await this.loadLedgerContexts(
+			db,
+			original.userId,
+			affectedCurrencies,
+			scope,
+		);
 
 		// 变更后内存形态：改币种时同步解除计划关联（计划绑定原币种，planId → null，快照留痕）
 		const planIdDetached = currencyChanged && original.planId !== null;
 		const effective: EffectiveTransaction = {
 			id: original.id,
-			userId,
+			userId: original.userId,
 			currencyCode: changes.currencyCode ?? original.currencyCode,
 			quantity: changes.quantity ?? original.quantity,
 			principalAmount: changes.principalAmount ?? original.principalAmount,
@@ -666,10 +720,10 @@ export class CorrectionService {
 	 */
 	private async evaluateUsage(
 		db: CorrectionDb,
-		userId: string,
 		dto: CorrectionRequestDto,
 		originalUsage: UsageRecord,
 		settings: { baseCurrency: string; ledgerStartedAt: Date | null } | null,
+		scope?: ReadScope,
 	): Promise<Evaluation> {
 		const changes = parseCorrectionChanges(dto.changes as Record<string, unknown>, {
 			targetType: "USAGE",
@@ -693,9 +747,13 @@ export class CorrectionService {
 			}),
 		);
 
-		// 计划与分配装载（UsageRecord.planId 非空；缺失即数据异常，拒绝更正）
-		const usagePlan = await db.plan.findUnique({
-			where: { id: originalUsage.planId },
+		// 计划与分配装载（UsageRecord.planId 非空；缺失即数据异常，拒绝更正）。
+		// 预览时计划须同属当前组织作用域（不因使用记录携带 planId 而读到组织外计划）
+		const usagePlan = await db.plan.findFirst({
+			where: {
+				id: originalUsage.planId,
+				...(scope ? compatReadWhere(scope) : {}),
+			},
 			select: { id: true, status: true, targetAmount: true },
 		});
 		const allocation = await db.planAllocation.findUnique({
@@ -718,7 +776,7 @@ export class CorrectionService {
 
 		const effective: EffectiveUsage = {
 			id: originalUsage.id,
-			userId,
+			userId: originalUsage.userId,
 			planId: originalUsage.planId,
 			currencyCode: originalUsage.currencyCode,
 			amount: changes.amount ?? originalUsage.amount,
@@ -747,7 +805,12 @@ export class CorrectionService {
 		}
 
 		const affectedCurrencies = [originalUsage.currencyCode];
-		const context = await this.loadLedgerContexts(db, userId, affectedCurrencies);
+		const context = await this.loadLedgerContexts(
+			db,
+			originalUsage.userId,
+			affectedCurrencies,
+			scope,
+		);
 		// 倒序补录时，按日期重放可能重新分配批次。原成本以账本已存的分摊为准。
 		const ledger = context.get(originalUsage.currencyCode)!;
 		const postedCosts = await db.usageLotAllocation.groupBy({
@@ -841,11 +904,11 @@ export class CorrectionService {
 	/** 初始持仓更正评估：金额（沿用原报价重算成本）或币种（原时点取价，方案 §5.3） */
 	private async evaluateHolding(
 		db: CorrectionDb,
-		userId: string,
 		dto: CorrectionRequestDto,
 		original: InitialHolding,
 		settings: { baseCurrency: string; ledgerStartedAt: Date | null } | null,
 		mode: "preview" | "apply",
+		scope?: ReadScope,
 	): Promise<Evaluation> {
 		const changes = parseCorrectionChanges(dto.changes as Record<string, unknown>, {
 			targetType: "INITIAL_HOLDING",
@@ -876,7 +939,12 @@ export class CorrectionService {
 		const affectedCurrencies = currencyChanged
 			? [original.currencyCode, nextCode]
 			: [original.currencyCode];
-		const context = await this.loadLedgerContexts(db, userId, affectedCurrencies);
+		const context = await this.loadLedgerContexts(
+			db,
+			original.userId,
+			affectedCurrencies,
+			scope,
+		);
 
 		// 币种更正须取得原确认时点的合格报价，取价窗口由 RateService 按来源粒度处理。
 		let nextRate = original.rate;
@@ -949,7 +1017,7 @@ export class CorrectionService {
 
 		const effective: EffectiveHolding = {
 			id: original.id,
-			userId,
+			userId: original.userId,
 			currencyCode: nextCode,
 			amount: nextAmount,
 			rate: nextRate,
@@ -1419,28 +1487,34 @@ export class CorrectionService {
 
 	// ──────────────────────── 目标加载 / 校验 / 上下文 ────────────────────────
 
+	/**
+	 * W18 读作用域（可选）：传入时目标查找按组织作用域（组织行 + 兼容 NULL 行）；
+	 * 只读端点（预览 / 列表 / 目标内容）传入，写路径 apply 不传、保持 { id, userId } 原行为
+	 */
 	private async loadTarget(
 		db: CorrectionDb,
 		userId: string,
 		targetType: CorrectionTargetTypeValue,
 		targetId: string,
+		scope?: ReadScope,
 	): Promise<LoadedTarget> {
+		const owner = scope ? compatReadWhere(scope) : { userId };
 		if (targetType === "TRANSACTION") {
 			const transaction = await db.transaction.findFirst({
-				where: { id: targetId, userId },
+				where: { id: targetId, ...owner },
 			});
 			if (!transaction) throw new CorrectionTargetNotFoundException();
 			return { type: "TRANSACTION", transaction };
 		}
 		if (targetType === "USAGE") {
 			const usage = await db.usageRecord.findFirst({
-				where: { id: targetId, userId },
+				where: { id: targetId, ...owner },
 			});
 			if (!usage) throw new CorrectionTargetNotFoundException();
 			return { type: "USAGE", usage };
 		}
 		const holding = await db.initialHolding.findFirst({
-			where: { id: targetId, userId },
+			where: { id: targetId, ...owner },
 		});
 		if (!holding) throw new CorrectionTargetNotFoundException();
 		return { type: "INITIAL_HOLDING", holding };
@@ -1517,26 +1591,29 @@ export class CorrectionService {
 
 	/**
 	 * 单币种账本上下文加载（该币种全部事件来源行 + 计划分配现状）。
-	 * PlanAllocation 与 Plan 裸外键：先查本人该币种计划，再按 planId 批量取分配。
+	 * PlanAllocation 与 Plan 裸外键：先查该币种计划，再按 planId 批量取分配。
+	 * 归属过滤见 ledgerWhere：预览传 scope（组织账本），apply 不传（请求者 userId）。
 	 */
 	private async loadLedgerContexts(
 		db: CorrectionDb,
 		userId: string,
 		currencies: string[],
+		scope?: ReadScope,
 	): Promise<Map<string, CurrencyLedgerContext>> {
 		const currencyList = [...new Set(currencies)];
+		const owner = ledgerWhere(scope, userId);
 		const [initialHoldings, transactions, usageRecords, plans] = await Promise.all([
 			db.initialHolding.findMany({
-				where: { userId, currencyCode: { in: currencyList } },
+				where: { currencyCode: { in: currencyList }, ...owner },
 			}),
 			db.transaction.findMany({
-				where: { userId, currencyCode: { in: currencyList } },
+				where: { currencyCode: { in: currencyList }, ...owner },
 			}),
 			db.usageRecord.findMany({
-				where: { userId, currencyCode: { in: currencyList } },
+				where: { currencyCode: { in: currencyList }, ...owner },
 			}),
 			db.plan.findMany({
-				where: { userId, targetCurrency: { in: currencyList } },
+				where: { targetCurrency: { in: currencyList }, ...owner },
 				select: {
 					id: true,
 					targetCurrency: true,

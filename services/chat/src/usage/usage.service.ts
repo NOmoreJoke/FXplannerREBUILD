@@ -11,6 +11,10 @@ import { lockPlanAccount } from "../prisma/ledger-write-lock";
 import { PrismaService } from "../prisma/prisma.service";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
 import {
+	compatReadWhere,
+	type ReadScope,
+} from "../authorization/organization-scope";
+import {
 	checkCompleteReady,
 	computeDerived,
 	computeRemainingAllocation,
@@ -327,15 +331,15 @@ export class UsageService {
 	 * usedAt 倒序、同刻 createdAt 倒序，limit 100 兑底；成本按 usageId 聚合
 	 * UsageLotAllocation。plan 不存在或不属于本人 → 404 防枚举。
 	 */
-	async list(userId: string, planId: string): Promise<UsageListRespDto> {
+	async list(scope: ReadScope, planId: string): Promise<UsageListRespDto> {
 		const plan = await this.prisma.plan.findFirst({
-			where: { id: planId, userId },
+			where: { id: planId, ...compatReadWhere(scope) },
 		});
 		if (!plan) {
 			throw new UsagePlanNotFoundException();
 		}
 		const records = await this.prisma.usageRecord.findMany({
-			where: { userId, planId },
+			where: { planId, ...compatReadWhere(scope) },
 			orderBy: [{ usedAt: "desc" }, { createdAt: "desc" }],
 			take: USAGE_LIST_LIMIT,
 		});

@@ -4,14 +4,20 @@ import {
 	streamMessage,
 	type AiStreamEvent,
 } from "@/lib/api/chat";
-import { ApiError } from "@/lib/api/client";
+import {
+	consumeOrganizationContextError,
+	getActiveOrganizationId,
+	ApiError,
+} from "@/lib/api/client";
 import { clearToken, getToken } from "@/lib/auth/token";
 import { captureApiError } from "@/lib/dev-log/monitor";
 
 // 真实 client.ts 顶层校验 NEXT_PUBLIC_API_BASE_URL（测试环境不存在），mock 掉；
 // 类定义须置于工厂内（vi.mock 被提升），被测模块与本文件拿到的 ApiError
 // 即同一 mock 类，instanceof 断言成立。构造签名与真实类一致。
-vi.mock("@/lib/api/client", () => {
+// 地址构造 / 组织上下文失效 / 401 的真实逻辑在 client.spec 覆盖；这里保持协议形状：
+// handleUnauthorized 复刻「清 token」一侧（401 用例据此断言）。
+vi.mock("@/lib/api/client", async () => {
 	class MockApiError extends Error {
 		constructor(
 			message: string,
@@ -23,9 +29,17 @@ vi.mock("@/lib/api/client", () => {
 			this.name = "ApiError";
 		}
 	}
+	const { clearToken } = await import("@/lib/auth/token");
 	return {
 		ApiError: MockApiError,
 		apiClient: vi.fn(),
+		// ToB W20：chat.ts 经此读取组织头值（未选组织返回 null = 不注入）
+		getActiveOrganizationId: vi.fn(() => null),
+		buildApiUrl: (endpoint: string) => `http://api.test${endpoint}`,
+		consumeOrganizationContextError: vi.fn(async () => null),
+		handleUnauthorized: vi.fn(() => {
+			clearToken();
+		}),
 		isExpectedControlFlowApiError: (status: number, code?: string) =>
 			(status === 409 && code === "ONBOARDING_NOT_COMPLETED") ||
 			(status === 403 &&
@@ -401,6 +415,36 @@ describe("streamMessage（fetch + 响应校验协议）", () => {
 		expect(clearToken).toHaveBeenCalledTimes(1);
 	});
 
+	it("组织上下文失效（400/404）：与 apiClient 共用处理，按发起流时的组织判定并抛出其错误", async () => {
+		vi.mocked(getActiveOrganizationId).mockReturnValueOnce("org-a");
+		fetchMock.mockResolvedValue(
+			mockResponse({
+				status: 404,
+				contentType: "application/json",
+				jsonBody: {
+					code: "ORGANIZATION_NOT_FOUND",
+					message: "组织不存在或无权访问",
+				},
+			}),
+		);
+		vi.mocked(consumeOrganizationContextError).mockResolvedValueOnce(
+			new ApiError("组织不存在或无权访问", 404, "ORGANIZATION_NOT_FOUND"),
+		);
+
+		await expect(
+			streamMessage({ conversationId: "conv-1", content: "追问" }),
+		).rejects.toMatchObject({
+			name: "ApiError",
+			status: 404,
+			code: "ORGANIZATION_NOT_FOUND",
+		});
+		// 交给共用处理的正是「发起流时携带的组织」
+		expect(consumeOrganizationContextError).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(consumeOrganizationContextError).mock.calls[0]?.[1]).toBe(
+			"org-a",
+		);
+	});
+
 	it("403 数据请求锁定：复用锁定跳转协议（location.href → /data-requests）并抛 ApiError", async () => {
 		fetchMock.mockResolvedValue(
 			mockResponse({
@@ -429,5 +473,17 @@ describe("streamMessage（fetch + 响应校验协议）", () => {
 		expect(
 			(init.headers as Record<string, string>).Authorization,
 		).toBeUndefined();
+	});
+
+	it("主动中止（AbortError）：静默透传，不误报为 dev-log 网络错误", async () => {
+		const controller = new AbortController();
+		const abortError = new DOMException("Aborted", "AbortError");
+		fetchMock.mockRejectedValueOnce(abortError);
+		controller.abort();
+
+		await expect(
+			streamMessage({ content: "你好", signal: controller.signal }),
+		).rejects.toThrow("Aborted");
+		expect(captureApiError).not.toHaveBeenCalled();
 	});
 });

@@ -1,7 +1,6 @@
 import type { INestApplication } from "@nestjs/common";
-import { ThrottlerGuard } from "@nestjs/throttler";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { OTP_CHANNELS, OTP_OPTIONS } from "../../src/auth/otp/otp-channel";
 import { createCapturingEmailOtpChannel } from "../helpers/capturing-email-otp-channel";
 import {
@@ -11,10 +10,24 @@ import {
 	type TestContext,
 } from "../helpers/test-app";
 
+// 关闭全局接口限流：APP_GUARD 注册的 ThrottlerGuard 无法经 overrideGuard 替换
+// （data-request.spec / plan-usage.spec 先例注释），本文件此前用 overrideGuard 实为无效——
+// 用例数贴近全局限流上限时新增发码即 429。统一改用 mock 类（与其余 14 个 spec 同款）。
+vi.mock("@nestjs/throttler", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@nestjs/throttler")>();
+	class NoopThrottlerGuard {
+		async canActivate() {
+			return true;
+		}
+	}
+	return { ...actual, ThrottlerGuard: NoopThrottlerGuard };
+});
+
 /**
  * 接口测试 ↔ src/auth/auth.service.ts loginWithOtp
  * OTP 登录绑定语义（changes/auth-otp-bind，仅绑定不迁移）：
- * 密码账号 + 同邮箱 → 绑定原账号；纯 OTP 账号复用；全新邮箱新建；绑定后密码登录回归。
+ * 密码账号 + 同邮箱 → 绑定原账号；纯 OTP 账号复用；全新邮箱新建；绑定后密码登录回归；
+ * 新用户默认组织兜底（ORG-01.2）。
  */
 describe("AuthController OTP 绑定语义（e2e）", () => {
 	let ctx: TestContext;
@@ -41,9 +54,7 @@ describe("AuthController OTP 绑定语义（e2e）", () => {
 	beforeAll(async () => {
 		ctx = await createTestApp((builder) =>
 			builder
-				// 关闭全局接口限流；注入捕获验证码的 fake 渠道并放开 OTP 60s 目标/IP 频控
-				.overrideGuard(ThrottlerGuard)
-				.useValue({ canActivate: () => true })
+				// 注入捕获验证码的 fake 渠道并放开 OTP 60s 目标/IP 频控
 				.overrideProvider(OTP_CHANNELS)
 				.useValue([otpChannel])
 				.overrideProvider(OTP_OPTIONS)
@@ -150,6 +161,62 @@ describe("AuthController OTP 绑定语义（e2e）", () => {
 				where: { otpIdentities: { some: { channel: "email", target: EMAIL } } },
 			});
 			expect(otpUsers).toHaveLength(1);
+		});
+	});
+
+	describe("默认组织兜底（ORG-01.2；评审 I-09）", () => {
+		it("全新邮箱验证码首登：同事务获得唯一默认组织（OWNER），业务 GET 不再 400", async () => {
+			const EMAIL = `otp-default-org-${Date.now()}@example.com`;
+
+			const res = await otpLogin(EMAIL);
+			const userId = res.body.data.user.id;
+			userIds.push(userId);
+
+			// 唯一默认组织 + OWNER/ACTIVE 成员关系；组织名取邮箱前缀
+			const memberships = await ctx.prisma.membership.findMany({
+				where: { userId },
+				include: { organization: { select: { id: true, name: true } } },
+			});
+			expect(memberships).toHaveLength(1);
+			expect(memberships[0]?.role).toBe("OWNER");
+			expect(memberships[0]?.status).toBe("ACTIVE");
+			expect(memberships[0]?.organization.name).toBe(
+				`${EMAIL.split("@")[0]}的工作台`,
+			);
+
+			// 组织创建审计同事务写入
+			const audit = await ctx.prisma.auditLog.findFirst({
+				where: {
+					organizationId: memberships[0]?.organization.id,
+					action: "organization.create",
+				},
+			});
+			expect(audit?.actorUserId).toBe(userId);
+
+			// 无组织头的业务 GET 回落到唯一默认组织（此前验证码新用户会全线 400）
+			const home = await request(app.getHttpServer())
+				.get("/api/home/state")
+				.set(bearer(res.body.data.accessToken))
+				.expect(200);
+			expect(home.body.data.onboardingCompleted).toBe(false);
+			const orgs = await request(app.getHttpServer())
+				.get("/api/organizations")
+				.set(bearer(res.body.data.accessToken))
+				.expect(200);
+			expect(orgs.body.data).toHaveLength(1);
+		});
+
+		it("再次验证码登录复用账号，不重复建组织", async () => {
+			const EMAIL = `otp-default-org-reuse-${Date.now()}@example.com`;
+
+			const first = await otpLogin(EMAIL);
+			userIds.push(first.body.data.user.id);
+			await otpLogin(EMAIL);
+
+			const orgCount = await ctx.prisma.membership.count({
+				where: { userId: first.body.data.user.id },
+			});
+			expect(orgCount).toBe(1);
 		});
 	});
 });

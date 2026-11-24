@@ -12,8 +12,9 @@ import {
 	formatReportDate,
 	hasUsageQuantity,
 } from "@/components/business/report/plan-cost-summary-card";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import { reportsApi } from "@/lib/api/reports";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import type { ReportPlanListItem, ReportListStatus } from "@/lib/api/contract";
 
 /**
@@ -62,10 +63,16 @@ export function ReportPlanList({ onDownload }: ReportPlanListProps) {
 		undefined,
 	);
 
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
+	const orgId = useActiveOrgId();
 	const query = useQuery({
 		// 筛选参数变化 → 换 Key 重查（方案 §6：react-query 参数变化重查）
-		queryKey: queryKeys.reports.plans(status, currencyCode),
+		queryKey: withOrgScope(
+			orgId,
+			queryKeys.reports.plans(status, currencyCode),
+		),
 		queryFn: () => reportsApi.listPlans({ status, currencyCode }),
+		enabled: orgId !== null,
 		staleTime: 15 * 1000,
 		retry: false,
 	});
@@ -74,8 +81,9 @@ export function ReportPlanList({ onDownload }: ReportPlanListProps) {
 	// 币种筛选项从「全部列表」推导：始终用无筛选请求的第一页结果？——
 	// 简化：从当前结果推导会导致筛选后选项收缩。改为恒取全量列表（一次额外缓存请求）。
 	const allQuery = useQuery({
-		queryKey: queryKeys.reports.plans(),
+		queryKey: withOrgScope(orgId, queryKeys.reports.plans()),
 		queryFn: () => reportsApi.listPlans({}),
+		enabled: orgId !== null,
 		staleTime: 15 * 1000,
 		retry: false,
 	});

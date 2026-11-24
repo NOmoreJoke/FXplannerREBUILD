@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useOrganizationStore } from "@/lib/stores/organization-store";
 
 // Node ≥26 在 globalThis 上自带一个返回 undefined 的 localStorage 原生 getter，
 // 会遮蔽 vitest 4 populateGlobal 注入的 jsdom localStorage（vitest#8757）——
@@ -33,7 +34,8 @@ import { useChat } from "@/lib/hooks/use-chat";
 import { aiMessagesQueryKey } from "@/lib/hooks/use-conversations";
 import { chatApi, streamMessage } from "@/lib/api/chat";
 import { ApiError } from "@/lib/api/client";
-import { useChatStore } from "@/lib/stores/chat-store";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
+import { abortActiveStream, useChatStore } from "@/lib/stores/chat-store";
 import type {
 	AiMessageListData,
 	AiStreamEvent,
@@ -162,6 +164,8 @@ const hangMessagesFetch = () => {
 };
 
 beforeEach(() => {
+		// ToB W20：业务查询按组织门控（enabled: orgId !== null）——测试统一选中组织
+		useOrganizationStore.setState({ activeOrganizationId: "org-test" });
 	// 必须 reset（而非 clear）：clearAllMocks 不清 mockResolvedValue，
 	// 前用例的 implementation 会泄漏到后续用例（409 用例曾因此串数据）
 	vi.resetAllMocks();
@@ -221,17 +225,297 @@ describe("useChat 新建会话流（activeId=null）", () => {
 			content: "你好呀",
 		});
 
-		// 权威收敛：消息 + 会话列表 invalidate
+		// 权威收敛：消息 + 会话列表失效，范围限定在**发起组织**的前缀键
+		// （此前用无前缀词根 ["ai","messages"]，前缀匹配命中不了带组织前缀的缓存——评审 I-19）
 		expect(invalidateSpy).toHaveBeenCalledWith({
-			queryKey: ["ai", "messages"],
+			queryKey: ["org", "org-test", "ai", "messages"],
 		});
 		expect(invalidateSpy).toHaveBeenCalledWith({
-			queryKey: ["ai", "conversations"],
+			queryKey: ["org", "org-test", "ai", "conversations"],
 		});
 
 		// 状态机回归 idle、流式文本已清理
 		expect(result.current.status).toBe("idle");
 		expect(result.current.streamText).toBeUndefined();
+	});
+
+	it("评审 I-18：流式中切换组织 → 流被中止，迟到帧不写入新组织的缓存", async () => {
+		hangMessagesFetch();
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		// 模拟忽略 abort 的慢响应：meta 已到，done 帧在切换组织后才到达
+		vi.mocked(streamMessage).mockImplementation(async () =>
+			(async function* () {
+				yield metaEvent;
+				await gate;
+				yield doneEvent("迟到的回复");
+			})(),
+		);
+		const { queryClient, wrapper } = createWrapper();
+		const { result } = renderHook(() => useChat(), { wrapper });
+
+		let sendPromise: Promise<void> = Promise.resolve();
+		act(() => {
+			sendPromise = result.current.send("你好");
+		});
+		await waitFor(() => expect(result.current.activeId).toBe("conv-1"));
+
+		// 用户切换组织：useSwitchOrganization 会中止当前流并切换选择
+		act(() => {
+			abortActiveStream();
+			useOrganizationStore.setState({ activeOrganizationId: "org-other" });
+		});
+		await act(async () => {
+			release();
+			await sendPromise;
+		});
+
+		// 迟到的 done 帧没有落进任何组织的缓存
+		const originKey = withOrgScope("org-test", queryKeys.ai.messages("conv-1"));
+		const newOrgKey = withOrgScope("org-other", queryKeys.ai.messages("conv-1"));
+		expect(queryClient.getQueryData(newOrgKey)).toBeUndefined();
+		const origin = queryClient.getQueryData<AiMessageListData>(originKey);
+		expect(origin?.items.map((item) => item.id)).toEqual(["msg-u1"]);
+		// 流已收尾：不再有进行中的流
+		expect(useChatStore.getState().streamingIds).toEqual([]);
+		expect(useChatStore.getState().creatingStream).toBe(false);
+	});
+
+	/** 在 meta 之前挂起、被 abort 时抛 AbortError 的流（请求已建立但首帧未到） */
+function preMetaHang(params: StreamMessageParams) {
+		return (async function* () {
+			// 与真实 fetch 一致：signal 已中止则立即以 AbortError 结束
+			if (params.signal?.aborted) throw abortErrorOf();
+			await new Promise<void>((_resolve, reject) => {
+				params.signal?.addEventListener("abort", () => reject(abortErrorOf()));
+			});
+			yield metaEvent;
+		})();
+	}
+
+	function abortErrorOf(): Error {
+		const error = new Error("The operation was aborted");
+		error.name = "AbortError";
+		return error;
+	}
+
+	/** 让前两次 invalidateQueries（流收尾的失效）挂起，模拟网络往返期间 */
+	function gateFirstInvalidateCalls(queryClient: QueryClient) {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let calls = 0;
+		vi.spyOn(queryClient, "invalidateQueries").mockImplementation(() => {
+			calls += 1;
+			return calls <= 2 ? gate : Promise.resolve();
+		});
+		return () => release();
+	}
+
+	/** 冲刷微任务：让被中止的流走完 catch/finally 直到挂起或结束 */
+	async function flushMicrotasks() {
+		await act(async () => {
+			for (let index = 0; index < 5; index += 1) {
+				await Promise.resolve();
+			}
+		});
+	}
+
+	it("评审 R2-I09：切组织中止血 #1 后，新组织的流 #2 不被 #1 迟到的收尾破坏（句柄与创建态都保留）", async () => {
+		hangMessagesFetch();
+		vi.mocked(streamMessage).mockImplementation(async (params) =>
+			preMetaHang(params),
+		);
+		const { queryClient, wrapper } = createWrapper();
+		const releaseInvalidate = gateFirstInvalidateCalls(queryClient);
+		const { result } = renderHook(() => useChat(), { wrapper });
+
+		// 流 #1（组织 org-test）：首帧未到即被切换组织中止
+		let firstSend!: Promise<void>;
+		act(() => {
+			firstSend = result.current.send("第一条");
+		});
+		await flushMicrotasks(); // 请求建立、流开始等待首帧
+		act(() => {
+			// 与 useSwitchOrganization 同序：中止当前流 → 重置聊天运行时态 → 切组织
+			abortActiveStream();
+			useChatStore.getState().resetRuntime();
+			useOrganizationStore.setState({ activeOrganizationId: "org-other" });
+		});
+		await flushMicrotasks();
+
+		// 用户已在新组织发出流 #2（同样卡在首帧之前）
+		let secondSend!: Promise<void>;
+		act(() => {
+			secondSend = result.current.send("第二条");
+		});
+		await flushMicrotasks();
+		const secondSignal = vi.mocked(streamMessage).mock.calls[1]?.[0].signal;
+		expect(secondSignal?.aborted).toBe(false);
+		expect(useChatStore.getState().creatingStream).toBe(true);
+		expect(useChatStore.getState().pendingUserContent).toBe("第二条");
+
+		// 流 #1 的收尾此刻才走完（此前要等两次缓存失效）：不得动 #2 的任何状态
+		await act(async () => {
+			releaseInvalidate();
+			await firstSend;
+		});
+		expect(useChatStore.getState().creatingStream).toBe(true);
+		expect(useChatStore.getState().pendingUserContent).toBe("第二条");
+
+		// 再次切换组织：#2 仍能被中止（此前 #1 的收尾把 #2 的句柄抹掉了）
+		act(() => {
+			abortActiveStream();
+		});
+		await flushMicrotasks();
+		expect(secondSignal?.aborted).toBe(true);
+		await act(async () => {
+			await secondSend;
+		});
+	});
+
+	it("评审 R2-I09：同一组织内，流 #1 收尾的失效等待期间开出流 #2——#1 只带走自己的句柄", async () => {
+		hangMessagesFetch();
+		vi.mocked(streamMessage)
+			.mockResolvedValueOnce(streamOf([metaEvent, doneEvent("第一段回复")]))
+			.mockImplementation(async (params) => preMetaHang(params));
+		const { queryClient, wrapper } = createWrapper();
+		const releaseInvalidate = gateFirstInvalidateCalls(queryClient);
+		const { result } = renderHook(() => useChat(), { wrapper });
+
+		let firstSend!: Promise<void>;
+		act(() => {
+			firstSend = result.current.send("第一条");
+		});
+		// #1 的流式态已清理（endStream 同步执行），收尾停在缓存失效的等待上
+		await waitFor(() => expect(result.current.anyStreaming).toBe(false));
+		expect(useOrganizationStore.getState().activeOrganizationId).toBe("org-test");
+
+		let secondSend!: Promise<void>;
+		act(() => {
+			secondSend = result.current.send("追问");
+		});
+		await flushMicrotasks();
+		const secondSignal = vi.mocked(streamMessage).mock.calls[1]?.[0].signal;
+		expect(secondSignal?.aborted).toBe(false);
+
+		await act(async () => {
+			releaseInvalidate();
+			await firstSend;
+		});
+		expect(secondSignal?.aborted).toBe(false); // #1 的收尾没有动 #2 的句柄
+
+		// #2 仍登记在册：stop/切组织都能中止它
+		act(() => {
+			result.current.stop();
+		});
+		await flushMicrotasks();
+		expect(secondSignal?.aborted).toBe(true);
+		await act(async () => {
+			await secondSend;
+		});
+	});
+
+	/**
+	 * 同组织重入（评审 R3-I04）：旧流 #1 被切组织中止后，其收尾可能晚于「切回原组织、
+	 * 同一会话上开出的新流 #2」。本用例用「不及时响应 abort 的传输层」建模这种迟到
+	 * （真实 SSE 解析器在 abort 时读取立即以 AbortError 拒绝，用户操作下触发不了；
+	 * 此处是与「评审 I-18」同口径的防御性建模）。
+	 */
+	it("评审 R3-I04：A→B→A 同会话重入——被中止的流 #1 迟到的收尾不得截断 / 污染新流 #2", async () => {
+		hangMessagesFetch();
+		const token = (delta: string) =>
+			({ type: "token", delta }) as const satisfies AiStreamEvent;
+		const followUpMeta = {
+			...metaEvent,
+			userMessageId: "msg-u2",
+		} as const satisfies AiStreamEvent;
+		let releaseFirst!: () => void;
+		const firstGate = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		vi.mocked(streamMessage)
+			// #1：meta + token 后挂起，放行后吐出迟到的 done（不响应 abort）
+			.mockImplementationOnce(
+				async () =>
+					(async function* () {
+						yield metaEvent;
+						yield token("第一段");
+						await firstGate;
+						yield doneEvent("迟到的回复");
+					})(),
+			)
+			// #2：meta + token 后挂起，直到被 abort
+			.mockImplementationOnce(
+				async (params) =>
+					(async function* () {
+						yield followUpMeta;
+						yield token("第二段");
+						await new Promise<void>((_resolve, reject) => {
+							params.signal?.addEventListener("abort", () =>
+								reject(abortErrorOf()),
+							);
+						});
+					})(),
+			);
+		const { queryClient, wrapper } = createWrapper();
+		const { result } = renderHook(() => useChat(), { wrapper });
+
+		let firstSend!: Promise<void>;
+		act(() => {
+			firstSend = result.current.send("第一条");
+		});
+		await waitFor(() =>
+			expect(useChatStore.getState().streamTexts["conv-1"]).toBe("第一段"),
+		);
+
+		// 切到另一组织（与 useSwitchOrganization 同序）：#1 被中止、聊天运行时态被重置
+		act(() => {
+			abortActiveStream();
+			useChatStore.getState().resetRuntime();
+			useOrganizationStore.setState({ activeOrganizationId: "org-other" });
+		});
+		// 未等 #1 收尾就切回原组织，并在同一会话上追问
+		act(() => {
+			useOrganizationStore.setState({ activeOrganizationId: "org-test" });
+			result.current.selectConversation("conv-1");
+		});
+		let secondSend!: Promise<void>;
+		act(() => {
+			secondSend = result.current.send("追问");
+		});
+		await waitFor(() =>
+			expect(useChatStore.getState().streamTexts["conv-1"]).toBe("第二段"),
+		);
+		const secondSignal = vi.mocked(streamMessage).mock.calls[1]?.[0].signal;
+		expect(secondSignal?.aborted).toBe(false);
+
+		// #1 的收尾此刻才执行（它此前一直挂在迟到帧上）
+		await act(async () => {
+			releaseFirst();
+			await firstSend;
+		});
+
+		// #2 仍在流式中：流式态没有被 #1 的收尾截断
+		expect(useChatStore.getState().streamingIds).toEqual(["conv-1"]);
+		expect(useChatStore.getState().streamTexts["conv-1"]).toBe("第二段");
+		expect(result.current.anyStreaming).toBe(true);
+		// #1 迟到的 done 帧没有写进 #2 所在的消息缓存
+		const messages = queryClient.getQueryData<AiMessageListData>(
+			withOrgScope("org-test", queryKeys.ai.messages("conv-1")),
+		);
+		expect(messages?.items.map((item) => item.id)).toEqual(["msg-u1", "msg-u2"]);
+		expect(secondSignal?.aborted).toBe(false);
+
+		act(() => {
+			result.current.stop();
+		});
+		await act(async () => {
+			await secondSend;
+		});
 	});
 
 	it("流式中的中间态：streamText 逐步拼接、status=streaming、anyStreaming 防重发", async () => {

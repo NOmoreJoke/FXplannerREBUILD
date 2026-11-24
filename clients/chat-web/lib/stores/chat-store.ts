@@ -54,6 +54,12 @@ interface ChatStore {
 	setPendingUserContent: (content: string | null) => void;
 	/** 选择模型；传 null 回退「跟随服务端默认」（白名单缩编自愈也走此入口） */
 	setSelectedModel: (key: string | null) => void;
+		/**
+		 * 重置运行时态（保留 selectedModel 偏好）：旧组织的会话选择、流式态与错误态
+		 * 不得带入新上下文。外部中止入口 abortActiveStream 会自动调用；登出等
+		 * 「中止 + 重置」场景一律经该入口，不要只调本方法。
+	 */
+	resetRuntime: () => void;
 }
 
 export const useChatStore = create<ChatStore>()(
@@ -132,6 +138,18 @@ export const useChatStore = create<ChatStore>()(
 			setPendingUserContent: (content) => set({ pendingUserContent: content }),
 
 			setSelectedModel: (key) => set({ selectedModel: key }),
+
+			resetRuntime: () =>
+				set({
+					activeConversationId: null,
+					streamingIds: [],
+					creatingStream: false,
+					streamTexts: {},
+					toolActiveIds: [],
+					errors: {},
+					newChatError: null,
+					pendingUserContent: null,
+				}),
 		}),
 		{
 			// key 与 LingJi 同名：同用户跨产品偏好语义一致
@@ -141,6 +159,52 @@ export const useChatStore = create<ChatStore>()(
 		},
 	),
 );
+
+/**
+ * 当前流的中断句柄（模块级而非 store 状态：AbortController 不进状态树、不参与渲染）。
+ * 切换组织/登出时由外部调 abortActiveStream——旧组织的流不得继续写入新上下文
+ * （评审 I-18）。use-chat 开流时登记、收尾时注销。
+ */
+let activeStreamAbort: AbortController | null = null;
+
+export function registerActiveStreamAbort(
+	controller: AbortController | null,
+): void {
+	activeStreamAbort = controller;
+}
+
+/**
+ * 中断当前流并重置聊天运行时态（无流时仅重置）。
+ *
+ * 切换组织 / 退出组织 / 会话重置的统一入口。「外部中止」与「运行时态重置」必须同时
+ * 发生（评审 R3-I04）：use-chat 的收尾以句柄归属判定自己是否仍是当前流，不是则不再
+ * 按会话 id 清理流式态——若只中止不重置，被中止的流就没有人清理，输入框永久锁死。
+ * 由本函数自身保证这一配对，不依赖调用点自律。
+ *
+ * 用户主动停止走 use-chat 的 stop()：只 abort、不从注册表摘句柄，流自己完成收尾。
+ */
+export function abortActiveStream(): void {
+	activeStreamAbort?.abort();
+	activeStreamAbort = null;
+	useChatStore.getState().resetRuntime();
+}
+
+/**
+ * 注销句柄：仅当登记的仍然是该句柄时才清空，并返回是否由本流完成注销（评审 R2-I09）。
+ * 返回 false = 登记在册的已不是它（被 abortActiveStream 摘掉，或已有后来者接管）。
+ *
+ * 流 #1 被切换组织中止后，其收尾要等缓存失效（含网络往返）才走到注销这一步；
+ * 期间用户可能已在新组织开出流 #2——无条件置空会抹掉 #2 的句柄，之后再切组织
+ * 就中止不了 #2。迟到的收尾只能带走自己的句柄，调用方以返回值判定自己是否仍是
+ * 当前流（归属判定必须在任何 await 之前完成）。
+ */
+export function releaseActiveStreamAbort(
+	controller: AbortController,
+): boolean {
+	if (activeStreamAbort !== controller) return false;
+	activeStreamAbort = null;
+	return true;
+}
 
 /** 发送前置检查（选择器）：任意流进行中（含创建中）→ true */
 export const selectAnyStreaming = (state: ChatStore): boolean =>

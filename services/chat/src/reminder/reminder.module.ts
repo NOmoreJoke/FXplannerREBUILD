@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AuthorizationModule } from "../authorization/authorization.module";
 import { ReminderController } from "./reminder.controller";
 import { ReminderService } from "./reminder.service";
 
@@ -7,6 +8,7 @@ import { ReminderService } from "./reminder.service";
  * 依赖 PrismaModule（全局）与 plan 模块的 plan-calculator 纯函数（零模块耦合，不引 PlanModule）。
  */
 @Module({
+	imports: [AuthorizationModule],
 	controllers: [ReminderController],
 	providers: [ReminderService],
 	exports: [ReminderService],

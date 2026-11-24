@@ -20,6 +20,12 @@ import {
 import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
+import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { PermissionGuard } from "../authorization/guards/permission.guard";
+import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
+import type { ActorContext } from "../authorization/authorization.types";
+import type { ReadScope } from "../authorization/organization-scope";
 // biome-ignore lint/style/useImportType: 必须值导入 DTO：type-only 导入会让 tsc 在 design:paramtypes 发出 Function，ValidationPipe 会对 @Param() 对象误转换导致字段丢失（500）
 import {
 	AccountCurrencyParamDto,
@@ -105,9 +111,15 @@ export class AccountController {
 			},
 		},
 	})
-	async listAccounts(@CurrentUser() user: User) {
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("account.read")
+	async listAccounts(
+		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
+	) {
+		const scope: ReadScope = actor;
 		return this.withLog("GET /accounts", user.id, null, () =>
-			this.accountService.list(user.id),
+			this.accountService.list(scope),
 		).then((data) => ({ success: true, data, message: "账户列表获取成功" }));
 	}
 
@@ -135,15 +147,19 @@ export class AccountController {
 		description: "该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND）",
 		type: AccountErrorDto,
 	})
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("account.read")
 	async getAccount(
 		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
 		@Param() params: AccountCurrencyParamDto,
 	) {
+		const scope: ReadScope = actor;
 		return this.withLog(
 			"GET /accounts/:currencyCode",
 			user.id,
 			params.currencyCode,
-			() => this.accountService.detail(user.id, params.currencyCode),
+			() => this.accountService.detail(scope, params.currencyCode),
 		).then((data) => ({ success: true, data, message: "账户详情获取成功" }));
 	}
 
@@ -178,15 +194,19 @@ export class AccountController {
 		description: "该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND）",
 		type: AccountErrorDto,
 	})
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("account.read")
 	async getAllocations(
 		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
 		@Param() params: AccountCurrencyParamDto,
 	) {
+		const scope: ReadScope = actor;
 		return this.withLog(
 			"GET /accounts/:currencyCode/allocations",
 			user.id,
 			params.currencyCode,
-			() => this.accountService.allocations(user.id, params.currencyCode),
+			() => this.accountService.allocations(scope, params.currencyCode),
 		).then((data) => ({ success: true, data, message: "计划分配获取成功" }));
 	}
 
@@ -214,15 +234,19 @@ export class AccountController {
 		description: "该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND）",
 		type: AccountErrorDto,
 	})
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("account.read")
 	async getLedger(
 		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
 		@Param() params: AccountCurrencyParamDto,
 	) {
+		const scope: ReadScope = actor;
 		return this.withLog(
 			"GET /accounts/:currencyCode/transactions",
 			user.id,
 			params.currencyCode,
-			() => this.accountService.ledger(user.id, params.currencyCode),
+			() => this.accountService.ledger(scope, params.currencyCode),
 		).then((data) => ({ success: true, data, message: "账户流水获取成功" }));
 	}
 }

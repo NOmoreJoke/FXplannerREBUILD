@@ -4,6 +4,10 @@ import { Prisma, type Transaction as TransactionModel } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
 import {
+	compatReadWhere,
+	type ReadScope,
+} from "../authorization/organization-scope";
+import {
 	assertUnitCostInRange,
 	buildPurchaseLot,
 } from "../account/account-calculator";
@@ -13,6 +17,7 @@ import {
 	assertRateDecimalPlaces,
 	assertSelfConsistent,
 	assertTransactedAtInRange,
+	assertValidTransactedAt,
 	parseFeeAmount,
 	parsePositiveAmount,
 	TransactionInvalidParamsException,
@@ -162,9 +167,9 @@ export class TransactionService {
 	 * 交易详情（GET /transactions/:id，方案 §5.2）：
 	 * 按 id + userId 联查，不存在或不属于本人一律 404（不泄露存在性）。
 	 */
-	async detail(userId: string, id: string): Promise<TransactionDto> {
+	async detail(scope: ReadScope, id: string): Promise<TransactionDto> {
 		const transaction = await this.prisma.transaction.findFirst({
-			where: { id, userId },
+			where: { id, ...compatReadWhere(scope) },
 		});
 		if (!transaction) {
 			throw new TransactionNotFoundException();
@@ -202,6 +207,8 @@ export class TransactionService {
 		const feeAmount = parseFeeAmount(dto.feeAmount);
 
 		const transactedAt = new Date(dto.transactedAt);
+		// 无效 / 越界日期在查库之前拦截（评审 R3-I06 同类面）：DTO 会放行解析不出时间的写法
+		assertValidTransactedAt(transactedAt);
 		// 日期上下界：UTC+8 口径不晚于今天；不早于账本起点（未设置时不校验下界）
 		const settings = await this.prisma.userSettings.findUnique({
 			where: { userId },

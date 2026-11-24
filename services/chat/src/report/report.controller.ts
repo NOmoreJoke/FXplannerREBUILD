@@ -20,6 +20,11 @@ import {
 import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
+import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { PermissionGuard } from "../authorization/guards/permission.guard";
+import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
+import type { ActorContext } from "../authorization/authorization.types";
 // biome-ignore lint/style/useImportType: 必须值导入 DTO：type-only 导入会让 tsc 在 design:paramtypes 发出 Function，ValidationPipe 会对 @Param() 对象误转换导致字段丢失（account.controller 先例注释）
 import {
 	PlanReportDto,
@@ -98,8 +103,11 @@ export class ReportController {
 			"status 不在三值枚举内，或币种不在支持的 15 币种内（INVALID_REPORT_PARAMS）",
 		type: ReportErrorDto,
 	})
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("report.read")
 	async listPlans(
 		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
 		@Query() query: ReportPlanListQueryDto,
 	) {
 		return this.withLog(
@@ -107,10 +115,13 @@ export class ReportController {
 			user.id,
 			null,
 			() =>
-				this.reportService.list(user.id, {
-					status: query.status,
-					currencyCode: query.currencyCode,
-				}),
+				this.reportService.list(
+					actor,
+					{
+						status: query.status,
+						currencyCode: query.currencyCode,
+					},
+				),
 		).then((data) => ({
 			success: true,
 			data,
@@ -142,9 +153,18 @@ export class ReportController {
 		description: "计划不存在或不属于本人（PLAN_NOT_FOUND）",
 		type: ReportErrorDto,
 	})
-	async getPlanReport(@CurrentUser() user: User, @Param("id") id: string) {
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("report.read")
+	async getPlanReport(
+		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
+		@Param("id") id: string,
+	) {
 		return this.withLog("GET /reports/plans/:id", user.id, id, () =>
-			this.reportService.detail(user.id, id),
+			this.reportService.detail(
+				actor,
+				id,
+			),
 		).then((data) => ({
 			success: true,
 			data,

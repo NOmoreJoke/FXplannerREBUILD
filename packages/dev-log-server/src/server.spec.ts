@@ -175,6 +175,88 @@ describe("createLogServer", () => {
 		}
 	});
 
+	// 评审 R2-I12：访问邀请页期间的任何报错，都会经 pageUrl / 面包屑把一次性邀请 token
+	// 带到本地日志服务；落盘文件与 GET /frontend-log 都不得出现明文 token
+	it("一次性邀请 token 不落盘、读回不暴露（pageUrl / 面包屑 / 编码态回跳参数），且不撑坏日志结构", async () => {
+		// envelope 体积较大，单独起一个默认上限的服务
+		const bigServer = createLogServer({ writer: new LogWriter({ dir }) });
+		await new Promise<void>((resolve) =>
+			bigServer.listen(0, "127.0.0.1", resolve),
+		);
+		const address = bigServer.address();
+		if (!address || typeof address === "string") throw new Error("no address");
+		const bigBaseUrl = `http://127.0.0.1:${address.port}`;
+
+		/** 工厂生成的占位邀请 token（非真实凭据） */
+		const invite = `tok_${Math.random().toString(36).slice(2)}${Math.random()
+			.toString(36)
+			.slice(2)}`;
+
+		try {
+			const envelope = [
+				JSON.stringify({ event_id: "e-invite" }),
+				JSON.stringify({ type: "event" }),
+				JSON.stringify({
+					message: `API Error: 403 GET /api/organization-invitations/${invite}/summary`,
+					level: "error",
+					tags: { type: "api_error" },
+					breadcrumbs: [
+						{
+							timestamp: 1761000000,
+							category: "navigation",
+							data: {
+								from: `/login?redirect=%2Finvitations%2F${invite}`,
+								to: `/invitations/${invite}`,
+							},
+						},
+						{
+							timestamp: 1761000001,
+							category: "fetch",
+							data: {
+								method: "POST",
+								url: `/api/organization-invitations/${invite}/accept`,
+								status_code: 409,
+							},
+						},
+					],
+				}),
+			].join("\n");
+
+			const post = await fetch(`${bigBaseUrl}/frontend-log`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					source: "sentry-browser",
+					pageUrl: `http://localhost:3001/invitations/${invite}`,
+					envelope,
+				}),
+			});
+			expect(post.status).toBe(200);
+
+			// 落盘的原始日志行不含明文 token
+			expect(fs.readFileSync(todayFile(), "utf8")).not.toContain(invite);
+
+			const res = await fetch(`${bigBaseUrl}/frontend-log?raw=1`);
+			const data = (await res.json()) as LogQueryResponse;
+			expect(JSON.stringify(data)).not.toContain(invite);
+			// 脱敏不得撑坏结构：条目仍被正确解析，并保留可读的路径形状
+			expect(data.count).toBe(1);
+			expect(data.entries[0].kind).toBe("error");
+			expect(data.entries[0].pageUrl).toBe(
+				"http://localhost:3001/invitations/***",
+			);
+			expect(data.entries[0].message).toBe(
+				"API Error: 403 GET /api/organization-invitations/***/summary",
+			);
+			expect(data.entries[0].breadcrumbs?.map((crumb) => crumb.message)).toEqual([
+				"/login?redirect=%2Finvitations%2F*** → /invitations/***",
+				"POST /api/organization-invitations/***/accept 409",
+			]);
+		} finally {
+			await new Promise((resolve) => bigServer.close(resolve));
+		}
+	});
+
 	it("GET /frontend-log 异常事件提取堆栈，client_report 单独展示", async () => {
 		const bigServer = createLogServer({ writer: new LogWriter({ dir }) });
 		await new Promise<void>((resolve) =>

@@ -26,6 +26,11 @@ import type { Request, Response } from "express";
 import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
+import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { PermissionGuard } from "../authorization/guards/permission.guard";
+import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
+import type { ActorContext } from "../authorization/authorization.types";
 import { AiService } from "./ai.service";
 import { AiAgentService, type StreamReplyParams } from "./ai-agent.service";
 import { listChatModels } from "./ai-models.config";
@@ -114,12 +119,18 @@ export class AiController {
 			},
 		},
 	})
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("agent.use")
 	async listConversations(
 		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
 		@Query() query: ListConversationsQueryDto,
 	) {
 		this.aiService.assertChatAvailable();
-		const data = await this.aiService.listConversations(user.id, query.limit);
+		const data = await this.aiService.listConversations(
+			actor,
+			query.limit,
+		);
 		return { success: true, data, message: "会话列表获取成功" };
 	}
 
@@ -220,15 +231,18 @@ export class AiController {
 			},
 		},
 	})
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("agent.use")
 	async listMessages(
 		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
 		@Param("id") conversationId: string,
 		@Query() query: ListMessagesQueryDto,
 	) {
 		this.aiService.assertChatAvailable();
 		const data = await this.aiService.listMessages(
 			conversationId,
-			user.id,
+			actor,
 			query.limit,
 		);
 		return { success: true, data, message: "消息列表获取成功" };

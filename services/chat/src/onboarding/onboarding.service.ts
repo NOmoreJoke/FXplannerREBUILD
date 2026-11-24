@@ -21,6 +21,12 @@ import type {
 	LatestRateResponse,
 } from "../rate/rate.service";
 import { utc8DayStart } from "../transaction/transaction-calculator";
+import type { ReadScope } from "../authorization/organization-scope";
+import {
+	PERSONAL_DEFAULT_LOCALE,
+	PERSONAL_DEFAULT_REGION,
+	resolveOrganizationPreferences,
+} from "../organization/organization-preferences";
 import {
 	CONSENT_TYPES,
 	CURRENT_TERMS_VERSION,
@@ -173,6 +179,10 @@ type FailureStage = "CONSENT" | "RATE" | "LIMIT" | "UNIQUE";
 /** rate-service 最新报价响应（单目标平铺 / 多目标组） */
 type LatestRatesResponse = LatestRateResponse | LatestRateGroupResponse;
 
+/** 个人展示偏好的产品默认值（与 settings 模块同源） */
+const ONBOARDING_DEFAULT_LOCALE = PERSONAL_DEFAULT_LOCALE;
+const ONBOARDING_DEFAULT_REGION = PERSONAL_DEFAULT_REGION;
+
 /**
  * 首次设置编排（技术方案 §2/§3）：
  * - 完成态判定 / 条款 / 完成设置；向导中间态无后端存储，中断即从头重填；
@@ -190,17 +200,39 @@ export class OnboardingService {
 		@Inject(Logger) private readonly logger: Logger,
 	) {}
 
-	/** 完成态判定：只读无副作用 */
-	async getStatus(userId: string): Promise<OnboardingStatusDto> {
-		const [settings, consentCount] = await Promise.all([
-			this.prisma.userSettings.findUnique({ where: { userId } }),
-			this.countCurrentConsents(this.prisma.termsConsent, userId),
+	/**
+	 * 完成态判定：只读无副作用（W18 组织隔离；评审 I-10）。
+	 *
+	 * 完成态与组织偏好以**当前组织**为准（resolveOrganizationPreferences：
+	 * OrganizationSettings 优先，兼容回落仅限默认组织所有者的个人设置）——
+	 * 此前只读请求者本人的 UserSettings：受邀加入已建账组织的成员读到
+	 * completed=false（前端据此永久停发提醒），而已建账成员切到未建账的新组织
+	 * 却读到 completed=true。locale/region 是个人展示偏好、条款确认进度是个人维度，
+	 * 两者仍按请求者本人取值。
+	 */
+	async getStatus(scope: ReadScope): Promise<OnboardingStatusDto> {
+		const [preferences, personal, consentCount] = await Promise.all([
+			resolveOrganizationPreferences(this.prisma, scope.organizationId),
+			this.prisma.userSettings.findUnique({
+				where: { userId: scope.userId },
+				select: { locale: true, region: true },
+			}),
+			this.countCurrentConsents(this.prisma.termsConsent, scope.userId),
 		]);
 
 		return {
-			completed: settings !== null,
+			completed: preferences !== null,
 			requiredConsentsMet: consentCount >= CONSENT_TYPES.length,
-			settings: settings ? this.toSettingsView(settings) : null,
+			settings: preferences
+				? this.toSettingsView({
+						baseCurrency: preferences.baseCurrency,
+						locale: personal?.locale ?? ONBOARDING_DEFAULT_LOCALE,
+						region: personal?.region ?? ONBOARDING_DEFAULT_REGION,
+						prepPreference: preferences.prepPreference,
+						reminderEnabled: preferences.reminderEnabled,
+						ledgerStartedAt: preferences.ledgerStartedAt,
+					})
+				: null,
 			currentTermsVersion: CURRENT_TERMS_VERSION,
 		};
 	}

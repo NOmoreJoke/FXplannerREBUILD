@@ -58,8 +58,13 @@ describe("Swagger 接口说明", () => {
 		// + AI 助手 6 端点（ai-assistant §4 + ai-model-whitelist §4.1）：
 		//   GET /api/ai/models、GET/POST /api/ai/conversations、
 		//   POST/GET /api/ai/conversations/:id/messages、DELETE /api/ai/conversations/:id
-		// + 阶段5 §2 账户分配视图 1 端点：GET /api/accounts/:currencyCode/allocations = 56
-		expect(operations).toHaveLength(56);
+		// + 阶段5 §2 账户分配视图 1 端点：GET /api/accounts/:currencyCode/allocations
+		// + ToB R1 W17 组织 4 端点 + 审计 1 端点：GET/POST /api/organizations、
+		//   GET/PATCH /api/organizations/current、GET /api/organizations/current/audit-logs
+		// + ToB R1 W19 成员/邀请 11 端点：GET/PATCH/DELETE /members、POST /members/leave、
+		//   POST /transfer-ownership、POST/GET/DELETE /invitations、
+		//   GET /organization-invitations/:token、POST accept/decline = 72
+		expect(operations).toHaveLength(72);
 		for (const { path, method, operation } of operations) {
 			expect(
 				operation.summary,

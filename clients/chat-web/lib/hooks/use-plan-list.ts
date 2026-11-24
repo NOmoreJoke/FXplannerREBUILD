@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { plansApi } from "@/lib/api/plans";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import type { PlanListItem, PlanListStatus } from "@/lib/api/contract";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 
 /**
  * 计划列表查询（changes/plan-management/技术方案.md §4.1）
@@ -36,9 +37,12 @@ export interface UsePlanListResult {
  * 计划列表消费层：status 筛选 + 加载/错误态归一（风格对齐 use-home-state）。
  */
 export function usePlanList(status?: PlanListStatus): UsePlanListResult {
+	// ToB W20：组织作用域缓存键 + 未选组织不发业务请求
+	const orgId = useActiveOrgId();
 	const query = useQuery({
-		queryKey: buildPlanListQueryKey(status),
+		queryKey: withOrgScope(orgId, buildPlanListQueryKey(status)),
 		queryFn: () => plansApi.list(status),
+		enabled: orgId !== null,
 		staleTime: 30 * 1000, // 列表容忍秒级陈旧；写操作后由提交方 invalidate 精确刷新
 		retry: false, // 401 由 apiClient 统一跳登录，其余失败直接交给页面错误态
 	});

@@ -1,5 +1,6 @@
 import { Logger, Module } from "@nestjs/common";
 import { RateModule } from "../rate/rate.module";
+import { AuthorizationModule } from "../authorization/authorization.module";
 import { CorrectionController } from "./correction.controller";
 import { CorrectionService } from "./correction.service";
 
@@ -10,7 +11,7 @@ import { CorrectionService } from "./correction.service";
  * 依赖 RateModule（原时点取价 findQuoteAt）；在 app.module.ts 唯一注册。
  */
 @Module({
-	imports: [RateModule],
+	imports: [RateModule, AuthorizationModule],
 	controllers: [CorrectionController],
 	// Logger 由 Nest 内置 @Injectable 提供，显式注册供 CorrectionService 注入（onboarding.module 先例）
 	providers: [CorrectionService, Logger],

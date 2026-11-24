@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AuthorizationModule } from "../authorization/authorization.module";
 import { RateModule } from "../rate/rate.module";
 import { HomeController } from "./home.controller";
 import { HomeService } from "./home.service";
@@ -8,7 +9,7 @@ import { HomeService } from "./home.service";
  * PrismaModule 为全局模块，无需重复导入；汇率域数据经 RateModule 出（home 不直接查 exchange_rates）。
  */
 @Module({
-	imports: [RateModule],
+	imports: [RateModule, AuthorizationModule],
 	controllers: [HomeController],
 	providers: [HomeService],
 })

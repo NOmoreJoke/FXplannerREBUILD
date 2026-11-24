@@ -14,8 +14,9 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
 import { getCurrencyName } from "@/lib/api/currencies";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import { accountsApi } from "@/lib/api/accounts";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 
 /**
  * 账户详情页（changes/account-module/技术方案.md §5.2，原型 QKb1c）
@@ -29,27 +30,29 @@ export default function AccountDetailPage() {
 	const raw = params?.currency;
 	// 接口对路径参数统一转大写（方案 §4.2），展示层同步大写
 	const code = typeof raw === "string" && raw !== "" ? raw.toUpperCase() : null;
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
+	const orgId = useActiveOrgId();
 
 	const detailQuery = useQuery({
-		queryKey: queryKeys.accounts.detail(code),
+		queryKey: withOrgScope(orgId, queryKeys.accounts.detail(code)),
 		queryFn: () => accountsApi.detail(code as string),
-		enabled: code !== null,
+		enabled: orgId !== null && code !== null,
 		retry: false, // 401 由 apiClient 统一跳登录；404 直接进提示态
 	});
 
 	const ledgerQuery = useQuery({
-		queryKey: queryKeys.accounts.ledger(code),
+		queryKey: withOrgScope(orgId, queryKeys.accounts.ledger(code)),
 		queryFn: () => accountsApi.ledger(code as string),
-		enabled: code !== null,
+		enabled: orgId !== null && code !== null,
 		retry: false,
 	});
 
 	// 按计划分配明细（阶段5 §2 功能 13）：只读事实展示，与摘要/流水并行；
 	// 失败静默降级不阻塞整页（明细缺失不该挡住余额/流水查看）
 	const allocationsQuery = useQuery({
-		queryKey: queryKeys.accounts.allocations(code),
+		queryKey: withOrgScope(orgId, queryKeys.accounts.allocations(code)),
 		queryFn: () => accountsApi.allocations(code as string),
-		enabled: code !== null,
+		enabled: orgId !== null && code !== null,
 		retry: false,
 	});
 

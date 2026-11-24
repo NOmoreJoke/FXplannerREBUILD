@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { accountsApi } from "@/lib/api/accounts";
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import {
 	AccountCostCard,
 	ReportPlanList,
@@ -21,10 +22,13 @@ import { ComplianceDisclaimer } from "@/components/base";
  */
 
 export default function ReportsPage() {
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
+	const orgId = useActiveOrgId();
 	// 账户成本：先取账户列表（币种集合），再逐币种并发取详情（个人数据 ≤15 币种，方案 §5.3）
 	const accountsQuery = useQuery({
-		queryKey: queryKeys.accounts.list(),
+		queryKey: withOrgScope(orgId, queryKeys.accounts.list()),
 		queryFn: () => accountsApi.list(),
+		enabled: orgId !== null,
 		staleTime: 15 * 1000,
 		retry: false,
 	});
@@ -32,8 +36,11 @@ export default function ReportsPage() {
 	const [printPlanId, setPrintPlanId] = useState<string | null>(null);
 
 	const accountDetails = useQuery({
-		queryKey: queryKeys.accounts.reportDetails(
-			accounts.map((a) => a.currencyCode).join(","),
+		queryKey: withOrgScope(
+			orgId,
+			queryKeys.accounts.reportDetails(
+				accounts.map((a) => a.currencyCode).join(","),
+			),
 		),
 		queryFn: async () => {
 			const details = await Promise.all(
@@ -46,7 +53,7 @@ export default function ReportsPage() {
 				averageUnitCost: detail.averageUnitCost,
 			}));
 		},
-		enabled: accounts.length > 0,
+		enabled: orgId !== null && accounts.length > 0,
 		staleTime: 15 * 1000,
 		retry: false,
 	});

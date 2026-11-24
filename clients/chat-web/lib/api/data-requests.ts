@@ -1,4 +1,11 @@
-import { apiClient, ApiError } from "@/lib/api/client";
+import {
+	apiClient,
+	ApiError,
+	buildApiUrl,
+	consumeOrganizationContextError,
+	getActiveOrganizationId,
+	handleUnauthorized,
+} from "@/lib/api/client";
 import type { components } from "@/lib/api/schema.gen";
 import type {
 	DataRequestView,
@@ -16,6 +23,9 @@ type Schemas = components["schemas"];
 export type CreateDataRequestInput = Schemas["CreateDataRequestDto"];
 
 export type VerifyDataRequestInput = Schemas["VerifyDataRequestDto"];
+
+/** 服务端请求 id 的形状白名单（cuid：字母数字；路径段内不做其他拼接） */
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9]{1,64}$/;
 
 export const dataRequestsApi = {
 	/** 当前请求（进度页）；无进行中请求返回 null */
@@ -65,16 +75,43 @@ export const dataRequestsApi = {
 	/**
 	 * 下载导出包（需 Authorization，绕过 apiClient 的 JSON 解析）：
 	 * fetch blob → 触发浏览器保存；410/404 抛 ApiError。
+	 *
+	 * 与 apiClient 对齐的三处（评审 I-18 + 安全钩子复核）：
+	 * - 地址经 buildApiUrl 构造（base 启动时校验、endpoint 仅站内相对路径），
+	 *   requestId 先按服务端 id 形状做白名单校验，不把任意输入拼进 URL；
+	 * - 携带 X-Organization-Id：导出按当前组织解析，多组织用户不带头会被后端
+	 *   400 拒绝或落到默认组织；
+	 * - 401 / 组织上下文失效走同一处理。
 	 */
 	async download(requestId: string): Promise<void> {
+		if (!REQUEST_ID_PATTERN.test(requestId)) {
+			throw new ApiError("无效的请求标识", 400, "INVALID_REQUEST_ID");
+		}
 		const { getToken } = await import("@/lib/auth/token");
+		const headers: Record<string, string> = {};
 		const token = getToken();
+		if (token) {
+			headers["Authorization"] = `Bearer ${token}`;
+		}
+		const sentOrganizationId = getActiveOrganizationId();
+		if (sentOrganizationId) {
+			headers["X-Organization-Id"] = sentOrganizationId;
+		}
 		const response = await fetch(
-			`${process.env.NEXT_PUBLIC_API_BASE_URL}/data-requests/${requestId}/download`,
-			{
-				headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-			},
+			buildApiUrl(`/data-requests/${requestId}/download`),
+			{ headers },
 		);
+		if (response.status === 401) {
+			handleUnauthorized();
+			throw new ApiError("Token 无效或已过期", 401);
+		}
+		const orgError = await consumeOrganizationContextError(
+			response,
+			sentOrganizationId,
+		);
+		if (orgError) {
+			throw orgError;
+		}
 		if (!response.ok) {
 			const body = (await response.json().catch(() => ({}))) as {
 				code?: string;

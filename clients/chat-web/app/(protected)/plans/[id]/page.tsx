@@ -34,9 +34,11 @@ import { plansApi } from "@/lib/api/plans";
 import {
 	invalidateAfterLedgerMutation,
 	queryKeys,
+	withOrgScope,
 } from "@/lib/api/query-keys";
 import { usagesApi } from "@/lib/api/usages";
 import type { PlanDetail } from "@/lib/api/contract";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 
 /**
  * 换汇计划详情页（changes/plan-management/技术方案.md §5.2）
@@ -52,20 +54,22 @@ export default function PlanDetailPage() {
 	const params = useParams<{ id: string }>();
 	const id = params?.id;
 	const queryClient = useQueryClient();
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
+	const orgId = useActiveOrgId();
 
 	const query = useQuery({
-		queryKey: queryKeys.plans.detail(id as string),
+		queryKey: withOrgScope(orgId, queryKeys.plans.detail(id as string)),
 		queryFn: () => plansApi.getDetail(id as string),
-		enabled: typeof id === "string" && id !== "",
+		enabled: orgId !== null && typeof id === "string" && id !== "",
 		retry: false, // 401 由 apiClient 统一跳登录；404 直接进提示态
 	});
 
 	// 使用记录列表（M7）；失败静默降级为空态（详情 404 已被上方拦截）。
 	// ⚠️ 必须在所有条件 return 之前调用（React Hooks 规则：hook 顺序恒定）
 	const usagesQuery = useQuery({
-		queryKey: queryKeys.usages.list(id as string),
+		queryKey: withOrgScope(orgId, queryKeys.usages.list(id as string)),
 		queryFn: () => usagesApi.list(id as string),
-		enabled: typeof id === "string" && id !== "",
+		enabled: orgId !== null && typeof id === "string" && id !== "",
 		retry: false,
 	});
 
@@ -121,7 +125,10 @@ export default function PlanDetailPage() {
 				plan={query.data}
 				onApplied={(detail) => {
 					if (typeof id !== "string") return;
-					queryClient.setQueryData(queryKeys.plans.detail(id), detail);
+					queryClient.setQueryData(
+						withOrgScope(orgId, queryKeys.plans.detail(id)),
+						detail,
+					);
 					invalidateAfterLedgerMutation(queryClient, { planId: id });
 				}}
 				onWriteFailed={() => void query.refetch()}

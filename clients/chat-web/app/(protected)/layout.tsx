@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
 	ArrowLeftRight,
 	Bot,
+	Building2,
 	FileText,
 	Home,
 	LogOut,
@@ -18,8 +19,18 @@ import { getToken } from "@/lib/auth/token";
 import { redirectToLogin } from "@/lib/auth/redirect-to-login";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { useLogout } from "@/lib/query/hooks/use-auth";
+import {
+	isOrglessRouteAllowed,
+	useOrganizationRouting,
+} from "@/lib/hooks/use-organizations";
 import { AppBreadcrumb, PageLoading } from "@/components/base";
 import { ReminderBell } from "@/components/business/reminder";
+import {
+	OrganizationPicker,
+	OrganizationRoutingError,
+	OrganizationScopeBoundary,
+	OrganizationSwitcher,
+} from "@/components/business/organization";
 import { cn } from "@/lib/utils";
 
 /**
@@ -66,8 +77,36 @@ export default function ProtectedLayout({
 		void checkAuth();
 	}, [pathname, setUser, clearUser]);
 
+	// ToB R1 组织路由分流（W21；需求 ORG-00.3/ORG-02.4；评审 I-18）：
+	// 选择校验与单组织自动选中都在 useOrganizationRouting 内以受控副作用完成，
+	// 本组件不在渲染期写 store；认证未就绪（user 为空）不拉组织列表。
+	// ready = 单组织直达 / 多组织已选；pick = 多组织未选 → OrganizationPicker
+	// （整屏隔离，不闪旧组织数据）或 0 组织 → Picker 内新建引导；error = 列表
+	// 拉取失败 → 显式错误态与重试（不误入「创建组织」引导）。
+	// 组织上下文未就绪前业务页面不渲染（hooks enabled 门控 + 缓存清理双保险）。
+	// 就绪后业务区包在 OrganizationScopeBoundary 内：切换组织 = 重新挂载，不依赖
+	// 各页面是否订阅组织 store（评审 R2-I07：removeQueries 不会通知挂载态的观察者）。
+	// 豁免路由：/invitations/*（受邀者可能尚无任何组织，接受流程为个人端点）——
+	// 既不做路由分流，也不随组织变化重挂载（评审 R3-I01：接受邀请会切换组织，
+	// 重挂载会清掉页面内的「已加入组织」结果态）。
+	const routing = useOrganizationRouting({ enabled: Boolean(user) });
+
 	if (!user) {
 		return <PageLoading />;
+	}
+
+	const orglessRouteAllowed = isOrglessRouteAllowed(pathname);
+	// 组织上下文就绪检查：认证已过但组织未就绪（加载中/待选择/待创建/加载失败）
+	if (!orglessRouteAllowed) {
+		if (routing.status === "disabled" || routing.status === "loading") {
+			return <PageLoading />;
+		}
+		if (routing.status === "error") {
+			return <OrganizationRoutingError onRetry={routing.retry} />;
+		}
+		if (routing.status === "pick") {
+			return <OrganizationPicker />;
+		}
 	}
 
 	const displayName = user.name || user.email || "已认证用户";
@@ -96,9 +135,12 @@ export default function ProtectedLayout({
 						FXPlanner
 					</span>
 				</Link>
-				<p className="px-5 pb-4 text-xs text-muted-foreground">
-					规划你的换汇工作台
-				</p>
+			<p className="px-5 pb-4 text-xs text-muted-foreground">
+				规划你的换汇工作台
+			</p>
+
+			{/* ToB R1 组织切换器（W21）：单组织简化态 / 多组织下拉切换 */}
+			<OrganizationSwitcher />
 
 				{/* 导航菜单 */}
 				<nav className="flex-1 space-y-1 px-3">
@@ -153,9 +195,14 @@ export default function ProtectedLayout({
 			</aside>
 
 			<main className="min-w-0 flex-1">
-				{/* 统一面包屑行：面包屑靠左，提醒铃铛靠右（全部子页面自动获得，页面内禁止重复实现） */}
-				<AppBreadcrumb actions={<ReminderBell />} />
-				{children}
+				{/* 组织作用域边界（评审 R2-I07）：面包屑、提醒铃铛与页面内容都随当前组织变化，
+				    组织切换时整棵子树重新挂载——旧组织的数据、本地状态与命令式副作用不残留。
+				    豁免路由不重挂载（评审 R3-I01） */}
+				<OrganizationScopeBoundary bypass={orglessRouteAllowed}>
+					{/* 统一面包屑行：面包屑靠左，提醒铃铛靠右（全部子页面自动获得，页面内禁止重复实现） */}
+					<AppBreadcrumb actions={<ReminderBell />} />
+					{children}
+				</OrganizationScopeBoundary>
 			</main>
 		</div>
 	);
@@ -168,5 +215,7 @@ const NAV_ITEMS = [
 	{ href: "/reports", label: "我的报告", icon: FileText },
 	{ href: "/market", label: "汇率行情", icon: TrendingUp },
 	{ href: "/chat", label: "AI 助手", icon: Bot },
+	// ToB R1：组织设置入口（信息/成员与邀请/审计；此前只能手输地址进入）
+	{ href: "/organization", label: "组织", icon: Building2 },
 	{ href: "/settings", label: "设置", icon: Settings },
 ] as const;

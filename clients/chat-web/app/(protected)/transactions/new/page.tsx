@@ -12,8 +12,13 @@ import {
 import { Button } from "@/components/ui/button";
 import type { CreateTransactionReq } from "@/lib/api/contract";
 import { onboardingApi } from "@/lib/api/onboarding";
-import { invalidateAfterLedgerMutation, queryKeys } from "@/lib/api/query-keys";
+import {
+	invalidateAfterLedgerMutation,
+	queryKeys,
+	withOrgScope,
+} from "@/lib/api/query-keys";
 import { transactionsApi } from "@/lib/api/transactions";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import { useHomeState } from "@/lib/hooks/use-home-state";
 import {
 	findCurrency,
@@ -61,10 +66,13 @@ function NewTransactionPageContent() {
 			: undefined,
 	);
 
-	// 本位币（参考汇率的 base；完成首次设置后锁定）
+	// 本位币（参考汇率的 base；完成首次设置后锁定）。
+	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
+	const orgId = useActiveOrgId();
 	const statusQuery = useQuery({
-		queryKey: queryKeys.onboarding.status(),
+		queryKey: withOrgScope(orgId, queryKeys.onboarding.status()),
 		queryFn: () => onboardingApi.getStatus(),
+		enabled: orgId !== null,
 		retry: false, // 401 由 apiClient 统一跳登录，其余失败静默用默认值
 	});
 	const baseCurrency = statusQuery.data?.settings?.baseCurrency ?? null;
