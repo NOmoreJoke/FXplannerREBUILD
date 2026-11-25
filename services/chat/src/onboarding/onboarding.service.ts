@@ -14,7 +14,10 @@ import {
 	roundRateTo8,
 } from "@fxplanner-new/money";
 import { PrismaService } from "../prisma/prisma.service";
-import { lockOrgLedgerAccounts } from "../prisma/ledger-write-lock";
+import {
+	lockOrgLedgerAccounts,
+	upsertOrgAccountWithLegacyMerge,
+} from "../prisma/ledger-write-lock";
 import { RateService } from "../rate/rate.service";
 import type {
 	LatestRateGroupResponse,
@@ -22,16 +25,17 @@ import type {
 	LatestRateResponse,
 } from "../rate/rate.service";
 import { utc8DayStart } from "../transaction/transaction-calculator";
-import { AuditService } from "../audit/audit.service";
+import {
+	AuditService,
+	recordDeniedAuditBestEffort,
+} from "../audit/audit.service";
 import { PermissionDeniedException } from "../authorization/authorization.errors";
 import type {
 	ActorContext,
 	OrganizationRole,
 } from "../authorization/authorization.types";
-import {
-	compatReadWhere,
-	type ReadScope,
-} from "../authorization/organization-scope";
+import { resolveDefaultOrganizationCreatorUserId } from "../authorization/default-organization";
+import type { ReadScope } from "../authorization/organization-scope";
 import { can } from "../authorization/permission-policy";
 import { lockOrganizationForActor } from "../organization/default-organization";
 import {
@@ -507,11 +511,20 @@ export class OnboardingService {
 				);
 				await lockOrgLedgerAccounts(tx, actor.organizationId, codes);
 
-				// 锁内按 compatReadWhere(actor) 查重（不做部分成功）；并发兜底由唯一约束承担
+				const defaultOwnerUserId = await resolveDefaultOrganizationCreatorUserId(
+					tx,
+					actor.organizationId,
+				);
+				// 锁内按当前组织（含默认创建者遗留 NULL 行）查重（不做部分成功）；并发兜底由唯一约束承担
 				const existing = await tx.initialHolding.findMany({
 					where: {
-						...compatReadWhere(actor),
 						currencyCode: { in: codes },
+						OR: [
+							{ organizationId: actor.organizationId },
+							...(defaultOwnerUserId
+								? [{ organizationId: null, userId: defaultOwnerUserId }]
+								: []),
+						],
 					},
 					select: { currencyCode: true },
 				});
@@ -588,20 +601,6 @@ export class OnboardingService {
 			baseCurrency,
 			codes,
 		);
-
-		// 默认组织写入前按 COLLATE "C" 升序锁定可能存在的 legacy organizationId: null 账户行
-		if (actor.isDefaultOrganization) {
-			const sortedCodes = [...new Set(codes)].sort((a, b) =>
-				a < b ? -1 : a > b ? 1 : 0,
-			);
-			await tx.$queryRaw`
-				SELECT id FROM accounts
-				WHERE user_id = ${actor.userId}
-					AND organization_id IS NULL
-					AND currency_code = ANY(${sortedCodes}::text[])
-				ORDER BY currency_code COLLATE "C"
-				FOR UPDATE`;
-		}
 
 		const created: InitialHoldingCreatedDto[] = [];
 		for (const item of items) {
@@ -688,49 +687,24 @@ export class OnboardingService {
 				},
 			});
 
-			// 余额按组织（含默认组织兼容存量行）全部 CostLot remainingQty 汇总重算
-			const aggregated = await tx.costLot.aggregate({
-				_sum: { remainingQty: true },
-				where: {
-					currencyCode: code,
-					...compatReadWhere(actor),
-				},
-			});
-			const balance = new Prisma.Decimal(aggregated._sum.remainingQty ?? 0);
-			if (actor.isDefaultOrganization) {
-				const legacyAccount = await tx.account.findFirst({
-					where: {
-						userId: actor.userId,
-						organizationId: null,
-						currencyCode: code,
-					},
-					select: { id: true },
-				});
-				if (legacyAccount) {
-					await tx.account.update({
-						where: { id: legacyAccount.id },
-						data: {
+			// 收口默认创建者 legacy 账户/批次并重算组织账户余额；
+			// 若已有存量账户无对应批次（如测试夹具），保留合并前账户余额并累加本次持仓
+			await upsertOrgAccountWithLegacyMerge({
+				tx,
+				organizationId: actor.organizationId,
+				currencyCode: code,
+				actorUserId: actor.userId,
+				computeBalance: async ({ existingBalance }) => {
+					const aggregated = await tx.costLot.aggregate({
+						_sum: { remainingQty: true },
+						where: {
+							currencyCode: code,
 							organizationId: actor.organizationId,
-							createdById: actor.userId,
 						},
 					});
-				}
-			}
-			await tx.account.upsert({
-				where: {
-					organizationId_currencyCode: {
-						organizationId: actor.organizationId,
-						currencyCode: code,
-					},
+					const lotSum = new Prisma.Decimal(aggregated._sum.remainingQty ?? 0);
+					return Prisma.Decimal.max(lotSum, existingBalance.add(amount));
 				},
-				create: {
-					userId: actor.userId,
-					organizationId: actor.organizationId,
-					createdById: actor.userId,
-					currencyCode: code,
-					balance,
-				},
-				update: { balance },
 			});
 
 			created.push({
@@ -751,21 +725,12 @@ export class OnboardingService {
 		role: OrganizationRole,
 		requestId: string | null,
 	): Promise<void> {
-		try {
-			await this.auditService.recordStandalone({
-				organizationId: actor.organizationId,
-				actorUserId: actor.userId,
-				actorType: "USER",
-				action: "permission.denied.settings.update",
-				result: "DENIED",
-				requestId,
-				detail: { required: "settings.update", role },
-			});
-		} catch (error) {
-			this.logger.warn(
-				`DENIED 审计写入失败（不影响 403 返回）: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
+		await recordDeniedAuditBestEffort(this.auditService, this.logger, {
+			actor,
+			role,
+			required: "settings.update",
+			requestId,
+		});
 	}
 
 	/**

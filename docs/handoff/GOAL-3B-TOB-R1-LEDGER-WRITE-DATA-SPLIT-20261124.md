@@ -149,7 +149,7 @@
   3. **前端组织作用域纪律**：全部组织数据查询使用 `withOrgScope(orgId, ...)` + `enabled: orgId !== null`；跨模块失效走 `invalidateBusinessKey`；切组织后后续导航用 `mutateAsync().then(...)` 而不依赖已卸载组件的调用点 `onSuccess`（R3-I02）；外部中止流统一调 `abortActiveStream()`；会话重置唯一入口 `clients/chat-web/lib/auth/session-reset.ts`。
   4. **测试卫生与确定性并发**：新增用例必须**单用例独立可运行（支持 `-t` 过滤）**、测后不漏孤儿组织；并发竞争测试必须复用 `services/chat/test/helpers/postgres-lock-barrier.ts`（`runBehindAdvisoryLock` / `raceBehindAdvisoryLock`）做确定性断言，禁止 `sleep` / `skip` / 删断言。
 - **严格作用域边界（防大爆炸）**：
-  - **禁止提前执行 `MIG-E`/`MIG-F` 破坏性收紧**（`organizationId` 非空收紧、删 `UserSettings` 旧列与删 `User` 级联留给 `Goal #3C`）；
+  - **禁止提前执行 `MIG-E`/`MIG-F` 破坏性收紧**（`organizationId SET NOT NULL`、`User` `onDelete: Cascade` 解耦、删 `UserSettings` 旧列与删过渡部分唯一索引留给 `Goal #3C`；**W22 显式例外**：为支撑 W22/W24 多组织同币种独立建账与账本不撞 `P2002`，`20261125094500_tob_r1_mig_c_org_unique_indexes` 已在 W22 提前将 `Account`/`InitialHolding`/`Reminder` 唯一索引切至组织维度，并保留 `WHERE organization_id IS NULL` 部分唯一索引兼容存量写路径）；
   - **禁止提前实现 ToB R2 组织 Agent 业务工具与计划草稿**（W25 **只做** `AiConversation` 写/读/删全端点绑定 `organizationId` 隔离，工具留给 `Goal #4`）；
   - **静态护栏**：零手写影子 DTO（改 DTO 后必跑 `bun run --cwd clients/chat-web generate:api` 且双跑零 diff）；页面与业务组件零裸 `useEffect` 与定时器。
 
@@ -162,14 +162,17 @@
 - **目标**：解耦 `UserSettings`（个人 `locale`/`region`）与 `OrganizationSettings`（组织 `baseCurrency`/`prepPreference`/`reminderEnabled`/`ledgerStartedAt`），让多组织用户可为新建的第二个组织独立完成首次建账（关闭 Goal #3A §6.2 遗留），并顺手收口 Goal #2 延后项 ①（`OnboardingService` 组织级账本行锁）。
 - **可选顺手结构项（R3-N3）**：评估在本切片或 W26 迁移中为 `organizations` 增加可空 `created_by_id` 并回填，替代未来删除个人工作台时的隐式时间推断（若加列，同步更新 `resolveDefaultOrganizationId` 与 `organization-reconcile.ts` 保持单源）。
 - **改动文件**：
-  1. `services/chat/src/settings/`（`settings.controller.ts`、`settings.service.ts`、`dto/settings.dto.ts`）：
+  1. `services/chat/prisma/schema.prisma` 与 `services/chat/prisma/migrations/20261125094500_tob_r1_mig_c_org_unique_indexes/`（**W22 显式提前切换例外**）：
+     - 原属 `技术方案.md` `MIG-E` 的 `Account`/`InitialHolding`/`Reminder` 唯一索引提前在 W22 切至 `(organizationId, ...)`，并加建 `WHERE organization_id IS NULL` 过渡部分唯一索引及非唯一 `(user_id, ...)` 索引以保持存量/未迁移写路径兼容；
+     - 因 Prisma DMMF 移除 `Account` `userId_currencyCode` 复合唯一键，在 `usage.service.ts`、`correction.service.ts`（以及 W23 改写前的 `transaction.service.ts`）与 `test/helpers/plan-test-helper.ts` 中做 `userId_currencyCode` 机械兼容垫片（W24 彻底收口组织化写路径）。
+  2. `services/chat/src/settings/`（`settings.controller.ts`、`settings.service.ts`、`dto/settings.dto.ts`）：
      - 区分个人偏好（`locale`/`region`，无需 `settings.update` 权限，写 `UserSettings` upsert，兼容无个人设置行的受邀成员）与组织偏好（`prepPreference`/`reminderEnabled`，挂 `OrganizationContextGuard` + `PermissionGuard` + `@RequiresPermission("settings.update")`，写 `OrganizationSettings` + 同事务 `AuditLog`）；
      - 保持 `baseCurrency` 建账后只读锁死无任何更新通道。
-  2. `services/chat/src/onboarding/`（`onboarding.controller.ts`、`onboarding.service.ts`、`dto/onboarding.dto.ts`）：
+  3. `services/chat/src/onboarding/`（`onboarding.controller.ts`、`onboarding.service.ts`、`dto/onboarding.dto.ts`）：
      - `POST /onboarding/complete` 与 `POST /onboarding/initial-holdings` 挂载 `OrganizationContextGuard` + `PermissionGuard` + `@RequiresPermission("settings.update")`（Operator/Viewer 403）；
      - `saveConsents` 保持个人维度（`TermsConsent`）；`complete` 与 `initial-holdings` 在事务内先取组织级账本锁，再写入当前组织的 `OrganizationSettings` 与带 `{ organizationId: actor.organizationId, createdById: actor.userId }` 的 `Account`/`InitialHolding`/`CostLot`（并双写兼容 `userId` 至 Goal #3C），同事务写 `AuditLog`；
      - 多组织用户为未建账 Org B 调用 `complete` 不再被本人 `UserSettings` 阻塞报 409。
-  3. 执行 `bun run --cwd clients/chat-web generate:api`。
+  4. 执行 `bun run --cwd clients/chat-web generate:api`。
 - **必配测试**：`services/chat/test/api/settings.spec.ts`、`services/chat/test/api/onboarding.spec.ts`、`services/chat/test/integration/onboarding.spec.ts`（Org A 已建账不影响 Org B 独立建账；Viewer/Operator 建账与改组织设置 403；审计写入故障注入导致整单回滚；并发建账/补录锁竞争回归）。
 - **Commit**：`feat(ledger-write): migrate settings and onboarding to organization scope with tx audit` — `Verified: unit, api, integration, diff`
 

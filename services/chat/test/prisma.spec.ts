@@ -594,7 +594,7 @@ describe("数据库基础设施测试", () => {
 		});
 	});
 
-	describe("ToB R1 MIG-C 组织维度唯一索引与存量部分唯一索引", () => {
+	describe("ToB R1 组织维度唯一索引与过渡存量部分唯一索引（W22 提前切出 MIG-E 项）", () => {
 		const migCOrgIds: string[] = [];
 		const migCUserIds: string[] = [];
 

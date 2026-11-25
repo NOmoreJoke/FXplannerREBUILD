@@ -32,6 +32,7 @@ import {
 	RequiresPermission,
 } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
+import { extractRequestId } from "../authorization/request-id";
 import {
 	CompleteOnboardingDto,
 	InitialHoldingsResultDto,
@@ -127,12 +128,11 @@ export class OnboardingController {
 		@Body() dto: CompleteOnboardingDto,
 		@Req() request: Request,
 	) {
-		const rawRequestId = request.headers["x-request-id"];
-		const requestId =
-			typeof rawRequestId === "string" && rawRequestId.trim().length > 0
-				? rawRequestId.trim()
-				: null;
-		const data = await this.onboardingService.complete(actor, dto, requestId);
+		const data = await this.onboardingService.complete(
+			actor,
+			dto,
+			extractRequestId(request),
+		);
 		return {
 			success: true,
 			data,
@@ -167,15 +167,10 @@ export class OnboardingController {
 		@Body() dto: SaveInitialHoldingsDto,
 		@Req() request: Request,
 	) {
-		const rawRequestId = request.headers["x-request-id"];
-		const requestId =
-			typeof rawRequestId === "string" && rawRequestId.trim().length > 0
-				? rawRequestId.trim()
-				: null;
 		const data = await this.onboardingService.saveInitialHoldings(
 			actor,
 			dto,
-			requestId,
+			extractRequestId(request),
 		);
 		return { success: true, data, message: "初始持仓已入账" };
 	}

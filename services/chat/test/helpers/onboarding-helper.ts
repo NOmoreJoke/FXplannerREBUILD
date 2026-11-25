@@ -19,6 +19,7 @@ export async function ensureOnboarded(
 	userId: string,
 	baseCurrency = "CNY",
 	ledgerStartedAt: Date | null = null,
+	options: { legacyOnly?: boolean } = {},
 ): Promise<void> {
 	await prisma.userSettings.upsert({
 		where: { userId },
@@ -31,6 +32,7 @@ export async function ensureOnboarded(
 			ledgerStartedAt,
 		},
 	});
+	if (options.legacyOnly) return;
 	const defaultOrganizationId = await resolveDefaultOrganizationId(
 		prisma,
 		userId,

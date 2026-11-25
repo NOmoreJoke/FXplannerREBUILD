@@ -29,6 +29,7 @@ import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scop
 import { PermissionGuard } from "../authorization/guards/permission.guard";
 import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
+import { extractRequestId } from "../authorization/request-id";
 import {
 	PersonalSettingsViewDto,
 	SettingsErrorDto,
@@ -37,11 +38,6 @@ import {
 	UpdateSettingsDto,
 } from "./dto/update-settings.dto";
 import { SettingsService } from "./settings.service";
-
-function extractRequestId(request: Request): string | null {
-	const raw = request.headers["x-request-id"];
-	return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
-}
 
 /**
  * 个人与组织设置（ToB R1 W22 分离个人展示偏好与组织账本偏好）：

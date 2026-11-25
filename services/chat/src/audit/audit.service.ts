@@ -3,8 +3,14 @@ import {
 	HttpStatus,
 	Inject,
 	Injectable,
+	type Logger,
 } from "@nestjs/common";
 import type { Prisma } from "@prisma/client";
+import type {
+	ActorContext,
+	OrganizationRole,
+	Permission,
+} from "../authorization/authorization.types";
 import { PrismaService } from "../prisma/prisma.service";
 import { sanitizeAuditDetail } from "./audit-sanitizer";
 
@@ -188,5 +194,36 @@ export class AuditService {
 			pageSize,
 			total,
 		};
+	}
+}
+
+/**
+ * 尽力而为写入权限拒绝（DENIED）独立审计（N-11 共享辅助）：
+ * 仅用于 403 拒绝路径（如 Guard 拦截或事务锁内重读降权后回滚），审计库异常只告警不掩盖 403 返回。
+ */
+export async function recordDeniedAuditBestEffort(
+	auditService: Pick<AuditService, "recordStandalone">,
+	logger: Pick<Logger, "warn">,
+	params: {
+		actor: Pick<ActorContext, "organizationId" | "userId">;
+		role: OrganizationRole;
+		required: Permission;
+		requestId: string | null;
+	},
+): Promise<void> {
+	try {
+		await auditService.recordStandalone({
+			organizationId: params.actor.organizationId,
+			actorUserId: params.actor.userId,
+			actorType: "USER",
+			action: `permission.denied.${params.required}`,
+			result: "DENIED",
+			requestId: params.requestId,
+			detail: { required: params.required, role: params.role },
+		});
+	} catch (error) {
+		logger.warn(
+			`DENIED 审计写入失败（不影响 403 返回）: ${error instanceof Error ? error.message : String(error)}`,
+		);
 	}
 }

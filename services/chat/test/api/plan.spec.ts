@@ -17,7 +17,10 @@
  */
 import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { AuditService } from "../../src/audit/audit.service";
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
+import { runBehindAdvisoryLock } from "../helpers/postgres-lock-barrier";
 import {
 	bearer,
 	cleanupUser,
@@ -1550,4 +1553,640 @@ describe("PlanController（接口）—— M5 管理端点", () => {
 			gap: "12000.0000",
 		});
 	}, 20000);
+});
+
+describe("ToB R1 W23：Plan 写接口 Actor 化 + OPERATOR/VIEWER 矩阵 + 跨组织 404 + 锁内降权 + 审计回滚（支持 -t 独立运行）", () => {
+	let ctx: TestContext;
+	let app: INestApplication;
+	const scopedUserIds: string[] = [];
+	const scopedPlanIds: string[] = [];
+
+	beforeAll(async () => {
+		ctx = await createTestApp();
+		app = ctx.app;
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		await cleanupPlanData(ctx.prisma, scopedPlanIds.splice(0));
+		while (scopedUserIds.length > 0) {
+			const uid = scopedUserIds.pop()!;
+			await cleanupUser(ctx.prisma, uid);
+		}
+	});
+
+	afterAll(async () => {
+		await app?.close();
+	});
+
+	async function setupOrgWithMembers(label: string) {
+		const owner = await createTestUser(app, `plan-w23-owner-${label}`);
+		scopedUserIds.push(owner.userId);
+		await ensureOnboarded(ctx.prisma, owner.userId);
+		const orgId = (await resolveDefaultOrganizationId(ctx.prisma, owner.userId))!;
+
+		const finance = await createTestUser(app, `plan-w23-fin-${label}`);
+		scopedUserIds.push(finance.userId);
+		const operator = await createTestUser(app, `plan-w23-op-${label}`);
+		scopedUserIds.push(operator.userId);
+		const viewer = await createTestUser(app, `plan-w23-vw-${label}`);
+		scopedUserIds.push(viewer.userId);
+
+		await ctx.prisma.membership.createMany({
+			data: [
+				{ organizationId: orgId, userId: finance.userId, role: "FINANCE", status: "ACTIVE" },
+				{ organizationId: orgId, userId: operator.userId, role: "OPERATOR", status: "ACTIVE" },
+				{ organizationId: orgId, userId: viewer.userId, role: "VIEWER", status: "ACTIVE" },
+			],
+		});
+		return { owner, finance, operator, viewer, orgId };
+	}
+
+	it("W23-PLAN-1 OPERATOR 全生命周期写（create 201 / adjust 200 / cancel 200 / complete 200）+ 共享组织余额 + 同事务审计", async () => {
+		const { finance, operator, orgId } = await setupOrgWithMembers("operator-ok");
+
+		// Finance 写入共享账本 USD 1000
+		await request(app.getHttpServer())
+			.post("/api/transactions")
+			.set(bearer(finance.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send({
+				currencyCode: "USD",
+				principalAmount: "7200.00",
+				exchangeRate: "7.20000000",
+				quantity: "1000.00",
+				transactedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+			})
+			.expect(201);
+
+		// Operator 消费组织账户余额创建计划（201）
+		const created = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.set("X-Request-Id", "req-op-create")
+			.send(planBody({ targetAmount: "5000", allocatedAmount: "600" }))
+			.expect(201);
+		const planId1 = created.body.data.id as string;
+		scopedPlanIds.push(planId1);
+
+		const planRow1 = await ctx.prisma.plan.findUniqueOrThrow({ where: { id: planId1 } });
+		expect(planRow1.organizationId).toBe(orgId);
+		expect(planRow1.createdById).toBe(operator.userId);
+
+		// Operator 修改计划（200）
+		const adjusted = await request(app.getHttpServer())
+			.patch(`/api/plans/${planId1}`)
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.set("X-Request-Id", "req-op-adjust")
+			.send({
+				newAllocAmount: "800",
+				expectedUpdatedAt: planRow1.updatedAt.toISOString(),
+			})
+			.expect(200);
+		expect(adjusted.body.data.allocatedAmount).toBe("800.0000");
+
+		const changeLog = await ctx.prisma.planChangeLog.findFirstOrThrow({
+			where: { planId: planId1 },
+		});
+		expect(changeLog.organizationId).toBe(orgId);
+		expect(changeLog.actorUserId).toBe(operator.userId);
+
+		// Operator 取消计划（200）
+		await request(app.getHttpServer())
+			.post(`/api/plans/${planId1}/cancel`)
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.set("X-Request-Id", "req-op-cancel")
+			.expect(200);
+
+		// 再建一笔达标计划并由 Operator 完成（200）
+		const readyPlanId = await seedPlanWithAllocation(ctx.prisma, finance.userId, {
+			targetAmount: "200",
+			allocatedAmount: "200",
+			usedAmount: "200",
+		});
+		await ctx.prisma.plan.update({
+			where: { id: readyPlanId },
+			data: { organizationId: orgId, createdById: finance.userId },
+		});
+		scopedPlanIds.push(readyPlanId);
+
+		await request(app.getHttpServer())
+			.post(`/api/plans/${readyPlanId}/complete`)
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.set("X-Request-Id", "req-op-complete")
+			.expect(200);
+
+		const audits = await ctx.prisma.auditLog.findMany({
+			where: {
+				organizationId: orgId,
+				actorUserId: operator.userId,
+				result: "SUCCESS",
+			},
+			orderBy: { createdAt: "asc" },
+		});
+		expect(audits.map((a) => a.action)).toEqual([
+			"plan.create",
+			"plan.adjust",
+			"plan.cancel",
+			"plan.complete",
+		]);
+		expect(audits.map((a) => a.requestId)).toEqual([
+			"req-op-create",
+			"req-op-adjust",
+			"req-op-cancel",
+			"req-op-complete",
+		]);
+	});
+
+	it("W23-PLAN-2 VIEWER 全写路径（create / adjust / complete / cancel）→ 403 PERMISSION_DENIED + DENIED 审计 + 零变更", async () => {
+		const { owner, viewer, orgId } = await setupOrgWithMembers("viewer-deny");
+		const created = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(bearer(owner.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send(planBody({ targetAmount: "1000", allocatedAmount: "0" }))
+			.expect(201);
+		const planId = created.body.data.id as string;
+		scopedPlanIds.push(planId);
+		const before = await ctx.prisma.plan.findUniqueOrThrow({ where: { id: planId } });
+
+		const rCreate = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(bearer(viewer.accessToken))
+			.set("X-Organization-Id", orgId)
+			.set("X-Request-Id", "req-vw-create")
+			.send(planBody({ targetAmount: "1000" }))
+			.expect(403);
+		expect(rCreate.body.code).toBe("PERMISSION_DENIED");
+
+		const rAdjust = await request(app.getHttpServer())
+			.patch(`/api/plans/${planId}`)
+			.set(bearer(viewer.accessToken))
+			.set("X-Organization-Id", orgId)
+			.set("X-Request-Id", "req-vw-adjust")
+			.send({
+				newTargetAmount: "2000",
+				expectedUpdatedAt: before.updatedAt.toISOString(),
+			})
+			.expect(403);
+		expect(rAdjust.body.code).toBe("PERMISSION_DENIED");
+
+		const rComplete = await request(app.getHttpServer())
+			.post(`/api/plans/${planId}/complete`)
+			.set(bearer(viewer.accessToken))
+			.set("X-Organization-Id", orgId)
+			.set("X-Request-Id", "req-vw-complete")
+			.expect(403);
+		expect(rComplete.body.code).toBe("PERMISSION_DENIED");
+
+		const rCancel = await request(app.getHttpServer())
+			.post(`/api/plans/${planId}/cancel`)
+			.set(bearer(viewer.accessToken))
+			.set("X-Organization-Id", orgId)
+			.set("X-Request-Id", "req-vw-cancel")
+			.expect(403);
+		expect(rCancel.body.code).toBe("PERMISSION_DENIED");
+
+		const after = await ctx.prisma.plan.findUniqueOrThrow({ where: { id: planId } });
+		expect(after.status).toBe("ACTIVE");
+		expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
+		expect(await ctx.prisma.plan.count({ where: { organizationId: orgId } })).toBe(1);
+
+		const deniedAudits = await ctx.prisma.auditLog.findMany({
+			where: {
+				organizationId: orgId,
+				actorUserId: viewer.userId,
+				result: "DENIED",
+			},
+		});
+		expect(deniedAudits).toHaveLength(4);
+	});
+
+	it("W23-PLAN-3 跨组织写操作统一 404 PLAN_NOT_FOUND（adjust / complete / cancel 均不泄露且零改动）", async () => {
+		const user = await createTestUser(app, "plan-w23-cross");
+		scopedUserIds.push(user.userId);
+		await ensureOnboarded(ctx.prisma, user.userId);
+		const orgAId = (await resolveDefaultOrganizationId(ctx.prisma, user.userId))!;
+		const orgBRes = await request(app.getHttpServer())
+			.post("/api/organizations")
+			.set(bearer(user.accessToken))
+			.send({ name: "Plan 跨组织 B" })
+			.expect(201);
+		const orgBId = orgBRes.body.data.id as string;
+		await ctx.prisma.organizationSettings.create({
+			data: {
+				organizationId: orgBId,
+				baseCurrency: "CNY",
+				prepPreference: "balanced",
+				reminderEnabled: true,
+			},
+		});
+
+		const created = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(bearer(user.accessToken))
+			.set("X-Organization-Id", orgAId)
+			.send(planBody({ targetAmount: "1000" }))
+			.expect(201);
+		const planInA = created.body.data.id as string;
+		scopedPlanIds.push(planInA);
+		const before = await ctx.prisma.plan.findUniqueOrThrow({ where: { id: planInA } });
+
+		const patchCross = await request(app.getHttpServer())
+			.patch(`/api/plans/${planInA}`)
+			.set(bearer(user.accessToken))
+			.set("X-Organization-Id", orgBId)
+			.send({
+				newTargetAmount: "2000",
+				expectedUpdatedAt: before.updatedAt.toISOString(),
+			})
+			.expect(404);
+		expect(patchCross.body.code).toBe("PLAN_NOT_FOUND");
+
+		const completeCross = await request(app.getHttpServer())
+			.post(`/api/plans/${planInA}/complete`)
+			.set(bearer(user.accessToken))
+			.set("X-Organization-Id", orgBId)
+			.expect(404);
+		expect(completeCross.body.code).toBe("PLAN_NOT_FOUND");
+
+		const cancelCross = await request(app.getHttpServer())
+			.post(`/api/plans/${planInA}/cancel`)
+			.set(bearer(user.accessToken))
+			.set("X-Organization-Id", orgBId)
+			.expect(404);
+		expect(cancelCross.body.code).toBe("PLAN_NOT_FOUND");
+
+		const after = await ctx.prisma.plan.findUniqueOrThrow({ where: { id: planInA } });
+		expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
+		expect(after.status).toBe("ACTIVE");
+	});
+
+	it("W23-PLAN-4 锁等期间降权（OPERATOR → VIEWER）：create 与 adjust 均 403 + DENIED 审计 + 零写入", async () => {
+		const { owner, operator, orgId } = await setupOrgWithMembers("demote");
+		const created = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(bearer(owner.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send(planBody({ targetAmount: "1000" }))
+			.expect(201);
+		const existingId = created.body.data.id as string;
+		scopedPlanIds.push(existingId);
+		const existingRow = await ctx.prisma.plan.findUniqueOrThrow({
+			where: { id: existingId },
+		});
+
+		// 1. POST /api/plans (create) 锁等降权（N-3）
+		const reqCreateId = `req-plan-demote-create-${Date.now()}`;
+		const resCreate = await runBehindAdvisoryLock(
+			ctx.prisma,
+			`membership:${orgId}`,
+			() =>
+				request(app.getHttpServer())
+					.post("/api/plans")
+					.set(bearer(operator.accessToken))
+					.set("X-Organization-Id", orgId)
+					.set("X-Request-Id", reqCreateId)
+					.send(planBody({ targetAmount: "1500" })),
+			async () => {
+				await ctx.prisma.membership.update({
+					where: {
+						organizationId_userId: {
+							organizationId: orgId,
+							userId: operator.userId,
+						},
+					},
+					data: { role: "VIEWER" },
+				});
+			},
+		);
+		expect(resCreate.status).toBe(403);
+		expect(resCreate.body.code).toBe("PERMISSION_DENIED");
+		expect(await ctx.prisma.plan.count({ where: { organizationId: orgId } })).toBe(1);
+		expect(
+			await ctx.prisma.auditLog.findFirst({
+				where: {
+					organizationId: orgId,
+					actorUserId: operator.userId,
+					action: "permission.denied.plan.create",
+					result: "DENIED",
+					requestId: reqCreateId,
+				},
+			}),
+		).not.toBeNull();
+
+		// 恢复角色为 OPERATOR 后再测 PATCH /api/plans/:id (adjust) 锁等降权
+		await ctx.prisma.membership.update({
+			where: {
+				organizationId_userId: {
+					organizationId: orgId,
+					userId: operator.userId,
+				},
+			},
+			data: { role: "OPERATOR" },
+		});
+
+		const reqId = `req-plan-demote-${Date.now()}`;
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			`membership:${orgId}`,
+			() =>
+				request(app.getHttpServer())
+					.patch(`/api/plans/${existingId}`)
+					.set(bearer(operator.accessToken))
+					.set("X-Organization-Id", orgId)
+					.set("X-Request-Id", reqId)
+					.send({
+						newTargetAmount: "2000",
+						expectedUpdatedAt: existingRow.updatedAt.toISOString(),
+					}),
+			async () => {
+				await ctx.prisma.membership.update({
+					where: {
+						organizationId_userId: {
+							organizationId: orgId,
+							userId: operator.userId,
+						},
+					},
+					data: { role: "VIEWER" },
+				});
+			},
+		);
+
+		expect(res.status).toBe(403);
+		expect(res.body.code).toBe("PERMISSION_DENIED");
+		const afterRow = await ctx.prisma.plan.findUniqueOrThrow({
+			where: { id: existingId },
+		});
+		expect(afterRow.targetAmount.toFixed(4)).toBe("1000.0000");
+		expect(
+			await ctx.prisma.planChangeLog.count({ where: { planId: existingId } }),
+		).toBe(0);
+		expect(
+			await ctx.prisma.auditLog.findFirst({
+				where: {
+					organizationId: orgId,
+					actorUserId: operator.userId,
+					action: "permission.denied.plan.adjust",
+					result: "DENIED",
+					requestId: reqId,
+				},
+			}),
+		).not.toBeNull();
+	});
+
+	it("W23-PLAN-5 AuditService.recordInTx 故障注入：create / adjust / complete / cancel 均整单回滚", async () => {
+		const { operator, orgId } = await setupOrgWithMembers("audit-fault");
+
+		vi.spyOn(app.get(AuditService), "recordInTx").mockRejectedValueOnce(
+			new Error("injected plan create audit fault"),
+		);
+		await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send(planBody({ targetAmount: "1000" }))
+			.expect(500);
+		expect(
+			await ctx.prisma.plan.count({ where: { organizationId: orgId } }),
+		).toBe(0);
+
+		const ok = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send(planBody({ targetAmount: "1000" }))
+			.expect(201);
+		const planId = ok.body.data.id as string;
+		scopedPlanIds.push(planId);
+		const beforeAdjust = await ctx.prisma.plan.findUniqueOrThrow({
+			where: { id: planId },
+		});
+
+		// adjust 审计故障注入整单回滚
+		vi.spyOn(app.get(AuditService), "recordInTx").mockRejectedValueOnce(
+			new Error("injected plan adjust audit fault"),
+		);
+		await request(app.getHttpServer())
+			.patch(`/api/plans/${planId}`)
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send({
+				newTargetAmount: "1500",
+				expectedUpdatedAt: beforeAdjust.updatedAt.toISOString(),
+			})
+			.expect(500);
+		const afterAdjustFault = await ctx.prisma.plan.findUniqueOrThrow({
+			where: { id: planId },
+		});
+		expect(afterAdjustFault.targetAmount.toFixed(4)).toBe("1000.0000");
+		expect(
+			await ctx.prisma.planChangeLog.count({ where: { planId } }),
+		).toBe(0);
+
+		// complete 审计故障注入整单回滚
+		const readyPlanId = await seedPlanWithAllocation(ctx.prisma, operator.userId, {
+			targetAmount: "200",
+			allocatedAmount: "200",
+			usedAmount: "200",
+		});
+		await ctx.prisma.plan.update({
+			where: { id: readyPlanId },
+			data: { organizationId: orgId, createdById: operator.userId },
+		});
+		scopedPlanIds.push(readyPlanId);
+		vi.spyOn(app.get(AuditService), "recordInTx").mockRejectedValueOnce(
+			new Error("injected plan complete audit fault"),
+		);
+		await request(app.getHttpServer())
+			.post(`/api/plans/${readyPlanId}/complete`)
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.expect(500);
+		const afterCompleteFault = await ctx.prisma.plan.findUniqueOrThrow({
+			where: { id: readyPlanId },
+		});
+		expect(afterCompleteFault.status).toBe("ACTIVE");
+		expect(
+			await ctx.prisma.planChangeLog.count({ where: { planId: readyPlanId } }),
+		).toBe(0);
+
+		vi.spyOn(app.get(AuditService), "recordInTx").mockRejectedValueOnce(
+			new Error("injected plan cancel audit fault"),
+		);
+		await request(app.getHttpServer())
+			.post(`/api/plans/${planId}/cancel`)
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.expect(500);
+
+		const afterRow = await ctx.prisma.plan.findUniqueOrThrow({
+			where: { id: planId },
+		});
+		expect(afterRow.status).toBe("ACTIVE");
+		expect(
+			await ctx.prisma.planChangeLog.count({ where: { planId } }),
+		).toBe(0);
+	});
+
+	it("W23-PLAN-6（N-8）存量 legacy Plan（organizationId=null）：受邀成员改之 404，Owner 修改同步收口 organizationId 与 createdById", async () => {
+		const { owner, operator, orgId } = await setupOrgWithMembers("legacy-adopt");
+		const legacyPlanId = await seedPlanWithAllocation(ctx.prisma, owner.userId, {
+			targetAmount: "500",
+			allocatedAmount: "0",
+		});
+		scopedPlanIds.push(legacyPlanId);
+		const before = await ctx.prisma.plan.findUniqueOrThrow({
+			where: { id: legacyPlanId },
+		});
+		expect(before.organizationId).toBeNull();
+		expect(before.createdById).toBeNull();
+
+		// 受邀 OPERATOR 无权触碰 Owner 尚未迁入的 legacy NULL 计划 → 404 PLAN_NOT_FOUND
+		const memberAttempt = await request(app.getHttpServer())
+			.patch(`/api/plans/${legacyPlanId}`)
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send({
+				newTargetAmount: "600",
+				expectedUpdatedAt: before.updatedAt.toISOString(),
+			})
+			.expect(404);
+		expect(memberAttempt.body.code).toBe("PLAN_NOT_FOUND");
+
+		// Owner 在默认组织修改该 legacy 计划 → 200 并同时写入 organizationId + createdById
+		await request(app.getHttpServer())
+			.patch(`/api/plans/${legacyPlanId}`)
+			.set(bearer(owner.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send({
+				newTargetAmount: "700",
+				expectedUpdatedAt: before.updatedAt.toISOString(),
+			})
+			.expect(200);
+
+		const adopted = await ctx.prisma.plan.findUniqueOrThrow({
+			where: { id: legacyPlanId },
+		});
+		expect(adopted.organizationId).toBe(orgId);
+		expect(adopted.createdById).toBe(owner.userId);
+		expect(adopted.targetAmount.toFixed(4)).toBe("700.0000");
+	});
+
+	it("W23-PLAN-7（R2-I1）计划占用对称性：Owner 存量 legacy 计划(80)对受邀 OPERATOR 计入占用，禁止超配至 180", async () => {
+		const { owner, operator, orgId } = await setupOrgWithMembers("r2-i1-symmetry");
+		// 构造 Owner 存量 legacy (organizationId: null) USD 账户(100) + ACTIVE 计划占用(80)
+		await ensureAccount(ctx.prisma, owner.userId, "USD", "100");
+		const legacyPlanId = await seedPlanWithAllocation(ctx.prisma, owner.userId, {
+			targetCurrency: "USD",
+			targetAmount: "500",
+			allocatedAmount: "80",
+			usedAmount: "0",
+		});
+		scopedPlanIds.push(legacyPlanId);
+
+		// 1. 尚在 legacy 状态时，OPERATOR 尝试超额分配 100 → 事务内合并账户并计入 Owner 80 占用，409 拦截
+		const firstAttempt = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send(planBody({ targetCurrency: "USD", targetAmount: "100", allocatedAmount: "100" }))
+			.expect(409);
+		expect(firstAttempt.body.code).toBe("INSUFFICIENT_ALLOCATABLE_BALANCE");
+		expect(firstAttempt.body.data.allocatableBalance).toBe("20.0000");
+
+		// 2. OPERATOR 建一笔 0 分配计划，合法触发组织账户升级（Owner legacy Plan 仍保持 null）
+		const zeroAllocRes = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send(planBody({ targetCurrency: "USD", targetAmount: "100", allocatedAmount: "0" }))
+			.expect(201);
+		const zeroPlanId = zeroAllocRes.body.data.id as string;
+		scopedPlanIds.push(zeroPlanId);
+
+		// 3. 账户已升级为组织行后：OPERATOR 的 schedule-preview / adjust-preview / GET accounts / create
+		//    均须计入 Owner 的 legacy Plan(80)，仅剩余 20.0000 可分配
+		const preview = await request(app.getHttpServer())
+			.post("/api/plans/schedule-preview")
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send(planBody({ targetCurrency: "USD", targetAmount: "100" }))
+			.expect(200);
+		expect(preview.body.data.caps).toEqual({
+			allocatableBalance: "20.0000",
+			maxAllocatable: "20.0000",
+		});
+
+		const adjustPreview = await request(app.getHttpServer())
+			.post(`/api/plans/${zeroPlanId}/adjust-preview`)
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send({ newAllocAmount: "20" })
+			.expect(200);
+		expect(adjustPreview.body.data.caps.unallocatedBalance).toBe("20.0000");
+
+		const accountsBefore = await request(app.getHttpServer())
+			.get("/api/accounts")
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.expect(200);
+		const usdBefore = accountsBefore.body.data.accounts.find(
+			(a: { currencyCode: string }) => a.currencyCode === "USD",
+		);
+		expect(usdBefore).toEqual({
+			currencyCode: "USD",
+			balance: "100.0000",
+			allocatedAmount: "80.0000",
+			unallocatedAmount: "20.0000",
+		});
+
+		const overAlloc = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send(planBody({ targetCurrency: "USD", targetAmount: "100", allocatedAmount: "100" }))
+			.expect(409);
+		expect(overAlloc.body.code).toBe("INSUFFICIENT_ALLOCATABLE_BALANCE");
+		expect(overAlloc.body.data.allocatableBalance).toBe("20.0000");
+
+		// 4. OPERATOR 分配剩余 20.0000 成功（201），Owner 与 Member 账户视图完全一致
+		const okRes = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(bearer(operator.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send(planBody({ targetCurrency: "USD", targetAmount: "100", allocatedAmount: "20" }))
+			.expect(201);
+		scopedPlanIds.push(okRes.body.data.id as string);
+
+		const [ownerAccounts, memberAccounts] = await Promise.all([
+			request(app.getHttpServer())
+				.get("/api/accounts")
+				.set(bearer(owner.accessToken))
+				.set("X-Organization-Id", orgId)
+				.expect(200),
+			request(app.getHttpServer())
+				.get("/api/accounts")
+				.set(bearer(operator.accessToken))
+				.set("X-Organization-Id", orgId)
+				.expect(200),
+		]);
+		const ownerUsd = ownerAccounts.body.data.accounts.find(
+			(a: { currencyCode: string }) => a.currencyCode === "USD",
+		);
+		const memberUsd = memberAccounts.body.data.accounts.find(
+			(a: { currencyCode: string }) => a.currencyCode === "USD",
+		);
+		expect(ownerUsd).toEqual({
+			currencyCode: "USD",
+			balance: "100.0000",
+			allocatedAmount: "100.0000",
+			unallocatedAmount: "0.0000",
+		});
+		expect(memberUsd).toEqual(ownerUsd);
+	});
 });

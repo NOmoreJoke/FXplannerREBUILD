@@ -283,7 +283,10 @@ model TermsConsent {
 }
 
 /// 按币种虚拟账户（同币种单账户；余额 0 保留不删）
-/// MIG-C：唯一约束切换为 (organizationId, currencyCode)，保留 (userId, currencyCode) 普通索引及 legacy 部分唯一索引
+/// 唯一约束按 (organizationId, currencyCode) 收口：原属技术方案 MIG-E 项，在 Goal #3B W22
+/// （20261125094500_tob_r1_mig_c_org_unique_indexes）有意提前切换并保留
+/// accounts_legacy_user_currency_uidx（WHERE organization_id IS NULL）以支持多组织同币种
+/// 记账；organization_id SET NOT NULL、User 级联解绑与删过渡索引留待 Goal #3C W30（MIG-E）。
 model Account {
   id            String   @id @default(cuid())
   userId        String   @map("user_id")
@@ -329,7 +332,11 @@ model Transaction {
 }
 
 /// 初始持仓记录（onboarding-rework 技术方案 §3.2：每币种仅一笔；rate 采用价
-/// 8 位小数，rawRate 为来源原值；CostLot.sourceId 指向本表，与 PURCHASE→Transaction 同构）
+/// 8 位小数，rawRate 为来源原值；CostLot.sourceId 指向本表，与 PURCHASE→Transaction 同构）。
+/// 唯一约束按 (organizationId, currencyCode) 收口：原属 MIG-E 项，在 Goal #3B W22
+/// （20261125094500_tob_r1_mig_c_org_unique_indexes）提前切换并保留
+/// initial_holdings_legacy_user_currency_uidx（WHERE organization_id IS NULL）；
+/// NOT NULL / User 级联解绑与删过渡索引留待 Goal #3C W30（MIG-E）。
 model InitialHolding {
   id             String   @id @default(cuid())
   userId         String   @map("user_id")
@@ -516,7 +523,11 @@ model Correction {
   @@map("corrections")
 }
 
-/// 站内提醒（同计划同日合并防打扰：userId + dedupKey + scheduledFor 唯一）
+/// 站内提醒（同计划同日合并防打扰：organizationId + dedupKey + scheduledFor 唯一）。
+/// 唯一约束按组织维度收口：原属 MIG-E 项，在 Goal #3B W22
+/// （20261125094500_tob_r1_mig_c_org_unique_indexes）提前切换并保留
+/// reminders_legacy_user_dedup_scheduled_uidx（WHERE organization_id IS NULL）；
+/// NOT NULL / User 级联解绑与删过渡索引留待 Goal #3C W30（MIG-E）。
 model Reminder {
   id             String         @id @default(cuid())
   userId         String         @map("user_id")

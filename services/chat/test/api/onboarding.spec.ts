@@ -14,6 +14,7 @@ import {
 import request from "supertest";
 import { AuditService } from "../../src/audit/audit.service";
 import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
+import { ensureAccount } from "../helpers/plan-test-helper";
 import { runBehindAdvisoryLock } from "../helpers/postgres-lock-barrier";
 import {
 	RATE_PROVIDER_TIMEOUT_TOKEN,
@@ -1239,6 +1240,89 @@ describe("OnboardingController（e2e）", () => {
 			expect(orgASettings.baseCurrency).toBe("HKD");
 			expect(orgBSettings.baseCurrency).toBe("USD");
 			expect(personal.baseCurrency).toBe("HKD");
+		});
+
+		it("I-2 回归：Owner 存量 legacy USD(50) → 受邀 FINANCE 买入 USD(30) → Owner 补录初始持仓 USD(20) 201 且单行余额 100.0000 双方视图一致", async () => {
+			await seedRate("CNY", "USD", "7.2000");
+			const owner = await createTestUser(app, "onb-i2-owner");
+			scopedUserIds.push(owner.userId);
+			const orgId = (await resolveDefaultOrganizationId(ctx.prisma, owner.userId))!;
+			const finance = await createTestUser(app, "onb-i2-finance");
+			scopedUserIds.push(finance.userId);
+			await ctx.prisma.membership.create({
+				data: {
+					organizationId: orgId,
+					userId: finance.userId,
+					role: "FINANCE",
+					status: "ACTIVE",
+				},
+			});
+
+			await request(app.getHttpServer())
+				.post("/api/onboarding/consents")
+				.set(bearer(owner.accessToken))
+				.send({ age18Confirmed: true, termsConfirmed: true })
+				.expect(201);
+			await request(app.getHttpServer())
+				.post("/api/onboarding/complete")
+				.set(bearer(owner.accessToken))
+				.set("X-Organization-Id", orgId)
+				.send({ ...wizard, baseCurrency: "CNY" })
+				.expect(201);
+			// 清除当日起点限制以便用昨日日期造交易，或用今日时间
+			await ensureAccount(ctx.prisma, owner.userId, "USD", "50");
+
+			// 受邀 FINANCE 买入 USD 30（使用当天时间，不早于 utc8DayStart）
+			await request(app.getHttpServer())
+				.post("/api/transactions")
+				.set(bearer(finance.accessToken))
+				.set("X-Organization-Id", orgId)
+				.send({
+					currencyCode: "USD",
+					principalAmount: "216.00",
+					exchangeRate: "7.20000000",
+					quantity: "30.00",
+					transactedAt: new Date().toISOString(),
+				})
+				.expect(201);
+
+			// Owner 再补录 USD 20 初始持仓：必须 201（不得 500 P2002），合并后余额 = 50 + 30 + 20 = 100
+			await request(app.getHttpServer())
+				.post("/api/onboarding/initial-holdings")
+				.set(bearer(owner.accessToken))
+				.set("X-Organization-Id", orgId)
+				.send({ holdings: [{ currencyCode: "USD", amount: "20.00" }] })
+				.expect(201);
+
+			const orgAccounts = await ctx.prisma.account.findMany({
+				where: { organizationId: orgId, currencyCode: "USD" },
+			});
+			expect(orgAccounts).toHaveLength(1);
+			expect(orgAccounts[0].balance.toFixed(4)).toBe("100.0000");
+
+			const legacyRemaining = await ctx.prisma.account.count({
+				where: {
+					userId: owner.userId,
+					organizationId: null,
+					currencyCode: "USD",
+				},
+			});
+			expect(legacyRemaining).toBe(0);
+
+			const [ownerView, memberView] = await Promise.all([
+				request(app.getHttpServer())
+					.get("/api/accounts/USD")
+					.set(bearer(owner.accessToken))
+					.set("X-Organization-Id", orgId)
+					.expect(200),
+				request(app.getHttpServer())
+					.get("/api/accounts/USD")
+					.set(bearer(finance.accessToken))
+					.set("X-Organization-Id", orgId)
+					.expect(200),
+			]);
+			expect(ownerView.body.data.balance).toBe("100.0000");
+			expect(memberView.body.data.balance).toBe("100.0000");
 		});
 	});
 });

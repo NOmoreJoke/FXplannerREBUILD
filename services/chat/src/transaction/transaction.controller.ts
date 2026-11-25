@@ -6,6 +6,7 @@ import {
 	Inject,
 	Param,
 	Post,
+	Req,
 	UseGuards,
 } from "@nestjs/common";
 import {
@@ -14,12 +15,14 @@ import {
 	ApiBody,
 	ApiCreatedResponse,
 	ApiExtraModels,
+	ApiForbiddenResponse,
 	ApiNotFoundResponse,
 	ApiOperation,
 	ApiResponse,
 	ApiTags,
 } from "@nestjs/swagger";
 import type { User } from "@prisma/client";
+import type { Request } from "express";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
@@ -27,6 +30,7 @@ import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scop
 import { PermissionGuard } from "../authorization/guards/permission.guard";
 import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
+import { extractRequestId } from "../authorization/request-id";
 import {
 	CreateTransactionDto,
 	TransactionDto,
@@ -53,10 +57,12 @@ export class TransactionController {
 	) {}
 
 	@Post()
+	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@RequiresPermission("transaction.create")
 	@ApiOperation({
 		summary: "创建买入记录（事务）",
 		description:
-			"两种填法三值同送（本金/汇率/到账），服务端做双向自洽校验（receivedAmountOf(p,r)==q 或 impliedRate(p,q)==r 满足其一）。事务内依次执行：关联计划校验（存在/本人 404 PLAN_NOT_FOUND、币种一致 400 PLAN_CURRENCY_MISMATCH，仅标记不触发分配）→ 账户 upsert 自动建户 + 余额原子累加 → 插入交易记录（version=1、rateSource=MANUAL）；任一失败全部回滚。手续费缺省 = 未知（null，≠ 0）；\"0\" = 无手续费。",
+			"两种填法三值同送（本金/汇率/到账），服务端做双向自洽校验（receivedAmountOf(p,r)==q 或 impliedRate(p,q)==r 满足其一）。事务内依次执行：锁组织与复验 transaction.create 权限 → 解析组织偏好与校验交易日期 → 锁组织账本账户 → 关联计划校验（同组织归属 404 PLAN_NOT_FOUND、币种一致 400 PLAN_CURRENCY_MISMATCH，仅标记不触发分配）→ 组织账户 upsert 自动建户 + 余额原子累加 → 插入交易记录（version=1、rateSource=MANUAL）→ 补写成本批次 → 同事务写入审计日志；任一失败全部回滚。手续费缺省 = 未知（null，≠ 0）；\"0\" = 无手续费。",
 	})
 	@ApiBody({ type: CreateTransactionDto })
 	@ApiCreatedResponse({
@@ -74,15 +80,24 @@ export class TransactionController {
 			"参数非法（INVALID_TRANSACTION_PARAMS，含三值不自洽、币种/金额/日期校验失败）或到账金额正数舍 0（ROUND_TO_ZERO）、计划币种不匹配（PLAN_CURRENCY_MISMATCH）",
 		type: TransactionErrorDto,
 	})
+	@ApiForbiddenResponse({
+		description: "无 transaction.create 权限（PERMISSION_DENIED，如 OPERATOR/VIEWER）",
+		type: TransactionErrorDto,
+	})
 	@ApiNotFoundResponse({
-		description: "关联计划不存在或不属于本人（PLAN_NOT_FOUND）",
+		description: "关联计划不存在或不属于当前组织（PLAN_NOT_FOUND）",
 		type: TransactionErrorDto,
 	})
 	async create(
-		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
 		@Body() dto: CreateTransactionDto,
+		@Req() request: Request,
 	) {
-		const data = await this.transactionService.create(user.id, dto);
+		const data = await this.transactionService.create(
+			actor,
+			dto,
+			extractRequestId(request),
+		);
 		return { success: true, data, message: "买入记录创建成功" };
 	}
 

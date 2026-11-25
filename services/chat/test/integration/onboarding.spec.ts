@@ -84,7 +84,7 @@ describe("Onboarding 集成：登录 → 设置 → 锁定 → 重复设置被�
 
 		expect(done.body.data.settings.baseCurrency).toBe("CNY");
 
-		// 事务证据：UserSettings 唯一行，ledgerStartedAt = 完成时刻
+		// 事务证据：UserSettings 唯一行，ledgerStartedAt = 完成时刻 + 同事务审计
 		const settings = await ctx.prisma.userSettings.findUnique({
 			where: { userId: user.userId },
 		});
@@ -93,6 +93,16 @@ describe("Onboarding 集成：登录 → 设置 → 锁定 → 重复设置被�
 		expect(done.body.data.ledgerStartedAt).toBe(
 			settings?.ledgerStartedAt?.toISOString(),
 		);
+		const defaultOrgId = (await resolveDefaultOrganizationId(ctx.prisma, user.userId))!;
+		const completeAudit = await ctx.prisma.auditLog.findFirst({
+			where: {
+				organizationId: defaultOrgId,
+				actorUserId: user.userId,
+				action: "onboarding.complete",
+				result: "SUCCESS",
+			},
+		});
+		expect(completeAudit).not.toBeNull();
 	});
 
 	it("锁定：本位币设置完成后重复提交被拒且数据不被覆盖", async () => {
@@ -414,6 +424,16 @@ describe("Onboarding 集成：登录 → 设置 → 锁定 → 重复设置被�
 					where: { organizationId: orgId },
 				}),
 			).toBe(0);
+			expect(
+				await ctx.prisma.costLot.count({
+					where: { organizationId: orgId },
+				}),
+			).toBe(0);
+			expect(
+				await ctx.prisma.auditLog.count({
+					where: { organizationId: orgId, action: "onboarding.initial_holdings" },
+				}),
+			).toBe(0);
 		});
 
 		it("反序建账集成：先建非默认 Org B 不阻塞默认 Org A 独立建账且本位币隔离", async () => {
@@ -467,6 +487,16 @@ describe("Onboarding 集成：登录 → 设置 → 锁定 → 重复设置被�
 			]);
 			expect(setA.baseCurrency).toBe("CNY");
 			expect(setB.baseCurrency).toBe("USD");
+			expect(
+				await ctx.prisma.auditLog.count({
+					where: { organizationId: orgAId, action: "onboarding.complete", result: "SUCCESS" },
+				}),
+			).toBe(1);
+			expect(
+				await ctx.prisma.auditLog.count({
+					where: { organizationId: orgBId, action: "onboarding.complete", result: "SUCCESS" },
+				}),
+			).toBe(1);
 		});
 	});
 });

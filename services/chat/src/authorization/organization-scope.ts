@@ -68,12 +68,13 @@ type CompatBranch =
 	| { organizationId: null; userId: string };
 
 /**
- * 兼容窗口读 where 片段（W18 专用，W22/Goal #3B 双写切换后移除）：
+ * 兼容窗口读 where 片段（W18 起用，持续至 Goal #3C MIG-D/MIG-E 切完存量 NULL 行）：
  * - `organizationId = 当前组织`：MIG-B 已回填行 / 显式组织行（跨用户可见，
  *   同组织成员共享）；
  * - `organizationId IS NULL AND userId = 请求者`：MIG-A 之后、写侧 Actor 化
  *   （Goal #3B）之前经旧写路径产生的过渡期行——逻辑上属请求者的**默认组织**，
- *   仅本人可见，禁止跨用户共享。
+ *   仅本人可见，禁止跨用户共享（计划占用汇总另由 planReservationWhere 对称覆盖
+ *   默认组织创建者存量计划，防止成员超配）。
  *
  * 评审 I-08：NULL 分支**仅在默认组织上下文**拼接。此前它对任何组织无条件生效，
  *   用户新建组织 B 或受邀加入组织 C 后，其个人未迁移记录会整批渗入 B/C。

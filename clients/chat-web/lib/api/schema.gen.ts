@@ -380,7 +380,7 @@ export interface paths {
         put?: never;
         /**
          * 创建换汇计划（事务）
-         * @description 事务内依次执行：重检可分配余额（409 INSUFFICIENT_ALLOCATABLE_BALANCE 时附 caps 现值）→ 插入计划（最晚准备日服务端重算，不信任前端）→ 分配记录（usedAmount = 0）→ 分批排期；任一失败全部回滚。allocatedAmount 允许 0（不占用余额的纯新建目标）。
+         * @description 事务内依次执行：锁组织与复验 plan.create 权限 → 校验组织已建账与目标币种 ≠ 本位币 → 锁组织账本账户 → 重检可分配余额（409 INSUFFICIENT_ALLOCATABLE_BALANCE 时附 caps 现值）→ 插入计划（最晚准备日服务端重算，不信任前端）→ 分配记录（usedAmount = 0）→ 分批排期 → 同事务写入审计日志；任一失败全部回滚。allocatedAmount 允许 0（不占用余额的纯新建目标）。
          */
         post: operations["PlanController_create"];
         delete?: never;
@@ -408,7 +408,7 @@ export interface paths {
         head?: never;
         /**
          * 提交修改 / 重新开启（事务 + 乐观锁）
-         * @description 两段式修改第二段：事务内条件更新（id + userId + updatedAt = expectedUpdatedAt）原子完成乐观锁检查与写入，行数 = 0 返回 409 PLAN_STATE_CHANGED；随后事务内重算重校验（预览结果不作为提交依据），目标/分配/排期/变更记录同一事务落库，任一失败全部回滚。已完成计划提高目标需 confirmReopen: true（缺失 400；重开时不得同时携带分配/节奏/准备缓冲参数）；进行中计划携带 confirmReopen 会被忽略。返回提交后详情。
+         * @description 两段式修改第二段：事务内先锁组织与复验 plan.adjust 权限，再按组织加账户与计划行锁；条件更新（id + 组织作用域 + updatedAt = expectedUpdatedAt）原子完成乐观锁检查与写入，行数 = 0 返回 409 PLAN_STATE_CHANGED；随后事务内重算重校验（预览结果不作为提交依据），目标/分配/排期/变更记录/同事务审计同一事务落库，任一失败全部回滚。已完成计划提高目标需 confirmReopen: true（缺失 400；重开时不得同时携带分配/节奏/准备缓冲参数）；进行中计划携带 confirmReopen 会被忽略。返回提交后详情。
          */
         patch: operations["PlanController_adjust"];
         trace?: never;
@@ -444,7 +444,7 @@ export interface paths {
         put?: never;
         /**
          * 完成确认（仅进行中；数据不变）
-         * @description 事务内条件更新（WHERE status = 'ACTIVE'）原子防「并发取消 + 完成」双写，行数 = 0 返回 409。仅当已使用 = 目标且剩余分配 = 0 且无超用可完成（PLAN_COMPLETE_NOT_READY 400 附当前差值；超用提示先走更正流程）。成功后状态转 COMPLETED 并写完成记录，计划数据不变。无请求体。
+         * @description 事务内先锁组织与复验 plan.adjust 权限，再按组织加账户与计划行锁；条件更新（WHERE status = 'ACTIVE'）原子防「并发取消 + 完成」双写，行数 = 0 返回 409。仅当已使用 = 目标且剩余分配 = 0 且无超用可完成（PLAN_COMPLETE_NOT_READY 400 附当前差值；超用提示先走更正流程）。成功后状态转 COMPLETED 并写完成记录与同事务审计，计划数据不变。无请求体。
          */
         post: operations["PlanController_complete"];
         delete?: never;
@@ -464,7 +464,7 @@ export interface paths {
         put?: never;
         /**
          * 取消计划（释放剩余分配，终态）
-         * @description 事务内条件更新（WHERE status = 'ACTIVE'）保证与完成/其他修改并发时恰一成功，行数 = 0 返回 409。分配总额下调为累计已使用（释放全部剩余分配回未分配余额，账户余额与已发生的换汇、使用记录不动），准备节点清空，状态转 CANCELLED（终态）并写取消记录。无请求体。
+         * @description 事务内先锁组织与复验 plan.adjust 权限，再按组织加账户与计划行锁；条件更新（WHERE status = 'ACTIVE'）保证与完成/其他修改并发时恰一成功，行数 = 0 返回 409。分配总额下调为累计已使用（释放全部剩余分配回未分配余额，账户余额与已发生的换汇、使用记录不动），准备节点清空，状态转 CANCELLED（终态）并写取消记录与同事务审计。无请求体。
          */
         post: operations["PlanController_cancel"];
         delete?: never;
@@ -504,7 +504,7 @@ export interface paths {
         put?: never;
         /**
          * 创建买入记录（事务）
-         * @description 两种填法三值同送（本金/汇率/到账），服务端做双向自洽校验（receivedAmountOf(p,r)==q 或 impliedRate(p,q)==r 满足其一）。事务内依次执行：关联计划校验（存在/本人 404 PLAN_NOT_FOUND、币种一致 400 PLAN_CURRENCY_MISMATCH，仅标记不触发分配）→ 账户 upsert 自动建户 + 余额原子累加 → 插入交易记录（version=1、rateSource=MANUAL）；任一失败全部回滚。手续费缺省 = 未知（null，≠ 0）；"0" = 无手续费。
+         * @description 两种填法三值同送（本金/汇率/到账），服务端做双向自洽校验（receivedAmountOf(p,r)==q 或 impliedRate(p,q)==r 满足其一）。事务内依次执行：锁组织与复验 transaction.create 权限 → 解析组织偏好与校验交易日期 → 锁组织账本账户 → 关联计划校验（同组织归属 404 PLAN_NOT_FOUND、币种一致 400 PLAN_CURRENCY_MISMATCH，仅标记不触发分配）→ 组织账户 upsert 自动建户 + 余额原子累加 → 插入交易记录（version=1、rateSource=MANUAL）→ 补写成本批次 → 同事务写入审计日志；任一失败全部回滚。手续费缺省 = 未知（null，≠ 0）；"0" = 无手续费。
          */
         post: operations["TransactionController_create"];
         delete?: never;
@@ -4897,6 +4897,15 @@ export interface operations {
                     "application/json": components["schemas"]["PlanErrorDto"];
                 };
             };
+            /** @description 无 plan.create 权限（PERMISSION_DENIED，如 VIEWER） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
             /** @description 分配超可配余额（INSUFFICIENT_ALLOCATABLE_BALANCE，附 caps 现值） */
             409: {
                 headers: {
@@ -4978,7 +4987,16 @@ export interface operations {
                     "application/json": components["schemas"]["PlanErrorDto"];
                 };
             };
-            /** @description 计划不存在或不属于本人（PLAN_NOT_FOUND） */
+            /** @description 无 plan.adjust 权限（PERMISSION_DENIED，如 VIEWER） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+            /** @description 计划不存在或不属于当前组织（PLAN_NOT_FOUND） */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -5086,7 +5104,16 @@ export interface operations {
                     "application/json": components["schemas"]["PlanErrorDto"];
                 };
             };
-            /** @description 计划不存在或不属于本人（PLAN_NOT_FOUND） */
+            /** @description 无 plan.adjust 权限（PERMISSION_DENIED，如 VIEWER） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+            /** @description 计划不存在或不属于当前组织（PLAN_NOT_FOUND） */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -5129,7 +5156,16 @@ export interface operations {
                     };
                 };
             };
-            /** @description 计划不存在或不属于本人（PLAN_NOT_FOUND） */
+            /** @description 无 plan.adjust 权限（PERMISSION_DENIED，如 VIEWER） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanErrorDto"];
+                };
+            };
+            /** @description 计划不存在或不属于当前组织（PLAN_NOT_FOUND） */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -5205,7 +5241,16 @@ export interface operations {
                     "application/json": components["schemas"]["TransactionErrorDto"];
                 };
             };
-            /** @description 关联计划不存在或不属于本人（PLAN_NOT_FOUND） */
+            /** @description 无 transaction.create 权限（PERMISSION_DENIED，如 OPERATOR/VIEWER） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransactionErrorDto"];
+                };
+            };
+            /** @description 关联计划不存在或不属于当前组织（PLAN_NOT_FOUND） */
             404: {
                 headers: {
                     [name: string]: unknown;

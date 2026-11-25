@@ -5,7 +5,10 @@ import {
 	Injectable,
 	Logger,
 } from "@nestjs/common";
-import { AuditService } from "../audit/audit.service";
+import {
+	AuditService,
+	recordDeniedAuditBestEffort,
+} from "../audit/audit.service";
 import { PermissionDeniedException } from "../authorization/authorization.errors";
 import type {
 	ActorContext,
@@ -85,8 +88,8 @@ export class SettingsService {
 	}
 
 	/**
-	 * 更新纯个人展示偏好（幂等）：无 UserSettings 行时以占位 baseCurrency: "CNY" 创建
-	 * 个人展示行（绝不创建 OrganizationSettings，不影响组织未建账判定）；已有行只更新 region/locale。
+	 * 更新纯个人展示偏好（幂等）：无 UserSettings 行时以占位 baseCurrency: ""（PERSONAL_PLACEHOLDER_BASE_CURRENCY）
+	 * 创建个人展示行（绝不创建 OrganizationSettings，不影响组织未建账判定）；已有行只更新 region/locale。
 	 */
 	async updatePersonalSettings(
 		userId: string,
@@ -153,7 +156,7 @@ export class SettingsService {
 	 *   事务内 lockOrganizationForActor 重读最新角色复验（锁等期间降权 → 回滚事务 + 写 DENIED 独立审计 + 403），
 	 *   固化 OWNER_LEGACY 后更新 OrganizationSettings（默认组织且本人有 UserSettings 时同步兼容列）+ 同事务写审计；
 	 * - 含 region / locale：确认当前组织已建账（兼容未建账 409 契约），对 actor.userId upsert
-	 *   个人展示偏好（无行时以当前组织 baseCurrency 建行；已有行只更新 region/locale，绝不改 baseCurrency/ledgerStartedAt）。
+	 *   个人展示偏好（无行时以占位 baseCurrency: "" 建行；已有行只更新 region/locale，绝不改 baseCurrency/ledgerStartedAt）。
 	 */
 	async updateSettings(
 		actor: ActorContext,
@@ -295,20 +298,11 @@ export class SettingsService {
 		role: OrganizationRole,
 		requestId: string | null,
 	): Promise<void> {
-		try {
-			await this.auditService.recordStandalone({
-				organizationId: actor.organizationId,
-				actorUserId: actor.userId,
-				actorType: "USER",
-				action: "permission.denied.settings.update",
-				result: "DENIED",
-				requestId,
-				detail: { required: "settings.update", role },
-			});
-		} catch (error) {
-			this.logger.warn(
-				`DENIED 审计写入失败（不影响 403 返回）: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
+		await recordDeniedAuditBestEffort(this.auditService, this.logger, {
+			actor,
+			role,
+			required: "settings.update",
+			requestId,
+		});
 	}
 }

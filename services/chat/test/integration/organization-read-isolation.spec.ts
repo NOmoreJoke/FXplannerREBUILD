@@ -1226,7 +1226,9 @@ describe("R2 回归：所有权转移后默认组织不漂移（R2-I03）", () =
 
 		// 组织 A：A 的默认组织，已建账但设置仍是个人设置（无 OrganizationSettings）
 		orgA = await trackDefaultOrg(ctx.prisma, ownerA.userId, orgIds);
-		await ensureOnboarded(ctx.prisma, ownerA.userId, "CNY");
+		await ensureOnboarded(ctx.prisma, ownerA.userId, "CNY", null, {
+			legacyOnly: true,
+		});
 		await ctx.prisma.membership.create({
 			data: { organizationId: orgA, userId: successorB.userId, role: "ADMIN", status: "ACTIVE" },
 		});

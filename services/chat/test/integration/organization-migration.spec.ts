@@ -581,21 +581,21 @@ describe("MIG-B 默认组织回填与核对", () => {
 	test("§12.3 核对：分片模式 0 差异；检查项齐全（防查询写错导致的空过）", async () => {
 		const result = await reconcileMigration(db, { userIds: scopeUserIds() });
 		expect(result.sharded).toBe(true);
-		// 分片模式评估 22 项：默认组织 1 + 行集映射 10 + 可归属不变量 7
-		// + 数据请求 1 + 提醒已读 1 + 设置同构 2。数量写死：任何一项的 SQL
+		// 分片模式评估 25 项：默认组织 1 + 行集映射 10 + 可归属不变量 7
+		// + 数据请求 1 + 提醒已读 1 + 设置同构 2 + 双写冲突 3。数量写死：任何一项的 SQL
 		// 列名写错都会让该项「恒 0」静默通过，数量对不上即暴露。
-		expect(result.checks).toBe(22);
+		expect(result.checks).toBe(25);
 		expect(result.diffs).toEqual([]);
 
 		// 空分片：不评估任何行，同样不得回落到全库
 		const empty = await reconcileMigration(db, { userIds: [] });
-		expect(empty).toMatchObject({ sharded: true, checks: 22, diffs: [] });
+		expect(empty).toMatchObject({ sharded: true, checks: 25, diffs: [] });
 
 		// 全量模式：额外评估 4 类无法归属到用户的孤儿派生行（共享本地库可能有
 		// 其他用例残留，故只断言检查项数量与模式，不断言 0 diffs）
 		const whole = await reconcileMigration(db);
 		expect(whole.sharded).toBe(false);
-		expect(whole.checks).toBe(26);
+		expect(whole.checks).toBe(29);
 	});
 
 	test("第 2 次回填：幂等（无新增组织/无重复记录/零重复回填）", async () => {
@@ -1395,6 +1395,139 @@ describe("MIG-B 默认组织回填与核对", () => {
 			expect(reconcile.diffs).toEqual([]);
 		} finally {
 			await cleanupUser(db as CleanupDb, placeholderUserId);
+		}
+	});
+
+	test("I-2 双写冲突防护：reconcile 检出 dualAccountRows，backfill 合并双行 Account（保留 updatedAt）、去重 Reminder 并阻断冲突 InitialHolding", async () => {
+		const dualUserId = await createUser("i2-dual", "双写冲突演练用户");
+		const T1 = new Date("2026-04-01T00:00:00.000Z");
+		try {
+			const org = await db.organization.create({
+				data: {
+					name: `双写冲突测试组织 ${RUN}`,
+					memberships: {
+						create: { userId: dualUserId, role: "OWNER", status: "ACTIVE" },
+					},
+				},
+			});
+			const orgAccount = await db.account.create({
+				data: {
+					userId: dualUserId,
+					organizationId: org.id,
+					createdById: dualUserId,
+					currencyCode: "USD",
+					balance: "20.0000",
+				},
+			});
+			// 存量 NULL 同币种账户 + 独立 EUR NULL 账户
+			await db.account.createMany({
+				data: [
+					{ userId: dualUserId, currencyCode: "USD", balance: "50.0000" },
+					{ userId: dualUserId, currencyCode: "EUR", balance: "15.0000" },
+				],
+			});
+			// 冲突 Reminder：组织行与 NULL 行同 (dedupKey, scheduledFor)，NULL 行已读
+			const orgReminder = await db.reminder.create({
+				data: {
+					userId: dualUserId,
+					organizationId: org.id,
+					type: "PLAN_DUE",
+					dedupKey: `${RUN}-dual-rem`,
+					scheduledFor: T1,
+				},
+			});
+			await db.reminder.create({
+				data: {
+					userId: dualUserId,
+					type: "PLAN_DUE",
+					dedupKey: `${RUN}-dual-rem`,
+					scheduledFor: T1,
+					readAt: T1,
+				},
+			});
+
+			const beforeReconcile = await reconcileMigration(db, {
+				userIds: [dualUserId],
+			});
+			const beforeByScope = Object.fromEntries(
+				beforeReconcile.diffs.map((d) => [d.scope, d.right]),
+			);
+			expect(beforeByScope["dual_rows.accounts"]).toBe(1);
+			expect(beforeByScope["dual_rows.reminders"]).toBe(1);
+
+			const run = await backfillDefaultOrganizations(db, {
+				userIds: [dualUserId],
+			});
+			expect(run.rowsBackfilled.accounts).toBe(2);
+			expect(run.rowsBackfilled.reminders).toBe(1);
+
+			const survivingUsd = await db.account.findUniqueOrThrow({
+				where: { id: orgAccount.id },
+			});
+			expect(survivingUsd.balance.toFixed(4)).toBe("70.0000");
+			expect(survivingUsd.updatedAt.getTime()).toBe(orgAccount.updatedAt.getTime());
+			expect(
+				await db.account.count({
+					where: { userId: dualUserId, organizationId: null },
+				}),
+			).toBe(0);
+			// 冲突提醒删除后，原 NULL 行已读态保留至存活组织提醒
+			expect(
+				await db.reminderRead.findUnique({
+					where: {
+						reminderId_userId: {
+							reminderId: orgReminder.id,
+							userId: dualUserId,
+						},
+					},
+				}),
+			).not.toBeNull();
+
+			const afterReconcile = await reconcileMigration(db, {
+				userIds: [dualUserId],
+			});
+			expect(afterReconcile.diffs).toEqual([]);
+
+			// 冲突 InitialHolding：必须 fail-closed 抛 BackfillAnomalyError 阻断
+			await db.initialHolding.create({
+				data: {
+					userId: dualUserId,
+					organizationId: org.id,
+					createdById: dualUserId,
+					currencyCode: "USD",
+					amount: "10.0000",
+					rate: "7.2000000000",
+					rawRate: "7.2000000000",
+					rateSource: "identity",
+					rateObservedAt: T1,
+					cost: "72.0000",
+					confirmedAt: T1,
+				},
+			});
+			await db.initialHolding.create({
+				data: {
+					userId: dualUserId,
+					currencyCode: "USD",
+					amount: "20.0000",
+					rate: "7.2000000000",
+					rawRate: "7.2000000000",
+					rateSource: "identity",
+					rateObservedAt: T1,
+					cost: "144.0000",
+					confirmedAt: T1,
+				},
+			});
+			const ihReconcile = await reconcileMigration(db, {
+				userIds: [dualUserId],
+			});
+			expect(
+				ihReconcile.diffs.find((d) => d.scope === "dual_rows.initial_holdings")?.right,
+			).toBe(1);
+			await expect(
+				backfillDefaultOrganizations(db, { userIds: [dualUserId] }),
+			).rejects.toThrow(BackfillAnomalyError);
+		} finally {
+			await cleanupUser(db as CleanupDb, dualUserId);
 		}
 	});
 });

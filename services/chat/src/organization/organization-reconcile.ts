@@ -338,5 +338,56 @@ export async function reconcileMigration(
 	expectZero("settings_parity.value_mismatch", settings?.mismatch ?? 0n);
 	expectZero("settings_parity.missing", settings?.missing ?? 0n);
 
+	// 8. 双写冲突（I-2 防护）：默认组织已存在组织行且同用户仍有同键 organization_id IS NULL 存量行
+	const [dualRows] = await db.$queryRaw<
+		Array<{
+			dualAccountRows: bigint;
+			dualInitialHoldingRows: bigint;
+			dualReminderRows: bigint;
+		}>
+	>`
+		WITH first_members AS (
+			SELECT DISTINCT ON (m.organization_id)
+				m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
+			FROM memberships m
+			ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+		),
+		defaults AS (
+			SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+			FROM first_members f
+			JOIN organizations o ON o.id = f.organization_id
+			WHERE f.created_at = o.created_at
+			ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
+		)
+		SELECT
+			(SELECT count(*) FROM accounts leg
+				JOIN defaults d ON d.user_id = leg.user_id
+				JOIN accounts org
+					ON org.organization_id = d.organization_id
+					AND org.currency_code = leg.currency_code
+				WHERE leg.organization_id IS NULL
+					AND (NOT ${sharded} OR leg.user_id = ANY(${ids}::text[]))) AS "dualAccountRows",
+			(SELECT count(*) FROM initial_holdings leg
+				JOIN defaults d ON d.user_id = leg.user_id
+				JOIN initial_holdings org
+					ON org.organization_id = d.organization_id
+					AND org.currency_code = leg.currency_code
+				WHERE leg.organization_id IS NULL
+					AND (NOT ${sharded} OR leg.user_id = ANY(${ids}::text[]))) AS "dualInitialHoldingRows",
+			(SELECT count(*) FROM reminders leg
+				JOIN defaults d ON d.user_id = leg.user_id
+				JOIN reminders org
+					ON org.organization_id = d.organization_id
+					AND org.dedup_key = leg.dedup_key
+					AND org.scheduled_for = leg.scheduled_for
+				WHERE leg.organization_id IS NULL
+					AND (NOT ${sharded} OR leg.user_id = ANY(${ids}::text[]))) AS "dualReminderRows"`;
+	expectZero("dual_rows.accounts", dualRows?.dualAccountRows ?? 0n);
+	expectZero(
+		"dual_rows.initial_holdings",
+		dualRows?.dualInitialHoldingRows ?? 0n,
+	);
+	expectZero("dual_rows.reminders", dualRows?.dualReminderRows ?? 0n);
+
 	return { checks, diffs, sharded };
 }

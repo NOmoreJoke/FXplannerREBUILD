@@ -42,6 +42,7 @@ function createPrismaMock(overrides: {
 	};
 	const organizationSettings = {
 		findUnique: vi.fn().mockResolvedValue(overrides.organizationSettings ?? null),
+		create: vi.fn(async (args: { data: SettingsRowLike }) => args.data),
 		upsert: vi.fn(async (args: { create: SettingsRowLike }) => args.create),
 		update: vi.fn(async (args: { data: SettingsRowLike }) => ({
 			...(overrides.organizationSettings ?? orgSettingsRow),
@@ -331,6 +332,58 @@ describe("SettingsService", () => {
 			});
 		});
 
+		it("N-17 混合个人+组织字段（{ region, prepPreference }）对无权角色 / 锁等降权均 403 且双方零写入", async () => {
+			for (const role of ["VIEWER", "OPERATOR"] as const) {
+				const { instance, mock, auditMock } = buildService({
+					organizationSettings: orgSettingsRow,
+				});
+				const { status, body } = await errorOf(() =>
+					instance.updateSettings(
+						{ ...OWNER_ACTOR, role, isDefaultOrganization: false },
+						{ region: "HK", prepPreference: "cautious" },
+						IDENTITY,
+						`req-mixed-${role}`,
+					),
+				);
+				expect(status, role).toBe(403);
+				expect(body.code).toBe("PERMISSION_DENIED");
+				expect(mock.$transaction).not.toHaveBeenCalled();
+				expect(mock.userSettings.upsert).not.toHaveBeenCalled();
+				expect(mock.organizationSettings.update).not.toHaveBeenCalled();
+				expect(auditMock.recordStandalone).toHaveBeenCalledWith({
+					organizationId: "org-test",
+					actorUserId: "u1",
+					actorType: "USER",
+					action: "permission.denied.settings.update",
+					result: "DENIED",
+					requestId: `req-mixed-${role}`,
+					detail: { required: "settings.update", role },
+				});
+			}
+
+			// 锁等降权场景：混合入参也不得提前写入 UserSettings
+			const { instance, mock, auditMock } = buildService({
+				organizationSettings: orgSettingsRow,
+				lockedMembership: {
+					organizationId: "org-test",
+					role: "OPERATOR",
+					status: "ACTIVE",
+				},
+			});
+			const { status } = await errorOf(() =>
+				instance.updateSettings(
+					OWNER_ACTOR,
+					{ region: "HK", locale: "en", prepPreference: "cautious" },
+					IDENTITY,
+					"req-mixed-demote",
+				),
+			);
+			expect(status).toBe(403);
+			expect(mock.userSettings.upsert).not.toHaveBeenCalled();
+			expect(mock.organizationSettings.update).not.toHaveBeenCalled();
+			expect(auditMock.recordInTx).not.toHaveBeenCalled();
+		});
+
 		it("VIEWER 仅更新 region/locale → 放行写 UserSettings，不写组织设置或组织审计", async () => {
 			const { instance, mock, auditMock } = buildService({
 				organizationSettings: orgSettingsRow,
@@ -481,7 +534,7 @@ describe("SettingsService", () => {
 		});
 
 		it("PATCH /settings/personal upsert 个人行且不创建 OrganizationSettings", async () => {
-			const { instance, mock } = buildService();
+			const { instance, mock, auditMock } = buildService();
 
 			const view = await instance.updatePersonalSettings(
 				"u1",
@@ -501,7 +554,10 @@ describe("SettingsService", () => {
 				update: { region: "HK", locale: "en" },
 				select: { region: true, locale: true },
 			});
+			expect(mock.organizationSettings.create).not.toHaveBeenCalled();
 			expect(mock.organizationSettings.upsert).not.toHaveBeenCalled();
+			expect(mock.organizationSettings.update).not.toHaveBeenCalled();
+			expect(auditMock.recordInTx).not.toHaveBeenCalled();
 		});
 
 		it("个人占位行（baseCurrency=\"\"）不影响组织未建账判定（getSettings 仍 409）", async () => {

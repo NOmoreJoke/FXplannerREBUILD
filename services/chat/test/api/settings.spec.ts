@@ -508,6 +508,46 @@ describe("SettingsController（e2e）", () => {
 			expect(defaultGet.body.code).toBe("ONBOARDING_NOT_COMPLETED");
 		});
 
+		it.each(["VIEWER", "OPERATOR"] as const)(
+			"N-17 %s 发送混合设置 { region, prepPreference } → 403 PERMISSION_DENIED + DENIED 审计 + 双方零写入",
+			async (role) => {
+				const { member, orgId } = await setupOnboardedOrgWithMember(
+					role,
+					`settings-mixed-${role.toLowerCase()}`,
+				);
+				const reqId = `req-settings-mixed-${role}-${Date.now()}`;
+
+				const res = await request(app.getHttpServer())
+					.patch("/api/settings")
+					.set(bearer(member.accessToken))
+					.set("X-Organization-Id", orgId)
+					.set("X-Request-Id", reqId)
+					.send({ region: "HK", locale: "en", prepPreference: "proactive" })
+					.expect(403);
+
+				expect(res.body.code).toBe("PERMISSION_DENIED");
+				expect(
+					await ctx.prisma.userSettings.findUnique({
+						where: { userId: member.userId },
+					}),
+				).toBeNull();
+				const orgSettings = await ctx.prisma.organizationSettings.findUniqueOrThrow({
+					where: { organizationId: orgId },
+				});
+				expect(orgSettings.prepPreference).toBe("balanced");
+				const deniedAudit = await ctx.prisma.auditLog.findFirst({
+					where: {
+						organizationId: orgId,
+						actorUserId: member.userId,
+						action: "permission.denied.settings.update",
+						result: "DENIED",
+						requestId: reqId,
+					},
+				});
+				expect(deniedAudit).not.toBeNull();
+			},
+		);
+
 		it("PATCH /settings/personal 占位行不绕过 transaction/plan 未建账 409 防线（Important #3 回归）", async () => {
 			const fresh = await createTestUser(app, "settings-personal-guard");
 			scopedUserIds.push(fresh.userId);
