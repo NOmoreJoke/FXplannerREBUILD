@@ -8,10 +8,8 @@ import {
 import { getCurrency } from "@fxplanner-new/money";
 import type { Prisma, CostLot, Plan } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
-import {
-	compatReadWhere,
-	type ReadScope,
-} from "../authorization/organization-scope";
+import type { ReadScope } from "../authorization/organization-scope";
+import { planReservationWhere } from "../authorization/default-organization";
 import { resolveOrganizationPreferences } from "../organization/organization-preferences";
 import {
 	aggregatePlanUsage,
@@ -57,6 +55,12 @@ export class ReportPlanNotFoundException extends HttpException {
 const PLAN_ID_PATTERN = /^[a-zA-Z0-9_-]{8,64}$/;
 
 const PLAN_STATUSES = ["ACTIVE", "COMPLETED", "CANCELLED"] as const;
+
+/**
+ * 计划占用对称口径的 where 片段类型（authorization/default-organization.ts）：
+ * 在 compatReadWhere 之上补入「默认组织创建者尚未回填 organizationId 的存量计划」。
+ */
+type PlanReservationWhere = Awaited<ReturnType<typeof planReservationWhere>>;
 
 /** 聚合所需的全部关联事实（loadUsageContext 一次载入，内存 join 防 N+1） */
 interface UsageContext {
@@ -114,19 +118,30 @@ export class ReportService {
 		return preferences?.baseCurrency ?? null;
 	}
 
-	/** 报告中心列表（GET /api/reports/plans，§5.1；W18 组织隔离）：全计划成本摘要 + 状态/币种筛选 */
+	/**
+	 * 报告中心列表（GET /api/reports/plans，§5.1；W18 组织隔离）：全计划成本摘要 + 状态/币种筛选
+	 *
+	 * 计划集合按**计划占用对称口径**（planReservationWhere）读取，而非 compatReadWhere：
+	 * 默认组织创建者尚未回填 organizationId 的存量计划在逻辑上属于该组织，若按
+	 * compatReadWhere 读取，创建者（默认组织上下文能看到自己的 NULL 行）与受邀成员
+	 * （非默认组织上下文看不到行主的 NULL 行）会看到**不同的计划集合**，报告视图
+	 * 逐字段不一致且遗漏 Plan 维度的成本归属（W24 对抗审 N-1 / P-2）。
+	 * 该口径与 AccountService.sumAllocatedByCurrencyForUser、CorrectionService 的
+	 * 计划占用读取同源（authorization/default-organization.ts）。
+	 */
 	async list(
 		scope: ReadScope,
 		query: { status?: string; currencyCode?: string },
 	): Promise<ReportPlanListDto> {
 		const status = this.normalizeStatus(query.status);
 		const currencyCode = this.normalizeCurrencyCode(query.currencyCode);
+		const reservationWhere = await planReservationWhere(this.prisma, scope);
 
 		const [baseCurrency, plans] = await Promise.all([
 			this.resolveBaseCurrency(scope),
 			this.prisma.plan.findMany({
 				where: {
-					...compatReadWhere(scope),
+					...reservationWhere,
 					...(status ? { status } : {}),
 					...(currencyCode ? { targetCurrency: currencyCode } : {}),
 				},
@@ -135,8 +150,8 @@ export class ReportService {
 		]);
 
 		const context = await this.loadUsageContext(
-			scope,
 			plans.map((plan) => plan.id),
+			reservationWhere,
 		);
 
 		const items = plans.map((plan) =>
@@ -149,13 +164,19 @@ export class ReportService {
 		return { baseCurrency, items };
 	}
 
-	/** 单计划报告（GET /api/reports/plans/:id，§5.2；W18 组织隔离）：页面摘要与打印视图共用数据源 */
+	/**
+	 * 单计划报告（GET /api/reports/plans/:id，§5.2；W18 组织隔离）：页面摘要与打印视图共用数据源
+	 *
+	 * 计划归属按同一「计划占用对称口径」校验（见 list 的 N-1 / P-2 说明）：
+	 * 同组织的创建者与受邀成员对同一计划得到逐字段一致的报告视图。
+	 */
 	async detail(scope: ReadScope, planId: string): Promise<PlanReportDto> {
 		if (!PLAN_ID_PATTERN.test(planId)) {
 			throw new ReportInvalidParamsException("计划 ID 格式非法");
 		}
+		const reservationWhere = await planReservationWhere(this.prisma, scope);
 		const plan = await this.prisma.plan.findFirst({
-			where: { id: planId, ...compatReadWhere(scope) },
+			where: { id: planId, ...reservationWhere },
 		});
 		if (!plan) {
 			// 组织作用域外与不存在均 404（防枚举，对齐 plan 模块）
@@ -163,7 +184,7 @@ export class ReportService {
 		}
 		const [baseCurrency, context] = await Promise.all([
 			this.resolveBaseCurrency(scope),
-			this.loadUsageContext(scope, [plan.id]),
+			this.loadUsageContext([plan.id], reservationWhere),
 		]);
 
 		const aggregate = this.aggregateForPlan(plan.id, context);
@@ -244,10 +265,15 @@ export class ReportService {
 	 * 一次载入聚合所需的全部关联事实（防 N+1）：使用记录 → 分摊明细 → 成本批次 →
 	 * 来源交易手续费 → 相关更正。方案 §4.2 口径 3：TRANSACTION 更正取
 	 * planId = 该计划的交易（字面口径；分摊来源交易若 planId=null 不参与 updatedAt）。
+	 *
+	 * 作用域（scope）统一由调用方传入的「计划占用对称口径」承担
+	 * （planReservationWhere）：使用记录与关联交易按同一口径读取，使同组织的
+	 * 创建者与受邀成员在**数量 / 成本 / 来源拆分 / 均价 / 更新时间**上逐字段一致
+	 * （W24 对抗审 N-1 / P-2：遗漏 Plan 维度的成本归属）。
 	 */
 	private async loadUsageContext(
-		scope: ReadScope,
 		planIds: string[],
+		reservationWhere: PlanReservationWhere,
 	): Promise<UsageContext> {
 		const empty: UsageContext = {
 			usageRecordsByPlan: new Map(),
@@ -264,10 +290,10 @@ export class ReportService {
 
 		const [usageRecords, planTransactions] = await Promise.all([
 			this.prisma.usageRecord.findMany({
-				where: { planId: { in: planIds }, ...compatReadWhere(scope) },
+				where: { planId: { in: planIds }, ...reservationWhere },
 			}),
 			this.prisma.transaction.findMany({
-				where: { planId: { in: planIds }, ...compatReadWhere(scope) },
+				where: { planId: { in: planIds }, ...reservationWhere },
 				select: { id: true, planId: true },
 			}),
 		]);

@@ -691,8 +691,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 单条已读（幂等）
-         * @description 将本人一条提醒标记为已读（userId 双保险防越权）。行不存在或非本人 → 404 REMINDER_NOT_FOUND（不泄露存在性）；重复调用幂等返回既有 readAt，不报错。
+         * 单条已读（幂等，成员级）
+         * @description 将**当前成员**的一条提醒标记为已读：已读态写入成员级 ReminderRead(reminderId, userId)，不写入共享的 Reminder.readAt（一名成员标已读不影响同组织其他成员的未读态）。目标提醒按当前组织作用域校验：不存在或跨组织一律 404 REMINDER_NOT_FOUND（不泄露存在性）；未受邀或已被移除（DISABLED）的成员由守卫统一返回 404。重复调用幂等返回既有 readAt。
          */
         post: operations["ReminderController_markRead"];
         delete?: never;
@@ -711,8 +711,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 全部已读（幂等）
-         * @description 将当前用户全部未读提醒标记为已读（仅更新 readAt 为 null 的行），返回本次更新的行数；重复调用 updatedCount = 0，天然幂等。
+         * 全部已读（幂等，成员级）
+         * @description 将当前组织作用域内、**当前成员尚未读过**的提醒全部标记为已读：只写当前成员自己的 ReminderRead（事务内批量插入、并发去重），不修改任何共享 Reminder.readAt。返回本次新增的成员级已读行数；重复调用 updatedCount = 0，天然幂等。
          */
         post: operations["ReminderController_markAllRead"];
         delete?: never;
@@ -1214,13 +1214,13 @@ export interface paths {
         };
         /**
          * 会话列表
-         * @description 仅返回本人会话，按 lastMessageAt 倒序；幂等只读。未配 LLM key 或总开关关闭时 503 整体降级。
+         * @description 仅返回本人且属于当前组织的会话，按 lastMessageAt 倒序；幂等只读。默认组织上下文附带本人存量（organizationId IS NULL）会话，其他组织严格只看当前组织会话。未配 LLM key 或总开关关闭时 503 整体降级。
          */
         get: operations["AiController_listConversations"];
         put?: never;
         /**
          * 首条消息并建会话（SSE 流式回复）
-         * @description 以首条消息创建会话（标题=消息前 20 字）后立即开始流式回复；body 可选 modelKey 指定模型（缺省用服务端默认，非法 key 400 AI_MODEL_UNKNOWN）。响应为 text/event-stream（帧协议 meta/tool/token/done/error），不走统一 JSON 包装。发消息 5/min/IP；用户级日配额超限 429 AI_QUOTA_EXCEEDED；系统并发满 429 AI_BUSY。
+         * @description 以首条消息创建会话（标题=消息前 20 字，会话绑定当前组织）后立即开始流式回复；body 可选 modelKey 指定模型（缺省用服务端默认，非法 key 400 AI_MODEL_UNKNOWN）。响应为 text/event-stream（帧协议 meta/tool/token/done/error），不走统一 JSON 包装。发消息 5/min/IP；用户级日配额超限 429 AI_QUOTA_EXCEEDED；系统并发满 429 AI_BUSY。
          */
         post: operations["AiController_createWithMessage"];
         delete?: never;
@@ -1258,13 +1258,13 @@ export interface paths {
         };
         /**
          * 会话消息列表
-         * @description 按 createdAt 升序返回本人会话消息；非本人/不存在统一 404（防枚举）；幂等只读。
+         * @description 按 createdAt 升序返回本人且属于当前组织的会话消息；非本人 / 跨组织 / 不存在统一 404（防枚举）；幂等只读。
          */
         get: operations["AiController_listMessages"];
         put?: never;
         /**
          * 追问（SSE 流式回复）
-         * @description 向既有会话追加消息并流式回复；body 可选 modelKey 指定模型（缺省用服务端默认，非法 key 400 AI_MODEL_UNKNOWN）。会话归属校验：非本人/不存在统一 404（防枚举）；同会话流进行中再发 409 AI_CONVERSATION_BUSY（先标忙碌再落用户消息，无并发窗口）。
+         * @description 向既有会话追加消息并流式回复；body 可选 modelKey 指定模型（缺省用服务端默认，非法 key 400 AI_MODEL_UNKNOWN）。会话归属校验：非本人 / 不在当前组织 / 不存在统一 404（防枚举）；同会话流进行中再发 409 AI_CONVERSATION_BUSY（先标忙碌再落用户消息，无并发窗口）。
          */
         post: operations["AiController_sendMessage"];
         delete?: never;
@@ -1285,7 +1285,7 @@ export interface paths {
         post?: never;
         /**
          * 删除会话（物理删除，消息级联）
-         * @description 物理删除本人会话及其全部消息；流进行中 409 拒绝删除；非本人/不存在统一 404（防枚举）。
+         * @description 物理删除本人且属于当前组织的会话及其全部消息；流进行中 409 拒绝删除；非本人 / 跨组织 / 不存在统一 404（防枚举）。
          */
         delete: operations["AiController_deleteConversation"];
         options?: never;
@@ -5677,7 +5677,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description 提醒不存在或不属于本人（REMINDER_NOT_FOUND） */
+            /** @description 提醒不存在或不属于当前组织（REMINDER_NOT_FOUND） */
             404: {
                 headers: {
                     [name: string]: unknown;

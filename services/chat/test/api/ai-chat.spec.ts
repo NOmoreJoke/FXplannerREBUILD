@@ -26,6 +26,10 @@ import {
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
+import {
+	createSecondOrg,
+	orgHeaders,
+} from "../helpers/organization-ledger-test-helper";
 import { localTestFetch } from "../helpers/local-test-fetch";
 
 // 关闭全局接口限流（先例：transaction.spec/plan.spec——APP_GUARD token 被 scanner 改写，只能 mock 类）
@@ -42,6 +46,7 @@ vi.mock("@nestjs/throttler", async (importOriginal) => {
 import { AI_LLM_FACTORY } from "../../src/ai/llm/llm-factory";
 import type { PrismaService } from "../../src/prisma/prisma.service";
 import { RateProvider } from "../../src/rate/rate.provider";
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
 
 // ────────────────────────── 脚本队列假模型（§8.2 装配①）──────────────────────────
 // 官方 FakeStreamingChatModel 的 responses 固定取 [0]，无法编排「tool_call 后再作答 /
@@ -1309,5 +1314,210 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 			.send({ content: "你好" })
 			.expect(503);
 		expect(res.body.code).toBe("AI_DISABLED");
+	});
+});
+
+/**
+ * AI 会话的组织隔离（Goal #3B W25；收口 Goal #3A §6.4 遗留）。
+ *
+ * 断言要点：
+ * - 建会话写入 organizationId = 当前组织（不再落 NULL 行）；
+ * - 跨组织（另一个组织的组织头）访问 / 追问 / 删除该会话一律 404，且无写入副作用；
+ * - 非默认组织**看不到** organizationId IS NULL 的存量会话（默认组织可见）；
+ * - 成员被移出组织（DISABLED）后访问 / 发消息 / 删除一律 404。
+ *
+ * 组织上下文经 test/helpers/organization-ledger-test-helper.ts 造数（第二个组织
+ * 由 createSecondOrg 建立，非用户的默认组织）。
+ */
+describe("AiController 组织隔离（W25）", () => {
+	let ctx: TestContext;
+	let app: INestApplication;
+	let prisma: PrismaService;
+	let user: TestUser;
+	let orgA: string;
+	let orgB: string;
+	const userIds: string[] = [];
+
+	beforeEach(() => {
+		scriptHolder.steps = [];
+		scriptHolder.shared = newShared();
+	});
+
+	beforeAll(async () => {
+		ctx = await buildAiApp();
+		app = ctx.app;
+		prisma = ctx.prisma;
+		user = await createTestUser(app, "ai-org-main");
+		userIds.push(user.userId);
+		const defaultOrgId = await resolveDefaultOrganizationId(prisma, user.userId);
+		if (!defaultOrgId) throw new Error("注册兜底未建默认组织");
+		orgA = defaultOrgId;
+		// 第二个组织（非默认组织）：用户是 OWNER，但该组织不是其默认组织
+		orgB = (await createSecondOrg(prisma, user, "ai-org-b")).orgId;
+	});
+
+	afterAll(async () => {
+		for (const id of userIds) await cleanupUser(prisma, id);
+		if (app) await app.close();
+	});
+
+	/** 在 Org A 内建会话（返回会话 id） */
+	async function createConversationInOrgA(content: string): Promise<string> {
+		scriptHolder.steps = [textReply("组织会话回复")];
+		const res = await request(app.getHttpServer())
+			.post("/api/ai/conversations")
+			.set(orgHeaders(user, orgA))
+			.send({ content })
+			.expect(200);
+		return (parseSse(res.text)[0].data as { conversationId: string })
+			.conversationId;
+	}
+
+	it("W25-AI-1 在 Org A 建会话 → 库内 organizationId = Org A（不再落 NULL 行）", async () => {
+		const conversationId = await createConversationInOrgA("组织 A 的会话");
+		const row = await prisma.aiConversation.findUniqueOrThrow({
+			where: { id: conversationId },
+		});
+		expect(row.userId).toBe(user.userId);
+		expect(row.organizationId).toBe(orgA);
+	});
+
+	it("W25-AI-2 带 Org B 头访问 / 追问 / 删除 Org A 的会话 → 全部 404，且无写入副作用", async () => {
+		const conversationId = await createConversationInOrgA("跨组织隔离会话");
+		const messagesBefore = await prisma.aiMessage.count({
+			where: { conversationId },
+		});
+
+		// 列表：Org B 上下文不含 Org A 的会话
+		const list = await request(app.getHttpServer())
+			.get("/api/ai/conversations")
+			.set(orgHeaders(user, orgB))
+			.expect(200);
+		expect(
+			(list.body.data.items as Array<{ id: string }>).map(
+				(item) => item.id,
+			),
+		).not.toContain(conversationId);
+
+		// 消息列表 → 404
+		const messages = await request(app.getHttpServer())
+			.get(`/api/ai/conversations/${conversationId}/messages`)
+			.set(orgHeaders(user, orgB))
+			.expect(404);
+		expect(messages.body.code).toBe("AI_CONVERSATION_NOT_FOUND");
+
+		// 追问 → 404（且不落消息、不建会话）
+		scriptHolder.steps = [textReply("不应发生的回复")];
+		await request(app.getHttpServer())
+			.post(`/api/ai/conversations/${conversationId}/messages`)
+			.set(orgHeaders(user, orgB))
+			.send({ content: "跨组织追问" })
+			.expect(404);
+
+		// 删除 → 404（会话仍在）
+		await request(app.getHttpServer())
+			.delete(`/api/ai/conversations/${conversationId}`)
+			.set(orgHeaders(user, orgB))
+			.expect(404);
+		expect(
+			await prisma.aiConversation.count({ where: { id: conversationId } }),
+		).toBe(1);
+		expect(
+			await prisma.aiMessage.count({ where: { conversationId } }),
+		).toBe(messagesBefore); // 跨组织追问未追加任何消息
+	});
+
+	it("W25-AI-3 非默认组织看不到 organizationId IS NULL 的存量会话；默认组织可见", async () => {
+		const legacy = await prisma.aiConversation.create({
+			data: {
+				userId: user.userId,
+				organizationId: null,
+				title: "存量 NULL 会话",
+			},
+		});
+
+		// 默认组织上下文：本人存量 NULL 会话可见
+		const inA = await request(app.getHttpServer())
+			.get("/api/ai/conversations")
+			.set(orgHeaders(user, orgA))
+			.expect(200);
+		expect(
+			(inA.body.data.items as Array<{ id: string }>).map((item) => item.id),
+		).toContain(legacy.id);
+
+		// 非默认组织：严格隔离，看不到存量 NULL 会话
+		const inB = await request(app.getHttpServer())
+			.get("/api/ai/conversations")
+			.set(orgHeaders(user, orgB))
+			.expect(200);
+		expect(
+			(inB.body.data.items as Array<{ id: string }>).map((item) => item.id),
+		).not.toContain(legacy.id);
+		await request(app.getHttpServer())
+			.get(`/api/ai/conversations/${legacy.id}/messages`)
+			.set(orgHeaders(user, orgB))
+			.expect(404);
+		await request(app.getHttpServer())
+			.get(`/api/ai/conversations/${legacy.id}/messages`)
+			.set(orgHeaders(user, orgA))
+			.expect(200);
+	});
+
+	it("W25-AI-4 被移出 Org A（DISABLED）后访问 / 发消息 / 删除 → 全部 404", async () => {
+		const conversationId = await createConversationInOrgA("被移除成员的会话");
+		const messagesBefore = await prisma.aiMessage.count({
+			where: { conversationId },
+		});
+		await prisma.membership.update({
+			where: {
+				organizationId_userId: {
+					organizationId: orgA,
+					userId: user.userId,
+				},
+			},
+			data: { status: "DISABLED" },
+		});
+
+		const list = await request(app.getHttpServer())
+			.get("/api/ai/conversations")
+			.set(orgHeaders(user, orgA))
+			.expect(404);
+		expect(list.body.code).toBe("ORGANIZATION_NOT_FOUND");
+
+		await request(app.getHttpServer())
+			.get(`/api/ai/conversations/${conversationId}/messages`)
+			.set(orgHeaders(user, orgA))
+			.expect(404);
+
+		scriptHolder.steps = [textReply("不应发生的回复")];
+		await request(app.getHttpServer())
+			.post(`/api/ai/conversations/${conversationId}/messages`)
+			.set(orgHeaders(user, orgA))
+			.send({ content: "移除后追问" })
+			.expect(404);
+
+		await request(app.getHttpServer())
+			.delete(`/api/ai/conversations/${conversationId}`)
+			.set(orgHeaders(user, orgA))
+			.expect(404);
+
+		// 无写入副作用：会话仍在，消息数未变
+		expect(
+			await prisma.aiConversation.count({ where: { id: conversationId } }),
+		).toBe(1);
+		expect(
+			await prisma.aiMessage.count({ where: { conversationId } }),
+		).toBe(messagesBefore);
+
+		// 复原成员状态（后续用例与清理不受影响）
+		await prisma.membership.update({
+			where: {
+				organizationId_userId: {
+					organizationId: orgA,
+					userId: user.userId,
+				},
+			},
+			data: { status: "ACTIVE" },
+		});
 	});
 });

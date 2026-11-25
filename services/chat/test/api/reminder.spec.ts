@@ -13,9 +13,15 @@ import {
 	createPlanToday,
 	getReminders,
 	onboardedUser,
-	REMINDER_TODAY_ISO,
 	REMINDER_WORKDAY,
 } from "../helpers/reminder-test-helper";
+import {
+	cleanupOrgLedgers,
+	createOrgLedger,
+	createSecondOrg,
+	orgHeaders,
+	type OrgLedger,
+} from "../helpers/organization-ledger-test-helper";
 import { ensureAccount } from "../helpers/plan-test-helper";
 import { utcPlus8Midnight } from "../../src/reminder/reminder-rules";
 
@@ -234,5 +240,241 @@ describe("ReminderController（接口）", () => {
 			where: { userId: user.userId },
 		});
 		expect(remaining.length).toBeGreaterThan(0);
+	});
+});
+
+/**
+ * 成员级已读与组织隔离（Goal #3B W25；LEDGER-03，收口 Goal #3A §6.3 遗留）。
+ *
+ * 断言要点：
+ * - 受邀成员（VIEWER / OPERATOR / FINANCE）标已读 200，数据库**只写该成员自己的**
+ *   ReminderRead；共享的 Reminder.readAt 保持 null（行主一读不替他人清除未读）；
+ * - 同组织成员 A 标已读不影响成员 B 与行主的未读态；
+ * - 跨组织（另一个组织的组织头）与已被移除（DISABLED）成员一律 404，且无写入副作用。
+ *
+ * 组织与成员经 test/helpers/organization-ledger-test-helper.ts 造数（成员直插
+ * Membership，角色即权限真源）；计划直插并带 organizationId = 组织（模拟 W23
+ * Actor 化写路径），懒生成时行归属当前组织。
+ */
+describe("ReminderController（成员级已读与组织隔离）", () => {
+	let ctx: TestContext;
+	let app: INestApplication;
+	const orgs: OrgLedger[] = [];
+
+	/**
+	 * 每个用例一套**独立**组织与组织内计划 + 提醒行：保证新增用例支持 -t 单用例
+	 * 独立运行（不依赖前序用例的已读态与计数）。
+	 */
+	async function setupOrgReminder(
+		label: string,
+		roles: Array<"VIEWER" | "OPERATOR" | "FINANCE">,
+	): Promise<{ org: OrgLedger; reminderId: string }> {
+		const org = await createOrgLedger(app, ctx.prisma, label, roles);
+		orgs.push(org);
+		// 组织内计划（预计使用日 = 业务今天 → R3 USE_DUE 事项）
+		const plan = await ctx.prisma.plan.create({
+			data: {
+				userId: org.owner.userId,
+				organizationId: org.orgId,
+				createdById: org.owner.userId,
+				targetCurrency: "USD",
+				targetAmount: "10000",
+				expectUseDate: REMINDER_WORKDAY,
+				latestPrepDate: REMINDER_WORKDAY,
+				planStartDate: REMINDER_WORKDAY,
+				status: "ACTIVE",
+			},
+		});
+		await ctx.prisma.planAllocation.create({
+			data: { planId: plan.id, amount: "0", usedAmount: "0" },
+		});
+		// 行主先读一次 → 懒生成组织内提醒行（行归属当前组织）
+		const list = await request(app.getHttpServer())
+			.get("/api/reminders")
+			.set(orgHeaders(org.owner, org.orgId))
+			.expect(200);
+		expect(list.body.data.items).toHaveLength(1);
+		return { org, reminderId: list.body.data.items[0].id };
+	}
+
+	/** 组织内提醒列表（按当前成员视角） */
+	function listReminders(user: TestUser, orgId: string) {
+		return request(app.getHttpServer())
+			.get("/api/reminders")
+			.set(orgHeaders(user, orgId));
+	}
+
+	/** 已读行 id 列表（成员级 ReminderRead） */
+	async function readUserIds(reminderId: string): Promise<string[]> {
+		const reads = await ctx.prisma.reminderRead.findMany({
+			where: { reminderId },
+			select: { userId: true },
+		});
+		return reads.map((read) => read.userId);
+	}
+
+	beforeAll(async () => {
+		vi.useFakeTimers({ toFake: ["Date"], now: REMINDER_WORKDAY.getTime() });
+		ctx = await createTestApp();
+		app = ctx.app;
+	});
+
+	afterAll(async () => {
+		vi.useRealTimers();
+		for (const org of orgs) {
+			await cleanupOrgLedgers(ctx.prisma, org);
+		}
+		await app.close();
+	});
+
+	it("W25-1 受邀成员（VIEWER）单条标已读 → 200；只写该成员的 ReminderRead，Reminder.readAt 保持 null", async () => {
+		const { org, reminderId } = await setupOrgReminder("rem-w25-1", [
+			"VIEWER",
+		]);
+		const member = org.members[0];
+		const res = await request(app.getHttpServer())
+			.post(`/api/reminders/${reminderId}/read`)
+			.set(orgHeaders(member, org.orgId))
+			.expect(200);
+		expect(res.body.data.id).toBe(reminderId);
+		expect(typeof res.body.data.readAt).toBe("string");
+
+		// 数据库只写该成员自己的成员级已读行
+		expect(await readUserIds(reminderId)).toEqual([member.userId]);
+		const row = await ctx.prisma.reminder.findUniqueOrThrow({
+			where: { id: reminderId },
+		});
+		expect(row.readAt).toBeNull(); // 共享 readAt 未被写入
+	});
+
+	it("W25-2 成员 A 标已读不影响成员 B 与行主的未读态", async () => {
+		const { org, reminderId } = await setupOrgReminder("rem-w25-2", [
+			"VIEWER",
+			"OPERATOR",
+		]);
+		const [memberA, memberB] = org.members;
+
+		await request(app.getHttpServer())
+			.post(`/api/reminders/${reminderId}/read`)
+			.set(orgHeaders(memberA, org.orgId))
+			.expect(200);
+
+		// 行主视角：仍未读
+		const ownerList = await listReminders(org.owner, org.orgId).expect(200);
+		const ownerItem = ownerList.body.data.items.find(
+			(item: { id: string }) => item.id === reminderId,
+		);
+		expect(ownerItem.readAt).toBeNull();
+		expect(ownerList.body.data.unreadCount).toBe(1);
+
+		// 其他受邀成员视角：仍未读
+		const otherList = await listReminders(memberB, org.orgId).expect(200);
+		const otherItem = otherList.body.data.items.find(
+			(item: { id: string }) => item.id === reminderId,
+		);
+		expect(otherItem.readAt).toBeNull();
+
+		// 标已读的成员视角：已读
+		const memberList = await listReminders(memberA, org.orgId).expect(200);
+		const memberItem = memberList.body.data.items.find(
+			(item: { id: string }) => item.id === reminderId,
+		);
+		expect(memberItem.readAt).not.toBeNull();
+		expect(memberList.body.data.unreadCount).toBe(0);
+	});
+
+	it("W25-3 受邀成员（OPERATOR）全部已读 → 200 updatedCount=1；再调为 0（幂等）；只写自己的 ReminderRead", async () => {
+		const { org, reminderId } = await setupOrgReminder("rem-w25-3", [
+			"OPERATOR",
+		]);
+		const member = org.members[0];
+		const first = await request(app.getHttpServer())
+			.post("/api/reminders/read-all")
+			.set(orgHeaders(member, org.orgId))
+			.expect(200);
+		expect(first.body.data.updatedCount).toBe(1);
+
+		const second = await request(app.getHttpServer())
+			.post("/api/reminders/read-all")
+			.set(orgHeaders(member, org.orgId))
+			.expect(200);
+		expect(second.body.data.updatedCount).toBe(0);
+
+		// 只写当前成员自己的成员级已读行
+		expect(await readUserIds(reminderId)).toEqual([member.userId]);
+		const row = await ctx.prisma.reminder.findUniqueOrThrow({
+			where: { id: reminderId },
+		});
+		expect(row.readAt).toBeNull(); // 共享 readAt 仍未被写入
+	});
+
+	it("W25-4 受邀成员（FINANCE）单条标已读 → 200（三个受邀角色均可标已读）", async () => {
+		const { org, reminderId } = await setupOrgReminder("rem-w25-4", [
+			"FINANCE",
+		]);
+		const member = org.members[0];
+		const res = await request(app.getHttpServer())
+			.post(`/api/reminders/${reminderId}/read`)
+			.set(orgHeaders(member, org.orgId))
+			.expect(200);
+		expect(res.body.data.id).toBe(reminderId);
+		expect(await readUserIds(reminderId)).toEqual([member.userId]);
+	});
+
+	it("W25-5 跨组织（另一个组织的组织头）标已读 → 404 REMINDER_NOT_FOUND，且无写入副作用", async () => {
+		const { org, reminderId } = await setupOrgReminder("rem-w25-5", []);
+		// owner 另建的空组织（非默认组织）：组织头指向它，目标提醒不可见
+		const otherOrg = await createSecondOrg(
+			ctx.prisma,
+			org.owner,
+			"rem-w25-5-b",
+		);
+		orgs.push(otherOrg);
+
+		const res = await request(app.getHttpServer())
+			.post(`/api/reminders/${reminderId}/read`)
+			.set(orgHeaders(org.owner, otherOrg.orgId))
+			.expect(404);
+		expect(res.body.code).toBe("REMINDER_NOT_FOUND");
+		expect(await readUserIds(reminderId)).not.toContain(org.owner.userId);
+
+		// 全部已读在另一个组织作用域内没有目标行：200 且 updatedCount = 0（不误标他组织）
+		const all = await request(app.getHttpServer())
+			.post("/api/reminders/read-all")
+			.set(orgHeaders(org.owner, otherOrg.orgId))
+			.expect(200);
+		expect(all.body.data.updatedCount).toBe(0);
+		expect(await readUserIds(reminderId)).not.toContain(org.owner.userId);
+	});
+
+	it("W25-6 已被移除（DISABLED）的成员标已读 / 全部已读 → 404，且无写入副作用", async () => {
+		const { org, reminderId } = await setupOrgReminder("rem-w25-6", [
+			"FINANCE",
+		]);
+		const member = org.members[0];
+		await ctx.prisma.membership.update({
+			where: {
+				organizationId_userId: {
+					organizationId: org.orgId,
+					userId: member.userId,
+				},
+			},
+			data: { status: "DISABLED" },
+		});
+
+		const single = await request(app.getHttpServer())
+			.post(`/api/reminders/${reminderId}/read`)
+			.set(orgHeaders(member, org.orgId))
+			.expect(404);
+		expect(single.body.code).toBe("ORGANIZATION_NOT_FOUND");
+
+		const all = await request(app.getHttpServer())
+			.post("/api/reminders/read-all")
+			.set(orgHeaders(member, org.orgId))
+			.expect(404);
+		expect(all.body.code).toBe("ORGANIZATION_NOT_FOUND");
+
+		// 无写入副作用：已读行集合为空
+		expect(await readUserIds(reminderId)).toEqual([]);
 	});
 });

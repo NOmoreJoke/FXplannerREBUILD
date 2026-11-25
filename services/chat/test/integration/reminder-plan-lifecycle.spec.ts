@@ -14,6 +14,12 @@ import {
 	REMINDER_TODAY_ISO,
 	REMINDER_WORKDAY,
 } from "../helpers/reminder-test-helper";
+import {
+	cleanupOrgLedgers,
+	createOrgLedger,
+	orgHeaders,
+	type OrgLedger,
+} from "../helpers/organization-ledger-test-helper";
 import { ensureAccount } from "../helpers/plan-test-helper";
 import { utcPlus8Midnight } from "../../src/reminder/reminder-rules";
 
@@ -43,6 +49,7 @@ describe("提醒 × 计划生命周期（集成）", () => {
 	let ctx: TestContext;
 	let app: INestApplication;
 	const users: TestUser[] = [];
+	const orgs: OrgLedger[] = [];
 
 	async function setupUser(label: string): Promise<TestUser> {
 		const user = await createOnboardedUser(app, label);
@@ -58,6 +65,8 @@ describe("提醒 × 计划生命周期（集成）", () => {
 			targetAmount?: string;
 			allocAmount?: string;
 			usedAmount?: string;
+			/** 组织化写路径（W23 起计划带 organizationId） */
+			organizationId?: string;
 		} = {},
 	): Promise<string> {
 		const expectUseDate = new Date(
@@ -67,6 +76,7 @@ describe("提醒 × 计划生命周期（集成）", () => {
 			data: {
 				userId,
 				name: null,
+				organizationId: options.organizationId ?? null,
 				targetCurrency: "USD",
 				targetAmount: options.targetAmount ?? "10000",
 				expectUseDate,
@@ -108,6 +118,10 @@ describe("提醒 × 计划生命周期（集成）", () => {
 
 	afterAll(async () => {
 		vi.useRealTimers();
+		// 组织用例的派生行与组织本身先清（不漏孤儿组织），再清个人用户
+		for (const org of orgs) {
+			await cleanupOrgLedgers(ctx.prisma, org);
+		}
 		for (const user of users) {
 			await cleanupUser(ctx.prisma, user.userId);
 		}
@@ -283,5 +297,62 @@ describe("提醒 × 计划生命周期（集成）", () => {
 		expect(rows[0].scheduledFor.getTime()).toBe(
 			utcPlus8Midnight(REMINDER_WORKDAY).getTime(),
 		);
+	});
+
+	/**
+	 * 流程 5（Goal #3B W25；LEDGER-03 成员级已读）：同一组织内成员的已读态互不影响，
+	 * 且标已读**不写共享的 Reminder.readAt**（行主一读不替他人清除未读）。
+	 */
+	it("W25 流程 5：成员级已读——成员 A 标已读不影响成员 B 与行主的未读态；Reminder.readAt 保持 null", async () => {
+		const org = await createOrgLedger(app, ctx.prisma, "lc-org", [
+			"VIEWER",
+			"FINANCE",
+		]);
+		orgs.push(org);
+		const planId = await seedPlan(org.owner.userId, {
+			organizationId: org.orgId,
+		});
+
+		// 行主读取 → 懒生成组织内提醒行（行归属当前组织）
+		const ownerList = await request(app.getHttpServer())
+			.get("/api/reminders")
+			.set(orgHeaders(org.owner, org.orgId))
+			.expect(200);
+		expect(ownerList.body.data.items).toHaveLength(1);
+		const reminderId = ownerList.body.data.items[0].id;
+		expect(ownerList.body.data.items[0].planId).toBe(planId);
+
+		// 成员 A 标已读 → 200
+		await request(app.getHttpServer())
+			.post(`/api/reminders/${reminderId}/read`)
+			.set(orgHeaders(org.members[0], org.orgId))
+			.expect(200);
+
+		// 成员 B 仍未读
+		const bList = await request(app.getHttpServer())
+			.get("/api/reminders")
+			.set(orgHeaders(org.members[1], org.orgId))
+			.expect(200);
+		expect(bList.body.data.items[0].readAt).toBeNull();
+		expect(bList.body.data.unreadCount).toBe(1);
+
+		// 行主仍未读（行主读不替他人清除，反之亦然）
+		const ownerAfter = await request(app.getHttpServer())
+			.get("/api/reminders")
+			.set(orgHeaders(org.owner, org.orgId))
+			.expect(200);
+		expect(ownerAfter.body.data.items[0].readAt).toBeNull();
+
+		// 数据库：只有成员 A 的成员级已读行；共享 Reminder.readAt 未被写入
+		const reads = await ctx.prisma.reminderRead.findMany({
+			where: { reminderId },
+			select: { userId: true },
+		});
+		expect(reads.map((read) => read.userId)).toEqual([org.members[0].userId]);
+		const row = await ctx.prisma.reminder.findUniqueOrThrow({
+			where: { id: reminderId },
+		});
+		expect(row.readAt).toBeNull();
+		expect(row.organizationId).toBe(org.orgId); // 新行归属当前组织
 	});
 });

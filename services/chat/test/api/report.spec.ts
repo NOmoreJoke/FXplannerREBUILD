@@ -25,6 +25,12 @@ import {
 	seedUsage,
 } from "../helpers/report-test-helper";
 import {
+	cleanupOrgLedgers,
+	createOrgLedger,
+	orgHeaders,
+	type OrgLedger,
+} from "../helpers/organization-ledger-test-helper";
+import {
 	cleanupPlanData,
 	seedPlanWithAllocation,
 } from "../helpers/plan-test-helper";
@@ -424,5 +430,127 @@ describe("usedQuantity 双接口口径一致（UI-P0③ 回归）", () => {
 		expect(detail.body.data.usedAmount).toBe("0.0000");
 		expect(report.body.data.plan.usedQuantity).toBe("0.0000");
 		expect(report.body.data.cost.usedTotalCost).toBeNull(); // 无分摊不补 0
+	});
+});
+
+/**
+ * 报告与默认组织创建者存量计划的对称口径（Goal #3B W25；收口 W24 对抗审 N-1 / P-2）。
+ *
+ * 背景：W24 已把使用记录收口到组织，但创建者仍可能有**未回填 organizationId** 的
+ * 存量 Plan（及其使用记录 / 成本批次）。若报告按 compatReadWhere(actor) 读计划，
+ * 创建者（默认组织上下文能看到自己的 NULL 行）与受邀成员（非默认组织上下文看不到
+ * 行主的 NULL 行）会看到**不同的计划集合**：成员报告缺计划、缺 Plan 维度的成本归属。
+ *
+ * 断言：同组织的 Owner 与受邀成员对同一组织得到**逐字段一致**的报告视图
+ * （列表项集合一致 + 单计划详情 200 且数值一致）。
+ */
+describe("ReportController（成员与创建者的报告视图对称，W25）", () => {
+	let ctx: TestContext;
+	let app: INestApplication;
+	let org: OrgLedger;
+	let legacyPlanId: string;
+
+	beforeAll(async () => {
+		ctx = await createTestApp();
+		app = ctx.app;
+		org = await createOrgLedger(app, ctx.prisma, "rpt-org", ["FINANCE"]);
+
+		// 存量计划：创建者名下、organizationId 尚未回填（兼容窗口形态）
+		const plan = await ctx.prisma.plan.create({
+			data: {
+				userId: org.owner.userId,
+				organizationId: null,
+				name: "存量计划",
+				targetCurrency: "USD",
+				targetAmount: "10000",
+				expectUseDate: new Date("2026-12-01T00:00:00.000Z"),
+				latestPrepDate: new Date("2026-11-01T00:00:00.000Z"),
+				status: "ACTIVE",
+			},
+		});
+		legacyPlanId = plan.id;
+		await ctx.prisma.planAllocation.create({
+			data: { planId: plan.id, amount: "0", usedAmount: "0" },
+		});
+		// 买入批次 + 使用记录（同为存量 NULL 行）
+		const lot = await seedCostLot(ctx.prisma, org.owner.userId, "USD", {
+			sourceType: "PURCHASE",
+			quantity: "1000",
+			principal: "7800",
+			fee: "0",
+			planId: plan.id,
+		});
+		await seedUsage(ctx.prisma, org.owner.userId, {
+			planId: plan.id,
+			currencyCode: "USD",
+			amount: "1000",
+			allocations: [{ lotId: lot.lotId, quantity: "1000", cost: "7800" }],
+		});
+	});
+
+	afterAll(async () => {
+		try {
+			await cleanupOrgLedgers(ctx.prisma, org);
+		} finally {
+			await app?.close();
+		}
+	});
+
+	it("W25-RPT-1 同组织 Owner 与受邀成员的报告视图逐字段一致（存量 NULL 计划同样可见）", async () => {
+		const ownerList = await request(app.getHttpServer())
+			.get("/api/reports/plans")
+			.set(orgHeaders(org.owner, org.orgId))
+			.expect(200);
+		const memberList = await request(app.getHttpServer())
+			.get("/api/reports/plans")
+			.set(orgHeaders(org.members[0], org.orgId))
+			.expect(200);
+
+		// 创建者视角：存量计划可见，且带完整成本归属
+		expect(ownerList.body.data.baseCurrency).toBe("CNY");
+		const ownerItems = ownerList.body.data.items as Array<{
+			planId: string;
+			usedQuantity: string;
+			usedTotalCost: string;
+			usedUnitCost: string;
+		}>;
+		expect(ownerItems).toHaveLength(1);
+		expect(ownerItems[0].planId).toBe(legacyPlanId);
+		expect(ownerItems[0].usedQuantity).toBe("1000.0000");
+		expect(ownerItems[0].usedTotalCost).toBe("7800.0000");
+		expect(ownerItems[0].usedUnitCost).toBe("7.80000000");
+
+		// 受邀成员视角：与创建者**逐字段一致**（修复前此处为空集）
+		expect(memberList.body.data).toEqual(ownerList.body.data);
+	});
+
+	it("W25-RPT-2 受邀成员读取存量计划详情 → 200 且数值与创建者一致（修复前 404）", async () => {
+		const ownerDetail = await request(app.getHttpServer())
+			.get(`/api/reports/plans/${legacyPlanId}`)
+			.set(orgHeaders(org.owner, org.orgId))
+			.expect(200);
+		const memberDetail = await request(app.getHttpServer())
+			.get(`/api/reports/plans/${legacyPlanId}`)
+			.set(orgHeaders(org.members[0], org.orgId))
+			.expect(200);
+
+		// meta.generatedAt 是每次请求的生成时刻（天然不同），其余字段逐字段一致
+		expect(memberDetail.body.data.plan).toEqual(ownerDetail.body.data.plan);
+		expect(memberDetail.body.data.cost).toEqual(ownerDetail.body.data.cost);
+		expect(memberDetail.body.data.sourceSplit).toEqual(
+			ownerDetail.body.data.sourceSplit,
+		);
+		expect(memberDetail.body.data.yieldSection).toEqual(
+			ownerDetail.body.data.yieldSection,
+		);
+		expect(memberDetail.body.data.meta.updatedAt).toBe(
+			ownerDetail.body.data.meta.updatedAt,
+		);
+		expect(memberDetail.body.data.plan.usedQuantity).toBe("1000.0000");
+		expect(memberDetail.body.data.cost.usedTotalCost).toBe("7800.0000");
+		expect(memberDetail.body.data.sourceSplit.purchase).toEqual({
+			quantity: "1000.0000",
+			cost: "7800.0000",
+		});
 	});
 });
