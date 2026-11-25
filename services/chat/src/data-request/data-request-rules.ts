@@ -311,10 +311,20 @@ export function toDisplayStatus(
 	return "SUBMITTED";
 }
 
-/** 下载入口（方案 §7.3）：仅 EXPORT COMPLETED 且未过期可下载，过期后为 null */
+/**
+ * 下载入口（方案 §7.3）：仅 EXPORT COMPLETED 且未过期可下载，过期后为 null。
+ *
+ * URL 按数据域分流（技术方案 §9.1 物理拆分）：
+ * - PERSONAL → `/api/data-requests/{id}/download`（个人域下载端点）；
+ * - ORGANIZATION → `/api/organizations/current/data-requests/{id}/download`
+ *   （组织域下载端点：实时复验成员资格与权限——**降权为 Operator / Viewer → 403
+ *   PERMISSION_DENIED**（权限点丢失）；**被移出组织（DISABLED）或切错组织 → 404**
+ *   （组织上下文不可达 / 组织绑定校验失败））。
+ */
 export function resolveDownload(
 	existing: {
 		id: string;
+		scope: string;
 		type: string;
 		status: string;
 		downloadExpiresAt: Date | null;
@@ -331,7 +341,10 @@ export function resolveDownload(
 		return null;
 	}
 	return {
-		url: `/api/data-requests/${existing.id}/download`,
+		url:
+			existing.scope === "ORGANIZATION"
+				? `/api/organizations/current/data-requests/${existing.id}/download`
+				: `/api/data-requests/${existing.id}/download`,
 		expiresAt: existing.downloadExpiresAt,
 	};
 }
@@ -372,43 +385,74 @@ export function resolveAdvance(
 }
 
 // ─────────────────────────────────────────────────────────────
-// 锁判定
+// 锁判定（双守卫：个人账号锁 / 组织数据锁；技术方案 §9.1–§9.3）
 // ─────────────────────────────────────────────────────────────
 
-/** 锁判定结果：null = 放行 */
-export type LockResolution = null | "ACCOUNT_PENDING_DELETION" | "DATA_REQUEST_LOCKED";
+/**
+ * 锁判定结果：null = 放行。
+ *
+ * 两个错误码严格区分（技术方案 §7.1）：
+ * - `ACCOUNT_PENDING_DELETION`：**本人**账号注销处理中（个人锁）；
+ * - `ORGANIZATION_DATA_LOCKED`：**当前组织**账本被清空 / 删除处理中（组织锁）。
+ */
+export type LockResolution =
+	| null
+	| "ACCOUNT_PENDING_DELETION"
+	| "ORGANIZATION_DATA_LOCKED";
 
 /**
- * 锁判定（方案 §3.3 + 技术方案 §9.1 锁范围）：
- * - EXPORT（任一 scope）不锁写：导出是只读快照；
- * - PERSONAL DELETION 锁个人账号：任何进行中状态 → 全端点拦截（除白名单）；
- * - ORGANIZATION CLEAR / DELETION 锁组织写：PROCESSING/FAILED 全端点拦截
- *   （残留数据不当作正常账本，doc 01:124），PENDING 冷静期仅拦非 GET
- *   （停写不停看，doc 01:122）；
- * - 终态放行。
- * scope 缺省按 defaultScopeForType 解读（CLEAR 只可能是组织域——PERSONAL + CLEAR
- * 被 DB CHECK 排除；其余为库列默认的 PERSONAL）；库内出现未知 scope 一律 fail-closed 上锁。
+ * 个人锁判定结果（只可能出现 ACCOUNT_PENDING_DELETION）。
+ * 命名纪律（评审 N-6）：与契约层 authorization/guards/organization-lock.guard.ts 的
+ * `PersonalLockErrorCode` / `OrganizationLockErrorCode` / `CombinedLockResolution`
+ * 区隔，两层不出现同名类型。
  */
-export function resolveLock(
-	lock: { scope?: string; type: string; status: string } | null,
-	method: string,
-): LockResolution {
+export type PersonalLockResolution = null | "ACCOUNT_PENDING_DELETION";
+
+/** 组织锁判定结果（只可能出现 ORGANIZATION_DATA_LOCKED） */
+export type OrganizationLockResolution = null | "ORGANIZATION_DATA_LOCKED";
+
+/**
+ * 个人账号锁判定（PersonalAccountLockGuard；技术方案 §9.1–§9.3）：
+ * - PERSONAL DELETION 进行中（PENDING / PROCESSING / FAILED）→ 锁本人账号
+ *   （`403 ACCOUNT_PENDING_DELETION`），除白名单端点外全端点拦截；
+ * - PERSONAL EXPORT 是只读快照，不锁业务；
+ * - 未知类型 fail-closed 上锁（库内出现未预期组合时不得放行）。
+ */
+export function resolvePersonalLock(
+	lock: { type: string; status: string } | null,
+): PersonalLockResolution {
 	if (!lock) return null;
-	if (lock.type === "EXPORT") return null;
 	if (!(ACTIVE_STATUSES as readonly string[]).includes(lock.status)) {
 		return null;
 	}
-	const scope = lock.scope ?? defaultScopeForType(lock.type as DataRequestType);
-	if (scope === "PERSONAL") {
-		return lock.type === "DELETION"
-			? "ACCOUNT_PENDING_DELETION"
-			: "DATA_REQUEST_LOCKED";
-	}
-	if (scope !== "ORGANIZATION") return "DATA_REQUEST_LOCKED";
-	if (lock.status === "PENDING" && method.toUpperCase() === "GET") {
+	if (lock.type === "EXPORT") return null;
+	return "ACCOUNT_PENDING_DELETION";
+}
+
+/**
+ * 组织数据锁判定（OrganizationLockGuard；技术方案 §9.1–§9.3）：
+ * - CLEAR PENDING（冷静期）：停写不停看——仅拦非 GET（doc 01:122）；
+ * - CLEAR PROCESSING / FAILED 与 DELETION 任意进行中状态：全端点拦截
+ *   （`403 ORGANIZATION_DATA_LOCKED`；残留数据不当作正常账本，doc 01:124）；
+ * - EXPORT 不锁写（只读快照）；未知类型 fail-closed 上锁。
+ */
+export function resolveOrganizationLock(
+	lock: { type: string; status: string } | null,
+	method: string,
+): OrganizationLockResolution {
+	if (!lock) return null;
+	if (!(ACTIVE_STATUSES as readonly string[]).includes(lock.status)) {
 		return null;
 	}
-	return "DATA_REQUEST_LOCKED";
+	if (lock.type === "EXPORT") return null;
+	if (
+		lock.type === "CLEAR" &&
+		lock.status === "PENDING" &&
+		method.toUpperCase() === "GET"
+	) {
+		return null;
+	}
+	return "ORGANIZATION_DATA_LOCKED";
 }
 
 // ─────────────────────────────────────────────────────────────

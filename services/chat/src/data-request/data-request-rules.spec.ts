@@ -13,7 +13,8 @@ import {
 	resolveCreationConflict,
 	resolveDownload,
 	resolveLastOwnerBlock,
-	resolveLock,
+	resolveOrganizationLock,
+	resolvePersonalLock,
 	resolveScopeType,
 	requiredPermission,
 	SCOPE_ALLOWED_TYPES,
@@ -197,6 +198,7 @@ describe("data-request-rules 展示映射", () => {
 describe("data-request-rules 下载入口", () => {
 	const exportDone = {
 		id: "req-1",
+		scope: "PERSONAL",
 		type: "EXPORT",
 		status: "COMPLETED",
 		downloadExpiresAt: new Date(T0.getTime() + 24 * 3600 * 1000),
@@ -217,43 +219,63 @@ describe("data-request-rules 下载入口", () => {
 		expect(resolveDownload({ ...exportDone, type: "CLEAR" }, T0)).toBeNull();
 		expect(resolveDownload({ ...exportDone, status: "PENDING" }, T0)).toBeNull();
 	});
+
+	it("组织域导出下载入口指向组织端点（物理拆分）", () => {
+		expect(resolveDownload({ ...exportDone, scope: "ORGANIZATION" }, T0)).toEqual({
+			url: "/api/organizations/current/data-requests/req-1/download",
+			expiresAt: exportDone.downloadExpiresAt,
+		});
+	});
 });
 
-describe("data-request-rules 锁判定", () => {
-	it("DELETION 三态全锁（ACCOUNT_PENDING_DELETION）", () => {
+describe("data-request-rules 锁判定（双守卫拆分）", () => {
+	it("个人锁：DELETION 三态全锁（ACCOUNT_PENDING_DELETION）", () => {
 		for (const status of ["PENDING", "PROCESSING", "FAILED"]) {
-			for (const method of ["GET", "POST"]) {
-				expect(resolveLock({ type: "DELETION", status }, method)).toBe(
-					"ACCOUNT_PENDING_DELETION",
-				);
-			}
+			expect(resolvePersonalLock({ type: "DELETION", status })).toBe(
+				"ACCOUNT_PENDING_DELETION",
+			);
 		}
 	});
 
-	it("CLEAR PROCESSING/FAILED 全锁（DATA_REQUEST_LOCKED）", () => {
+	it("个人锁：EXPORT 不锁业务（只读快照）", () => {
+		for (const status of ["PENDING", "PROCESSING", "FAILED"]) {
+			expect(resolvePersonalLock({ type: "EXPORT", status })).toBeNull();
+		}
+	});
+
+	it("组织锁：CLEAR PROCESSING/FAILED 全锁（ORGANIZATION_DATA_LOCKED）", () => {
 		for (const status of ["PROCESSING", "FAILED"]) {
 			for (const method of ["GET", "POST"]) {
-				expect(resolveLock({ type: "CLEAR", status }, method)).toBe(
-					"DATA_REQUEST_LOCKED",
+				expect(resolveOrganizationLock({ type: "CLEAR", status }, method)).toBe(
+					"ORGANIZATION_DATA_LOCKED",
 				);
 			}
 		}
 	});
 
-	it("CLEAR PENDING 仅锁非 GET（停写不停看）", () => {
-		expect(resolveLock({ type: "CLEAR", status: "PENDING" }, "GET")).toBeNull();
-		expect(resolveLock({ type: "CLEAR", status: "PENDING" }, "POST")).toBe(
-			"DATA_REQUEST_LOCKED",
+	it("组织锁：CLEAR PENDING 仅锁非 GET（停写不停看）", () => {
+		expect(resolveOrganizationLock({ type: "CLEAR", status: "PENDING" }, "GET")).toBeNull();
+		expect(resolveOrganizationLock({ type: "CLEAR", status: "PENDING" }, "POST")).toBe(
+			"ORGANIZATION_DATA_LOCKED",
 		);
-		expect(resolveLock({ type: "CLEAR", status: "PENDING" }, "patch")).toBe(
-			"DATA_REQUEST_LOCKED",
+		expect(resolveOrganizationLock({ type: "CLEAR", status: "PENDING" }, "patch")).toBe(
+			"ORGANIZATION_DATA_LOCKED",
 		);
+	});
+
+	it("组织锁：DELETION 进行中三态全端点拦截（含 GET）", () => {
+		for (const status of ["PENDING", "PROCESSING", "FAILED"]) {
+			expect(resolveOrganizationLock({ type: "DELETION", status }, "GET")).toBe(
+				"ORGANIZATION_DATA_LOCKED",
+			);
+		}
 	});
 
 	it("无锁或终态放行", () => {
-		expect(resolveLock(null, "POST")).toBeNull();
-		expect(resolveLock({ type: "CLEAR", status: "COMPLETED" }, "POST")).toBeNull();
-		expect(resolveLock({ type: "DELETION", status: "CANCELLED" }, "GET")).toBeNull();
+		expect(resolvePersonalLock(null)).toBeNull();
+		expect(resolveOrganizationLock(null, "POST")).toBeNull();
+		expect(resolvePersonalLock({ type: "DELETION", status: "COMPLETED" })).toBeNull();
+		expect(resolveOrganizationLock({ type: "CLEAR", status: "CANCELLED" }, "POST")).toBeNull();
 	});
 });
 
@@ -482,84 +504,90 @@ describe("data-request-rules scope × type 合法性矩阵（与 DB CHECK 同口
 	});
 });
 
-describe("data-request-rules 双域锁语义（技术方案 §9.1 锁范围）", () => {
+describe("data-request-rules 双域锁语义（技术方案 §9.1–§9.3 锁范围）", () => {
 	const METHODS = ["GET", "POST", "PATCH", "DELETE", "get"];
 	const ACTIVE = ["PENDING", "PROCESSING", "FAILED"] as const;
 	const TERMINAL = ["COMPLETED", "CANCELLED"] as const;
 
 	it("导出不锁写：PERSONAL / ORGANIZATION EXPORT 在任何状态、任何方法下都放行", () => {
-		for (const scope of ["PERSONAL", "ORGANIZATION"] as const) {
-			for (const status of [...ACTIVE, ...TERMINAL]) {
-				for (const method of METHODS) {
-					expect(
-						resolveLock({ scope, type: "EXPORT", status }, method),
-						`${scope} ${status} ${method}`,
-					).toBeNull();
-				}
+		for (const status of [...ACTIVE, ...TERMINAL]) {
+			for (const method of METHODS) {
+				expect(resolvePersonalLock({ type: "EXPORT", status }), `PERSONAL ${status} ${method}`).toBeNull();
+				expect(
+					resolveOrganizationLock({ type: "EXPORT", status }, method),
+					`ORGANIZATION ${status} ${method}`,
+				).toBeNull();
 			}
 		}
 	});
 
 	it("PERSONAL DELETION 锁个人账号：进行中三态全端点拦截（含 GET）", () => {
 		for (const status of ACTIVE) {
-			for (const method of METHODS) {
-				expect(
-					resolveLock({ scope: "PERSONAL", type: "DELETION", status }, method),
-				).toBe("ACCOUNT_PENDING_DELETION");
-			}
+			expect(resolvePersonalLock({ type: "DELETION", status })).toBe(
+				"ACCOUNT_PENDING_DELETION",
+			);
 		}
 	});
 
-	it.each(["CLEAR", "DELETION"] as const)(
-		"ORGANIZATION %s 锁组织写：冷静期仅拦非 GET，处理中/失败全拦",
-		(type) => {
-			for (const status of ["PROCESSING", "FAILED"] as const) {
-				for (const method of METHODS) {
-					expect(
-						resolveLock({ scope: "ORGANIZATION", type, status }, method),
-					).toBe("DATA_REQUEST_LOCKED");
-				}
+	it("ORGANIZATION CLEAR 锁组织写：冷静期仅拦非 GET，处理中/失败全拦", () => {
+		for (const status of ["PROCESSING", "FAILED"] as const) {
+			for (const method of METHODS) {
+				expect(resolveOrganizationLock({ type: "CLEAR", status }, method)).toBe(
+					"ORGANIZATION_DATA_LOCKED",
+				);
 			}
-			expect(resolveLock({ scope: "ORGANIZATION", type, status: "PENDING" }, "GET")).toBeNull();
-			for (const method of ["POST", "PATCH", "DELETE", "get"]) {
-				// 小写 get 仍视为读（与既有实现的大小写无关口径一致）
-				expect(
-					resolveLock({ scope: "ORGANIZATION", type, status: "PENDING" }, method),
-				).toBe(method === "get" ? null : "DATA_REQUEST_LOCKED");
+		}
+		expect(resolveOrganizationLock({ type: "CLEAR", status: "PENDING" }, "GET")).toBeNull();
+		for (const method of ["POST", "PATCH", "DELETE", "get"]) {
+			// 小写 get 仍视为读（大小写无关口径）
+			expect(resolveOrganizationLock({ type: "CLEAR", status: "PENDING" }, method)).toBe(
+				method === "get" ? null : "ORGANIZATION_DATA_LOCKED",
+			);
+		}
+	});
+
+	it("ORGANIZATION DELETION 锁组织写：进行中三态全端点拦截（含 GET）", () => {
+		for (const status of ACTIVE) {
+			for (const method of METHODS) {
+				expect(resolveOrganizationLock({ type: "DELETION", status }, method)).toBe(
+					"ORGANIZATION_DATA_LOCKED",
+				);
 			}
-		},
-	);
+		}
+	});
 
 	it("组织锁不会冒充个人账号注销：ORGANIZATION DELETION 永不返回 ACCOUNT_PENDING_DELETION", () => {
 		for (const status of ACTIVE) {
-			expect(
-				resolveLock({ scope: "ORGANIZATION", type: "DELETION", status }, "GET"),
-			).not.toBe("ACCOUNT_PENDING_DELETION");
+			expect(resolveOrganizationLock({ type: "DELETION", status }, "GET")).not.toBe(
+				"ACCOUNT_PENDING_DELETION",
+			);
 		}
 	});
 
-	it("scope 缺省按 defaultScopeForType 解读（CLEAR = 组织域，DELETION = 个人域）；未知 scope fail-closed 上锁", () => {
-		expect(resolveLock({ type: "DELETION", status: "PENDING" }, "GET")).toBe(
-			"ACCOUNT_PENDING_DELETION",
-		);
-		// CLEAR 只可能是组织域：缺省即「冷静期停写不停看」，而非个人账号锁
-		expect(resolveLock({ type: "CLEAR", status: "PENDING" }, "GET")).toBeNull();
-		expect(resolveLock({ type: "CLEAR", status: "PENDING" }, "POST")).toBe(
-			"DATA_REQUEST_LOCKED",
-		);
+	it("个人锁不会冒充组织锁：PERSONAL DELETION 永不返回 ORGANIZATION_DATA_LOCKED", () => {
+		for (const status of ACTIVE) {
+			expect(resolvePersonalLock({ type: "DELETION", status })).not.toBe(
+				"ORGANIZATION_DATA_LOCKED",
+			);
+		}
+	});
+
+	it("未知类型 fail-closed 上锁（库内出现未预期组合时不得放行）", () => {
 		for (const method of METHODS) {
-			expect(
-				resolveLock({ scope: "TEAM", type: "DELETION", status: "PENDING" }, method),
-			).toBe("DATA_REQUEST_LOCKED");
+			expect(resolvePersonalLock({ type: "WEIRD", status: "PENDING" })).toBe(
+				"ACCOUNT_PENDING_DELETION",
+			);
+			expect(resolveOrganizationLock({ type: "WEIRD", status: "PENDING" }, method)).toBe(
+				"ORGANIZATION_DATA_LOCKED",
+			);
 		}
 	});
 
-	it("终态放行（任一 scope）", () => {
-		for (const scope of ["PERSONAL", "ORGANIZATION"] as const) {
-			for (const status of TERMINAL) {
-				expect(resolveLock({ scope, type: "DELETION", status }, "POST")).toBeNull();
-				expect(resolveLock({ scope, type: "CLEAR", status }, "POST")).toBeNull();
-			}
+	it("终态放行（任一数据域）", () => {
+		for (const status of TERMINAL) {
+			expect(resolvePersonalLock({ type: "DELETION", status })).toBeNull();
+			expect(resolveOrganizationLock({ type: "DELETION", status }, "POST")).toBeNull();
+			expect(resolveOrganizationLock({ type: "CLEAR", status }, "POST")).toBeNull();
 		}
 	});
 });

@@ -18,7 +18,6 @@ import {
 } from "../authorization/authorization.types";
 import {
 	OrganizationNotFoundException,
-	OrganizationRequiredException,
 	PermissionDeniedException,
 } from "../authorization/authorization.errors";
 import { can } from "../authorization/permission-policy";
@@ -29,19 +28,20 @@ import {
 	assertCredentialUsable,
 	auditActionOf,
 	computeDueAt,
-	defaultScopeForType,
 	requiredPermission,
 	resolveAdvance,
 	resolveCancel,
 	resolveCreationConflict,
 	resolveDownload,
-	resolveLock,
+	resolveOrganizationLock,
+	resolvePersonalLock,
 	resolveScopeType,
 	toDisplayStatus,
 	type DataRequestAuditVerb,
 	type DataRequestScope,
 	type DataRequestType,
-	type LockResolution,
+	type OrganizationLockResolution,
+	type PersonalLockResolution,
 	type OtpPurpose,
 	type VerificationErrorCode,
 	type VerificationResolution,
@@ -86,6 +86,21 @@ import {
 type Tx = Prisma.TransactionClient;
 
 /**
+ * 数据域上下文（技术方案 §9.1–§9.2 双域物理拆分）。
+ *
+ * - PERSONAL：个人身份与个人数据（不挂组织、不涉及组织角色）；
+ * - ORGANIZATION：当前组织的共享账本与组织数据——目标组织由**组织上下文守卫**
+ *   解析（X-Organization-Id），Service 只消费已解析结果，不再自行猜组织。
+ */
+export type DataRequestDomain =
+	| { scope: "PERSONAL"; organizationId: null; membershipId: null }
+	| {
+			scope: "ORGANIZATION";
+			organizationId: string;
+			membershipId: string;
+	  };
+
+/**
  * 到期清理事务参数：显式超时，不依赖 PrismaClient 的交互式事务默认值（仅 5s）——
  * 大账本的清空 / 组织删除可能远超 5s，超时即整体回滚置 FAILED 待重试。
  */
@@ -98,9 +113,6 @@ const CLEANUP_TX_OPTIONS = { maxWait: 30_000, timeout: 120_000 } as const;
 const EXPORT_FILENAME_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.zip$/;
 
-/** X-Organization-Id 原始请求头（缺省 undefined；数组头一律拒绝） */
-export type OrganizationHeader = string | string[] | undefined;
-
 /** 读时推进的单次查询选出的行（锁判定数据源 + 到期候选） */
 interface ActiveRequestRow {
 	id: string;
@@ -112,6 +124,18 @@ interface ActiveRequestRow {
 	requestedAt: Date;
 	dueAt: Date;
 }
+
+/** 锁查询的公共列（个人域单查与双锁合并查共用） */
+const LOCK_ROW_SELECT = {
+	id: true,
+	userId: true,
+	scope: true,
+	organizationId: true,
+	type: true,
+	status: true,
+	requestedAt: true,
+	dueAt: true,
+} as const;
 
 /** 请求行 → 视图所需的字段 */
 type RequestViewSource = Pick<
@@ -188,11 +212,41 @@ export class DataRequestService {
 	// 查询
 	// ─────────────────────────────────────────────────────────
 
-	/** 当前请求（设置页/进度页）：最近 30 天内非 CANCELLED 的最新请求；无 → null */
-	async getCurrentView(userId: string): Promise<DataRequestViewDto | null> {
+	/**
+	 * 当前请求（设置页/进度页）：最近 30 天内非 CANCELLED 的最新请求；无 → null。
+	 *
+	 * 双域拆分（技术方案 §9.1）：个人域只看本人名下的 PERSONAL 请求；组织域看
+	 * 当前组织名下的 ORGANIZATION 请求（任意有效成员可查，见组织端点）。
+	 */
+	async getCurrentView(
+		userId: string,
+		scope: DataRequestScope,
+	): Promise<DataRequestViewDto | null> {
 		const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 		const request = await this.prisma.dataRequest.findFirst({
-			where: { userId, requestedAt: { gte: since }, status: { not: "CANCELLED" } },
+			where: {
+				userId,
+				scope,
+				requestedAt: { gte: since },
+				status: { not: "CANCELLED" },
+			},
+			orderBy: { requestedAt: "desc" },
+		});
+		return request ? this.toView(request) : null;
+	}
+
+	/** 组织域当前请求（组织进度页）：当前组织最近 30 天内非 CANCELLED 的最新请求 */
+	async getOrganizationCurrentView(
+		organizationId: string,
+	): Promise<DataRequestViewDto | null> {
+		const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+		const request = await this.prisma.dataRequest.findFirst({
+			where: {
+				organizationId,
+				scope: "ORGANIZATION",
+				requestedAt: { gte: since },
+				status: { not: "CANCELLED" },
+			},
 			orderBy: { requestedAt: "desc" },
 		});
 		return request ? this.toView(request) : null;
@@ -200,39 +254,34 @@ export class DataRequestService {
 
 	/**
 	 * 清空确认页数据（方案 §7.4）：**当前组织**各业务记录数量 + 可下载导出提示；
-	 * 目标组织取 X-Organization-Id（单组织用户可缺省）；未建账 409 对齐 settings 先例。
+	 * 目标组织由组织上下文守卫解析（Service 不再自行猜组织）；需 data.clear 权限。
 	 * 记录数量口径与清空 / 导出同一账本作用域（organizationLedgerScope）。
 	 */
 	async getImpact(
 		userId: string,
-		organization?: OrganizationHeader,
+		organizationId: string,
 	): Promise<ImpactViewDto> {
-		const target = await this.resolveOrganizationId(
-			this.prisma,
-			userId,
-			organization,
-		);
 		const membership = await this.prisma.membership.findUniqueOrThrow({
-			where: { id: target.membershipId },
+			where: {
+				organizationId_userId: { organizationId, userId },
+			},
 			select: { role: true },
 		});
 		if (!isOrganizationRole(membership.role)) {
 			throw new PermissionDeniedException("成员角色无效，拒绝访问");
 		}
 		this.assertOrganizationPermission(membership.role, "data.clear", {
-			organizationId: target.organizationId,
+			organizationId,
 			userId,
 		});
-		if (
-			!(await resolveOrganizationPreferences(this.prisma, target.organizationId))
-		) {
+		if (!(await resolveOrganizationPreferences(this.prisma, organizationId))) {
 			throw new OnboardingNotCompletedException();
 		}
-		const scope = await organizationLedgerScope(this.prisma, target.organizationId);
+		const scope = await organizationLedgerScope(this.prisma, organizationId);
 		const totals = await this.computeTotals(this.prisma, scope);
 		const downloadable = await this.prisma.dataRequest.findFirst({
 			where: {
-				organizationId: target.organizationId,
+				organizationId,
 				scope: "ORGANIZATION",
 				type: "EXPORT",
 				status: "COMPLETED",
@@ -296,19 +345,44 @@ export class DataRequestService {
 	/**
 	 * 创建请求（方案 §7.5）：互斥 → 凭证 → 数据域与目标组织（判权 / 最后 Owner）→
 	 * 影响快照 → 同域导出链接失效 → 创建 / 同步生成。
-	 * scope 缺省按类型归属（CLEAR = 当前组织，其余 = 个人）；组织域目标组织取
-	 * X-Organization-Id，单组织用户可缺省。个人域不设「未建账」门槛——个人数据权利
-	 * 只需本人 + 二次验证（需求 DATA-01），与组织是否建账无关。
+	 *
+	 * 双域物理拆分（技术方案 §9.1–§9.2）：数据域由**端点**决定（个人端点只受理
+	 * PERSONAL，组织端点只受理 ORGANIZATION），请求体显式 scope 与端点数据域不一致
+	 * 一律 400 SCOPE_TYPE_MISMATCH；个人域不设「未建账」门槛（个人数据权利只需
+	 * 本人 + 二次验证），组织域须已建账且按 data.export / data.clear /
+	 * organization.delete 判权。
 	 */
 	async create(
 		dto: CreateDataRequestDto,
 		user: User,
-		organization?: OrganizationHeader,
+		domain: DataRequestDomain,
 	): Promise<DataRequestViewDto> {
+		// ── 数据域一致性优先（评审 N-2）：scope / scope×type 合法性先于业务参数校验，
+		//    免得「个人端点发 CLEAR」被 confirmedTotals 的 400 抢先（错误码不一致）
+		if (dto.scope !== undefined && dto.scope !== domain.scope) {
+			throw new DataRequestScopeMismatchException(
+				domain.scope === "PERSONAL"
+					? "该端点只受理个人域请求（PERSONAL）；组织域请使用组织数据请求端点"
+					: "该端点只受理组织域请求（ORGANIZATION）；个人域请使用个人数据请求端点",
+			);
+		}
+		// scope × type × 组织 合法性（与 DB CHECK 同口径）
+		const combination = resolveScopeType({
+			scope: domain.scope,
+			type: dto.type,
+			organizationId: domain.organizationId,
+		});
+		if (!combination.ok) {
+			throw new DataRequestScopeMismatchException(
+				domain.scope === "PERSONAL"
+					? "清空业务记录属于组织数据，请以当前组织提交"
+					: "个人数据请求不属于组织域，请以个人身份提交",
+			);
+		}
 		if (dto.type === "CLEAR" && !dto.confirmedTotals) {
 			throw new BadRequestException("清空业务记录必须携带确认时的记录数量快照");
 		}
-		const scope: DataRequestScope = dto.scope ?? defaultScopeForType(dto.type);
+		const scope: DataRequestScope = domain.scope;
 
 		return this.prisma.$transaction(async (tx) => {
 			// 互斥检查的并发兜底：同人串行（对齐 otp.service 的 advisory lock 先例）
@@ -371,14 +445,14 @@ export class DataRequestService {
 				),
 			);
 
-			// 3. 数据域：合法性 → 目标组织与判权（组织域）/ 最后 Owner（个人注销）
+			// 3. 数据域：目标组织与判权（组织域）/ 最后 Owner（个人注销）
 			let targetOrganizationId: string | null = null;
-			if (scope === "ORGANIZATION") {
+			if (domain.scope === "ORGANIZATION") {
 				targetOrganizationId = await this.authorizeOrganizationRequest(
 					tx,
 					user.id,
 					dto.type,
-					organization,
+					domain,
 				);
 				// 组织级互斥：同一组织已有任何成员发起的进行中组织请求 → 409（附原请求）
 				const organizationActive = await tx.dataRequest.findFirst({
@@ -394,8 +468,12 @@ export class DataRequestService {
 						this.toView(organizationActive),
 					);
 				}
-				// 组织数据请求以组织已建账为前提（本位币决定导出口径与清空后的记账起点）
+				// 组织数据请求以组织已建账为前提（本位币决定导出口径与清空后的记账起点）——
+				// **仅 EXPORT / CLEAR**：ORGANIZATION DELETION 不受此限（评审 I-4），
+				// 否则「未建账组织的唯一 Owner」既不能删组织、也不能注销个人账号 → 死锁
+				// （组织删除的清理路径不依赖 OrganizationSettings）。
 				if (
+					dto.type !== "DELETION" &&
 					!(await resolveOrganizationPreferences(tx, targetOrganizationId))
 				) {
 					throw new OnboardingNotCompletedException();
@@ -417,22 +495,11 @@ export class DataRequestService {
 						return this.toView(downloadable);
 					}
 				}
-			} else {
-				const combination = resolveScopeType({
-					scope,
-					type: dto.type,
-					organizationId: null,
-				});
-				if (!combination.ok) {
-					// PERSONAL + CLEAR：个人域不能清空组织账本（DB CHECK 同口径）
-					throw new DataRequestScopeMismatchException();
-				}
-				if (dto.type === "DELETION") {
-					// 最后 Owner 保护（创建阶段；到期执行时在组织锁内重读复验）
-					const blocking = await findLastOwnerBlocking(tx, user.id);
-					if (blocking.length > 0) {
-						throw new DataRequestLastOwnerRequiredException(blocking);
-					}
+			} else if (dto.type === "DELETION") {
+				// 最后 Owner 保护（创建阶段；到期执行时在组织锁内重读复验）
+				const blocking = await findLastOwnerBlocking(tx, user.id);
+				if (blocking.length > 0) {
+					throw new DataRequestLastOwnerRequiredException(blocking);
 				}
 			}
 
@@ -495,37 +562,55 @@ export class DataRequestService {
 	}
 
 	/**
-	 * 组织域请求的授权（技术方案 §4.3 / §6.3）：解析目标组织 → 持组织成员锁重读最新
-	 * 角色（lockOrganizationForActor，不信任请求进锁前的旧角色）→ 按 data.export /
-	 * data.clear / organization.delete 判权。返回目标组织 ID。
+	 * 组织域请求的授权（技术方案 §4.3 / §6.3）：目标组织由组织上下文守卫解析 →
+	 * 持组织成员锁重读最新角色（lockOrganizationForActor，不信任请求进锁前的旧角色）
+	 * → 按 data.export / data.clear / organization.delete 判权。返回目标组织 ID。
 	 */
 	private async authorizeOrganizationRequest(
 		tx: Tx,
 		userId: string,
 		type: DataRequestType,
-		organization: OrganizationHeader | undefined,
+		domain: Extract<DataRequestDomain, { scope: "ORGANIZATION" }>,
 	): Promise<string> {
-		const target = await this.resolveOrganizationId(tx, userId, organization);
 		// 锁内重读：等待锁期间可能已被降权 / 移除（404）或角色值非法（403）
-		const role = await lockOrganizationForActor(tx, target);
+		const role = await lockOrganizationForActor(tx, {
+			organizationId: domain.organizationId,
+			membershipId: domain.membershipId,
+		});
 		this.assertOrganizationPermission(role, requiredPermission("ORGANIZATION", type), {
-			organizationId: target.organizationId,
+			organizationId: domain.organizationId,
 			userId,
 		});
-		return target.organizationId;
+		return domain.organizationId;
 	}
 
-	/** 撤回（方案 §7.6）：CLEAR 直接撤；DELETION 需 DELETION 用途验证码（仅登录不算撤回） */
+	/**
+	 * 撤回（方案 §7.6）：CLEAR 直接撤；DELETION 需 DELETION 用途验证码（仅登录不算撤回）。
+	 *
+	 * 双域隔离（技术方案 §9.1）：个人端点只撤个人域请求、组织端点只撤当前组织的
+	 * 组织域请求；跨域 / 他人 / 不存在一律 404（不泄露存在性）。
+	 */
 	async cancel(
 		requestId: string,
 		user: User,
 		dto: CancelDataRequestDto,
+		domain: DataRequestDomain,
 	): Promise<DataRequestViewDto> {
 		const request = await this.prisma.dataRequest.findUnique({
 			where: { id: requestId },
 		});
-		// 非本人 / 不存在 → 同一响应，不泄露存在性（需求验收 18）
-		if (!request || request.userId !== user.id) {
+		// 非本人 / 跨域 / 不存在 → 同一响应，不泄露存在性（需求验收 18）
+		if (
+			!request ||
+			request.userId !== user.id ||
+			request.scope !== domain.scope
+		) {
+			throw new DataRequestNotFoundException();
+		}
+		if (
+			domain.scope === "ORGANIZATION" &&
+			request.organizationId !== domain.organizationId
+		) {
 			throw new DataRequestNotFoundException();
 		}
 
@@ -630,37 +715,45 @@ export class DataRequestService {
 	}
 
 	// ─────────────────────────────────────────────────────────
-	// 读时惰性推进 + 锁判定（方案 §3.1 决策一 + F1-2 单次查询合并）
+	// 读时惰性推进 + 锁判定（方案 §3.1 决策一 + 技术方案 §9.3 单次查询合并）
+	//
+	// 每个请求**至多 1 条** data_requests 查询：
+	// - 组织上下文端点：advanceAndResolveCombinedLock 用**一条合并查询**
+	//   （个人域注销 ∪ 当前组织清空/删除）同时得出推进候选与两把锁的判定依据；
+	// - 未挂组织锁守卫的端点：advanceAndResolvePersonalLock 一次个人域单查。
 	// ─────────────────────────────────────────────────────────
 
-	async advanceAndResolveLock(
+	/**
+	 * 个人账号锁守卫的读时推进 + 锁判定（技术方案 §9.1–§9.3）。
+	 *
+	 * 单次查询口径：`scope = PERSONAL`、`type = DELETION`、
+	 * `status ∈ ACTIVE_STATUSES`——**只看本人名下的个人域注销请求**，
+	 * 既不查询也不拦截任何组织域请求（同组织其他成员完全不受影响）。
+	 *
+	 * 返回：
+	 * - `userDeleted`：到期注销已物理删除 User（守卫据此让同请求返回 401）；
+	 * - `lock`：非白名单端点的锁判定（ACCOUNT_PENDING_DELETION）；
+	 * - `lockSubject`：触发锁的请求（供守卫给出准确文案）。
+	 */
+	async advanceAndResolvePersonalLock(
 		userId: string,
 		options: { skipLock: boolean; method: string },
 	): Promise<{
 		userDeleted: boolean;
-		lock: LockResolution;
-		/** 触发锁的请求（供守卫给出准确文案）；lock 为 null 时亦为 null */
+		lock: PersonalLockResolution;
 		lockSubject: { scope: string; type: string } | null;
 	}> {
 		const now = new Date();
-		// 单次查询：同时取回锁判定与到期推进所需字段（F1-2 不变量：至多 1 条 data_requests 查询）
+		// 单次查询：同时取回锁判定与到期推进所需字段（至多 1 条 data_requests 查询）
 		const activeRows = await this.prisma.dataRequest.findMany({
 			where: {
 				userId,
-				type: { in: ["CLEAR", "DELETION"] },
+				scope: "PERSONAL",
+				type: "DELETION",
 				status: { in: ACTIVE_STATUSES as string[] },
 			},
 			orderBy: { requestedAt: "asc" },
-			select: {
-				id: true,
-				userId: true,
-				scope: true,
-				organizationId: true,
-				type: true,
-				status: true,
-				requestedAt: true,
-				dueAt: true,
-			},
+			select: LOCK_ROW_SELECT,
 		});
 
 		const noLock = {
@@ -690,42 +783,12 @@ export class DataRequestService {
 					remaining = activeRows.filter((row) => row.id !== dueCandidate.id);
 				}
 			} catch (error) {
-				if (error instanceof DataRequestLastOwnerRequiredException) {
-					// 到期时已是某组织唯一所有者：不可逆清理不具备前置资格，请求由系统作废
-					//（账号锁随之解除；用户转移所有权 / 删除组织后可重新申请）。不置 FAILED——
-					// FAILED 不可撤回，会把账号锁死在无法转移所有权的死局
-					await this.prisma.dataRequest
-						.updateMany({
-							where: {
-								id: dueCandidate.id,
-								status: { in: ["PENDING", "FAILED"] },
-							},
-							data: { status: "CANCELLED" },
-						})
-						.catch(() => undefined);
-					this.logger.warn(
-						`[data-request] 个人注销到期作废（已成为某组织唯一所有者） id=${dueCandidate.id} userId=${userId}`,
-					);
-					remaining = activeRows.filter((row) => row.id !== dueCandidate.id);
-				} else {
-					// 整体回滚 → FAILED（锁保持，残留数据不当作正常账本）；下次读时重试。
-					// 条件更新：不覆盖并发已认领（PROCESSING）或已终结的行
-					await this.prisma.dataRequest
-						.updateMany({
-							where: {
-								id: dueCandidate.id,
-								status: { in: ["PENDING", "FAILED"] },
-							},
-							data: { status: "FAILED" },
-						})
-						.catch(() => undefined);
-					this.logger.warn(
-						`[data-request] cleanup FAILED scope=${dueCandidate.scope} type=${dueCandidate.type} id=${dueCandidate.id} userId=${userId}: ${error instanceof Error ? error.message : String(error)}`,
-					);
-					remaining = activeRows.map((row) =>
-						row.id === dueCandidate.id ? { ...row, status: "FAILED" } : row,
-					);
-				}
+				remaining = await this.handlePersonalAdvanceFailure(
+					dueCandidate,
+					error,
+					userId,
+					remaining,
+				);
 			}
 		}
 
@@ -737,15 +800,220 @@ export class DataRequestService {
 		const latestActive = remaining[remaining.length - 1] ?? null;
 		return {
 			userDeleted: false,
-			lock: resolveLock(latestActive, options.method),
+			lock: resolvePersonalLock(latestActive),
 			lockSubject: latestActive
 				? { scope: latestActive.scope, type: latestActive.type }
 				: null,
 		};
 	}
 
-	async advanceDueRequests(userId: string): Promise<void> {
-		await this.advanceAndResolveLock(userId, { skipLock: true, method: "GET" });
+	/**
+	 * 双锁合并的读时推进 + 锁判定（技术方案 §9.3；组织上下文端点的唯一入口）。
+	 *
+	 * **1 条合并查询**：个人域注销（`scope=PERSONAL`、`type=DELETION`、`userId=本人`）
+	 * ∪ 当前组织清空/删除（`scope=ORGANIZATION`、`organizationId=当前组织`、
+	 * `type ∈ {CLEAR, DELETION}`），`status ∈ ACTIVE_STATUSES`——一次查询同时得出
+	 * 两把锁的推进候选与判定依据（不再出现「个人锁 1 条 + 组织锁 1 条」的固定 2 条）。
+	 *
+	 * 判定顺序：先个人（删号 → 401 / 账号注销锁），再组织（删组 → 404 / 组织数据锁）。
+	 * 两把锁**互不误判**：个人锁只看本人名下个人域请求，组织锁只看当前组织。
+	 */
+	async advanceAndResolveCombinedLock(
+		actor: { userId: string; organizationId: string },
+		options: { method: string },
+	): Promise<{
+		userDeleted: boolean;
+		personalLock: PersonalLockResolution;
+		organizationDeleted: boolean;
+		organizationLock: OrganizationLockResolution;
+		personalLockSubject: { scope: string; type: string } | null;
+		organizationLockSubject: { scope: string; type: string } | null;
+		organizationLockSummary: { active: boolean; type: string | null };
+	}> {
+		const now = new Date();
+		// 合并查询：个人域注销 ∪ 当前组织清空/删除（至多 1 条 data_requests 查询）
+		const activeRows = await this.prisma.dataRequest.findMany({
+			where: {
+				status: { in: ACTIVE_STATUSES as string[] },
+				OR: [
+					{ scope: "PERSONAL", userId: actor.userId, type: "DELETION" },
+					{
+						scope: "ORGANIZATION",
+						organizationId: actor.organizationId,
+						type: { in: ["CLEAR", "DELETION"] },
+					},
+				],
+			},
+			orderBy: { requestedAt: "asc" },
+			select: LOCK_ROW_SELECT,
+		});
+
+		let personalRows = activeRows.filter((row) => row.scope === "PERSONAL");
+		let organizationRows = activeRows.filter((row) => row.scope === "ORGANIZATION");
+
+		// 1. 个人注销候选优先推进（物理删号 → 守卫据此让同次请求 401）
+		const personalDue =
+			personalRows.find(
+				(row) => row.status === "PENDING" || row.status === "FAILED",
+			) ?? null;
+		if (personalDue && resolveAdvance(personalDue, now) === "advance") {
+			try {
+				const outcome = await this.executeCleanup(personalDue, now);
+				if (outcome === "user-deleted") {
+					return {
+						userDeleted: true,
+						personalLock: null,
+						organizationDeleted: false,
+						organizationLock: null,
+						personalLockSubject: null,
+						organizationLockSubject: null,
+						organizationLockSummary: { active: false, type: null },
+					};
+				}
+				if (outcome !== "skipped") {
+					personalRows = personalRows.filter((row) => row.id !== personalDue.id);
+				}
+			} catch (error) {
+				personalRows = await this.handlePersonalAdvanceFailure(
+					personalDue,
+					error,
+					actor.userId,
+					personalRows,
+				);
+			}
+		}
+
+		// 2. 组织锁候选推进（组织已删 → 守卫据此 404）
+		const organizationDue =
+			organizationRows.find(
+				(row) => row.status === "PENDING" || row.status === "FAILED",
+			) ?? null;
+		if (organizationDue && resolveAdvance(organizationDue, now) === "advance") {
+			try {
+				const outcome = await this.executeCleanup(organizationDue, now);
+				if (organizationDue.type === "DELETION" && outcome === "completed") {
+					// 组织已删（含成员关系 / 邀请 / 设置 / 审计）：后续一律 404
+					return {
+						userDeleted: false,
+						personalLock: null,
+						organizationDeleted: true,
+						organizationLock: null,
+						personalLockSubject: null,
+						organizationLockSubject: null,
+						organizationLockSummary: { active: false, type: null },
+					};
+				}
+				if (outcome !== "skipped") {
+					organizationRows = organizationRows.filter(
+						(row) => row.id !== organizationDue.id,
+					);
+				}
+			} catch (error) {
+				organizationRows = await this.handleOrganizationAdvanceFailure(
+					organizationDue,
+					error,
+					actor.organizationId,
+					organizationRows,
+				);
+			}
+		}
+
+		// activeRows 按 requestedAt ASC 排序，末尾即最新活跃请求（与原 desc findFirst 等价）
+		const latestPersonal = personalRows[personalRows.length - 1] ?? null;
+		const latestOrganization = organizationRows[organizationRows.length - 1] ?? null;
+		return {
+			userDeleted: false,
+			personalLock: resolvePersonalLock(latestPersonal),
+			organizationDeleted: false,
+			organizationLock: resolveOrganizationLock(
+				latestOrganization,
+				options.method,
+			),
+			personalLockSubject: latestPersonal
+				? { scope: latestPersonal.scope, type: latestPersonal.type }
+				: null,
+			organizationLockSubject: latestOrganization
+				? { scope: latestOrganization.scope, type: latestOrganization.type }
+				: null,
+			// 组织锁摘要（推进后的真实状态）：供当前组织视图复用，消除第 3 次查库
+			organizationLockSummary: {
+				active: latestOrganization !== null,
+				type: latestOrganization?.type ?? null,
+			},
+		};
+	}
+
+	/**
+	 * 个人注销推进失败后的处置（读时惰性推进）：
+	 * - 唯一 Owner 阻塞 → 请求由系统作废（CANCELLED，账号锁随之解除；用户转移所有权
+	 *   或删除组织后可重新申请）。不置 FAILED——FAILED 不可撤回，会把账号锁死在
+	 *   无法转移所有权的死局；
+	 * - 其他失败 → 整体回滚置 FAILED（锁保持，残留数据不当作正常账本），下次读时重试。
+	 */
+	private async handlePersonalAdvanceFailure(
+		dueCandidate: ActiveRequestRow,
+		error: unknown,
+		userId: string,
+		remaining: ActiveRequestRow[],
+	): Promise<ActiveRequestRow[]> {
+		if (error instanceof DataRequestLastOwnerRequiredException) {
+			await this.prisma.dataRequest
+				.updateMany({
+					where: {
+						id: dueCandidate.id,
+						status: { in: ["PENDING", "FAILED"] },
+					},
+					data: { status: "CANCELLED" },
+				})
+				.catch(() => undefined);
+			this.logger.warn(
+				`[data-request] 个人注销到期作废（已成为某组织唯一所有者） id=${dueCandidate.id} userId=${userId}`,
+			);
+			return remaining.filter((row) => row.id !== dueCandidate.id);
+		}
+		// 条件更新：不覆盖并发已认领（PROCESSING）或已终结的行
+		await this.prisma.dataRequest
+			.updateMany({
+				where: {
+					id: dueCandidate.id,
+					status: { in: ["PENDING", "FAILED"] },
+				},
+				data: { status: "FAILED" },
+			})
+			.catch(() => undefined);
+		this.logger.warn(
+			`[data-request] 个人注销清理 FAILED id=${dueCandidate.id} userId=${userId}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return remaining.map((row) =>
+			row.id === dueCandidate.id ? { ...row, status: "FAILED" } : row,
+		);
+	}
+
+	/**
+	 * 组织锁推进失败后的处置（读时惰性推进）：整体回滚 → FAILED（锁保持，残留数据
+	 * 不当作正常账本）；下次读时重试。条件更新：不覆盖并发已认领或已终结的行。
+	 */
+	private async handleOrganizationAdvanceFailure(
+		dueCandidate: ActiveRequestRow,
+		error: unknown,
+		organizationId: string,
+		remaining: ActiveRequestRow[],
+	): Promise<ActiveRequestRow[]> {
+		await this.prisma.dataRequest
+			.updateMany({
+				where: {
+					id: dueCandidate.id,
+					status: { in: ["PENDING", "FAILED"] },
+				},
+				data: { status: "FAILED" },
+			})
+			.catch(() => undefined);
+		this.logger.warn(
+			`[data-request] 组织清理 FAILED scope=${dueCandidate.scope} type=${dueCandidate.type} id=${dueCandidate.id} organizationId=${organizationId}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return remaining.map((row) =>
+			row.id === dueCandidate.id ? { ...row, status: "FAILED" } : row,
+		);
 	}
 
 	/**
@@ -807,12 +1075,21 @@ export class DataRequestService {
 
 	/**
 	 * 下载（方案 §7.7）：本人 + EXPORT COMPLETED + 24h 内；过期/文件缺失 → 410。
-	 * 组织导出的下载者必须仍是该组织有效成员且具备 data.export（DATA-02.5：
-	 * 成员被移除 / 降权后原下载链接不可继续使用）；不满足一律 404（不泄露存在性）。
+	 *
+	 * 双域隔离与实时重验（技术方案 §9.2 / DATA-02.5）：
+	 * - 个人端点只受理 scope = PERSONAL 的请求；组织端点只受理 scope = ORGANIZATION
+	 *   且 organizationId 绑定当前组织的请求；跨域 / 跨组织一律 404（不泄露存在性）；
+	 * - 组织导出下载者必须**仍是该组织 ACTIVE 成员且角色具备 data.export**：
+	 *   降权为 Operator / Viewer → 403 PERMISSION_DENIED（权限守卫，权限点丢失）；
+	 *   被移出组织（DISABLED）→ 404 ORGANIZATION_NOT_FOUND（组织上下文不可达）；
+	 *   切错组织（组织绑定不符）→ 404 DATA_REQUEST_NOT_FOUND。
+	 *   绝不可凭旧 id 偷下组织账本；
+	 * - 请求者校验：只能下载本人发起的导出。
 	 */
 	async loadDownload(
 		requestId: string,
 		userId: string,
+		domain: DataRequestDomain,
 	): Promise<{ buffer: Buffer; filename: string }> {
 		const request = await this.prisma.dataRequest.findUnique({
 			where: { id: requestId },
@@ -821,15 +1098,25 @@ export class DataRequestService {
 			!request ||
 			request.userId !== userId ||
 			request.type !== "EXPORT" ||
-			request.status !== "COMPLETED"
+			request.status !== "COMPLETED" ||
+			request.scope !== domain.scope
 		) {
 			throw new DataRequestNotFoundException();
 		}
-		if (
-			request.scope === "ORGANIZATION" &&
-			!(await this.canDownloadOrganizationExport(request.organizationId, userId))
-		) {
-			throw new DataRequestNotFoundException();
+		if (domain.scope === "ORGANIZATION") {
+			// 组织绑定校验：切错 X-Organization-Id 一律 404
+			if (request.organizationId !== domain.organizationId) {
+				throw new DataRequestNotFoundException();
+			}
+			// 实时成员资格与权限复验（降权 / 移除后立即失效）
+			if (
+				!(await this.canDownloadOrganizationExport(
+					request.organizationId,
+					userId,
+				))
+			) {
+				throw new DataRequestNotFoundException();
+			}
 		}
 		if (
 			!request.fileUrl ||
@@ -888,47 +1175,6 @@ export class DataRequestService {
 				resolution.code as VerificationErrorCode,
 			);
 		}
-	}
-
-	/**
-	 * 解析组织域请求的目标组织：显式 X-Organization-Id，或（缺省时）用户唯一的
-	 * ACTIVE 组织（兼容窗口口径同 BusinessOrgScopeGuard：0 个或 ≥2 个一律 400，禁猜测）。
-	 * 非成员 / 已禁用 / 组织不存在统一 404（不泄露存在性）。
-	 */
-	private async resolveOrganizationId(
-		db: Pick<Tx, "membership">,
-		userId: string,
-		organization: OrganizationHeader | undefined,
-	): Promise<{ organizationId: string; membershipId: string }> {
-		let organizationId: string;
-		if (organization !== undefined) {
-			// 数组头严格拒绝（对齐 OrganizationContextGuard 口径，不静默取首元素）
-			if (typeof organization !== "string" || organization.trim().length === 0) {
-				throw new OrganizationRequiredException();
-			}
-			organizationId = organization.trim();
-		} else {
-			const memberships = await db.membership.findMany({
-				where: { userId, status: "ACTIVE" },
-				select: { organizationId: true },
-				take: 2,
-			});
-			// 单组织用户回落到唯一 ACTIVE 组织；0 个或 ≥2 个一律 400（不取首元素）
-			if (memberships.length !== 1) {
-				throw new OrganizationRequiredException(
-					"缺少组织上下文（X-Organization-Id），且无法唯一确定默认组织",
-				);
-			}
-			organizationId = memberships[0]!.organizationId;
-		}
-		const membership = await db.membership.findUnique({
-			where: { organizationId_userId: { organizationId, userId } },
-			select: { id: true },
-		});
-		if (!membership) {
-			throw new OrganizationNotFoundException();
-		}
-		return { organizationId, membershipId: membership.id };
 	}
 
 	/** 组织域判权（集中策略 can；取不到权限点一律拒绝），拒绝时尽力写 DENIED 审计 */

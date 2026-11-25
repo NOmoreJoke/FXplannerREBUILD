@@ -67,7 +67,10 @@ describe("Swagger 接口说明", () => {
 		// + ToB R1 W22 个人/组织设置分离 2 端点：GET/PATCH /api/settings/personal
 		//   （W24 同步本计数：W22 新增两端点后此处仍停在 72，导致该用例在分支上一直失败）
 		//   = 74。W24 只扩充既有端点的说明与出参，未新增端点。
-		expect(operations).toHaveLength(74);
+		// + ToB R1 W27 双域数据请求物理拆分：个人域 5 端点（原 6 端点去掉 /impact）
+		//   + 组织域 6 端点（/api/organizations/current/data-requests/*）
+		//   + DELETE /api/organizations/current（发起组织删除）= 74 - 1 + 6 + 1 = 80。
+		expect(operations).toHaveLength(80);
 		for (const { path, method, operation } of operations) {
 			expect(
 				operation.summary,

@@ -41,6 +41,7 @@ import {
 	CorrectionTargetDto,
 } from "./dto/correction.dto";
 import { CorrectionService } from "./correction.service";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /**
  * 更正与日志（corrections，M8 技术方案 §6）：4 个功能入口，全部需登录。
@@ -72,7 +73,7 @@ export class CorrectionController {
 	// 带其他组织头仍返回本人别的组织的账本重放，受邀成员则按自己的空账本重放）
 	@Post("preview")
 	@HttpCode(HttpStatus.OK)
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("correction.preview")
 	@ApiOperation({
 		summary: "影响预览（只读重放）",
@@ -110,7 +111,7 @@ export class CorrectionController {
 	}
 
 	@Post()
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("correction.apply")
 	@ApiOperation({
 		summary: "提交更正（事务）",
@@ -183,7 +184,7 @@ export class CorrectionController {
 		description: "目标不存在或不属于当前组织（CORRECTION_TARGET_NOT_FOUND）",
 		type: CorrectionErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("correction.read")
 	async getTarget(
 		@CurrentUser() user: User,
@@ -224,7 +225,7 @@ export class CorrectionController {
 		description: "目标不存在或不属于当前组织（CORRECTION_TARGET_NOT_FOUND）",
 		type: CorrectionErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("correction.read")
 	async list(
 		@CurrentUser() user: User,

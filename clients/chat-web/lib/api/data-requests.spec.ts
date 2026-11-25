@@ -103,6 +103,25 @@ describe("dataRequestsApi.download", () => {
 		});
 	});
 
+	it("组织域导出走组织下载端点（双域物理拆分）", async () => {
+		const { dataRequestsApi } = await import("./data-requests");
+		const { useOrganizationStore } = await import(
+			"@/lib/stores/organization-store"
+		);
+		useOrganizationStore.setState({ activeOrganizationId: "org-b" });
+		fetchMock.mockResolvedValue(okResponse());
+
+		await dataRequestsApi.download("req123abc", "ORGANIZATION");
+
+		expect(fetchMock.mock.calls[0]?.[0]).toBe(
+			"http://127.0.0.1:4001/api/organizations/current/data-requests/req123abc/download",
+		);
+		expect(fetchInit().headers).toEqual({
+			Authorization: "Bearer tok-123",
+			"X-Organization-Id": "org-b",
+		});
+	});
+
 	it("未选组织时不注入组织头", async () => {
 		const { dataRequestsApi } = await import("./data-requests");
 		fetchMock.mockResolvedValue(okResponse());

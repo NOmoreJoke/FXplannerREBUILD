@@ -857,30 +857,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * 查询当前数据请求（进度页）
-         * @description 返回最近 30 天内最新一条非撤回请求的进度视图（含展示状态映射、可否撤回、下载入口）；无进行中请求返回 null。
+         * 查询当前个人数据请求（进度页）
+         * @description 返回最近 30 天内本人最新一条非撤回**个人域**请求的进度视图（含展示状态映射、可否撤回、下载入口）；无进行中个人请求返回 null。组织域进度见 GET /api/organizations/current/data-requests/current。
          */
         get: operations["DataRequestController_getCurrent"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/data-requests/impact": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * 查询清空影响（确认页）
-         * @description 返回**当前组织**各业务记录数量与是否存在可下载的组织导出包（目标组织取 X-Organization-Id，单组织用户可缺省；需 data.clear 权限）；CLEAR 提交时的 confirmedTotals 快照与此比对，不一致 409 IMPACT_CHANGED。
-         */
-        get: operations["DataRequestController_getImpact"];
         put?: never;
         post?: never;
         delete?: never;
@@ -899,8 +879,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 数据操作验证码校验（生成 10 分钟确认凭证）
-         * @description 校验 challenge 用途（LOGIN 不放行）并消费验证码，返回确认截止时刻（消费 +10 分钟）；用途不匹配 403 VERIFICATION_PURPOSE_MISMATCH，码错沿用 OTP 语义。
+         * 个人数据操作验证码校验（生成 10 分钟确认凭证）
+         * @description 校验 challenge 用途（LOGIN 不放行）并消费验证码，返回确认截止时刻（消费 +10 分钟）；用途不匹配 403 VERIFICATION_PURPOSE_MISMATCH，码错沿用 OTP 语义。本端点只服务个人域操作；组织域验证码请用 POST /api/organizations/current/data-requests/verify。
          */
         post: operations["DataRequestController_verify"];
         delete?: never;
@@ -919,8 +899,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 提交数据请求（EXPORT 同步生成 / CLEAR、DELETION 进入 7 日流程）
-         * @description 需 verify 返回的确认凭证（10 分钟内、一次性）；互斥 409 附原请求视图；个人注销时本人仍是某组织唯一所有者 → 409 LAST_OWNER_REQUIRED 附阻塞组织列表。数据域 scope 缺省按类型归属：CLEAR = 当前组织的 ORGANIZATION（目标组织取 X-Organization-Id，单组织用户可缺省，需 data.clear；必带 confirmedTotals 且与服务端重算一致），EXPORT / DELETION = PERSONAL（仅本人 + 二次验证，不含组织账本）。提交 CLEAR/DELETION 时同域可下载导出链接立即失效。
+         * 提交个人数据请求（EXPORT 同步生成 / DELETION 进入 7 日流程）
+         * @description 仅受理个人域（PERSONAL）的 EXPORT / DELETION：传 scope = ORGANIZATION 或 type = CLEAR 一律 400 SCOPE_TYPE_MISMATCH（组织数据权利见 POST /api/organizations/current/data-requests）。需 verify 返回的确认凭证（10 分钟内、一次性）；互斥 409 附原请求视图；个人注销时本人仍是某组织唯一所有者 → 409 LAST_OWNER_REQUIRED 附阻塞组织列表。提交 DELETION 时本人个人域可下载导出链接立即失效。
          */
         post: operations["DataRequestController_create"];
         delete?: never;
@@ -939,8 +919,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 撤回请求
-         * @description CLEAR PENDING 直接撤回（原记录原样恢复）；DELETION PENDING 需携带 purpose=DELETION 的新验证凭证（仅登录不算撤回）；EXPORT 无取消窗口；非本人/不存在 404。
+         * 撤回个人请求
+         * @description DELETION PENDING 需携带 purpose=DELETION 的新验证凭证（仅登录不算撤回）；EXPORT 无取消窗口；非本人 / 组织域请求 / 不存在一律 404（不泄露存在性）。
          */
         post: operations["DataRequestController_cancel"];
         delete?: never;
@@ -957,10 +937,130 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * 下载导出包（ZIP 流式返回）
-         * @description 仅本人 EXPORT COMPLETED 且 24 小时内可下载；过期/文件已清理 410 DOWNLOAD_EXPIRED；非本人 404（不泄露存在性）。
+         * 下载个人导出包（ZIP 流式返回）
+         * @description 仅本人**个人域** EXPORT COMPLETED 且 24 小时内可下载；过期/文件已清理 410 DOWNLOAD_EXPIRED；非本人 / 组织域请求 404（不泄露存在性）。组织导出包请用 GET /api/organizations/current/data-requests/{id}/download。
          */
         get: operations["DataRequestController_download"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/current/data-requests/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询当前组织数据请求（组织进度页）
+         * @description 返回当前组织最近 30 天内最新一条非撤回**组织域**请求的进度视图（任意有效成员可查看）；无进行中组织请求返回 null。白名单端点：组织正在清空 / 删除时仍可拉取锁摘要，避免前端死锁。
+         */
+        get: operations["OrganizationDataRequestController_getCurrent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/current/data-requests/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询组织清空影响（确认页）
+         * @description 返回**当前组织**各业务记录数量与是否存在可下载的组织导出包（需 data.clear 权限）；CLEAR 提交时的 confirmedTotals 快照与此比对，不一致 409 IMPACT_CHANGED。记录数量口径与清空 / 导出同一账本作用域。
+         */
+        get: operations["OrganizationDataRequestController_getImpact"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/current/data-requests/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 组织数据操作验证码校验（生成 10 分钟确认凭证）
+         * @description 校验 challenge 用途（LOGIN 不放行）并消费验证码，返回确认截止时刻（消费 +10 分钟）；用途不匹配 403 VERIFICATION_PURPOSE_MISMATCH，码错沿用 OTP 语义。白名单端点：组织删除冷静期内仍须能验证并撤回删除请求。
+         */
+        post: operations["OrganizationDataRequestController_verify"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/current/data-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 提交组织数据请求（EXPORT 同步生成 / CLEAR、DELETION 进入 7 日流程）
+         * @description 仅受理组织域（ORGANIZATION）的 EXPORT / CLEAR / DELETION：传 scope = PERSONAL 一律 400 SCOPE_TYPE_MISMATCH（个人数据权利见 POST /api/data-requests）。权限由服务端 permission-policy 严格判定：EXPORT 需 data.export、CLEAR 需 data.clear、DELETION 需 organization.delete（仅 Owner）；组织已有进行中请求 → 409 DATA_REQUEST_CONFLICT；组织尚未建账 → 409 ONBOARDING_NOT_COMPLETED；CLEAR 必带 confirmedTotals 且与服务端重算一致。
+         */
+        post: operations["OrganizationDataRequestController_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/current/data-requests/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 撤回组织请求
+         * @description CLEAR PENDING 直接撤回；DELETION PENDING 需携带 purpose=DELETION 的新验证凭证（仅登录不算撤回）；撤回权限按请求类型在事务内持组织成员锁重读（data.clear / organization.delete）；跨组织 / 非本人 / 不存在一律 404。白名单端点：组织正在清空 / 删除时仍可撤回。
+         */
+        post: operations["OrganizationDataRequestController_cancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organizations/current/data-requests/{id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 下载组织导出包（ZIP 流式返回）
+         * @description 仅本人发起的组织域 EXPORT COMPLETED 且 24 小时内可下载；**实时复验**：下载者仍须是当前组织 ACTIVE 成员且角色具备 data.export——降权为 Operator / Viewer → **403 PERMISSION_DENIED**（权限点丢失）；被移出组织（DISABLED）→ **404 ORGANIZATION_NOT_FOUND**（组织上下文不可达）；组织绑定校验——切错 X-Organization-Id → **404 DATA_REQUEST_NOT_FOUND**（绝不凭旧 id 偷下组织账本）；非本人 → 404 DATA_REQUEST_NOT_FOUND；过期/文件已清理 410 DOWNLOAD_EXPIRED。白名单端点：组织正在清空 / 删除时仍可下载已生成的导出包。
+         */
+        get: operations["OrganizationDataRequestController_download"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1007,7 +1107,11 @@ export interface paths {
         get: operations["OrganizationController_getCurrent"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * 发起删除当前组织（7 日撤回期）
+         * @description 仅 Owner 可发起（organization.delete 权限点）：提交后进入 7 日撤回期（PENDING），期间可凭 purpose=DELETION 的验证凭证撤回；到期才真正删除组织（清空账本 + 删除组织/成员关系/邀请/设置/审计，**不删除任何成员 User 账号**，成员身份保留）。必须携带 verify（purpose=DELETION）返回的已消费凭证——仅登录不算发起；组织已有进行中组织请求 → 409 DATA_REQUEST_CONFLICT。
+         */
+        delete: operations["OrganizationController_deleteCurrent"];
         options?: never;
         head?: never;
         /**
@@ -3870,6 +3974,50 @@ export interface components {
             /** @description 确认截止时刻（消费时刻 +10 分钟，ISO 8601） */
             confirmDeadline: string;
         };
+        VerifyDataRequestDto: {
+            /** @description send-code 返回的挑战 ID */
+            challengeId: string;
+            /**
+             * @description 6 位验证码
+             * @example 123456
+             */
+            code: string;
+            /**
+             * @description 验证用途（LOGIN 不放行数据操作）
+             * @example CLEAR
+             * @enum {string}
+             */
+            purpose: "EXPORT" | "CLEAR" | "DELETION";
+        };
+        DataRequestErrorDto: {
+            /** @description success 恒为 false */
+            success: boolean;
+            /** @description 错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / ORGANIZATION_DATA_LOCKED（当前组织账本清空/删除处理中）/ ACCOUNT_PENDING_DELETION（本人账号注销处理中）/ DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE / LAST_OWNER_REQUIRED（个人注销：仍是某组织唯一所有者）/ ORGANIZATION_REQUIRED / ORGANIZATION_NOT_FOUND / PERMISSION_DENIED / SCOPE_TYPE_MISMATCH */
+            code: string;
+            /** @description 人类可读信息 */
+            message: string;
+        };
+        BlockingOrganizationDto: {
+            /** @description 组织 ID */
+            organizationId: string;
+            /** @description 组织名称 */
+            organizationName: string;
+            /**
+             * @description 本人在该组织的成员角色（无成员关系时为 NONE）
+             * @example OWNER
+             */
+            role: string;
+        };
+        LastOwnerRequiredBodyDto: {
+            /** @description success 恒为 false */
+            success: boolean;
+            /** @description 错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / ORGANIZATION_DATA_LOCKED（当前组织账本清空/删除处理中）/ ACCOUNT_PENDING_DELETION（本人账号注销处理中）/ DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE / LAST_OWNER_REQUIRED（个人注销：仍是某组织唯一所有者）/ ORGANIZATION_REQUIRED / ORGANIZATION_NOT_FOUND / PERMISSION_DENIED / SCOPE_TYPE_MISMATCH */
+            code: string;
+            /** @description 人类可读信息 */
+            message: string;
+            /** @description 阻塞注销的组织列表（需先转移所有权或删除这些组织） */
+            blockingOrganizations: components["schemas"]["BlockingOrganizationDto"][];
+        };
         ImpactTotalsDto: {
             /**
              * @description 外汇账户数
@@ -3902,59 +4050,6 @@ export interface components {
              */
             corrections: number;
         };
-        ImpactViewDto: {
-            /** @description 各业务记录数量 */
-            totals: components["schemas"]["ImpactTotalsDto"];
-            /**
-             * @description 是否存在可下载的导出包（确认页提示先下载）
-             * @example false
-             */
-            hasDownloadableExport: boolean;
-        };
-        VerifyDataRequestDto: {
-            /** @description send-code 返回的挑战 ID */
-            challengeId: string;
-            /**
-             * @description 6 位验证码
-             * @example 123456
-             */
-            code: string;
-            /**
-             * @description 验证用途（LOGIN 不放行数据操作）
-             * @example CLEAR
-             * @enum {string}
-             */
-            purpose: "EXPORT" | "CLEAR" | "DELETION";
-        };
-        DataRequestErrorDto: {
-            /** @description success 恒为 false */
-            success: boolean;
-            /** @description 错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE / LAST_OWNER_REQUIRED（个人注销：仍是某组织唯一所有者）/ ORGANIZATION_REQUIRED / ORGANIZATION_NOT_FOUND / PERMISSION_DENIED / SCOPE_TYPE_MISMATCH */
-            code: string;
-            /** @description 人类可读信息 */
-            message: string;
-        };
-        BlockingOrganizationDto: {
-            /** @description 组织 ID */
-            organizationId: string;
-            /** @description 组织名称 */
-            organizationName: string;
-            /**
-             * @description 本人在该组织的成员角色（无成员关系时为 NONE）
-             * @example OWNER
-             */
-            role: string;
-        };
-        LastOwnerRequiredBodyDto: {
-            /** @description success 恒为 false */
-            success: boolean;
-            /** @description 错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE / LAST_OWNER_REQUIRED（个人注销：仍是某组织唯一所有者）/ ORGANIZATION_REQUIRED / ORGANIZATION_NOT_FOUND / PERMISSION_DENIED / SCOPE_TYPE_MISMATCH */
-            code: string;
-            /** @description 人类可读信息 */
-            message: string;
-            /** @description 阻塞注销的组织列表（需先转移所有权或删除这些组织） */
-            blockingOrganizations: components["schemas"]["BlockingOrganizationDto"][];
-        };
         CreateDataRequestDto: {
             /**
              * @description 请求类型
@@ -3974,7 +4069,7 @@ export interface components {
         DataRequestConflictBodyDto: {
             /** @description success 恒为 false */
             success: boolean;
-            /** @description 错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE / LAST_OWNER_REQUIRED（个人注销：仍是某组织唯一所有者）/ ORGANIZATION_REQUIRED / ORGANIZATION_NOT_FOUND / PERMISSION_DENIED / SCOPE_TYPE_MISMATCH */
+            /** @description 错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / ORGANIZATION_DATA_LOCKED（当前组织账本清空/删除处理中）/ ACCOUNT_PENDING_DELETION（本人账号注销处理中）/ DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE / LAST_OWNER_REQUIRED（个人注销：仍是某组织唯一所有者）/ ORGANIZATION_REQUIRED / ORGANIZATION_NOT_FOUND / PERMISSION_DENIED / SCOPE_TYPE_MISMATCH */
             code: string;
             /** @description 人类可读信息 */
             message: string;
@@ -3984,6 +4079,15 @@ export interface components {
         CancelDataRequestDto: {
             /** @description DELETION 撤回必带：verify（purpose=DELETION）返回的挑战 ID（已消费凭证，仅登录不算撤回）；CLEAR 直接撤回无需携带 */
             challengeId?: string;
+        };
+        ImpactViewDto: {
+            /** @description 各业务记录数量 */
+            totals: components["schemas"]["ImpactTotalsDto"];
+            /**
+             * @description 是否存在可下载的导出包（确认页提示先下载）
+             * @example false
+             */
+            hasDownloadableExport: boolean;
         };
         OrganizationViewDto: {
             /** @description 组织 id */
@@ -4043,6 +4147,10 @@ export interface components {
              * @example 张三的工作台
              */
             name: string;
+        };
+        OrganizationDeletionRequestDto: {
+            /** @description verify（purpose=DELETION）返回的挑战 ID（已消费凭证，仅登录不算发起删除） */
+            challengeId: string;
         };
         MemberViewDto: {
             /** @description Membership id */
@@ -6119,7 +6227,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description 当前请求视图或 null */
+            /** @description 当前个人请求视图或 null */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6129,31 +6237,6 @@ export interface operations {
                         /** @example true */
                         success?: boolean;
                         data?: components["schemas"]["DataRequestViewDto"] | null;
-                        message?: string;
-                    };
-                };
-            };
-        };
-    };
-    DataRequestController_getImpact: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description 记录数量与可下载导出提示 */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        /** @example true */
-                        success?: boolean;
-                        data?: components["schemas"]["ImpactViewDto"];
                         message?: string;
                     };
                 };
@@ -6225,7 +6308,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description 互斥（DATA_REQUEST_CONFLICT 附原请求）/ 影响变化（IMPACT_CHANGED）/ 个人注销的最后 Owner 保护（LAST_OWNER_REQUIRED 附阻塞组织列表） */
+            /** @description 互斥（DATA_REQUEST_CONFLICT 附原请求）/ 个人注销的最后 Owner 保护（LAST_OWNER_REQUIRED 附阻塞组织列表） */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6272,7 +6355,7 @@ export interface operations {
                     "application/json": components["schemas"]["DataRequestErrorDto"];
                 };
             };
-            /** @description 请求不存在或非本人 */
+            /** @description 请求不存在 / 非本人 / 非个人域 */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -6310,7 +6393,236 @@ export interface operations {
                     "application/json": string;
                 };
             };
-            /** @description 请求不存在或非本人 */
+            /** @description 请求不存在 / 非本人 / 非个人域 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
+                };
+            };
+            /** @description 下载链接已失效 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
+                };
+            };
+        };
+    };
+    OrganizationDataRequestController_getCurrent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 当前组织请求视图或 null */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["DataRequestViewDto"] | null;
+                        message?: string;
+                    };
+                };
+            };
+        };
+    };
+    OrganizationDataRequestController_getImpact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 记录数量与可下载导出提示 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["ImpactViewDto"];
+                        message?: string;
+                    };
+                };
+            };
+        };
+    };
+    OrganizationDataRequestController_verify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifyDataRequestDto"];
+            };
+        };
+        responses: {
+            /** @description 验证通过，返回确认凭证与截止时刻 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["VerifyResultDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 用途不匹配 / 验证码无效 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
+                };
+            };
+        };
+    };
+    OrganizationDataRequestController_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDataRequestDto"];
+            };
+        };
+        responses: {
+            /** @description 请求视图（EXPORT 为 COMPLETED 含下载入口） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["DataRequestViewDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 互斥（DATA_REQUEST_CONFLICT 附原请求）/ 影响变化（IMPACT_CHANGED） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestConflictBodyDto"];
+                };
+            };
+        };
+    };
+    OrganizationDataRequestController_cancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelDataRequestDto"];
+            };
+        };
+        responses: {
+            /** @description 撤回后的请求视图（CANCELLED） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["DataRequestViewDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description DELETION 撤回缺验证凭证 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
+                };
+            };
+            /** @description 请求不存在 / 跨组织 / 非本人 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
+                };
+            };
+            /** @description 当前状态不可撤回 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
+                };
+            };
+        };
+    };
+    OrganizationDataRequestController_download: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ZIP 二进制（Content-Disposition 附件下载） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string;
+                };
+            };
+            /** @description 下载者仍是有效成员但角色已无 data.export（降权为 Operator / Viewer）→ 403 PERMISSION_DENIED */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
+                };
+            };
+            /** @description 404 ORGANIZATION_NOT_FOUND（已被移出组织 / 组织不可达）或 404 DATA_REQUEST_NOT_FOUND（请求不存在 / 跨组织 / 非本人） */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -6430,6 +6742,53 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    OrganizationController_deleteCurrent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationDeletionRequestDto"];
+            };
+        };
+        responses: {
+            /** @description 删除请求视图（PENDING，含撤回期截止时刻） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["DataRequestViewDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 非 Owner（PERMISSION_DENIED） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
+                };
+            };
+            /** @description 组织不存在 / 非有效成员 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRequestErrorDto"];
+                };
             };
         };
     };

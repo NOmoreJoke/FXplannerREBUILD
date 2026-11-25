@@ -41,6 +41,7 @@ import {
 	UsageListRespDto,
 } from "./dto/usage.dto";
 import { UsageService } from "./usage.service";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /**
  * 资金使用（usage-recording M7 / ToB R1 W24）：2 个功能入口，全部需登录，路由挂在 plans 下。
@@ -86,7 +87,7 @@ export class UsageController {
 	}
 
 	@Post(":id/usages")
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("usage.create")
 	@ApiOperation({
 		summary: "记录使用（五步事务：扣分配/扣余额/FIFO 分摊）",
@@ -145,7 +146,7 @@ export class UsageController {
 		description: "计划不存在或不属于当前组织（PLAN_NOT_FOUND，防枚举）",
 		type: UsageErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("usage.read")
 	async list(
 		@CurrentUser() user: User,

@@ -44,6 +44,7 @@ import {
 	SaveInitialHoldingsDto,
 } from "./dto/onboarding.dto";
 import { OnboardingService } from "./onboarding.service";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /**
  * 首次设置（M1.1，技术方案 §2）：3 个功能入口，全部需登录。
@@ -68,7 +69,7 @@ export class OnboardingController {
 	// 只读状态查询与业务 GET 同一守卫链（评审 I-10：此前漏挂，离职成员/跨组织上下文
 	// 仍可读，且完成态只看个人设置——现按当前组织的偏好判定）
 	@Get("status")
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("settings.read")
 	@ApiOperation({
 		summary: "查询首次设置状态（按当前组织）",
@@ -102,7 +103,7 @@ export class OnboardingController {
 	}
 
 	@Post("complete")
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("settings.update")
 	@ApiOperation({
 		summary: "完成首次设置（当前组织，最终提交，不可重复）",
@@ -141,7 +142,7 @@ export class OnboardingController {
 	}
 
 	@Post("initial-holdings")
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("settings.update")
 	@ApiOperation({
 		summary: "补录初始持仓（当前组织建账后，每币种仅一笔）",

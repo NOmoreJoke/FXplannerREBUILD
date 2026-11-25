@@ -18,7 +18,7 @@ import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nes
 import { AuthService } from './auth.service';
 import { RegisterDto, LoginDto } from './dto';
 import { AuthResponseDto, UserDto } from './dto/auth-response.dto';
-import { SkipDataRequestLock } from '../data-request/data-request-lock.guard';
+import { SkipPersonalAccountLock } from '../authorization/guards/data-lock.decorators';
 import { SendOtpCodeDto } from './otp/dto/send-otp-code.dto';
 import { OtpChallengeResultDto } from './otp/dto/otp-challenge-result.dto';
 import { OtpLoginDto } from './otp/dto/otp-login.dto';
@@ -83,7 +83,7 @@ export class AuthController {
   }
 
   @Post('otp/send-code')
-  @SkipDataRequestLock() // 白名单：注销中「新的邮箱验证只进进度页」（account-data §3.3）
+  @SkipPersonalAccountLock() // 白名单：注销中「新的邮箱验证只进进度页」（account-data §3.3）
   @ApiOperation({
     summary: '发送 OTP 登录验证码',
     description: '向邮箱或手机号发送 6 位验证码（可指定用途 LOGIN/EXPORT/CLEAR/DELETION，默认 LOGIN），并返回 challengeId 和过期时间；此步骤不会登录或签发 JWT。',
@@ -109,7 +109,7 @@ export class AuthController {
   }
 
   @Post('otp/login')
-  @SkipDataRequestLock() // 白名单：注销/清空期间 OTP 登录后仅可达进度页（新 JWT 仍被锁拦业务端点）
+  @SkipPersonalAccountLock() // 白名单：注销/清空期间 OTP 登录后仅可达进度页（新 JWT 仍被锁拦业务端点）
   @ApiOperation({
     summary: '使用 OTP 登录',
     description: '校验并消费 challengeId 对应的验证码后按优先级登录：已有 OTP 标识则复用原账号；email 渠道且同邮箱存在密码账号则登录该账号并绑定此 OTP 标识（不新建 User）；否则创建独立 OTP 账号，然后签发 JWT。',
@@ -146,7 +146,7 @@ export class AuthController {
     type: UserDto,
   })
   @UseGuards(JwtAuthGuard)
-  @SkipDataRequestLock() // 白名单：前端跳进度页的判定入口
+  @SkipPersonalAccountLock() // 白名单：前端跳进度页的判定入口
   @HttpCode(HttpStatus.OK)
   async getMe(@CurrentUser() user: User) {
     const data = await this.authService.getMe(user.id);

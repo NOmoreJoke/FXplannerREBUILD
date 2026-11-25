@@ -232,8 +232,9 @@ async function openStreamResponse(
 			.json()
 			.catch(() => ({}) as { code?: string });
 		if (
-			lockError.code === "DATA_REQUEST_LOCKED" ||
-			lockError.code === "ACCOUNT_PENDING_DELETION"
+			lockError.code === "ORGANIZATION_DATA_LOCKED" ||
+			lockError.code === "ACCOUNT_PENDING_DELETION" ||
+			lockError.code === "DATA_REQUEST_LOCKED"
 		) {
 			window.location.href = "/data-requests";
 		}

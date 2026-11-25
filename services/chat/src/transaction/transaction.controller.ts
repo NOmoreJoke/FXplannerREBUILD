@@ -37,6 +37,7 @@ import {
 	TransactionErrorDto,
 } from "./dto/transaction.dto";
 import { TransactionService } from "./transaction.service";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /**
  * 买入交易（transaction-entry，技术方案 §5）：2 个功能入口，全部需登录。
@@ -57,7 +58,7 @@ export class TransactionController {
 	) {}
 
 	@Post()
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("transaction.create")
 	@ApiOperation({
 		summary: "创建买入记录（事务）",
@@ -112,7 +113,7 @@ export class TransactionController {
 		description: "交易不存在或不属于本人（TRANSACTION_NOT_FOUND）",
 		type: TransactionErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("transaction.read")
 	async detail(
 		@CurrentUser() user: User,

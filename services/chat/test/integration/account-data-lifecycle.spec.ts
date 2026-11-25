@@ -65,7 +65,11 @@ describe("AccountData 生命周期（integration）", () => {
 
 	/**
 	 * 提交指定类型 / 数据域的请求（verify → create 全链路），返回请求视图。
-	 * organizationId 用于多组织用户显式指定目标组织（单组织用户可缺省，回落到唯一 ACTIVE 组织）。
+	 *
+	 * 双域物理拆分（技术方案 §9.1–§9.2）：
+	 * - PERSONAL → 个人端点 `/api/data-requests`（不要求组织头）；
+	 * - ORGANIZATION → 组织端点 `/api/organizations/current/data-requests`
+	 *   （组织上下文守卫严格解析 X-Organization-Id，缺省即回落本人默认组织）。
 	 */
 	async function submitRequest(
 		user: TestUser,
@@ -80,19 +84,30 @@ describe("AccountData 生命周期（integration）", () => {
 			user.email,
 			type,
 		);
+		const targetOrgId =
+			scope === "ORGANIZATION"
+				? (organizationId ?? (await defaultOrgIdOf(user.userId)))
+				: undefined;
+		const path =
+			scope === "ORGANIZATION"
+				? "/api/organizations/current/data-requests"
+				: "/api/data-requests";
+		const orgHeaders = targetOrgId
+			? { "X-Organization-Id": targetOrgId }
+			: {};
 		const payload: Record<string, unknown> = { type, scope, challengeId };
 		if (type === "CLEAR") {
 			const impact = await request(app.getHttpServer())
-				.get("/api/data-requests/impact")
+				.get("/api/organizations/current/data-requests/impact")
 				.set("Authorization", `Bearer ${user.accessToken}`)
-				.set(organizationId ? { "X-Organization-Id": organizationId } : {})
+				.set(orgHeaders)
 				.expect(200);
 			payload.confirmedTotals = impact.body.data.totals;
 		}
 		const res = await request(app.getHttpServer())
-			.post("/api/data-requests")
+			.post(path)
 			.set("Authorization", `Bearer ${user.accessToken}`)
-			.set(organizationId ? { "X-Organization-Id": organizationId } : {})
+			.set(orgHeaders)
 			.send(payload);
 		if (res.status !== 200) {
 			throw new Error(`create ${scope} ${type} got ${res.status}: ${JSON.stringify(res.body)}`);
@@ -157,7 +172,7 @@ describe("AccountData 生命周期（integration）", () => {
 			Date.now(),
 		);
 
-		// 写锁生效：新增买入被拒（403 DATA_REQUEST_LOCKED）
+		// 组织写锁生效：新增买入被拒（403 ORGANIZATION_DATA_LOCKED）
 		await request(app.getHttpServer())
 			.post("/api/transactions")
 			.set("Authorization", `Bearer ${user.accessToken}`)
@@ -178,8 +193,9 @@ describe("AccountData 生命周期（integration）", () => {
 			data: { dueAt: before },
 		});
 		await request(app.getHttpServer())
-			.get("/api/data-requests/current")
+			.get("/api/organizations/current")
 			.set("Authorization", `Bearer ${user.accessToken}`)
+			.set("X-Organization-Id", orgId)
 			.expect(200);
 
 		// 方案 §5.1 涉及表：当前组织账本（创建者的存量 NULL 行逻辑上属该组织）行数为 0
@@ -437,7 +453,7 @@ describe("AccountData 生命周期（integration）", () => {
 			"DELETION",
 		);
 		const denied = await request(app.getHttpServer())
-			.post("/api/data-requests")
+			.post("/api/organizations/current/data-requests")
 			.set("Authorization", `Bearer ${member.accessToken}`)
 			.set("X-Organization-Id", orgId)
 			.send({ type: "DELETION", scope: "ORGANIZATION", challengeId: memberCredential.challengeId })
@@ -462,20 +478,33 @@ describe("AccountData 生命周期（integration）", () => {
 				transactedAt: new Date().toISOString(),
 			})
 			.expect(403);
-		expect(locked.body.code).toBe("DATA_REQUEST_LOCKED");
-		await request(app.getHttpServer())
+		expect(locked.body.code).toBe("ORGANIZATION_DATA_LOCKED");
+		// 组织删除进行中：全端点拦截（含 GET）——白名单除外
+		const readLocked = await request(app.getHttpServer())
 			.get("/api/accounts")
+			.set("Authorization", `Bearer ${owner.accessToken}`)
+			.set("X-Organization-Id", orgId)
+			.expect(403);
+		expect(readLocked.body.code).toBe("ORGANIZATION_DATA_LOCKED");
+		// 白名单：进度页与当前组织视图仍可达（前端据此拉锁摘要，避免死锁）
+		await request(app.getHttpServer())
+			.get("/api/organizations/current/data-requests/current")
+			.set("Authorization", `Bearer ${owner.accessToken}`)
+			.set("X-Organization-Id", orgId)
+			.expect(200);
+		await request(app.getHttpServer())
+			.get("/api/organizations/current")
 			.set("Authorization", `Bearer ${owner.accessToken}`)
 			.set("X-Organization-Id", orgId)
 			.expect(200);
 
 		// 到期推进（由本人任意请求触发；成员个人账号不删，token 仍有效）
 		await makeRequestDue(env.prisma, deletionId, new Date(Date.now() - 1000));
-		const advanced = await request(app.getHttpServer())
-			.get("/api/data-requests/current")
+		await request(app.getHttpServer())
+			.get("/api/organizations/current")
 			.set("Authorization", `Bearer ${owner.accessToken}`)
-			.expect(200);
-		expect(advanced.body.data).toBeNull(); // 该组织的数据请求随组织一并删除
+			.set("X-Organization-Id", orgId)
+			.expect(404); // 组织已删：不得残留虚幻权限
 
 		// 组织及其账本、成员关系、设置、数据请求全部删除
 		expect(await env.prisma.organization.findUnique({ where: { id: orgId } })).toBeNull();
@@ -556,8 +585,9 @@ describe("AccountData 生命周期（integration）", () => {
 		// 开启注入后触发推进（事务回滚 → FAILED）
 		injectFail = true;
 		await request(app.getHttpServer())
-			.get("/api/data-requests/current")
+			.get("/api/organizations/current")
 			.set("Authorization", `Bearer ${user.accessToken}`)
+			.set("X-Organization-Id", await defaultOrgIdOf(user.userId))
 			.expect(200);
 		await vi.waitFor(async () => {
 			const row = await env.prisma.dataRequest.findUniqueOrThrow({
@@ -583,13 +613,14 @@ describe("AccountData 生命周期（integration）", () => {
 				transactedAt: new Date().toISOString(),
 			})
 			.expect(403);
-		expect(locked.body.code).toBe("DATA_REQUEST_LOCKED");
+		expect(locked.body.code).toBe("ORGANIZATION_DATA_LOCKED");
 
 		// 关闭注入 → 下次读时重试推进 → COMPLETED
 		injectFail = false;
 		await request(app.getHttpServer())
-			.get("/api/data-requests/current")
+			.get("/api/organizations/current")
 			.set("Authorization", `Bearer ${user.accessToken}`)
+			.set("X-Organization-Id", await defaultOrgIdOf(user.userId))
 			.expect(200);
 		await vi.waitFor(async () => {
 			const row = await env.prisma.dataRequest.findUniqueOrThrow({

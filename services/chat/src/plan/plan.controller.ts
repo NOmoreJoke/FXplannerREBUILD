@@ -59,6 +59,7 @@ import {
 	SchedulePreviewResultDto,
 } from "./dto/plan.dto";
 import { PlanService } from "./plan.service";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /**
  * 换汇计划（plan-creation + plan-management）：8 个功能入口，全部需登录。
@@ -125,7 +126,7 @@ export class PlanController {
 	// 读作用域（评审 R2-I02——此前只传 user.id，守卫形同虚设：带其他组织头仍返回
 	// 本人在该组织的余额 caps，受邀成员则命中自己的空账本）
 	@Post("schedule-preview")
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.create")
 	@ApiOperation({
 		summary: "分批排期预览（只读，不落库）",
@@ -159,7 +160,7 @@ export class PlanController {
 	}
 
 	@Post()
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.create")
 	@ApiOperation({
 		summary: "创建换汇计划（事务）",
@@ -213,7 +214,7 @@ export class PlanController {
 		description: "status 非法（不在三值枚举内），无模块 code",
 		type: PlanErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.read")
 	async list(
 		@CurrentUser() user: User,
@@ -248,7 +249,7 @@ export class PlanController {
 		description: "计划不存在或不属于本人（PLAN_NOT_FOUND）",
 		type: PlanErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.read")
 	async getDetail(
 		@CurrentUser() user: User,
@@ -265,7 +266,7 @@ export class PlanController {
 
 	@Post(":id/adjust-preview")
 	@HttpCode(HttpStatus.OK)
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.adjust")
 	@ApiOperation({
 		summary: "修改预览（只读，不落库）",
@@ -311,7 +312,7 @@ export class PlanController {
 	}
 
 	@Patch(":id")
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.adjust")
 	@ApiOperation({
 		summary: "提交修改 / 重新开启（事务 + 乐观锁）",
@@ -361,7 +362,7 @@ export class PlanController {
 
 	@Post(":id/complete")
 	@HttpCode(HttpStatus.OK)
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.adjust")
 	@ApiOperation({
 		summary: "完成确认（仅进行中；数据不变）",
@@ -407,7 +408,7 @@ export class PlanController {
 
 	@Post(":id/cancel")
 	@HttpCode(HttpStatus.OK)
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.adjust")
 	@ApiOperation({
 		summary: "取消计划（释放剩余分配，终态）",

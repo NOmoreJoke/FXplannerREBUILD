@@ -43,7 +43,7 @@ import { SmsOtpChannel } from "./otp/sms-otp.channel";
 			useValue: {},
 		},
 	],
-	// @Global 导出：各业务模块 @UseGuards(JwtAuthGuard) 与 DataRequestLockGuard 共享同一
+	// @Global 导出：各业务模块 @UseGuards(JwtAuthGuard) 与 PersonalAccountLockGuard 共享同一
 	// RequestAuthService 与 JwtModule 单例，避免跨模块重复验签与查库；OtpService 供 data-request 复用
 	exports: [AuthService, RequestAuthService, OtpService, JwtModule],
 })

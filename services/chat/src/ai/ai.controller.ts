@@ -51,6 +51,7 @@ import {
 	ListMessagesQueryDto,
 	SendMessageDto,
 } from "./dto/ai.dto";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /** 发消息端点的 IP 级限流：路由级 @Throttle 覆盖全局配置（§4，throttler「覆盖」语义） */
 const AI_SEND_THROTTLE = { default: { limit: 5, ttl: 60_000 } } as const;
@@ -123,7 +124,7 @@ export class AiController {
 			},
 		},
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("agent.use")
 	async listConversations(
 		@CurrentUser() user: User,
@@ -167,7 +168,7 @@ export class AiController {
 		description:
 			"以首条消息创建会话（标题=消息前 20 字，会话绑定当前组织）后立即开始流式回复；body 可选 modelKey 指定模型（缺省用服务端默认，非法 key 400 AI_MODEL_UNKNOWN）。响应为 text/event-stream（帧协议 meta/tool/token/done/error），不走统一 JSON 包装。发消息 5/min/IP；用户级日配额超限 429 AI_QUOTA_EXCEEDED；系统并发满 429 AI_BUSY。",
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("agent.use")
 	async createWithMessage(
 		@Req() req: Request,
@@ -198,7 +199,7 @@ export class AiController {
 		description:
 			"向既有会话追加消息并流式回复；body 可选 modelKey 指定模型（缺省用服务端默认，非法 key 400 AI_MODEL_UNKNOWN）。会话归属校验：非本人 / 不在当前组织 / 不存在统一 404（防枚举）；同会话流进行中再发 409 AI_CONVERSATION_BUSY（先标忙碌再落用户消息，无并发窗口）。",
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("agent.use")
 	async sendMessage(
 		@Req() req: Request,
@@ -239,7 +240,7 @@ export class AiController {
 			},
 		},
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("agent.use")
 	async listMessages(
 		@CurrentUser() user: User,
@@ -262,7 +263,7 @@ export class AiController {
 		description:
 			"物理删除本人且属于当前组织的会话及其全部消息；流进行中 409 拒绝删除；非本人 / 跨组织 / 不存在统一 404（防枚举）。",
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("agent.use")
 	async deleteConversation(
 		@CurrentActor() actor: ActorContext,

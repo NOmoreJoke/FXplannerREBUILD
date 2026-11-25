@@ -168,6 +168,22 @@ export class CancelDataRequestDto {
 	challengeId?: string;
 }
 
+/**
+ * 发起组织删除（DELETE /api/organizations/current）的请求体：
+ * 必须携带 verify（purpose=DELETION）返回的已消费凭证——删除组织不可逆，
+ * 冷静期（7 日）内仍可凭同一用途凭证撤回；仅登录不算发起。
+ */
+export class OrganizationDeletionRequestDto {
+	@ApiProperty({
+		description:
+			"verify（purpose=DELETION）返回的挑战 ID（已消费凭证，仅登录不算发起删除）",
+		type: String,
+	})
+	@IsString({ message: "challengeId 必须是字符串" })
+	@IsNotEmpty({ message: "challengeId 不能为空" })
+	challengeId!: string;
+}
+
 export class DataRequestDownloadDto {
 	@ApiProperty({ description: "下载地址（相对 API 前缀）", example: "/api/data-requests/xxx/download", type: String })
 	url!: string;
@@ -256,7 +272,7 @@ export class DataRequestErrorDto {
 
 	@ApiProperty({
 		description:
-			"错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE / LAST_OWNER_REQUIRED（个人注销：仍是某组织唯一所有者）/ ORGANIZATION_REQUIRED / ORGANIZATION_NOT_FOUND / PERMISSION_DENIED / SCOPE_TYPE_MISMATCH",
+			"错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / ORGANIZATION_DATA_LOCKED（当前组织账本清空/删除处理中）/ ACCOUNT_PENDING_DELETION（本人账号注销处理中）/ DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE / LAST_OWNER_REQUIRED（个人注销：仍是某组织唯一所有者）/ ORGANIZATION_REQUIRED / ORGANIZATION_NOT_FOUND / PERMISSION_DENIED / SCOPE_TYPE_MISMATCH",
 		type: String })
 	code!: string;
 
@@ -422,25 +438,20 @@ export class DownloadExpiredException extends HttpException {
 }
 
 /**
- * 锁守卫拦截（方案 §3.3）。
- * subject 为触发锁的请求（scope / type），仅用于给出准确的提示文案；
- * 锁范围与错误码由 data-request-rules 的 resolveLock 决定。
+ * 个人账号锁拦截（方案 §3.3；技术方案 §7.1 双锁错误码严格区分）。
+ *
+ * - `ACCOUNT_PENDING_DELETION`：**本人**账号注销处理中（只锁本人，绝不锁同组织他人）；
+ * - 组织锁 `ORGANIZATION_DATA_LOCKED` 属授权层错误族
+ *   （authorization/authorization.errors.ts 的 OrganizationDataLockedException）——
+ *   守卫与契约在 authorization/（横切能力，audit 等模块亦须挂载）。
  */
 export class DataRequestLockedException extends HttpException {
-	constructor(
-		code: "DATA_REQUEST_LOCKED" | "ACCOUNT_PENDING_DELETION",
-		subject?: { scope?: string; type: string } | null,
-	) {
+	constructor(code: "ACCOUNT_PENDING_DELETION") {
 		super(
 			{
 				success: false,
 				code,
-				message:
-					code === "ACCOUNT_PENDING_DELETION"
-						? "账号注销处理中，仅可查看数据请求进度"
-						: subject?.type === "DELETION"
-							? "组织删除处理中，业务操作暂不可用"
-							: "清空业务记录处理中，业务操作暂不可用",
+				message: "账号注销处理中，仅可查看数据请求进度",
 			},
 			HttpStatus.FORBIDDEN,
 		);

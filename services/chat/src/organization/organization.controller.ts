@@ -1,6 +1,7 @@
 import {
 	Body,
 	Controller,
+	Delete,
 	Get,
 	Inject,
 	Patch,
@@ -30,10 +31,19 @@ import {
 	OrganizationContextGuard,
 } from "../authorization/guards/organization-context.guard";
 import { PermissionGuard } from "../authorization/guards/permission.guard";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
+import { SkipOrganizationLock } from "../authorization/guards/data-lock.decorators";
+import { DataRequestService } from "../data-request/data-request.service";
+import {
+	DataRequestErrorDto,
+	DataRequestViewDto,
+	OrganizationDeletionRequestDto,
+} from "../data-request/dto/data-request.dto";
 import {
 	RequiresPermission,
 } from "../authorization/decorators/requires-permission.decorator";
 import { OrganizationRoute } from "../authorization/decorators/organization-route.decorator";
+import type { RequestWithOrganizationLock } from "../authorization/guards/organization-lock.guard";
 import type { ActorContext } from "../authorization/authorization.types";
 import { OrganizationService } from "./organization.service";
 import {
@@ -52,7 +62,7 @@ import {
  */
 @ApiTags("Organizations")
 @ApiBearerAuth()
-@ApiExtraModels(OrganizationViewDto, OrganizationCurrentDto)
+@ApiExtraModels(OrganizationViewDto, OrganizationCurrentDto, DataRequestViewDto)
 @ApiForbiddenResponse({
 	description: "403 PERMISSION_DENIED（角色无对应权限点）",
 })
@@ -63,6 +73,8 @@ export class OrganizationController {
 	constructor(
 		@Inject(OrganizationService)
 		private readonly organizationService: OrganizationService,
+		@Inject(DataRequestService)
+		private readonly dataRequestService: DataRequestService,
 	) {}
 
 	@Get()
@@ -118,7 +130,10 @@ export class OrganizationController {
 
 	@Get("current")
 	@OrganizationRoute()
-	@UseGuards(OrganizationContextGuard, PermissionGuard)
+	// 锁守卫白名单：组织正在清空 / 删除时前端仍须拉取锁摘要（dataRequestLock），
+	// 否则前端拿不到锁态 → 跳不进进度页 → 死锁。
+	@SkipOrganizationLock()
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("organization.read")
 	@ApiOperation({
 		summary: "当前组织详情 + capabilities + 组织锁与建账状态",
@@ -128,17 +143,21 @@ export class OrganizationController {
 	@ApiOkResponse({ type: OrganizationCurrentDto })
 	async getCurrent(
 		@CurrentActor() actor: ActorContext,
+		@Req() request: Request,
 	): Promise<{ success: true; data: OrganizationCurrentDto; message: string }> {
 		return {
 			success: true,
-			data: await this.organizationService.getCurrent(actor),
+			data: await this.organizationService.getCurrent(
+				actor,
+				(request as RequestWithOrganizationLock).organizationLock,
+			),
 			message: "查询成功",
 		};
 	}
 
 	@Patch("current")
 	@OrganizationRoute()
-	@UseGuards(OrganizationContextGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("organization.update")
 	@ApiOperation({
 		summary: "修改当前组织名称（同事务审计）",
@@ -157,11 +176,66 @@ export class OrganizationController {
 			dto,
 			request.headers["x-request-id"] as string | undefined,
 		);
-		const current = await this.organizationService.getCurrent(actor);
+		const current = await this.organizationService.getCurrent(
+			actor,
+			(request as RequestWithOrganizationLock).organizationLock,
+		);
 		return {
 			success: true,
 			data: { ...current, name: updated.name },
 			message: "更新成功",
 		};
+	}
+
+	@Delete("current")
+	@OrganizationRoute()
+	// 锁守卫白名单（与类级控制面注释一致）：本端点属**控制面**——组织清空 /
+	// 删除冷静期内仍须可达（否则死锁前端），且再次发起必须由服务层统一以
+	// 409 DATA_REQUEST_CONFLICT 呈现（而非守卫级 403 ORGANIZATION_DATA_LOCKED）；
+	// 真正发起删除的资格由 organization.delete 权限点 + 组织级请求互斥保证。
+	@SkipOrganizationLock()
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
+	@RequiresPermission("organization.delete")
+	@ApiOperation({
+		summary: "发起删除当前组织（7 日撤回期）",
+		description:
+			"仅 Owner 可发起（organization.delete 权限点）：提交后进入 7 日撤回期（PENDING），期间可凭 purpose=DELETION 的验证凭证撤回；到期才真正删除组织（清空账本 + 删除组织/成员关系/邀请/设置/审计，**不删除任何成员 User 账号**，成员身份保留）。必须携带 verify（purpose=DELETION）返回的已消费凭证——仅登录不算发起；组织已有进行中组织请求 → 409 DATA_REQUEST_CONFLICT。",
+	})
+	@ApiBody({ type: OrganizationDeletionRequestDto })
+	@ApiOkResponse({
+		description: "删除请求视图（PENDING，含撤回期截止时刻）",
+		schema: {
+			properties: {
+				success: { type: "boolean", example: true },
+				data: { $ref: "#/components/schemas/DataRequestViewDto" },
+				message: { type: "string" },
+			},
+		},
+	})
+	@ApiForbiddenResponse({ description: "非 Owner（PERMISSION_DENIED）", type: DataRequestErrorDto })
+	@ApiNotFoundResponse({ description: "组织不存在 / 非有效成员", type: DataRequestErrorDto })
+	async deleteCurrent(
+		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
+		@Body() dto: OrganizationDeletionRequestDto,
+	): Promise<{
+		success: true;
+		data: DataRequestViewDto;
+		message: string;
+	}> {
+		const data = await this.dataRequestService.create(
+			{
+				type: "DELETION",
+				scope: "ORGANIZATION",
+				challengeId: dto.challengeId,
+			},
+			user,
+			{
+				scope: "ORGANIZATION",
+				organizationId: actor.organizationId,
+				membershipId: actor.membershipId,
+			},
+		);
+		return { success: true, data, message: "删除请求已提交" };
 	}
 }

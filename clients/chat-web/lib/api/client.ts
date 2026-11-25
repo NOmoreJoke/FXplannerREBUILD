@@ -85,7 +85,8 @@ export class ApiError extends Error {
 /**
  * 预期业务控制流 HTTP 响应不记为 dev-log 错误事件（DEBT-06）：
  * - 409 ONBOARDING_NOT_COMPLETED：首次建账前门控/降级语义
- * - 403 DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION：数据锁守卫重定向进度页语义
+ * - 403 ORGANIZATION_DATA_LOCKED / ACCOUNT_PENDING_DELETION：双锁守卫重定向进度页语义
+ *   （ORGANIZATION_DATA_LOCKED = 当前组织账本清空/删除处理中；ACCOUNT_PENDING_DELETION = 本人账号注销处理中）
  * - 400 ORGANIZATION_REQUIRED / 404 ORGANIZATION_NOT_FOUND / 403 PERMISSION_DENIED：
  *   ToB 组织上下文语义（选择失效/权限变化由组织路由层接管，W20）
  */
@@ -96,7 +97,9 @@ export function isExpectedControlFlowApiError(
 	if (status === 409 && code === "ONBOARDING_NOT_COMPLETED") return true;
 	if (
 		status === 403 &&
-		(code === "DATA_REQUEST_LOCKED" || code === "ACCOUNT_PENDING_DELETION")
+		(code === "ORGANIZATION_DATA_LOCKED" ||
+			code === "ACCOUNT_PENDING_DELETION" ||
+			code === "DATA_REQUEST_LOCKED")
 	) {
 		return true;
 	}
@@ -243,8 +246,9 @@ export async function apiClient<T>(
 			.json()
 			.catch(() => ({}) as ApiErrorBody);
 		if (
-			lockError.code === "DATA_REQUEST_LOCKED" ||
-			lockError.code === "ACCOUNT_PENDING_DELETION"
+			lockError.code === "ORGANIZATION_DATA_LOCKED" ||
+			lockError.code === "ACCOUNT_PENDING_DELETION" ||
+			lockError.code === "DATA_REQUEST_LOCKED"
 		) {
 			window.location.href = "/data-requests";
 		}

@@ -110,27 +110,37 @@ describe("DataRequestController（e2e）", () => {
 		return organizationId;
 	}
 
-	/** 下载导出包为 Buffer（application/zip 无内置解析器） */
-	async function downloadZip(url: string, token: string): Promise<Buffer> {
+	/** 下载导出包为 Buffer（application/zip 无内置解析器）；组织域下载须带组织头 */
+	async function downloadZip(
+		url: string,
+		token: string,
+		organizationId?: string,
+	): Promise<Buffer> {
 		const res = await request(app.getHttpServer())
 			.get(url)
 			.set("Authorization", `Bearer ${token}`)
+			.set(organizationId ? { "X-Organization-Id": organizationId } : {})
 			.buffer(true)
 			.parse((response, callback) => {
 				const chunks: Buffer[] = [];
 				response.on("data", (chunk: Buffer) => chunks.push(chunk));
 				response.on("end", () => callback(null, Buffer.concat(chunks)));
-			})
-			.expect(200);
+			});
+		if (res.status !== 200) {
+			throw new Error(`downloadZip ${url} got ${res.status}: ${res.text}`);
+		}
 		return res.body as Buffer;
 	}
 
-	it("未登录访问全部端点 → 401", async () => {
+	it("未登录访问全部端点 → 401（个人域 + 组织域两套路由）", async () => {
 		await request(app.getHttpServer())
 			.get("/api/data-requests/current")
 			.expect(401);
 		await request(app.getHttpServer())
-			.get("/api/data-requests/impact")
+			.get("/api/organizations/current/data-requests/current")
+			.expect(401);
+		await request(app.getHttpServer())
+			.get("/api/organizations/current/data-requests/impact")
 			.expect(401);
 		await request(app.getHttpServer())
 			.post("/api/data-requests/verify")
@@ -141,11 +151,22 @@ describe("DataRequestController（e2e）", () => {
 			.send({})
 			.expect(401);
 		await request(app.getHttpServer())
+			.post("/api/organizations/current/data-requests")
+			.send({})
+			.expect(401);
+		await request(app.getHttpServer())
 			.post("/api/data-requests/nope/cancel")
 			.send({})
 			.expect(401);
 		await request(app.getHttpServer())
+			.post("/api/organizations/current/data-requests/nope/cancel")
+			.send({})
+			.expect(401);
+		await request(app.getHttpServer())
 			.get("/api/data-requests/nope/download")
+			.expect(401);
+		await request(app.getHttpServer())
+			.get("/api/organizations/current/data-requests/nope/download")
 			.expect(401);
 	});
 
@@ -162,9 +183,11 @@ describe("DataRequestController（e2e）", () => {
 		userIds.push(created.body.data.user.id);
 
 		// 清空影响 / 组织导出是组织数据请求：组织尚未建账 → 409
+		const rawOrgId = await defaultOrgIdOf(created.body.data.user.id as string);
 		const impact = await request(app.getHttpServer())
-			.get("/api/data-requests/impact")
+			.get("/api/organizations/current/data-requests/impact")
 			.set("Authorization", `Bearer ${rawToken}`)
+			.set("X-Organization-Id", rawOrgId)
 			.expect(409);
 		expect(impact.body.code).toBe("ONBOARDING_NOT_COMPLETED");
 
@@ -198,8 +221,9 @@ describe("DataRequestController（e2e）", () => {
 			"EXPORT",
 		);
 		const orgExport = await request(app.getHttpServer())
-			.post("/api/data-requests")
+			.post("/api/organizations/current/data-requests")
 			.set("Authorization", `Bearer ${rawToken}`)
+			.set("X-Organization-Id", rawOrgId)
 			.send({ type: "EXPORT", scope: "ORGANIZATION", challengeId: orgCredential.challengeId })
 			.expect(409);
 		expect(orgExport.body.code).toBe("ONBOARDING_NOT_COMPLETED");
@@ -346,11 +370,14 @@ describe("DataRequestController（e2e）", () => {
 			challengeId,
 			new Date(Date.now() - 10 * 60 * 1000 - 1000),
 		);
+		const expiredOrgId = await defaultOrgIdOf(user.userId);
 		const res = await request(app.getHttpServer())
-			.post("/api/data-requests")
+			.post("/api/organizations/current/data-requests")
 			.set("Authorization", `Bearer ${user.accessToken}`)
+			.set("X-Organization-Id", expiredOrgId)
 			.send({
 				type: "CLEAR",
+				scope: "ORGANIZATION",
 				challengeId,
 				confirmedTotals: {
 					accounts: 0,
@@ -389,9 +416,11 @@ describe("DataRequestController（e2e）", () => {
 			where: { userId: user.userId, type: "EXPORT" },
 			data: { downloadExpiresAt: new Date(Date.now() - 1000) },
 		});
+		const clearOrgId = await defaultOrgIdOf(user.userId);
 		const impact = await request(app.getHttpServer())
-			.get("/api/data-requests/impact")
+			.get("/api/organizations/current/data-requests/impact")
 			.set("Authorization", `Bearer ${user.accessToken}`)
+			.set("X-Organization-Id", clearOrgId)
 			.expect(200);
 		expect(impact.body.data.totals).toMatchObject({
 			accounts: 0,
@@ -408,10 +437,12 @@ describe("DataRequestController（e2e）", () => {
 			"CLEAR",
 		);
 		const res = await request(app.getHttpServer())
-			.post("/api/data-requests")
+			.post("/api/organizations/current/data-requests")
 			.set("Authorization", `Bearer ${user.accessToken}`)
+			.set("X-Organization-Id", clearOrgId)
 			.send({
 				type: "CLEAR",
+				scope: "ORGANIZATION",
 				challengeId,
 				confirmedTotals: impact.body.data.totals,
 			});
@@ -446,18 +477,21 @@ describe("DataRequestController（e2e）", () => {
 		}
 	});
 
-	it("CLEAR PENDING 期间：POST/PATCH 业务端点 403 DATA_REQUEST_LOCKED，GET 放行", async () => {
+	it("CLEAR PENDING 期间：POST/PATCH 业务端点 403 ORGANIZATION_DATA_LOCKED，GET 放行", async () => {
+		const clearOrgId = await defaultOrgIdOf(user.userId);
 		const locked = await request(app.getHttpServer())
 			.patch("/api/settings")
 			.set("Authorization", `Bearer ${user.accessToken}`)
+			.set("X-Organization-Id", clearOrgId)
 			.send({ region: "CN" })
 			.expect(403);
-		expect(locked.body.code).toBe("DATA_REQUEST_LOCKED");
+		expect(locked.body.code).toBe("ORGANIZATION_DATA_LOCKED");
 
 		// GET 放行（停写不停看）
 		await request(app.getHttpServer())
 			.get("/api/settings")
 			.set("Authorization", `Bearer ${user.accessToken}`)
+			.set("X-Organization-Id", clearOrgId)
 			.expect(200);
 
 		// data-request 白名单端点可用
@@ -472,17 +506,28 @@ describe("DataRequestController（e2e）", () => {
 			.expect(200);
 	});
 
-	it("撤回：CLEAR 直接撤成功；DELETION 无验证码被拒、带 DELETION 验证成功", async () => {
+	it("撤回：CLEAR 直接撤成功；DELETION 无验证码被拒、带 DELETION 验证成功（双域各走各自端点）", async () => {
 		const { sendAndVerify: sv } = await import("../helpers/data-request-helper");
+		const clearOrgId = await defaultOrgIdOf(user.userId);
 		const current = await request(app.getHttpServer())
-			.get("/api/data-requests/current")
+			.get("/api/organizations/current/data-requests/current")
 			.set("Authorization", `Bearer ${user.accessToken}`)
+			.set("X-Organization-Id", clearOrgId)
 			.expect(200);
 		expect(current.body.data.type).toBe("CLEAR");
 
-		const cancelled = await request(app.getHttpServer())
+		// 组织域请求用个人端点撤回 → 404（跨域一律不泄露存在性）
+		const crossDomain = await request(app.getHttpServer())
 			.post(`/api/data-requests/${current.body.data.id}/cancel`)
 			.set("Authorization", `Bearer ${user.accessToken}`)
+			.send({})
+			.expect(404);
+		expect(crossDomain.body.code).toBe("DATA_REQUEST_NOT_FOUND");
+
+		const cancelled = await request(app.getHttpServer())
+			.post(`/api/organizations/current/data-requests/${current.body.data.id}/cancel`)
+			.set("Authorization", `Bearer ${user.accessToken}`)
+			.set("X-Organization-Id", clearOrgId)
 			.send({})
 			.expect(200);
 		expect(cancelled.body.data.status).toBe("CANCELLED");
@@ -642,9 +687,11 @@ describe("DataRequestController（e2e）", () => {
 	it("CLEAR 创建时 confirmedTotals 过期 → 409 IMPACT_CHANGED", async () => {
 		// 先清掉当前 DELETION（上一用例已撤），直接种一笔业务数据制造数量变化
 		const { sendAndVerify: sv } = await import("../helpers/data-request-helper");
+		const impactOrgId = await defaultOrgIdOf(user.userId);
 		const impact = await request(app.getHttpServer())
-			.get("/api/data-requests/impact")
+			.get("/api/organizations/current/data-requests/impact")
 			.set("Authorization", `Bearer ${user.accessToken}`)
+			.set("X-Organization-Id", impactOrgId)
 			.expect(200);
 		const totals = impact.body.data.totals;
 
@@ -656,10 +703,12 @@ describe("DataRequestController（e2e）", () => {
 			"CLEAR",
 		);
 		const res = await request(app.getHttpServer())
-			.post("/api/data-requests")
+			.post("/api/organizations/current/data-requests")
 			.set("Authorization", `Bearer ${user.accessToken}`)
+			.set("X-Organization-Id", impactOrgId)
 			.send({
 				type: "CLEAR",
+				scope: "ORGANIZATION",
 				challengeId,
 				confirmedTotals: {
 					...totals,
@@ -670,7 +719,7 @@ describe("DataRequestController（e2e）", () => {
 		expect(res.body.code).toBe("IMPACT_CHANGED");
 	});
 
-	it("F1-2 性能收敛：单次受保护请求仅验签 1 次、查 user 1 次、查 data_requests 1 次；已删除用户 token 零查 data_requests", async () => {
+	it("W27 双守卫查询不变量：每个请求至多 1 次 data_requests SELECT（组织端点走合并查询）；ghost token 短路零查；异常一律 fail-closed 500（个人锁与组织锁两条路径分别验证）", async () => {
 		const jwtService = app.get(JwtService);
 		const verifySpy = vi.spyOn(jwtService, "verify");
 		const userFindSpy = vi.spyOn(env.prisma.user, "findUnique");
@@ -683,9 +732,9 @@ describe("DataRequestController（e2e）", () => {
 			drFindManySpy.mockClear();
 			drFindFirstSpy.mockClear();
 
-			// 1. 合法用户访问受保护业务端点（无进行中数据请求）
+			// 1. 个人域受保护端点：仅个人锁守卫 → data_requests 恰好 1 次
 			await request(app.getHttpServer())
-				.get("/api/settings")
+				.get("/api/settings/personal")
 				.set("Authorization", `Bearer ${user.accessToken}`)
 				.expect(200);
 			expect(verifySpy).toHaveBeenCalledTimes(1);
@@ -693,7 +742,20 @@ describe("DataRequestController（e2e）", () => {
 			expect(drFindManySpy).toHaveBeenCalledTimes(1);
 			expect(drFindFirstSpy).not.toHaveBeenCalled();
 
-			// 2. 合法签名但用户不存在的旧 token → 401，且在守卫阶段短路零查 data_requests
+			// 2. 组织上下文端点：OrganizationLockGuard 用**一条合并查询**
+			//    （个人域注销 ∪ 当前组织清空/删除）同时判定两把锁 → 仍然只有 1 条
+			const probeOrgId = await defaultOrgIdOf(user.userId);
+			drFindManySpy.mockClear();
+			drFindFirstSpy.mockClear();
+			await request(app.getHttpServer())
+				.get("/api/settings")
+				.set("Authorization", `Bearer ${user.accessToken}`)
+				.set("X-Organization-Id", probeOrgId)
+				.expect(200);
+			expect(drFindManySpy).toHaveBeenCalledTimes(1);
+			expect(drFindFirstSpy).not.toHaveBeenCalled();
+
+			// 3. 合法签名但用户不存在的旧 token → 401，且在守卫阶段短路零查 data_requests
 			verifySpy.mockClear();
 			userFindSpy.mockClear();
 			drFindManySpy.mockClear();
@@ -717,9 +779,10 @@ describe("DataRequestController（e2e）", () => {
 			drFindFirstSpy.mockRestore();
 		}
 
-		// 3. 组织 CLEAR PENDING 期间单次查询不变量：GET 放行、POST 403 DATA_REQUEST_LOCKED，且均只查 1 次 dataRequest.findMany / 0 次 findFirst
+		// 4. 组织 CLEAR PENDING 期间单次查询不变量：GET 放行、POST 403 ORGANIZATION_DATA_LOCKED，
+		//    且两次各自至多 1 次 dataRequest.findMany / 0 次 findFirst
 		//（CLEAR 属组织域：夹具须带 scope + organizationId，否则被 data_requests_scope_type_org_check 拒绝）
-		const lockUser = await onboardedUser("f1-2-clear-pending");
+		const lockUser = await onboardedUser("w27-clear-pending");
 		const lockOrgId = await defaultOrgIdOf(lockUser.userId);
 		const clearRow = await env.prisma.dataRequest.create({
 			data: {
@@ -740,6 +803,7 @@ describe("DataRequestController（e2e）", () => {
 			await request(app.getHttpServer())
 				.get("/api/settings")
 				.set("Authorization", `Bearer ${lockUser.accessToken}`)
+				.set("X-Organization-Id", lockOrgId)
 				.expect(200);
 			expect(drManyClearSpy).toHaveBeenCalledTimes(1);
 			expect(drFirstClearSpy).not.toHaveBeenCalled();
@@ -749,9 +813,10 @@ describe("DataRequestController（e2e）", () => {
 			const postRes = await request(app.getHttpServer())
 				.post("/api/transactions")
 				.set("Authorization", `Bearer ${lockUser.accessToken}`)
+				.set("X-Organization-Id", lockOrgId)
 				.send({})
 				.expect(403);
-			expect(postRes.body.code).toBe("DATA_REQUEST_LOCKED");
+			expect(postRes.body.code).toBe("ORGANIZATION_DATA_LOCKED");
 			expect(drManyClearSpy).toHaveBeenCalledTimes(1);
 			expect(drFirstClearSpy).not.toHaveBeenCalled();
 		} finally {
@@ -762,13 +827,13 @@ describe("DataRequestController（e2e）", () => {
 				.catch(() => {});
 		}
 
-		// 4. data_requests 查询异常边界：非白名单端点 fail-closed（500），@SkipDataRequestLock 白名单放行（200）
+		// 5. 个人锁查询异常边界：非白名单端点 fail-closed（500），个人白名单放行（200）
 		const dbErrSpy = vi
 			.spyOn(env.prisma.dataRequest, "findMany")
 			.mockRejectedValue(new Error("simulated db connection error"));
 		try {
 			await request(app.getHttpServer())
-				.get("/api/settings")
+				.get("/api/settings/personal")
 				.set("Authorization", `Bearer ${user.accessToken}`)
 				.expect(500);
 			await request(app.getHttpServer())
@@ -777,6 +842,42 @@ describe("DataRequestController（e2e）", () => {
 				.expect(200);
 		} finally {
 			dbErrSpy.mockRestore();
+		}
+
+		// 6. 组织锁（合并查询）异常边界：**两把锁中任一把未被跳过即 fail-closed（500）**
+		//    - /api/settings：个人锁与组织锁都未跳过 → 500；
+		//    - /api/organizations/current：组织锁已跳过，但个人锁未跳过 → 同样 500
+		//      （查不到锁状态不得放行注销中的账号）；白名单仅对**两把锁都跳过**的端点放行
+		const failOrgId = await defaultOrgIdOf(user.userId);
+		const originalFindMany = env.prisma.dataRequest.findMany.bind(
+			env.prisma.dataRequest,
+		);
+		const orgErrSpy = vi
+			.spyOn(env.prisma.dataRequest, "findMany")
+			.mockImplementation((args: unknown) => {
+				// 合并查询（where.OR）= OrganizationLockGuard 的双锁查询
+				const where = (args as { where?: { OR?: unknown } })?.where;
+				if (where && where.OR !== undefined) {
+					return Promise.reject(
+						new Error("simulated organization lock db error"),
+					);
+				}
+				return originalFindMany(args as never);
+			});
+		try {
+			await request(app.getHttpServer())
+				.get("/api/settings")
+				.set("Authorization", `Bearer ${user.accessToken}`)
+				.set("X-Organization-Id", failOrgId)
+				.expect(500);
+			// 个人锁未跳过 → 同样 fail-closed（查不到锁状态不得放行注销中的账号）
+			await request(app.getHttpServer())
+				.get("/api/organizations/current")
+				.set("Authorization", `Bearer ${user.accessToken}`)
+				.set("X-Organization-Id", failOrgId)
+				.expect(500);
+		} finally {
+			orgErrSpy.mockRestore();
 		}
 	});
 
@@ -861,6 +962,60 @@ describe("DataRequestController（e2e）", () => {
 		expect(cancelled.body.data.status).toBe("CANCELLED");
 	});
 
+	it("[N-2] 域一致性校验优先：个人端点 CLEAR（无 confirmedTotals）/ scope=ORGANIZATION、组织端点 scope=PERSONAL 一律 400 SCOPE_TYPE_MISMATCH", async () => {
+		const member = await onboardedUser("dr-domain-mismatch");
+		const orgId = await defaultOrgIdOf(member.userId);
+		const { challengeId: clearCredential } = await sendAndVerify(
+			app,
+			env.otpChannel,
+			member.accessToken,
+			member.email,
+			"CLEAR",
+		);
+
+		// ① 个人端点发 CLEAR 且**不带** confirmedTotals → 域不一致优先（400 SCOPE_TYPE_MISMATCH）
+		const clearNoTotals = await request(app.getHttpServer())
+			.post("/api/data-requests")
+			.set("Authorization", `Bearer ${member.accessToken}`)
+			.send({ type: "CLEAR", challengeId: clearCredential })
+			.expect(400);
+		expect(clearNoTotals.body.code).toBe("SCOPE_TYPE_MISMATCH");
+
+		// ② 个人端点显式 scope=ORGANIZATION → 400 SCOPE_TYPE_MISMATCH
+		const { challengeId: exportCredential } = await sendAndVerify(
+			app,
+			env.otpChannel,
+			member.accessToken,
+			member.email,
+			"EXPORT",
+		);
+		const wrongScope = await request(app.getHttpServer())
+			.post("/api/data-requests")
+			.set("Authorization", `Bearer ${member.accessToken}`)
+			.send({ type: "EXPORT", scope: "ORGANIZATION", challengeId: exportCredential })
+			.expect(400);
+		expect(wrongScope.body.code).toBe("SCOPE_TYPE_MISMATCH");
+
+		// ③ 组织端点显式 scope=PERSONAL → 400 SCOPE_TYPE_MISMATCH
+		const { challengeId: orgExportCredential } = await sendAndVerify(
+			app,
+			env.otpChannel,
+			member.accessToken,
+			member.email,
+			"EXPORT",
+		);
+		const wrongOrgScope = await request(app.getHttpServer())
+			.post("/api/organizations/current/data-requests")
+			.set("Authorization", `Bearer ${member.accessToken}`)
+			.set("X-Organization-Id", orgId)
+			.send({ type: "EXPORT", scope: "PERSONAL", challengeId: orgExportCredential })
+			.expect(400);
+		expect(wrongOrgScope.body.code).toBe("SCOPE_TYPE_MISMATCH");
+
+		// 三次拒绝均零副作用
+		expect(await env.prisma.dataRequest.count({ where: { userId: member.userId } })).toBe(0);
+	});
+
 	it("PERSONAL + CLEAR 一律 400 SCOPE_TYPE_MISMATCH：个人域不能清空组织账本", async () => {
 		const member = await onboardedUser("dr-scope-mismatch");
 		const { challengeId } = await sendAndVerify(
@@ -934,7 +1089,7 @@ describe("DataRequestController（e2e）", () => {
 				type,
 			);
 			return request(app.getHttpServer())
-				.post("/api/data-requests")
+				.post("/api/organizations/current/data-requests")
 				.set("Authorization", `Bearer ${member.accessToken}`)
 				.set("X-Organization-Id", orgId)
 				.send({ type, scope: "ORGANIZATION", challengeId, ...extra });
@@ -984,13 +1139,18 @@ describe("DataRequestController（e2e）", () => {
 		});
 		expect(exportRow.downloadExpiresAt!.getTime()).toBeLessThanOrEqual(Date.now());
 
-		// 组织级互斥：同组织已有进行中的组织请求，任何成员（含 Owner）都不能再创建
+		// 组织级互斥：同组织已有进行中的组织请求（CLEAR PENDING）→
+		// 控制平面端点（组织数据请求）不被锁拦，统一 409 DATA_REQUEST_CONFLICT + 原请求视图
 		const conflict = await submitExpect(owner, "DELETION", 409);
 		expect(conflict.body.code).toBe("DATA_REQUEST_CONFLICT");
-		expect(conflict.body.data).toMatchObject({ type: "CLEAR", scope: "ORGANIZATION", status: "PENDING" });
+		expect(conflict.body.data).toMatchObject({
+			type: "CLEAR",
+			scope: "ORGANIZATION",
+			status: "PENDING",
+		});
 		// 影响确认页同样按角色判权
 		const impactDenied = await request(app.getHttpServer())
-			.get("/api/data-requests/impact")
+			.get("/api/organizations/current/data-requests/impact")
 			.set("Authorization", `Bearer ${finance.accessToken}`)
 			.set("X-Organization-Id", orgId)
 			.expect(403);
@@ -998,8 +1158,9 @@ describe("DataRequestController（e2e）", () => {
 
 		// Admin 直接撤回清空 → CANCELLED
 		const cancelled = await request(app.getHttpServer())
-			.post(`/api/data-requests/${adminClear.body.data.id as string}/cancel`)
+			.post(`/api/organizations/current/data-requests/${adminClear.body.data.id as string}/cancel`)
 			.set("Authorization", `Bearer ${admin.accessToken}`)
+			.set("X-Organization-Id", orgId)
 			.send({})
 			.expect(200);
 		expect(cancelled.body.data.status).toBe("CANCELLED");
@@ -1021,8 +1182,9 @@ describe("DataRequestController（e2e）", () => {
 			"DELETION",
 		);
 		const deletionCancelled = await request(app.getHttpServer())
-			.post(`/api/data-requests/${ownerDeletion.body.data.id as string}/cancel`)
+			.post(`/api/organizations/current/data-requests/${ownerDeletion.body.data.id as string}/cancel`)
 			.set("Authorization", `Bearer ${owner.accessToken}`)
+			.set("X-Organization-Id", orgId)
 			.send({ challengeId: cancelCredential.challengeId })
 			.expect(200);
 		expect(deletionCancelled.body.data.status).toBe("CANCELLED");
@@ -1059,8 +1221,12 @@ describe("DataRequestController（e2e）", () => {
 				owner.email,
 				"EXPORT",
 			);
+			const path =
+				scope === "ORGANIZATION"
+					? "/api/organizations/current/data-requests"
+					: "/api/data-requests";
 			const res = await request(app.getHttpServer())
-				.post("/api/data-requests")
+				.post(path)
 				.set("Authorization", `Bearer ${owner.accessToken}`)
 				.set("X-Organization-Id", orgId)
 				.send({ type: "EXPORT", scope, challengeId });
@@ -1079,12 +1245,23 @@ describe("DataRequestController（e2e）", () => {
 		expect(await env.prisma.dataRequest.count({ where: { userId: owner.userId } })).toBe(2);
 
 		const JSZip = (await import("jszip")).default;
-		const entriesOf = async (url: string) =>
+		const entriesOf = async (url: string, organizationId?: string) =>
 			Object.keys(
-				(await JSZip.loadAsync(await downloadZip(url, owner.accessToken))).files,
+				(
+					await JSZip.loadAsync(
+						await downloadZip(url, owner.accessToken, organizationId),
+					)
+				).files,
 			).sort();
+		// 下载入口按数据域分流（技术方案 §9.1 物理拆分）
+		expect(personal.download.url).toContain("/api/data-requests/");
+		expect(personal.download.url).toContain("/download");
+		expect(organization.download.url).toContain(
+			"/api/organizations/current/data-requests/",
+		);
+		expect(organization.download.url).toContain("/download");
 		const personalEntries = await entriesOf(personal.download.url);
-		const organizationEntries = await entriesOf(organization.download.url);
+		const organizationEntries = await entriesOf(organization.download.url, orgId);
 		expect(personalEntries).toEqual([...PERSONAL_EXPORT_PATHS].sort());
 		expect(organizationEntries).toEqual(
 			expect.arrayContaining([

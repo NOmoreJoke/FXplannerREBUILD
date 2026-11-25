@@ -34,9 +34,9 @@ function extractBearerToken(request: Request): string | null {
 /**
  * 请求级认证身份复用服务（F1-2 / DEBT-02）：
  *
- * 将 DataRequestLockGuard 与 JwtAuthGuard 的 Bearer 解析收敛为单次：
+ * 将 PersonalAccountLockGuard 与 JwtAuthGuard 的 Bearer 解析收敛为单次：
  * 同一次 HTTP Request 内共享 JWT 验签与 users 表查询结果，不再双倍验签/重复查库；
- * 若全局锁守卫惰性推进到期注销（DELETION）物理删除了 User，需调用
+ * 若全局个人锁守卫惰性推进到期注销（DELETION）物理删除了 User，需调用
  * invalidateRequestUser(req) 置无效态，保证下游 JwtAuthGuard 返回 401。
  */
 @Injectable()

@@ -23,6 +23,7 @@ import { RequiresPermission } from "../authorization/decorators/requires-permiss
 import type { ActorContext } from "../authorization/authorization.types";
 import { HomeStateDto, PortfolioDto } from "./dto/home.dto";
 import { HomeService } from "./home.service";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /**
  * 首页状态（home-state-routing，技术方案 §3.1）：单一查询入口，需登录。
@@ -57,7 +58,7 @@ export class HomeController {
 		},
 	})
 	@HttpCode(HttpStatus.OK)
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("account.read")
 	async getState(
 		@CurrentUser() user: User,
@@ -84,7 +85,7 @@ export class HomeController {
 		},
 	})
 	@HttpCode(HttpStatus.OK)
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("account.read")
 	async getPortfolio(
 		@CurrentUser() user: User,

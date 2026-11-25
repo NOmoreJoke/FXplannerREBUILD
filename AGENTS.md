@@ -51,13 +51,13 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  ├─ app.controller.ts          # health / hello 探针
 │  │  ├─ auth/                      # L1：JWT 认证
 │  │  ├─ organization/              # ToB R1：组织、成员、邀请、组织设置与默认组织回填
-│  │  ├─ authorization/             # ToB R1：ActorContext、纯函数权限策略、组织上下文/权限 Guard
+│  │  ├─ authorization/             # ToB R1：ActorContext、纯函数权限策略、组织上下文/权限/双锁 Guard 与白名单装饰器
 │  │  ├─ audit/                     # ToB R1：审计同事务 writer 与只读分页查询（无 update/delete 接口）
 │  │  ├─ account/                   # 账户与分配只读视图
 │  │  ├─ ai/                        # AI 助手（会话、配额、汇率工具）
 │  │  ├─ correction/                # 更正与账本重放（FIFO）
 │  │  ├─ currency/                  # 币种清单下发
-│  │  ├─ data-request/              # 数据请求与全局锁（导出/清空/注销）
+│  │  ├─ data-request/              # 数据请求与双锁判定实现（个人账号锁 / 组织数据锁；导出/清空/注销）
 │  │  ├─ home/                      # 首页聚合
 │  │  ├─ onboarding/                # 首次建账向导（初始持仓）
 │  │  ├─ plan/                      # 换汇计划（排期、分配、变更日志）
@@ -137,6 +137,10 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | E2E 用例         | `e2e/modules/<编号>-<模块>.spec.ts`                                       |
 | ToB 组织工作台与 Agent 规划 | `changes/tob-agent-workspace/` |
 | ToB R1 后端新模块（组织/成员/邀请/设置、权限策略与 Guard、审计） | `services/chat/src/{organization,authorization,audit}/`，在 `app.module.ts` 唯一注册；`authorization/` 仅纯函数与类型（IO 在 Guard/Service 层） |
+| 双域数据请求与双锁守卫 | `services/chat/src/data-request/`：个人域 `/api/data-requests/*`（`DataRequestController`，仅 `JwtAuthGuard`）+ 组织域 `/api/organizations/current/data-requests/*`（`OrganizationDataRequestController`，类级 `@SkipOrganizationLock()`，`JwtAuthGuard → OrganizationContextGuard → OrganizationLockGuard → PermissionGuard`）；`PersonalAccountLockGuard`（全局 `APP_GUARD`，未挂组织锁守卫的路由走个人域单查）/ `OrganizationLockGuard`（**横切守卫，契约与实现分离**：守卫 + `ORGANIZATION_LOCK_RESOLVER` 契约在 `services/chat/src/authorization/guards/organization-lock.guard.ts`，真实判定在 `data-request/organization-lock-resolver.ts`，经全局 `DataRequestModule` 导出后注入——`authorization/` 与 `audit/` 均禁止引入业务记账模块）；双锁白名单装饰器统一在 `services/chat/src/authorization/guards/data-lock.decorators.ts` |
+| 组织锁守卫挂载顺序铁律 | `@UseGuards(OrganizationContextGuard \| BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)`——先解析 `actor.organizationId`、再检锁、最后检权限；放前则无 actor 绕过、放后则 403 先于锁原因返回 |
+| 锁查询不变量（每请求至多 1 条 `data_requests` SELECT） | 组织上下文端点由 `OrganizationLockGuard` 发**一条合并查询**（`scope=PERSONAL` 本人注销 ∪ `scope=ORGANIZATION` 当前组织 `CLEAR`/`DELETION`），同时判定两把锁；`PersonalAccountLockGuard` 读到路由 `__guards__` 含 `OrganizationLockGuard` 时直接放行（不再单独查库）；未挂组织锁守卫的路由由个人锁守卫单查个人域。锁判定失败一律 fail-closed（500），白名单端点仅 log warn |
+| 双锁错误码 | `ACCOUNT_PENDING_DELETION`（**本人**账号注销处理中，只锁本人）/ `ORGANIZATION_DATA_LOCKED`（**当前组织**账本清空/删除处理中，只锁当前组织）——两者严格区分，互不误判、互不触发对方语义 |
 | 组织工作台前端页面 | `clients/chat-web/app/(protected)/organization/`（信息/成员/审计）、`clients/chat-web/app/(protected)/invitations/[token]/` |
 | 组织/审计业务组件 | `clients/chat-web/components/business/{organization,audit}/`，带 index.ts 桶文件 |
 | 组织上下文前端状态 | `clients/chat-web/lib/stores/organization-store.ts`（仅存 `activeOrganizationId`，严禁持久化 role/capabilities） |

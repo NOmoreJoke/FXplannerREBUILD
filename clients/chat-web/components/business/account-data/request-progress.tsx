@@ -52,7 +52,7 @@ export function RequestProgress({ view }: { view: DataRequestView }) {
 
 	const cancelMutation = useMutation({
 		mutationFn: (challengeId?: string) =>
-			dataRequestsApi.cancel(view.id, challengeId),
+			dataRequestsApi.cancel(view.id, challengeId, view.scope),
 		onSuccess: () => {
 			toast.success("已撤回，数据恢复原样");
 			invalidateAfterDataRequestMutation(queryClient);

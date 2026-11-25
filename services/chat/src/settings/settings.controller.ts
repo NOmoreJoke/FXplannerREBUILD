@@ -38,6 +38,7 @@ import {
 	UpdateSettingsDto,
 } from "./dto/update-settings.dto";
 import { SettingsService } from "./settings.service";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /**
  * 个人与组织设置（ToB R1 W22 分离个人展示偏好与组织账本偏好）：
@@ -134,7 +135,7 @@ export class SettingsController {
 		description: "尚未完成首次设置（ONBOARDING_NOT_COMPLETED）",
 		type: SettingsErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("settings.read")
 	async getSettings(
 		@CurrentUser() user: User,
@@ -147,7 +148,7 @@ export class SettingsController {
 	}
 
 	@Patch()
-	@UseGuards(BusinessOrgScopeGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard)
 	@ApiOperation({
 		summary: "更新偏好设置（幂等；个人/组织字段分权校验）",
 		description:

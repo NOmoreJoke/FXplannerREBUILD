@@ -25,6 +25,7 @@ import {
 	RemindersViewDto,
 } from "./dto/reminder.dto";
 import { ReminderService } from "./reminder.service";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /**
  * 站内提醒（reminders 技术方案 §7）：3 个功能入口，全部需登录。
@@ -70,7 +71,7 @@ export class ReminderController {
 		description: "尚未完成首次设置（ONBOARDING_NOT_COMPLETED）",
 		type: ReminderErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.read")
 	async list(
 		@CurrentUser() user: User,
@@ -101,7 +102,7 @@ export class ReminderController {
 		description: "提醒不存在或不属于当前组织（REMINDER_NOT_FOUND）",
 		type: ReminderErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.read")
 	async markRead(
 		@CurrentActor() actor: ActorContext,
@@ -128,7 +129,7 @@ export class ReminderController {
 			},
 		},
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.read")
 	async markAllRead(@CurrentActor() actor: ActorContext) {
 		const data = await this.reminderService.markAllRead(actor);

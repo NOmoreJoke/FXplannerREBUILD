@@ -45,6 +45,7 @@ import {
 	TransferOwnershipResultDto,
 	UpdateMemberDto,
 } from "./dto/member.dto";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /**
  * 成员管理端点（需求 MEM-02 / ORG-03.3；技术方案 §7.2；W19）。
@@ -78,7 +79,7 @@ export class MemberController {
 
 	@Get("current/members")
 	@OrganizationRoute()
-	@UseGuards(OrganizationContextGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("member.read")
 	@ApiOperation({
 		summary: "当前组织成员列表（角色/状态/加入时间）",
@@ -93,7 +94,7 @@ export class MemberController {
 
 	@Patch("current/members/:id")
 	@OrganizationRoute()
-	@UseGuards(OrganizationContextGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("member.update")
 	@ApiOperation({
 		summary: "调整成员角色（同事务审计）",
@@ -119,7 +120,7 @@ export class MemberController {
 
 	@Delete("current/members/:id")
 	@OrganizationRoute()
-	@UseGuards(OrganizationContextGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("member.remove")
 	@ApiOperation({
 		summary: "移除成员（DISABLED 保留历史归属；同事务审计）",
@@ -143,7 +144,7 @@ export class MemberController {
 	@Post("current/members/leave")
 	@HttpCode(HttpStatus.OK)
 	@OrganizationRoute()
-	@UseGuards(OrganizationContextGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("member.read")
 	@ApiOperation({
 		summary: "主动退出组织（最后 Owner 409）",
@@ -163,7 +164,7 @@ export class MemberController {
 	@Post("current/transfer-ownership")
 	@HttpCode(HttpStatus.OK)
 	@OrganizationRoute()
-	@UseGuards(OrganizationContextGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("owner.transfer")
 	@ApiOperation({
 		summary: "转移所有权（原 Owner 降为 ADMIN；先降后升保索引顺序）",

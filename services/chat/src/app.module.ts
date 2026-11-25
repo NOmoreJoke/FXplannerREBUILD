@@ -21,7 +21,7 @@ import { ReportModule } from "./report/report.module";
 import { UsageModule } from "./usage/usage.module";
 import { CorrectionModule } from "./correction/correction.module";
 import { DataRequestModule } from "./data-request/data-request.module";
-import { DataRequestLockGuard } from "./data-request/data-request-lock.guard";
+import { PersonalAccountLockGuard } from "./data-request/personal-account-lock.guard";
 import { AiModule } from "./ai/ai.module";
 import { AuditModule } from "./audit/audit.module";
 import { AuthorizationModule } from "./authorization/authorization.module";
@@ -67,11 +67,13 @@ import { OrganizationModule } from "./organization/organization.module";
 			provide: APP_GUARD,
 			useClass: ThrottlerGuard,
 		},
-		// 数据请求锁全局守卫（account-data §3.3）：先于控制器守卫执行，
-		// 读时惰性推进到期请求并拦截注销/清空期间的端点访问
+		// 个人账号锁全局守卫（技术方案 §9.1–§9.3）：先于控制器守卫执行，
+		// 读时惰性推进到期的个人注销并锁住「本人账号」（403 ACCOUNT_PENDING_DELETION）。
+		// 组织锁（403 ORGANIZATION_DATA_LOCKED）由 OrganizationLockGuard 按端点挂载
+		// （在组织上下文守卫之后、权限守卫之前），两者互不误锁。
 		{
 			provide: APP_GUARD,
-			useClass: DataRequestLockGuard,
+			useClass: PersonalAccountLockGuard,
 		},
 	],
 })

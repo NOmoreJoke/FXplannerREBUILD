@@ -712,7 +712,7 @@ describe("PERSONAL DELETION 的最后 Owner 保护（创建阶段 + 锁内复验
 		});
 		const before = await readOrgRows([org.id]);
 
-		const advanced = await service.advanceAndResolveLock(owner.id, {
+		const advanced = await service.advanceAndResolvePersonalLock(owner.id, {
 			skipLock: true,
 			method: "GET",
 		});
@@ -725,7 +725,7 @@ describe("PERSONAL DELETION 的最后 Owner 保护（创建阶段 + 锁内复验
 
 		// 账号锁解除：不再有进行中的请求
 		expect(
-			await service.advanceAndResolveLock(owner.id, { skipLock: false, method: "POST" }),
+			await service.advanceAndResolvePersonalLock(owner.id, { skipLock: false, method: "POST" }),
 		).toEqual({ userDeleted: false, lock: null, lockSubject: null });
 	});
 });
@@ -814,7 +814,7 @@ describe("PERSONAL DELETION：共享组织账本 1 行不丢、余额零变化",
 			orderBy: { id: "asc" },
 		});
 
-		const advanced = await service.advanceAndResolveLock(deleting.id, {
+		const advanced = await service.advanceAndResolvePersonalLock(deleting.id, {
 			skipLock: true,
 			method: "GET",
 		});
@@ -932,7 +932,7 @@ describe("PERSONAL DELETION：共享组织账本 1 行不丢、余额零变化",
 		await createRequest({ userId: user.id, type: "DELETION", scope: "PERSONAL" });
 		const organizationsBefore = await db.organization.count();
 
-		const advanced = await service.advanceAndResolveLock(user.id, {
+		const advanced = await service.advanceAndResolvePersonalLock(user.id, {
 			skipLock: true,
 			method: "GET",
 		});

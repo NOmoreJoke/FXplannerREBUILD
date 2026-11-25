@@ -53,7 +53,7 @@ describe("apiClient & isExpectedControlFlowApiError", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("409 ONBOARDING_NOT_COMPLETED 与 403 DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION 不触发 dev-log captureApiError", async () => {
+	it("409 ONBOARDING_NOT_COMPLETED 与 403 双锁错误码不触发 dev-log captureApiError", async () => {
 		const { apiClient, isExpectedControlFlowApiError, ApiError } = await import(
 			"@/lib/api/client"
 		);
@@ -64,6 +64,10 @@ describe("apiClient & isExpectedControlFlowApiError", () => {
 		expect(isExpectedControlFlowApiError(403, "DATA_REQUEST_LOCKED")).toBe(true);
 		expect(
 			isExpectedControlFlowApiError(403, "ACCOUNT_PENDING_DELETION"),
+		).toBe(true);
+		// W27：组织数据锁（当前组织账本清空/删除处理中）
+		expect(
+			isExpectedControlFlowApiError(403, "ORGANIZATION_DATA_LOCKED"),
 		).toBe(true);
 		expect(isExpectedControlFlowApiError(409, "IMPACT_CHANGED")).toBe(false);
 		expect(isExpectedControlFlowApiError(500, "INTERNAL_ERROR")).toBe(false);

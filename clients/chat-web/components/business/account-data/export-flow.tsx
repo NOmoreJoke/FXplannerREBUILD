@@ -148,7 +148,7 @@ export function ExportFlow({
 /** 导出下载入口（进度卡内使用） */
 export function ExportDownloadButton({ view }: { view: DataRequestView }) {
 	const downloadMutation = useMutation({
-		mutationFn: () => dataRequestsApi.download(view.id),
+		mutationFn: () => dataRequestsApi.download(view.id, view.scope),
 		onError: (error: Error) => toast.error(error.message || "下载失败"),
 	});
 	if (!view.download) return null;
