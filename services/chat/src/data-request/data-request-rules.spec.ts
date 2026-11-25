@@ -1,16 +1,27 @@
 import { describe, expect, it } from "vitest";
+import { can } from "../authorization/permission-policy";
 import {
 	ACTIVE_STATUSES,
 	assertCredentialUsable,
 	computeDueAt,
+	DATA_REQUEST_SCOPES,
+	defaultScopeForType,
+	isDataRequestScope,
 	resolveAdvance,
+	resolveAuditCleanupPolicy,
 	resolveCancel,
 	resolveCreationConflict,
 	resolveDownload,
+	resolveLastOwnerBlock,
 	resolveLock,
+	resolveScopeType,
+	requiredPermission,
+	SCOPE_ALLOWED_TYPES,
 	toDisplayStatus,
 	verifyChallengeCredential,
+	type AuditCleanupPolicy,
 	type ExistingRequestLike,
+	type OwnershipSnapshot,
 } from "./data-request-rules";
 
 const T0 = new Date("2026-01-15T08:00:00.000Z");
@@ -355,5 +366,316 @@ describe("data-request-rules 验证凭证窗口", () => {
 				T0,
 			),
 		).toEqual({ ok: false, code: "VERIFICATION_INVALID" });
+	});
+});
+
+// ─────────────────────────────────────────────────────────────
+// 双域拆分（技术方案 §9；Goal #3B W26）
+// ─────────────────────────────────────────────────────────────
+
+describe("data-request-rules scope × type 合法性矩阵（与 DB CHECK 同口径）", () => {
+	const SCOPES = ["PERSONAL", "ORGANIZATION"] as const;
+	const TYPES = ["EXPORT", "CLEAR", "DELETION"] as const;
+	/** 唯一合法的 5 种组合 */
+	const ALLOWED = new Set([
+		"PERSONAL|EXPORT|null",
+		"PERSONAL|DELETION|null",
+		"ORGANIZATION|EXPORT|org",
+		"ORGANIZATION|CLEAR|org",
+		"ORGANIZATION|DELETION|org",
+	]);
+
+	it("穷举 2 scope × 3 type × 组织有无：恰好 5 种放行，其余逐项给出拒绝码", () => {
+		const allowedSeen: string[] = [];
+		for (const scope of SCOPES) {
+			for (const type of TYPES) {
+				for (const organizationId of [null, "org-1"]) {
+					// 组织有无归一为 null / org 两态（与 ALLOWED 的键一致）
+					const key = `${scope}|${type}|${organizationId === null ? "null" : "org"}`;
+					const result = resolveScopeType({ scope, type, organizationId });
+					if (ALLOWED.has(key)) {
+						expect(result, key).toEqual({ ok: true });
+						allowedSeen.push(key);
+					} else if (scope === "ORGANIZATION" && organizationId === null) {
+						expect(result, key).toEqual({
+							ok: false,
+							code: "ORGANIZATION_REQUIRED",
+						});
+					} else {
+						expect(result, key).toEqual({
+							ok: false,
+							code: "SCOPE_TYPE_MISMATCH",
+						});
+					}
+				}
+			}
+		}
+		// 防同义反复：矩阵确有 5 格放行、7 格拒绝（12 = 5 + 7）
+		expect(allowedSeen).toHaveLength(5);
+		expect(SCOPES.length * TYPES.length * 2).toBe(12);
+	});
+
+	it("PERSONAL 不得清空组织账本（PERSONAL + CLEAR 一律拒绝），ORGANIZATION 不得缺组织", () => {
+		expect(
+			resolveScopeType({ scope: "PERSONAL", type: "CLEAR", organizationId: null }),
+		).toEqual({ ok: false, code: "SCOPE_TYPE_MISMATCH" });
+		expect(
+			resolveScopeType({ scope: "PERSONAL", type: "DELETION", organizationId: "org-1" }),
+		).toEqual({ ok: false, code: "SCOPE_TYPE_MISMATCH" });
+		expect(
+			resolveScopeType({ scope: "ORGANIZATION", type: "EXPORT", organizationId: null }),
+		).toEqual({ ok: false, code: "ORGANIZATION_REQUIRED" });
+	});
+
+	it("未知 scope / 未知 type fail-closed", () => {
+		expect(isDataRequestScope("personal")).toBe(false);
+		expect(isDataRequestScope("TEAM")).toBe(false);
+		expect(isDataRequestScope(undefined)).toBe(false);
+		expect(isDataRequestScope("ORGANIZATION")).toBe(true);
+		expect(
+			resolveScopeType({ scope: "TEAM", type: "EXPORT", organizationId: "org-1" }),
+		).toEqual({ ok: false, code: "SCOPE_TYPE_MISMATCH" });
+		expect(
+			resolveScopeType({ scope: "ORGANIZATION", type: "PURGE", organizationId: "org-1" }),
+		).toEqual({ ok: false, code: "SCOPE_TYPE_MISMATCH" });
+	});
+
+	it("未显式指定 scope：清空 = 默认组织的 ORGANIZATION，导出/注销 = PERSONAL（§9.2）", () => {
+		expect(defaultScopeForType("CLEAR")).toBe("ORGANIZATION");
+		expect(defaultScopeForType("EXPORT")).toBe("PERSONAL");
+		expect(defaultScopeForType("DELETION")).toBe("PERSONAL");
+		for (const type of TYPES) {
+			// 默认归属与「组织有无」自洽：默认 scope 下该 type 必在允许集合内
+			const scope = defaultScopeForType(type);
+			expect(SCOPE_ALLOWED_TYPES[scope], type).toContain(type);
+		}
+	});
+
+	it("组织域所需权限点与 DATA-01 角色矩阵一致（个人域不涉及角色）", () => {
+		expect(requiredPermission("PERSONAL", "EXPORT")).toBeNull();
+		expect(requiredPermission("PERSONAL", "DELETION")).toBeNull();
+		expect(requiredPermission("ORGANIZATION", "EXPORT")).toBe("data.export");
+		expect(requiredPermission("ORGANIZATION", "CLEAR")).toBe("data.clear");
+		expect(requiredPermission("ORGANIZATION", "DELETION")).toBe("organization.delete");
+
+		// 需求 DATA-01：导出 Owner/Admin/Finance；清空 Owner/Admin；删除仅 Owner
+		const expectGranted = (
+			role: Parameters<typeof can>[0],
+			type: (typeof TYPES)[number],
+			granted: boolean,
+		) => {
+			const permission = requiredPermission("ORGANIZATION", type);
+			if (!permission) throw new Error("组织域请求必须有权限点");
+			expect(can(role, permission), `${role} × ${type}`).toBe(granted);
+		};
+		for (const type of TYPES) {
+			expectGranted("OWNER", type, true);
+			expectGranted("VIEWER", type, false);
+			expectGranted("OPERATOR", type, false);
+		}
+		expectGranted("ADMIN", "EXPORT", true);
+		expectGranted("ADMIN", "CLEAR", true);
+		expectGranted("ADMIN", "DELETION", false);
+		expectGranted("FINANCE", "EXPORT", true);
+		expectGranted("FINANCE", "CLEAR", false);
+		expectGranted("FINANCE", "DELETION", false);
+	});
+});
+
+describe("data-request-rules 双域锁语义（技术方案 §9.1 锁范围）", () => {
+	const METHODS = ["GET", "POST", "PATCH", "DELETE", "get"];
+	const ACTIVE = ["PENDING", "PROCESSING", "FAILED"] as const;
+	const TERMINAL = ["COMPLETED", "CANCELLED"] as const;
+
+	it("导出不锁写：PERSONAL / ORGANIZATION EXPORT 在任何状态、任何方法下都放行", () => {
+		for (const scope of ["PERSONAL", "ORGANIZATION"] as const) {
+			for (const status of [...ACTIVE, ...TERMINAL]) {
+				for (const method of METHODS) {
+					expect(
+						resolveLock({ scope, type: "EXPORT", status }, method),
+						`${scope} ${status} ${method}`,
+					).toBeNull();
+				}
+			}
+		}
+	});
+
+	it("PERSONAL DELETION 锁个人账号：进行中三态全端点拦截（含 GET）", () => {
+		for (const status of ACTIVE) {
+			for (const method of METHODS) {
+				expect(
+					resolveLock({ scope: "PERSONAL", type: "DELETION", status }, method),
+				).toBe("ACCOUNT_PENDING_DELETION");
+			}
+		}
+	});
+
+	it.each(["CLEAR", "DELETION"] as const)(
+		"ORGANIZATION %s 锁组织写：冷静期仅拦非 GET，处理中/失败全拦",
+		(type) => {
+			for (const status of ["PROCESSING", "FAILED"] as const) {
+				for (const method of METHODS) {
+					expect(
+						resolveLock({ scope: "ORGANIZATION", type, status }, method),
+					).toBe("DATA_REQUEST_LOCKED");
+				}
+			}
+			expect(resolveLock({ scope: "ORGANIZATION", type, status: "PENDING" }, "GET")).toBeNull();
+			for (const method of ["POST", "PATCH", "DELETE", "get"]) {
+				// 小写 get 仍视为读（与既有实现的大小写无关口径一致）
+				expect(
+					resolveLock({ scope: "ORGANIZATION", type, status: "PENDING" }, method),
+				).toBe(method === "get" ? null : "DATA_REQUEST_LOCKED");
+			}
+		},
+	);
+
+	it("组织锁不会冒充个人账号注销：ORGANIZATION DELETION 永不返回 ACCOUNT_PENDING_DELETION", () => {
+		for (const status of ACTIVE) {
+			expect(
+				resolveLock({ scope: "ORGANIZATION", type: "DELETION", status }, "GET"),
+			).not.toBe("ACCOUNT_PENDING_DELETION");
+		}
+	});
+
+	it("scope 缺省按 defaultScopeForType 解读（CLEAR = 组织域，DELETION = 个人域）；未知 scope fail-closed 上锁", () => {
+		expect(resolveLock({ type: "DELETION", status: "PENDING" }, "GET")).toBe(
+			"ACCOUNT_PENDING_DELETION",
+		);
+		// CLEAR 只可能是组织域：缺省即「冷静期停写不停看」，而非个人账号锁
+		expect(resolveLock({ type: "CLEAR", status: "PENDING" }, "GET")).toBeNull();
+		expect(resolveLock({ type: "CLEAR", status: "PENDING" }, "POST")).toBe(
+			"DATA_REQUEST_LOCKED",
+		);
+		for (const method of METHODS) {
+			expect(
+				resolveLock({ scope: "TEAM", type: "DELETION", status: "PENDING" }, method),
+			).toBe("DATA_REQUEST_LOCKED");
+		}
+	});
+
+	it("终态放行（任一 scope）", () => {
+		for (const scope of ["PERSONAL", "ORGANIZATION"] as const) {
+			for (const status of TERMINAL) {
+				expect(resolveLock({ scope, type: "DELETION", status }, "POST")).toBeNull();
+				expect(resolveLock({ scope, type: "CLEAR", status }, "POST")).toBeNull();
+			}
+		}
+	});
+});
+
+describe("data-request-rules 最后 Owner 阻塞判定（DATA-02.4 / 验收 27）", () => {
+	function entry(
+		patch: Partial<OwnershipSnapshot> = {},
+	): OwnershipSnapshot {
+		return {
+			organizationId: "org-a",
+			organizationName: "A 的工作台",
+			membership: { role: "OWNER", status: "ACTIVE" },
+			otherActiveOwnerCount: 0,
+			hasSharedRows: false,
+			...patch,
+		};
+	}
+
+	it("本人是唯一 ACTIVE OWNER → 阻塞并给出组织名与角色", () => {
+		expect(resolveLastOwnerBlock([entry()])).toEqual([
+			{ organizationId: "org-a", organizationName: "A 的工作台", role: "OWNER" },
+		]);
+	});
+
+	it("ACTIVE OWNER 但另有 ACTIVE OWNER → 放行（可把共享行过户给对方）", () => {
+		expect(resolveLastOwnerBlock([entry({ otherActiveOwnerCount: 1 })])).toEqual([]);
+		expect(resolveLastOwnerBlock([entry({ otherActiveOwnerCount: 3 })])).toEqual([]);
+	});
+
+	it("已转移所有权（ADMIN）或已被移除（DISABLED）的成员不阻塞", () => {
+		// 组织仍有另一名 ACTIVE OWNER（单活跃 Owner 不变量下非 Owner 成员存在的前提）
+		expect(
+			resolveLastOwnerBlock([
+				entry({
+					membership: { role: "ADMIN", status: "ACTIVE" },
+					otherActiveOwnerCount: 1,
+					hasSharedRows: true,
+				}),
+			]),
+		).toEqual([]);
+		expect(
+			resolveLastOwnerBlock([
+				entry({
+					membership: { role: "OWNER", status: "DISABLED" },
+					otherActiveOwnerCount: 1,
+					hasSharedRows: true,
+				}),
+			]),
+		).toEqual([]);
+	});
+
+	it("持有共享行却无人可接任 → 阻塞（无处过户，不静默删共享账本）", () => {
+		expect(
+			resolveLastOwnerBlock([
+				entry({
+					organizationId: "org-x",
+					organizationName: "无主组织",
+					membership: { role: "FINANCE", status: "ACTIVE" },
+					hasSharedRows: true,
+				}),
+			]),
+		).toEqual([
+			{ organizationId: "org-x", organizationName: "无主组织", role: "FINANCE" },
+		]);
+		// 成员关系已不存在（异常态）同理阻塞，角色记 NONE
+		expect(
+			resolveLastOwnerBlock([entry({ membership: null, hasSharedRows: true })]),
+		).toEqual([
+			{ organizationId: "org-a", organizationName: "A 的工作台", role: "NONE" },
+		]);
+		// 无成员关系且无共享行 → 与该组织再无瓜葛，不阻塞
+		expect(resolveLastOwnerBlock([entry({ membership: null })])).toEqual([]);
+	});
+
+	it("多个组织：列出全部阻塞组织，不替用户选择处置方式", () => {
+		const blocking = resolveLastOwnerBlock([
+			entry({ organizationId: "org-a", organizationName: "A", otherActiveOwnerCount: 1 }),
+			entry({ organizationId: "org-b", organizationName: "B" }),
+			entry({
+				organizationId: "org-c",
+				organizationName: "C",
+				membership: { role: "VIEWER", status: "ACTIVE" },
+				hasSharedRows: true,
+			}),
+			entry({ organizationId: "org-d", organizationName: "D" }),
+		]);
+		expect(blocking).toEqual([
+			{ organizationId: "org-b", organizationName: "B", role: "OWNER" },
+			{ organizationId: "org-c", organizationName: "C", role: "VIEWER" },
+			{ organizationId: "org-d", organizationName: "D", role: "OWNER" },
+		]);
+	});
+
+	it("无任何组织（纯个人账号）不阻塞", () => {
+		expect(resolveLastOwnerBlock([])).toEqual([]);
+	});
+});
+
+describe("data-request-rules 审计清理策略", () => {
+	it("穷举 6 种组合：仅组织删除在删组织前清理审计", () => {
+		const expected: Record<string, AuditCleanupPolicy> = {
+			"PERSONAL|EXPORT": "KEEP",
+			"PERSONAL|DELETION": "KEEP",
+			"ORGANIZATION|EXPORT": "KEEP",
+			"ORGANIZATION|CLEAR": "KEEP",
+			"ORGANIZATION|DELETION": "PURGE_BEFORE_ORG_DELETE",
+		};
+		for (const scope of DATA_REQUEST_SCOPES) {
+			for (const type of ["EXPORT", "CLEAR", "DELETION"] as const) {
+				if (scope === "PERSONAL" && type === "CLEAR") continue; // 不合法组合
+				expect(resolveAuditCleanupPolicy(scope, type), `${scope}|${type}`).toBe(
+					expected[`${scope}|${type}`],
+				);
+			}
+		}
+		// 个人注销不删组织审计（DATA-01 语义分离）
+		expect(resolveAuditCleanupPolicy("PERSONAL", "DELETION")).toBe("KEEP");
 	});
 });

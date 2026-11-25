@@ -878,7 +878,7 @@ export interface paths {
         };
         /**
          * 查询清空影响（确认页）
-         * @description 返回各业务记录数量与是否存在可下载导出包；CLEAR 提交时的 confirmedTotals 快照与此比对，不一致 409 IMPACT_CHANGED。
+         * @description 返回**当前组织**各业务记录数量与是否存在可下载的组织导出包（目标组织取 X-Organization-Id，单组织用户可缺省；需 data.clear 权限）；CLEAR 提交时的 confirmedTotals 快照与此比对，不一致 409 IMPACT_CHANGED。
          */
         get: operations["DataRequestController_getImpact"];
         put?: never;
@@ -920,7 +920,7 @@ export interface paths {
         put?: never;
         /**
          * 提交数据请求（EXPORT 同步生成 / CLEAR、DELETION 进入 7 日流程）
-         * @description 需 verify 返回的确认凭证（10 分钟内、一次性）；互斥 409 附原请求视图；CLEAR 必带 confirmedTotals 且与服务端重算一致；提交 CLEAR/DELETION 时可下载导出链接立即失效。
+         * @description 需 verify 返回的确认凭证（10 分钟内、一次性）；互斥 409 附原请求视图；个人注销时本人仍是某组织唯一所有者 → 409 LAST_OWNER_REQUIRED 附阻塞组织列表。数据域 scope 缺省按类型归属：CLEAR = 当前组织的 ORGANIZATION（目标组织取 X-Organization-Id，单组织用户可缺省，需 data.clear；必带 confirmedTotals 且与服务端重算一致），EXPORT / DELETION = PERSONAL（仅本人 + 二次验证，不含组织账本）。提交 CLEAR/DELETION 时同域可下载导出链接立即失效。
          */
         post: operations["DataRequestController_create"];
         delete?: never;
@@ -3830,6 +3830,13 @@ export interface components {
              */
             type: "EXPORT" | "CLEAR" | "DELETION";
             /**
+             * @description 数据域：PERSONAL（个人身份与个人数据）/ ORGANIZATION（组织账本与组织数据）
+             * @enum {string}
+             */
+            scope: "PERSONAL" | "ORGANIZATION";
+            /** @description 组织域请求的目标组织 ID；个人域为 null */
+            organizationId?: string | null;
+            /**
              * @description 处理状态
              * @enum {string}
              */
@@ -3922,10 +3929,31 @@ export interface components {
         DataRequestErrorDto: {
             /** @description success 恒为 false */
             success: boolean;
-            /** @description 错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE */
+            /** @description 错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE / LAST_OWNER_REQUIRED（个人注销：仍是某组织唯一所有者）/ ORGANIZATION_REQUIRED / ORGANIZATION_NOT_FOUND / PERMISSION_DENIED / SCOPE_TYPE_MISMATCH */
             code: string;
             /** @description 人类可读信息 */
             message: string;
+        };
+        BlockingOrganizationDto: {
+            /** @description 组织 ID */
+            organizationId: string;
+            /** @description 组织名称 */
+            organizationName: string;
+            /**
+             * @description 本人在该组织的成员角色（无成员关系时为 NONE）
+             * @example OWNER
+             */
+            role: string;
+        };
+        LastOwnerRequiredBodyDto: {
+            /** @description success 恒为 false */
+            success: boolean;
+            /** @description 错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE / LAST_OWNER_REQUIRED（个人注销：仍是某组织唯一所有者）/ ORGANIZATION_REQUIRED / ORGANIZATION_NOT_FOUND / PERMISSION_DENIED / SCOPE_TYPE_MISMATCH */
+            code: string;
+            /** @description 人类可读信息 */
+            message: string;
+            /** @description 阻塞注销的组织列表（需先转移所有权或删除这些组织） */
+            blockingOrganizations: components["schemas"]["BlockingOrganizationDto"][];
         };
         CreateDataRequestDto: {
             /**
@@ -3933,6 +3961,11 @@ export interface components {
              * @enum {string}
              */
             type: "EXPORT" | "CLEAR" | "DELETION";
+            /**
+             * @description 数据域。缺省按类型归属：CLEAR = 当前组织的 ORGANIZATION（清空的是组织账本），EXPORT / DELETION = PERSONAL。ORGANIZATION 的目标组织取 X-Organization-Id（单组织用户可缺省）；PERSONAL 仅支持 EXPORT / DELETION
+             * @enum {string}
+             */
+            scope?: "PERSONAL" | "ORGANIZATION";
             /** @description verify 返回的验证凭证 ID */
             challengeId: string;
             /** @description CLEAR 必带：确认页展示时的记录数量快照，与服务端重算不一致 → 409 IMPACT_CHANGED */
@@ -3941,7 +3974,7 @@ export interface components {
         DataRequestConflictBodyDto: {
             /** @description success 恒为 false */
             success: boolean;
-            /** @description 错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE */
+            /** @description 错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE / LAST_OWNER_REQUIRED（个人注销：仍是某组织唯一所有者）/ ORGANIZATION_REQUIRED / ORGANIZATION_NOT_FOUND / PERMISSION_DENIED / SCOPE_TYPE_MISMATCH */
             code: string;
             /** @description 人类可读信息 */
             message: string;
@@ -6192,7 +6225,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description 互斥（DATA_REQUEST_CONFLICT 附原请求）/ 影响变化（IMPACT_CHANGED） */
+            /** @description 互斥（DATA_REQUEST_CONFLICT 附原请求）/ 影响变化（IMPACT_CHANGED）/ 个人注销的最后 Owner 保护（LAST_OWNER_REQUIRED 附阻塞组织列表） */
             409: {
                 headers: {
                     [name: string]: unknown;

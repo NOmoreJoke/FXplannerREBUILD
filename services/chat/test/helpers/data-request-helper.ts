@@ -142,18 +142,28 @@ export interface SeedBusinessDataResult {
  * 种一套完整业务数据（集成测试生命周期用）：
  * 初始持仓 + 买入（未知手续费）+ 计划 + 分配 + 使用 + 成本批次 + 分摊 + 更正 + 提醒。
  * 直接写库，跳过 API 校验（数据可控、可复算）。
+ *
+ * scope 缺省 = 兼容窗口存量行（organization_id IS NULL，逻辑上属个人域 / 默认组织创建者）；
+ * 传入 organizationId = 组织共享账本行（带 organizationId 与 createdById / actorUserId 审计快照）。
+ * 同一用户两种形态可并存；同一组织只能种一次（账户 / 持仓按组织 + 币种唯一）。
  */
 export async function seedBusinessData(
 	prisma: PrismaService,
 	userId: string,
+	scope?: { organizationId: string },
 ): Promise<SeedBusinessDataResult> {
+	const tenant = scope ? { organizationId: scope.organizationId } : {};
+	const creator = scope ? { createdById: userId } : {};
+	const actor = scope ? { actorUserId: userId } : {};
 	const now = new Date();
 	const account = await prisma.account.create({
-		data: { userId, currencyCode: "USD", balance: "900.0000" },
+		data: { userId, ...tenant, ...creator, currencyCode: "USD", balance: "900.0000" },
 	});
 	const holding = await prisma.initialHolding.create({
 		data: {
 			userId,
+			...tenant,
+			...creator,
 			currencyCode: "CAD",
 			amount: "100.0000",
 			rate: "5.0000000000",
@@ -167,6 +177,8 @@ export async function seedBusinessData(
 	const transaction = await prisma.transaction.create({
 		data: {
 			userId,
+			...tenant,
+			...creator,
 			currencyCode: "USD",
 			quantity: "100.0000",
 			principalAmount: "720.0000",
@@ -180,6 +192,7 @@ export async function seedBusinessData(
 	const costLot = await prisma.costLot.create({
 		data: {
 			userId,
+			...tenant,
 			currencyCode: "USD",
 			sourceType: "PURCHASE",
 			sourceId: transaction.id,
@@ -193,6 +206,8 @@ export async function seedBusinessData(
 	const plan = await prisma.plan.create({
 		data: {
 			userId,
+			...tenant,
+			...creator,
 			name: "测试计划",
 			targetCurrency: "USD",
 			targetAmount: "1000.0000",
@@ -208,6 +223,8 @@ export async function seedBusinessData(
 	const usage = await prisma.usageRecord.create({
 		data: {
 			userId,
+			...tenant,
+			...creator,
 			planId: plan.id,
 			currencyCode: "USD",
 			amount: "40.0000",
@@ -225,6 +242,8 @@ export async function seedBusinessData(
 	const correction = await prisma.correction.create({
 		data: {
 			userId,
+			...tenant,
+			...actor,
 			targetType: "TRANSACTION",
 			targetId: transaction.id,
 			reason: "手续费补录",
@@ -236,6 +255,7 @@ export async function seedBusinessData(
 	const reminder = await prisma.reminder.create({
 		data: {
 			userId,
+			...tenant,
 			type: "PREP",
 			planId: plan.id,
 			dedupKey: `PREP:${plan.id}`,

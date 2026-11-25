@@ -2,6 +2,7 @@ import {
 	Body,
 	Controller,
 	Get,
+	Headers,
 	HttpCode,
 	HttpStatus,
 	Inject,
@@ -30,12 +31,14 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { DataRequestService } from "./data-request.service";
 import { SkipDataRequestLock } from "./data-request-lock.guard";
 import {
+	BlockingOrganizationDto,
 	CancelDataRequestDto,
 	CreateDataRequestDto,
 	DataRequestConflictBodyDto,
 	DataRequestErrorDto,
 	DataRequestViewDto,
 	ImpactViewDto,
+	LastOwnerRequiredBodyDto,
 	VerifyDataRequestDto,
 	VerifyResultDto,
 } from "./dto/data-request.dto";
@@ -88,7 +91,7 @@ export class DataRequestController {
 	@ApiOperation({
 		summary: "查询清空影响（确认页）",
 		description:
-			"返回各业务记录数量与是否存在可下载导出包；CLEAR 提交时的 confirmedTotals 快照与此比对，不一致 409 IMPACT_CHANGED。",
+			"返回**当前组织**各业务记录数量与是否存在可下载的组织导出包（目标组织取 X-Organization-Id，单组织用户可缺省；需 data.clear 权限）；CLEAR 提交时的 confirmedTotals 快照与此比对，不一致 409 IMPACT_CHANGED。",
 	})
 	@ApiOkResponse({
 		description: "记录数量与可下载导出提示",
@@ -100,8 +103,11 @@ export class DataRequestController {
 			},
 		},
 	})
-	async getImpact(@CurrentUser() user: User) {
-		const data = await this.dataRequestService.getImpact(user.id);
+	async getImpact(
+		@CurrentUser() user: User,
+		@Headers("x-organization-id") organizationHeader?: string | string[],
+	) {
+		const data = await this.dataRequestService.getImpact(user.id, organizationHeader);
 		return { success: true, data, message: "查询成功" };
 	}
 
@@ -136,7 +142,7 @@ export class DataRequestController {
 	@ApiOperation({
 		summary: "提交数据请求（EXPORT 同步生成 / CLEAR、DELETION 进入 7 日流程）",
 		description:
-			"需 verify 返回的确认凭证（10 分钟内、一次性）；互斥 409 附原请求视图；CLEAR 必带 confirmedTotals 且与服务端重算一致；提交 CLEAR/DELETION 时可下载导出链接立即失效。",
+			"需 verify 返回的确认凭证（10 分钟内、一次性）；互斥 409 附原请求视图；个人注销时本人仍是某组织唯一所有者 → 409 LAST_OWNER_REQUIRED 附阻塞组织列表。数据域 scope 缺省按类型归属：CLEAR = 当前组织的 ORGANIZATION（目标组织取 X-Organization-Id，单组织用户可缺省，需 data.clear；必带 confirmedTotals 且与服务端重算一致），EXPORT / DELETION = PERSONAL（仅本人 + 二次验证，不含组织账本）。提交 CLEAR/DELETION 时同域可下载导出链接立即失效。",
 	})
 	@ApiBody({ type: CreateDataRequestDto })
 	@ApiOkResponse({
@@ -150,12 +156,18 @@ export class DataRequestController {
 		},
 	})
 	@ApiConflictResponse({
-		description: "互斥（DATA_REQUEST_CONFLICT 附原请求）/ 影响变化（IMPACT_CHANGED）",
+		description:
+			"互斥（DATA_REQUEST_CONFLICT 附原请求）/ 影响变化（IMPACT_CHANGED）/ 个人注销的最后 Owner 保护（LAST_OWNER_REQUIRED 附阻塞组织列表）",
 		type: DataRequestConflictBodyDto,
 	})
+	@ApiExtraModels(LastOwnerRequiredBodyDto, BlockingOrganizationDto)
 	@HttpCode(HttpStatus.OK)
-	async create(@CurrentUser() user: User, @Body() dto: CreateDataRequestDto) {
-		const data = await this.dataRequestService.create(dto, user);
+	async create(
+		@CurrentUser() user: User,
+		@Body() dto: CreateDataRequestDto,
+		@Headers("x-organization-id") organizationHeader?: string | string[],
+	) {
+		const data = await this.dataRequestService.create(dto, user, organizationHeader);
 		return { success: true, data, message: "请求已提交" };
 	}
 

@@ -54,6 +54,8 @@ vi.mock("@/lib/api/data-requests", () => ({
 
 const pendingClear: DataRequestView = {
 	id: "req-1",
+	scope: "ORGANIZATION",
+	organizationId: "org-test",
 	type: "CLEAR",
 	status: "PENDING",
 	requestedAt: "2026-09-17T00:00:00.000Z",

@@ -2645,7 +2645,7 @@
     },
     "/api/data-requests/impact": {
       "get": {
-        "description": "返回各业务记录数量与是否存在可下载导出包；CLEAR 提交时的 confirmedTotals 快照与此比对，不一致 409 IMPACT_CHANGED。",
+        "description": "返回**当前组织**各业务记录数量与是否存在可下载的组织导出包（目标组织取 X-Organization-Id，单组织用户可缺省；需 data.clear 权限）；CLEAR 提交时的 confirmedTotals 快照与此比对，不一致 409 IMPACT_CHANGED。",
         "operationId": "DataRequestController_getImpact",
         "parameters": [],
         "responses": {
@@ -2743,7 +2743,7 @@
     },
     "/api/data-requests": {
       "post": {
-        "description": "需 verify 返回的确认凭证（10 分钟内、一次性）；互斥 409 附原请求视图；CLEAR 必带 confirmedTotals 且与服务端重算一致；提交 CLEAR/DELETION 时可下载导出链接立即失效。",
+        "description": "需 verify 返回的确认凭证（10 分钟内、一次性）；互斥 409 附原请求视图；个人注销时本人仍是某组织唯一所有者 → 409 LAST_OWNER_REQUIRED 附阻塞组织列表。数据域 scope 缺省按类型归属：CLEAR = 当前组织的 ORGANIZATION（目标组织取 X-Organization-Id，单组织用户可缺省，需 data.clear；必带 confirmedTotals 且与服务端重算一致），EXPORT / DELETION = PERSONAL（仅本人 + 二次验证，不含组织账本）。提交 CLEAR/DELETION 时同域可下载导出链接立即失效。",
         "operationId": "DataRequestController_create",
         "parameters": [],
         "requestBody": {
@@ -2779,7 +2779,7 @@
             }
           },
           "409": {
-            "description": "互斥（DATA_REQUEST_CONFLICT 附原请求）/ 影响变化（IMPACT_CHANGED）",
+            "description": "互斥（DATA_REQUEST_CONFLICT 附原请求）/ 影响变化（IMPACT_CHANGED）/ 个人注销的最后 Owner 保护（LAST_OWNER_REQUIRED 附阻塞组织列表）",
             "content": {
               "application/json": {
                 "schema": {
@@ -7947,6 +7947,19 @@
             ],
             "description": "请求类型"
           },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "PERSONAL",
+              "ORGANIZATION"
+            ],
+            "description": "数据域：PERSONAL（个人身份与个人数据）/ ORGANIZATION（组织账本与组织数据）"
+          },
+          "organizationId": {
+            "type": "string",
+            "description": "组织域请求的目标组织 ID；个人域为 null",
+            "nullable": true
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -8006,6 +8019,7 @@
         "required": [
           "id",
           "type",
+          "scope",
           "status",
           "requestedAt",
           "dueAt",
@@ -8143,7 +8157,7 @@
           },
           "code": {
             "type": "string",
-            "description": "错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE"
+            "description": "错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE / LAST_OWNER_REQUIRED（个人注销：仍是某组织唯一所有者）/ ORGANIZATION_REQUIRED / ORGANIZATION_NOT_FOUND / PERMISSION_DENIED / SCOPE_TYPE_MISMATCH"
           },
           "message": {
             "type": "string",
@@ -8154,6 +8168,59 @@
           "success",
           "code",
           "message"
+        ]
+      },
+      "BlockingOrganizationDto": {
+        "type": "object",
+        "properties": {
+          "organizationId": {
+            "type": "string",
+            "description": "组织 ID"
+          },
+          "organizationName": {
+            "type": "string",
+            "description": "组织名称"
+          },
+          "role": {
+            "type": "string",
+            "description": "本人在该组织的成员角色（无成员关系时为 NONE）",
+            "example": "OWNER"
+          }
+        },
+        "required": [
+          "organizationId",
+          "organizationName",
+          "role"
+        ]
+      },
+      "LastOwnerRequiredBodyDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "success 恒为 false"
+          },
+          "code": {
+            "type": "string",
+            "description": "错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE / LAST_OWNER_REQUIRED（个人注销：仍是某组织唯一所有者）/ ORGANIZATION_REQUIRED / ORGANIZATION_NOT_FOUND / PERMISSION_DENIED / SCOPE_TYPE_MISMATCH"
+          },
+          "message": {
+            "type": "string",
+            "description": "人类可读信息"
+          },
+          "blockingOrganizations": {
+            "description": "阻塞注销的组织列表（需先转移所有权或删除这些组织）",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockingOrganizationDto"
+            }
+          }
+        },
+        "required": [
+          "success",
+          "code",
+          "message",
+          "blockingOrganizations"
         ]
       },
       "CreateDataRequestDto": {
@@ -8167,6 +8234,14 @@
               "DELETION"
             ],
             "description": "请求类型"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "PERSONAL",
+              "ORGANIZATION"
+            ],
+            "description": "数据域。缺省按类型归属：CLEAR = 当前组织的 ORGANIZATION（清空的是组织账本），EXPORT / DELETION = PERSONAL。ORGANIZATION 的目标组织取 X-Organization-Id（单组织用户可缺省）；PERSONAL 仅支持 EXPORT / DELETION"
           },
           "challengeId": {
             "type": "string",
@@ -8195,7 +8270,7 @@
           },
           "code": {
             "type": "string",
-            "description": "错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE"
+            "description": "错误码：VERIFICATION_INVALID / _EXPIRED / _USED / _PURPOSE_MISMATCH / DATA_REQUEST_NOT_FOUND / DATA_REQUEST_CONFLICT / IMPACT_CHANGED / ONBOARDING_NOT_COMPLETED / DATA_REQUEST_LOCKED / ACCOUNT_PENDING_DELETION / DOWNLOAD_EXPIRED / DATA_REQUEST_NOT_CANCELLABLE / LAST_OWNER_REQUIRED（个人注销：仍是某组织唯一所有者）/ ORGANIZATION_REQUIRED / ORGANIZATION_NOT_FOUND / PERMISSION_DENIED / SCOPE_TYPE_MISMATCH"
           },
           "message": {
             "type": "string",

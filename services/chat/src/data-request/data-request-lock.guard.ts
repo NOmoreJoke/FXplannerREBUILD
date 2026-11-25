@@ -75,7 +75,7 @@ export class DataRequestLockGuard implements CanActivate {
 				return true;
 			}
 			if (result.lock) {
-				throw new DataRequestLockedException(result.lock);
+				throw new DataRequestLockedException(result.lock, result.lockSubject);
 			}
 		} catch (error) {
 			if (error instanceof DataRequestLockedException) {

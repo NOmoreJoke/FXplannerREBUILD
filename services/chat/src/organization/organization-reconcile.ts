@@ -262,9 +262,12 @@ export async function reconcileMigration(
 		}
 	}
 
-	// 5. DataRequest 语义映射（§12.2.7）：EXPORT/DELETION 为 PERSONAL 且不挂组织；
-	//    历史 CLEAR 归属默认组织（scope=ORGANIZATION）。
-	//    defaults CTE 同第 1 项口径；无默认组织的用户的数据请求计为未映射（R2-I05）
+	// 5. DataRequest 语义映射（§12.2.7；Goal #3B W26 双域拆分后口径）：
+	//    合法形态 = DB CHECK data_requests_scope_type_org_check 的同一谓词——
+	//    PERSONAL 仅 EXPORT/DELETION 且不挂组织；ORGANIZATION 可为 EXPORT/CLEAR/DELETION
+	//    且必挂组织（任意成员组织，不再限定为请求者的默认组织）。
+	//    defaults CTE 同第 1 项口径；无默认组织的用户的数据请求仍计为未映射（R2-I05，
+	//    迁移闸门的 fail-closed 信号不变）。
 	const [dataRequests] = await db.$queryRaw<Array<{ n: bigint }>>`
 		WITH first_members AS (
 			SELECT DISTINCT ON (m.organization_id)
@@ -282,11 +285,9 @@ export async function reconcileMigration(
 		SELECT count(*) AS n FROM data_requests r
 		LEFT JOIN defaults d ON d.user_id = r.user_id
 		WHERE (d.organization_id IS NULL
-			OR ((r.type IN ('EXPORT', 'DELETION')
-					AND (r.scope <> 'PERSONAL' OR r.organization_id IS NOT NULL))
-				OR (r.type = 'CLEAR'
-					AND (r.scope <> 'ORGANIZATION'
-						OR r.organization_id IS DISTINCT FROM d.organization_id))))
+			OR NOT (
+				(r.scope = 'PERSONAL' AND r.type IN ('EXPORT', 'DELETION') AND r.organization_id IS NULL)
+				OR (r.scope = 'ORGANIZATION' AND r.type IN ('EXPORT', 'CLEAR', 'DELETION') AND r.organization_id IS NOT NULL)))
 			AND (NOT ${sharded} OR r.user_id = ANY(${ids}::text[]))`;
 	expectZero("data_request.scope_mapping", dataRequests?.n ?? 0n);
 
