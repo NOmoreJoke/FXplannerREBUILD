@@ -326,10 +326,8 @@ describe("更正重放一致性（集成）", () => {
 		});
 		expect(allocations).toHaveLength(2);
 		// 两不变式：balance = Σ剩余分配 + 未分配；重建分摊 = 理论成本（初始 1,000@7.248 + 买入一 1,000@7.8 = 15,048）
-		const account = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const account = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		expect(account.balance.toFixed(4)).toBe("1000.0000");
 		const totalAllocCost = (
@@ -347,7 +345,7 @@ describe("更正重放一致性（集成）", () => {
 			return Promise.all([
 				prisma.usageRecord.findUniqueOrThrow({ where: { id: usageId } }),
 				prisma.planAllocation.findUniqueOrThrow({ where: { planId } }),
-				prisma.account.findUniqueOrThrow({ where: { userId_currencyCode: accountKey } }),
+				prisma.account.findFirstOrThrow({ where: accountKey }),
 				prisma.costLot.findMany({ where: accountKey, orderBy: { id: "asc" } }),
 				prisma.usageLotAllocation.findMany({ where: { usageId }, orderBy: { id: "asc" } }),
 			]);
@@ -428,10 +426,8 @@ describe("更正重放一致性（集成）", () => {
 				where: { userId: user.userId, currencyCode: "USD" },
 				orderBy: { unitCost: "asc" },
 			}),
-			account: await ctx.prisma.account.findUniqueOrThrow({
-				where: {
-					userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-				},
+			account: await ctx.prisma.account.findFirstOrThrow({
+				where: { userId: user.userId, currencyCode: "USD" },
 			}),
 		};
 
@@ -453,10 +449,8 @@ describe("更正重放一致性（集成）", () => {
 				where: { userId: user.userId, currencyCode: "USD" },
 				orderBy: { unitCost: "asc" },
 			}),
-			account: await ctx.prisma.account.findUniqueOrThrow({
-				where: {
-					userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-				},
+			account: await ctx.prisma.account.findFirstOrThrow({
+				where: { userId: user.userId, currencyCode: "USD" },
 			}),
 		};
 		expect(snapshotAfterSecond.transaction).toEqual(
@@ -538,10 +532,8 @@ describe("更正重放一致性（集成）", () => {
 
 		// 若更正因「买入已先落库但版本无关」成功，最终状态必须满足不变式
 		await assertInvariants(ctx.prisma, user.userId);
-		const balance = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const balance = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		// 终态余额 = 初始 1,000 + 三笔买入 3,000 − 使用 1,200（与批次 Σremaining 严格一致）
 		expect(balance.balance.toFixed(4)).toBe("2800.0000");
@@ -834,10 +826,8 @@ describe("更正重放一致性（集成）", () => {
 		});
 		expect(allocation.usedAmount.toFixed(4)).toBe("1100.0000");
 		expect(allocation.amount.toFixed(4)).toBe("1100.0000");
-		const account = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const account = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		expect(account.balance.toFixed(4)).toBe("1900.0000");
 		await assertInvariants(ctx.prisma, user.userId);
@@ -914,10 +904,8 @@ describe("更正重放一致性（集成）", () => {
 		});
 		expect(allocation.usedAmount.toFixed(4)).toBe("1100.0000");
 		expect(allocation.amount.toFixed(4)).toBe("1100.0000");
-		const account = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const account = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		expect(account.balance.toFixed(4)).toBe("1900.0000");
 		await assertInvariants(ctx.prisma, user.userId);

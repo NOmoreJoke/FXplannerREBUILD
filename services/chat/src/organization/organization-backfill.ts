@@ -310,12 +310,12 @@ async function backfillUser(
 		organizationCreated = true;
 	}
 
-	// §12.2.3：UserSettings 有则幂等复制到 OrganizationSettings；无则保持待建账
+	// §12.2.3：UserSettings 有则幂等复制到 OrganizationSettings；无则（含个人偏好占位行 baseCurrency=""）保持待建账
 	let settingsCreated = 0;
 	const userSettings = await tx.userSettings.findUnique({
 		where: { userId: user.id },
 	});
-	if (userSettings) {
+	if (userSettings && userSettings.baseCurrency.trim() !== "") {
 		const existing = await tx.organizationSettings.findUnique({
 			where: { organizationId },
 		});
@@ -572,6 +572,7 @@ export async function backfillDefaultOrganizations(
 			LEFT JOIN defaults d ON d.user_id = s.user_id
 			LEFT JOIN organization_settings o ON o.organization_id = d.organization_id
 			WHERE o.organization_id IS NULL
+				AND COALESCE(btrim(s.base_currency), '') <> ''
 				AND (NOT ${sharded} OR s.user_id = ANY(${shardIds}::text[]))`;
 		summary.organizationSettingsCreated = Number(settingsToCreate?.n ?? 0n);
 		return summary;

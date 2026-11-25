@@ -260,10 +260,8 @@ describe("UsageController（接口）", () => {
 		});
 		// 本次不记账（需求 §7）：记录数不变、余额与 usedAmount 不变
 		expect(await ctx.prisma.usageRecord.count()).toBe(before);
-		const account = await ctx.prisma.account.findUnique({
-			where: {
-				userId_currencyCode: { userId: userErr.userId, currencyCode: "USD" },
-			},
+		const account = await ctx.prisma.account.findFirst({
+			where: { userId: userErr.userId, currencyCode: "USD" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("10000.0000");
 		const allocation = await ctx.prisma.planAllocation.findUnique({

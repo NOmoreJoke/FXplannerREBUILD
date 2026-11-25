@@ -103,9 +103,11 @@ export class DataRequestService {
 	async getImpact(userId: string): Promise<ImpactViewDto> {
 		const settings = await this.prisma.userSettings.findUnique({
 			where: { userId },
-			select: { userId: true },
+			select: { userId: true, baseCurrency: true },
 		});
-		if (!settings) throw new OnboardingNotCompletedException();
+		if (!settings || !settings.baseCurrency.trim()) {
+			throw new OnboardingNotCompletedException();
+		}
 
 		const totals = await this.computeTotals(this.prisma, userId);
 		const downloadable = await this.prisma.dataRequest.findFirst({
@@ -174,9 +176,11 @@ export class DataRequestService {
 	async create(dto: CreateDataRequestDto, user: User): Promise<DataRequestViewDto> {
 		const settings = await this.prisma.userSettings.findUnique({
 			where: { userId: user.id },
-			select: { userId: true },
+			select: { userId: true, baseCurrency: true },
 		});
-		if (!settings) throw new OnboardingNotCompletedException();
+		if (!settings || !settings.baseCurrency.trim()) {
+			throw new OnboardingNotCompletedException();
+		}
 
 		if (dto.type === "CLEAR" && !dto.confirmedTotals) {
 			throw new BadRequestException("清空业务记录必须携带确认时的记录数量快照");
@@ -694,18 +698,19 @@ export class DataRequestService {
 
 		return {
 			generatedAt: new Date(),
-			settings: settings
-				? {
-					baseCurrency: settings.baseCurrency,
-					locale: settings.locale,
-					region: settings.region,
-					prepPreference: settings.prepPreference,
-					reminderEnabled: settings.reminderEnabled,
-					ledgerStartedAt: settings.ledgerStartedAt,
-					createdAt: settings.createdAt,
-					updatedAt: settings.updatedAt,
-				}
-				: null,
+			settings:
+				settings && settings.baseCurrency.trim()
+					? {
+							baseCurrency: settings.baseCurrency,
+							locale: settings.locale,
+							region: settings.region,
+							prepPreference: settings.prepPreference,
+							reminderEnabled: settings.reminderEnabled,
+							ledgerStartedAt: settings.ledgerStartedAt,
+							createdAt: settings.createdAt,
+							updatedAt: settings.updatedAt,
+						}
+					: null,
 			initialHoldings: initialHoldings.map((row) => ({
 				id: row.id,
 				currencyCode: row.currencyCode,

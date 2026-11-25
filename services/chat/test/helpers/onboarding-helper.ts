@@ -11,16 +11,39 @@
  * 保持「无起点 → 跳过下界校验」的既有测试语义（report-test-helper
  * ensureSettings 同款实现，此处放 test-app 供全域复用）。
  */
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
 import type { PrismaService } from "../../src/prisma/prisma.service";
 
 export async function ensureOnboarded(
 	prisma: PrismaService,
 	userId: string,
 	baseCurrency = "CNY",
+	ledgerStartedAt: Date | null = null,
 ): Promise<void> {
 	await prisma.userSettings.upsert({
 		where: { userId },
-		update: { baseCurrency },
-		create: { userId, baseCurrency, locale: "zh-CN", region: "CN" },
+		update: { baseCurrency, ledgerStartedAt },
+		create: {
+			userId,
+			baseCurrency,
+			locale: "zh-CN",
+			region: "CN",
+			ledgerStartedAt,
+		},
 	});
+	const defaultOrganizationId = await resolveDefaultOrganizationId(
+		prisma,
+		userId,
+	);
+	if (defaultOrganizationId) {
+		await prisma.organizationSettings.upsert({
+			where: { organizationId: defaultOrganizationId },
+			update: { baseCurrency, ledgerStartedAt },
+			create: {
+				organizationId: defaultOrganizationId,
+				baseCurrency,
+				ledgerStartedAt,
+			},
+		});
+	}
 }

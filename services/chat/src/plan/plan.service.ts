@@ -244,7 +244,7 @@ export class PlanService {
 			where: { userId },
 			select: { userId: true, baseCurrency: true },
 		});
-		if (!settings) {
+		if (!settings || !settings.baseCurrency.trim()) {
 			throw new OnboardingNotCompletedException(
 				"尚未完成首次设置，请先前往 /onboarding 完成建账后再创建计划",
 			);

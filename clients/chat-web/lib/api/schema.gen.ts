@@ -175,8 +175,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 完成首次设置（最终提交，不可重复）
-         * @description 事务内依次校验：条款（400 CONSENT_REQUIRED）→ 本位币 15 币种（400 INVALID_BASE_CURRENCY）→ 已有设置（409 ONBOARDING_ALREADY_COMPLETED，并发重复由唯一约束兜底同样 409）。成功后创建设置（记账起点 = 完成当日 UTC+8 日初）；可选 initialHoldings 初始持仓同事务入账（最多 14 项，任一失败整单回滚：无有效报价 400 RATE_UNAVAILABLE、金额/成本非法 400 INVALID_AMOUNT）。本位币一经设定永久锁定，无任何修改入口。
+         * 完成首次设置（当前组织，最终提交，不可重复）
+         * @description 要求当前组织 settings.update 权限（仅 OWNER/ADMIN）。事务内依次校验：条款（400 CONSENT_REQUIRED）→ 本位币 15 币种（400 INVALID_BASE_CURRENCY）→ 当前组织已有设置（409 ONBOARDING_ALREADY_COMPLETED，多组织互不阻塞；并发重复由唯一约束兜底同样 409）。成功后创建当前组织设置（记账起点 = 完成当日 UTC+8 日初）并同事务写审计；可选 initialHoldings 初始持仓先取组织账本锁再同事务入账。本位币一经设定永久锁定。
          */
         post: operations["OnboardingController_complete"];
         delete?: never;
@@ -195,8 +195,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 补录初始持仓（建账后，每币种仅一笔）
-         * @description 要求已建账（409 ONBOARDING_NOT_COMPLETED）；传入币种均不得已有初始记录（409 INITIAL_HOLDING_EXISTS，整单拒绝不做部分成功；并发重复由唯一约束兜底同样 409）。实时取价（现汇卖出价优先，1 外币 = X 本位币），5 分钟时效以报价观测时间为锚；无有效报价 400 RATE_UNAVAILABLE、金额/成本非法 400 INVALID_AMOUNT，均整单回滚。
+         * 补录初始持仓（当前组织建账后，每币种仅一笔）
+         * @description 要求当前组织 settings.update 权限（仅 OWNER/ADMIN）且已建账（409 ONBOARDING_NOT_COMPLETED）；先取组织账本锁再查重与入账，传入币种均不得已有初始记录（409 INITIAL_HOLDING_EXISTS，整单拒绝不做部分成功）并同事务写审计。
          */
         post: operations["OnboardingController_saveInitialHoldings"];
         delete?: never;
@@ -613,6 +613,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/personal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询个人展示偏好（不依赖组织或建账状态）
+         * @description 仅要求登录，返回当前用户邮箱与个人展示偏好（region/locale；无个人设置行时回落产品默认值 CN / zh-CN）。
+         */
+        get: operations["SettingsController_getPersonalSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * 更新个人展示偏好（不依赖组织或建账状态）
+         * @description 仅要求登录，允许任意用户（含未建账/无组织/VIEWER/OPERATOR）更新个人 region/locale（全空 400 SETTINGS_UPDATE_EMPTY）；绝不创建 OrganizationSettings。
+         */
+        patch: operations["SettingsController_updatePersonalSettings"];
+        trace?: never;
+    };
     "/api/settings": {
         parameters: {
             query?: never;
@@ -631,8 +655,8 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * 更新偏好设置（幂等）
-         * @description 白名单四字段 region/locale/prepPreference/reminderEnabled，全部可选但至少一项（全空 400 SETTINGS_UPDATE_EMPTY）；枚举非法 400；重复提交同值幂等无副作用。baseCurrency 无更新通道：DTO 不含该字段，未知字段被全局 ValidationPipe 静默剥离（含 baseCurrency 的请求剥后为空 → 400）。未建账 409 ONBOARDING_NOT_COMPLETED。
+         * 更新偏好设置（幂等；个人/组织字段分权校验）
+         * @description 白名单四字段 region/locale/prepPreference/reminderEnabled，全部可选但至少一项（全空 400 SETTINGS_UPDATE_EMPTY）；枚举非法 400；重复提交同值幂等无副作用。更新 region/locale 放行全部有效组织成员；更新 prepPreference/reminderEnabled 须具备 settings.update 权限（无权 403 PERMISSION_DENIED + DENIED 审计）并同事务写 SUCCESS 审计。baseCurrency 无更新通道。未建账 409 ONBOARDING_NOT_COMPLETED。
          */
         patch: operations["SettingsController_updateSettings"];
         trace?: never;
@@ -2900,6 +2924,37 @@ export interface components {
              */
             ledgerStartedAt: string | null;
         };
+        PersonalSettingsViewDto: {
+            /**
+             * @description 账号邮箱（注册时填写；历史数据可能为空）
+             * @example user@example.com
+             */
+            email: string | null;
+            /**
+             * @description 地区
+             * @example CN
+             */
+            region: string;
+            /**
+             * @description 语言
+             * @example zh-CN
+             */
+            locale: string;
+        };
+        UpdatePersonalSettingsDto: {
+            /**
+             * @description 地区（ISO 3166 国家/地区码）
+             * @example HK
+             * @enum {string}
+             */
+            region?: "HK" | "CN";
+            /**
+             * @description 语言（BCP 47 标识）
+             * @example zh-CN
+             * @enum {string}
+             */
+            locale?: "zh-CN" | "en";
+        };
         SettingsErrorDto: {
             /**
              * @description 错误码：SETTINGS_UPDATE_EMPTY / ONBOARDING_NOT_COMPLETED
@@ -4452,6 +4507,15 @@ export interface operations {
                     "application/json": components["schemas"]["OnboardingErrorDto"];
                 };
             };
+            /** @description 无 settings.update 权限（PERMISSION_DENIED） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OnboardingErrorDto"];
+                };
+            };
             /** @description 首次设置已完成（ONBOARDING_ALREADY_COMPLETED） */
             409: {
                 headers: {
@@ -4492,6 +4556,15 @@ export interface operations {
             };
             /** @description 无有效报价（RATE_UNAVAILABLE）或金额非法（INVALID_AMOUNT/INVALID_HOLDINGS） */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OnboardingErrorDto"];
+                };
+            };
+            /** @description 无 settings.update 权限（PERMISSION_DENIED） */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5334,6 +5407,69 @@ export interface operations {
             };
         };
     };
+    SettingsController_getPersonalSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 个人设置查询成功，响应体为 { success, data, message } 包装 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["PersonalSettingsViewDto"];
+                        message?: string;
+                    };
+                };
+            };
+        };
+    };
+    SettingsController_updatePersonalSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePersonalSettingsDto"];
+            };
+        };
+        responses: {
+            /** @description 个人设置已更新 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @example true */
+                        success?: boolean;
+                        data?: components["schemas"]["PersonalSettingsViewDto"];
+                        message?: string;
+                    };
+                };
+            };
+            /** @description 全空入参（SETTINGS_UPDATE_EMPTY）或枚举非法 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorDto"];
+                };
+            };
+        };
+    };
     SettingsController_getSettings: {
         parameters: {
             query?: never;
@@ -5397,6 +5533,15 @@ export interface operations {
             };
             /** @description 全空入参（SETTINGS_UPDATE_EMPTY）或枚举非法 */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorDto"];
+                };
+            };
+            /** @description 无 settings.update 权限修改组织偏好（PERMISSION_DENIED） */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

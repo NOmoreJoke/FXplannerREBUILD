@@ -104,38 +104,42 @@ export class TransactionService {
 
 			// ② 自动建户 + 余额累加：increment 生成 SET balance = balance + x，
 			// 禁止「先读再写回」（READ COMMITTED 下并发同币种买入会丢更新，方案 §4.4）
-			try {
-				await tx.account.upsert({
-					where: {
-						userId_currencyCode: {
+			const existingAccount = await tx.account.findFirst({
+				where: { userId, currencyCode: params.currencyCode },
+				select: { id: true },
+			});
+			if (existingAccount) {
+				await tx.account.update({
+					where: { id: existingAccount.id },
+					data: { balance: { increment: params.quantity } },
+				});
+			} else {
+				try {
+					await tx.account.create({
+						data: {
 							userId,
 							currencyCode: params.currencyCode,
+							balance: params.quantity,
 						},
-					},
-					create: {
-						userId,
-						currencyCode: params.currencyCode,
-						balance: params.quantity,
-					},
-					update: { balance: { increment: params.quantity } },
-				});
-			} catch (error) {
-				// 并发首次建户竞态：唯一约束冲突则账户已被并发请求创建，降级为累加
-				if (
-					error instanceof Prisma.PrismaClientKnownRequestError &&
-					error.code === "P2002"
-				) {
-					await tx.account.update({
-						where: {
-							userId_currencyCode: {
-								userId,
-								currencyCode: params.currencyCode,
-							},
-						},
-						data: { balance: { increment: params.quantity } },
 					});
-				} else {
-					throw error;
+				} catch (error) {
+					// 并发首次建户竞态：唯一约束冲突则账户已被并发请求创建，降级为累加
+					if (
+						error instanceof Prisma.PrismaClientKnownRequestError &&
+						error.code === "P2002"
+					) {
+						const concurrentAccount = await tx.account.findFirst({
+							where: { userId, currencyCode: params.currencyCode },
+							select: { id: true },
+						});
+						if (!concurrentAccount) throw error;
+						await tx.account.update({
+							where: { id: concurrentAccount.id },
+							data: { balance: { increment: params.quantity } },
+						});
+					} else {
+						throw error;
+					}
 				}
 			}
 
@@ -212,10 +216,10 @@ export class TransactionService {
 		// 日期上下界：UTC+8 口径不晚于今天；不早于账本起点（未设置时不校验下界）
 		const settings = await this.prisma.userSettings.findUnique({
 			where: { userId },
-			select: { ledgerStartedAt: true },
+			select: { baseCurrency: true, ledgerStartedAt: true },
 		});
-		// BE-03 防线：未建账不允许录交易（错误体附 /onboarding 引导，与 plan/usage 一致）
-		if (!settings) {
+		// BE-03 防线：未建账不允许录交易（个人偏好占位行 baseCurrency="" 也视同未建账）
+		if (!settings || !settings.baseCurrency.trim()) {
 			throw new OnboardingNotCompletedException(
 				"尚未完成首次设置，请先前往 /onboarding 完成建账后再录入交易",
 			);

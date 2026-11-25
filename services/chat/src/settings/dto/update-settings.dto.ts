@@ -112,6 +112,46 @@ export class SettingsViewDto {
 	ledgerStartedAt!: Date | null;
 }
 
+/** PATCH /api/settings/personal 请求体：个人展示偏好白名单二字段，全部可选（至少一项，全空 400） */
+export class UpdatePersonalSettingsDto {
+	@ApiPropertyOptional({
+		description: "地区（ISO 3166 国家/地区码）",
+		example: "HK",
+		enum: ["HK", "CN"],
+		type: String,
+	})
+	@IsOptional()
+	@IsIn(["HK", "CN"], { message: "地区必须是 HK 或 CN" })
+	region?: string;
+
+	@ApiPropertyOptional({
+		description: "语言（BCP 47 标识）",
+		example: "zh-CN",
+		enum: ["zh-CN", "en"],
+		type: String,
+	})
+	@IsOptional()
+	@IsIn(["zh-CN", "en"], { message: "语言必须是 zh-CN 或 en" })
+	locale?: string;
+}
+
+/** GET / PATCH /api/settings/personal 出参：个人展示偏好视图 */
+export class PersonalSettingsViewDto {
+	@ApiProperty({
+		description: "账号邮箱（注册时填写；历史数据可能为空）",
+		example: "user@example.com",
+		type: String,
+		nullable: true,
+	})
+	email!: string | null;
+
+	@ApiProperty({ description: "地区", example: "CN", type: String })
+	region!: string;
+
+	@ApiProperty({ description: "语言", example: "zh-CN", type: String })
+	locale!: string;
+}
+
 /** 设置模块错误响应体（统一 { code, message }，风格与 onboarding 模块一致） */
 export class SettingsErrorDto {
 	@ApiProperty({

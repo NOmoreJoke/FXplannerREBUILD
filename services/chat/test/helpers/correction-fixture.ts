@@ -161,19 +161,23 @@ export async function seedInitialHolding(
 			acquiredAt: input.acquiredAt ?? input.confirmedAt,
 		},
 	});
-	await prisma.account.upsert({
-		where: {
-			userId_currencyCode: {
+	const existingAccount = await prisma.account.findFirst({
+		where: { userId: input.userId, currencyCode: input.currencyCode },
+		select: { id: true },
+	});
+	if (existingAccount) {
+		await prisma.account.update({
+			where: { id: existingAccount.id },
+			data: { balance: { increment: amount } },
+		});
+	} else {
+		await prisma.account.create({
+			data: {
 				userId: input.userId,
 				currencyCode: input.currencyCode,
+				balance: amount,
 			},
-		},
-		create: {
-			userId: input.userId,
-			currencyCode: input.currencyCode,
-			balance: amount,
-		},
-		update: { balance: { increment: amount } },
-	});
+		});
+	}
 	return { holdingId: holding.id };
 }

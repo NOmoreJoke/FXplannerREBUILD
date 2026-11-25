@@ -214,12 +214,10 @@ export class UsageService {
 				data: { balance: { decrement: amount } },
 			});
 			if (balanceUpdated.count === 0) {
-				const account = await tx.account.findUnique({
+				const account = await tx.account.findFirst({
 					where: {
-						userId_currencyCode: {
-							userId,
-							currencyCode: context.currencyCode,
-						},
+						userId,
+						currencyCode: context.currencyCode,
 					},
 				});
 				throw new UsageInsufficientBalanceException(
@@ -379,9 +377,9 @@ export class UsageService {
 	) {
 		const settings = await tx.userSettings.findUnique({
 			where: { userId },
-			select: { ledgerStartedAt: true },
+			select: { baseCurrency: true, ledgerStartedAt: true },
 		});
-		if (!settings) {
+		if (!settings || !settings.baseCurrency.trim()) {
 			throw new OnboardingNotCompletedException(
 				"尚未完成首次设置，请先前往 /onboarding 完成建账后再记录使用",
 			);

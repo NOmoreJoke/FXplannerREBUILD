@@ -593,4 +593,147 @@ describe("数据库基础设施测试", () => {
 			]);
 		});
 	});
+
+	describe("ToB R1 MIG-C 组织维度唯一索引与存量部分唯一索引", () => {
+		const migCOrgIds: string[] = [];
+		const migCUserIds: string[] = [];
+
+		afterAll(async () => {
+			await prisma.reminder.deleteMany({
+				where: { userId: { in: migCUserIds } },
+			});
+			await prisma.initialHolding.deleteMany({
+				where: { userId: { in: migCUserIds } },
+			});
+			await prisma.account.deleteMany({
+				where: { userId: { in: migCUserIds } },
+			});
+			await prisma.organization.deleteMany({
+				where: { id: { in: migCOrgIds } },
+			});
+			await prisma.user.deleteMany({
+				where: { id: { in: migCUserIds } },
+			});
+		});
+
+		test("Account / InitialHolding / Reminder 按组织唯一（同用户跨组织同币种/同 dedupKey 共存，同组织重复 P2002，legacy NULL 仍受部分唯一索引约束）", async () => {
+			const owner = await prisma.user.create({
+				data: {
+					email: `migc-owner-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
+				},
+			});
+			const orgA = await prisma.organization.create({
+				data: { name: "MIG-C Org A" },
+			});
+			const orgB = await prisma.organization.create({
+				data: { name: "MIG-C Org B" },
+			});
+			migCUserIds.push(owner.id);
+			migCOrgIds.push(orgA.id, orgB.id);
+
+			// 1. Account: 同用户跨组织同币种共存，同组织重复冲突
+			await prisma.account.create({
+				data: { userId: owner.id, organizationId: orgA.id, currencyCode: "M1C", balance: "10" },
+			});
+			await expect(
+				prisma.account.create({
+					data: { userId: owner.id, organizationId: orgB.id, currencyCode: "M1C", balance: "20" },
+				}),
+			).resolves.toBeDefined();
+			await expect(
+				prisma.account.create({
+					data: { userId: owner.id, organizationId: orgA.id, currencyCode: "M1C", balance: "30" },
+				}),
+			).rejects.toMatchObject({ code: "P2002" });
+
+			// 2. InitialHolding: 同用户跨组织同币种共存，同组织重复 P2002，legacy NULL 部分唯一索引 P2002
+			const holdingBase = {
+				userId: owner.id,
+				currencyCode: "M1C",
+				amount: "100",
+				rate: "7.0",
+				rawRate: "7.0",
+				rateSource: "er-api",
+				rateObservedAt: observedAt,
+				cost: "700",
+				confirmedAt: observedAt,
+			};
+			await prisma.initialHolding.create({
+				data: { ...holdingBase, organizationId: orgA.id },
+			});
+			await expect(
+				prisma.initialHolding.create({
+					data: { ...holdingBase, organizationId: orgB.id },
+				}),
+			).resolves.toBeDefined();
+			await expect(
+				prisma.initialHolding.create({
+					data: { ...holdingBase, organizationId: orgA.id },
+				}),
+			).rejects.toMatchObject({ code: "P2002" });
+			await prisma.initialHolding.create({
+				data: { ...holdingBase, organizationId: null },
+			});
+			await expect(
+				prisma.initialHolding.create({
+					data: { ...holdingBase, organizationId: null },
+				}),
+			).rejects.toThrow();
+
+			// 3. Reminder: (organizationId, dedupKey, scheduledFor) 唯一 + legacy 部分唯一索引
+			const dedupKey = `migc-dedup-${Date.now()}`;
+			await prisma.reminder.create({
+				data: {
+					userId: owner.id,
+					organizationId: orgA.id,
+					type: "PLAN_DUE",
+					dedupKey,
+					scheduledFor: observedAt,
+				},
+			});
+			await expect(
+				prisma.reminder.create({
+					data: {
+						userId: owner.id,
+						organizationId: orgB.id,
+						type: "PLAN_DUE",
+						dedupKey,
+						scheduledFor: observedAt,
+					},
+				}),
+			).resolves.toBeDefined();
+			await expect(
+				prisma.reminder.create({
+					data: {
+						userId: owner.id,
+						organizationId: orgA.id,
+						type: "PLAN_DUE",
+						dedupKey,
+						scheduledFor: observedAt,
+					},
+				}),
+			).rejects.toMatchObject({ code: "P2002" });
+			await prisma.reminder.create({
+				data: {
+					userId: owner.id,
+					organizationId: null,
+					type: "PLAN_DUE",
+					dedupKey,
+					scheduledFor: observedAt,
+				},
+			});
+			await expect(
+				prisma.reminder.create({
+					data: {
+						userId: owner.id,
+						organizationId: null,
+						type: "PLAN_DUE",
+						dedupKey,
+						scheduledFor: observedAt,
+					},
+				}),
+			).rejects.toThrow();
+		});
+	});
 });

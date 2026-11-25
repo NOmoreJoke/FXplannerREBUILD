@@ -501,11 +501,20 @@ export class CorrectionService {
 			await this.rebuildLots(tx, userId, currencyCode, replay);
 		}
 		for (const [currencyCode, replay] of evaluation.replayByCurrency) {
-			await tx.account.upsert({
-				where: { userId_currencyCode: { userId, currencyCode } },
-				create: { userId, currencyCode, balance: replay.finalBalance },
-				update: { balance: replay.finalBalance },
+			const existingAccount = await tx.account.findFirst({
+				where: { userId, currencyCode },
+				select: { id: true },
 			});
+			if (existingAccount) {
+				await tx.account.update({
+					where: { id: existingAccount.id },
+					data: { balance: replay.finalBalance },
+				});
+			} else {
+				await tx.account.create({
+					data: { userId, currencyCode, balance: replay.finalBalance },
+				});
+			}
 		}
 		const targetVersion =
 			evaluation.afterTransaction?.version ?? evaluation.afterUsage?.version ?? null;
@@ -564,9 +573,11 @@ export class CorrectionService {
 		this.assertOptimisticMatch(dto, target);
 		// 本位币 / 记账起点：预览取组织偏好（OrganizationSettings 优先，默认组织兼容回落
 		// 到所有者个人设置——受邀成员没有自己的 UserSettings）；apply 沿用请求者个人设置
-		const settings = scope
+		const rawSettings = scope
 			? await resolveOrganizationPreferences(db, scope.organizationId)
 			: await db.userSettings.findUnique({ where: { userId } });
+		const settings =
+			rawSettings && rawSettings.baseCurrency.trim() ? rawSettings : null;
 		if (dto.targetType === "TRANSACTION") {
 			return this.evaluateTransaction(
 				db,

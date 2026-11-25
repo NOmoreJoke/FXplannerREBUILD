@@ -322,14 +322,16 @@ export async function reconcileMigration(
 			(SELECT count(*) FROM user_settings s
 				LEFT JOIN defaults d ON d.user_id = s.user_id
 				JOIN organization_settings o ON o.organization_id = d.organization_id
-				WHERE (o.base_currency <> s.base_currency
+				WHERE COALESCE(btrim(s.base_currency), '') <> ''
+					AND (o.base_currency <> s.base_currency
 						OR o.prep_preference <> s.prep_preference
 						OR o.reminder_enabled <> s.reminder_enabled
 						OR o.ledger_started_at IS DISTINCT FROM s.ledger_started_at)
 					AND (NOT ${sharded} OR s.user_id = ANY(${ids}::text[]))) AS mismatch,
 			(SELECT count(*) FROM user_settings s
 				LEFT JOIN defaults d ON d.user_id = s.user_id
-				WHERE (d.organization_id IS NULL OR NOT EXISTS (
+				WHERE COALESCE(btrim(s.base_currency), '') <> ''
+					AND (d.organization_id IS NULL OR NOT EXISTS (
 						SELECT 1 FROM organization_settings o
 						WHERE o.organization_id = d.organization_id))
 					AND (NOT ${sharded} OR s.user_id = ANY(${ids}::text[]))) AS missing`;

@@ -25,18 +25,27 @@ export const PLAN_EXPECT_USE_DATE = "2030-02-15T00:00:00.000Z";
 /** 显式开始准备日（工作日）——锁定排期首日 */
 export const PLAN_START_DATE = "2030-01-01T00:00:00.000Z";
 
-/** 确保某币种账户存在并写入余额（upsert） */
+/** 确保某币种账户存在并写入余额（compat upsert） */
 export async function ensureAccount(
 	prisma: PrismaService,
 	userId: string,
 	currencyCode: string,
 	balance: string,
 ): Promise<void> {
-	await prisma.account.upsert({
-		where: { userId_currencyCode: { userId, currencyCode } },
-		update: { balance },
-		create: { userId, currencyCode, balance },
+	const existing = await prisma.account.findFirst({
+		where: { userId, currencyCode },
+		select: { id: true },
 	});
+	if (existing) {
+		await prisma.account.update({
+			where: { id: existing.id },
+			data: { balance },
+		});
+	} else {
+		await prisma.account.create({
+			data: { userId, currencyCode, balance },
+		});
+	}
 }
 
 export interface SeedPlanOptions {

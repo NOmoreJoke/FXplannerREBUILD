@@ -963,10 +963,8 @@ describe("PlanController（接口）—— M5 管理端点", () => {
 			releasedAmount: "2000.0000",
 		});
 		// 释放原子生效：账户余额不动，分配行下调，caps 回收 2000
-		const account = await ctx.prisma.account.findUnique({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const account = await ctx.prisma.account.findFirst({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("10000.0000");
 		const allocation = await ctx.prisma.planAllocation.findUnique({
@@ -1372,10 +1370,8 @@ describe("PlanController（接口）—— M5 管理端点", () => {
 			releasedAmount: "2000.0000",
 		});
 		// 账户余额与真实记录不动；释放后未分配余额回升至全额
-		const account = await ctx.prisma.account.findUnique({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const account = await ctx.prisma.account.findFirst({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("10000.0000");
 		expect(await previewCaps(user)).toBe("10000.0000");

@@ -197,8 +197,8 @@ describe("backfill-cost-lots（存量回填，§8.1）", () => {
 			},
 		});
 		// 同步账户余额（模拟第②步），保持不变式平衡
-		await prisma.account.update({
-			where: { userId_currencyCode: { userId, currencyCode: "USD" } },
+		await prisma.account.updateMany({
+			where: { userId, currencyCode: "USD" },
 			data: { balance: "10500" },
 		});
 

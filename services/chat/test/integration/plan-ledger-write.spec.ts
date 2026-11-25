@@ -185,8 +185,8 @@ describe("计划与账本写入串行化（W6-02）", () => {
 		const [persistedPlan, allocation, account, lots, usages, corrections] = await Promise.all([
 			prisma.plan.findUniqueOrThrow({ where: { id: plan.id } }),
 			prisma.planAllocation.findUniqueOrThrow({ where: { planId: plan.id } }),
-			prisma.account.findUniqueOrThrow({
-				where: { userId_currencyCode: { userId: user.userId, currencyCode: "USD" } },
+			prisma.account.findFirstOrThrow({
+				where: { userId: user.userId, currencyCode: "USD" },
 			}),
 			prisma.costLot.aggregate({ where: { userId: user.userId }, _sum: { remainingQty: true } }),
 			prisma.usageRecord.findMany({ where: { planId: plan.id }, orderBy: { usedAt: "asc" } }),

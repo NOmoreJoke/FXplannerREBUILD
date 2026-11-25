@@ -410,16 +410,12 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			})
 			.expect(201);
 
-		const usd = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const usd = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		expect(usd.balance.toFixed(4)).toBe("500.0000"); // 旧账户归零保留语义：余额为剩余批次
-		const cad = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "CAD" },
-			},
+		const cad = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "CAD" },
 		});
 		expect(cad.balance.toFixed(4)).toBe("1000.0000"); // 新账户自动建
 		const cadLot = await ctx.prisma.costLot.findFirstOrThrow({
@@ -473,10 +469,8 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			});
 
 		// 零变化：余额/分配/批次原样
-		const usd = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const usd = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		expect(usd.balance.toFixed(4)).toBe("1000.0000");
 		const transaction = await ctx.prisma.transaction.findUniqueOrThrow({
@@ -887,10 +881,8 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		});
 		expect(changeLogs).toHaveLength(0);
 		// 余额联动（重放重建）：4,000 − (800 + 800) = 2,400
-		const account = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "TWD" },
-			},
+		const account = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "TWD" },
 		});
 		expect(account.balance.toFixed(4)).toBe("2400.0000");
 		// 分摊重建：u1 分摊 800（INITIAL 批）
@@ -986,10 +978,8 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			beforeSnapshot: { amountBefore: "1200.0000" },
 			afterSnapshot: { amountAfter: "3000.0000", supplement: "800.0000" },
 		}]);
-		const account = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "TWD" },
-			},
+		const account = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "TWD" },
 		});
 		expect(account.balance.toFixed(4)).toBe("200.0000");
 	});
@@ -1076,11 +1066,11 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			reason: "使用金额少记了 100",
 			changes: { amount: "200" },
 		};
-		const accountKey = { userId_currencyCode: { userId, currencyCode: "USD" } };
+		const accountKey = { userId, currencyCode: "USD" };
 		const planWhere = { planId: { in: [planA, planB] } };
 		const { prisma } = ctx;
 		const readBusinessRows = () => Promise.all([
-			prisma.account.findUniqueOrThrow({ where: accountKey }),
+			prisma.account.findFirstOrThrow({ where: accountKey }),
 			prisma.transaction.findUniqueOrThrow({ where: { id: transactionId } }),
 			prisma.usageRecord.findUniqueOrThrow({ where: { id: usageId } }),
 			prisma.plan.findMany({ where: { userId }, orderBy: { id: "asc" } }),
@@ -1169,7 +1159,7 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		});
 		expect(allocationB.amount.toFixed(4)).toBe("800.0000");
 		expect(allocationB.usedAmount.toFixed(4)).toBe("0.0000");
-		const account = await prisma.account.findUniqueOrThrow({ where: accountKey });
+		const account = await prisma.account.findFirstOrThrow({ where: accountKey });
 		expect(account.balance.toFixed(4)).toBe("800.0000");
 		const logs = await prisma.planChangeLog.findMany({ where: planWhere });
 		expect(logs).toMatchObject(
@@ -1242,8 +1232,8 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			});
 			expect(allocation.amount.toFixed(4)).toBe(step.allocationAfter);
 			expect(allocation.usedAmount.toFixed(4)).toBe(step.usedAfter);
-			const account = await ctx.prisma.account.findUniqueOrThrow({
-				where: { userId_currencyCode: { userId: user.userId, currencyCode: "TWD" } },
+			const account = await ctx.prisma.account.findFirstOrThrow({
+				where: { userId: user.userId, currencyCode: "TWD" },
 			});
 			expect(account.balance.toFixed(4)).toBe(step.balanceAfter);
 		}
@@ -1487,10 +1477,8 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			where: { planId: usage.planId },
 		});
 		expect(allocation.usedAmount.toFixed(4)).toBe("3300.0000");
-		const account = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "TWD" },
-			},
+		const account = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "TWD" },
 		});
 		expect(account.balance.toFixed(4)).toBe("700.0000");
 		// 分摊跨批次重排断言：u1 改序后跨 A/B 两批（改序前仅 INITIAL 单批）
@@ -1779,10 +1767,8 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			where: { planId },
 		});
 		expect(allocation.usedAmount.toFixed(4)).toBe("2000.0000");
-		const account = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "TWD" },
-			},
+		const account = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "TWD" },
 		});
 		expect(account.balance.toFixed(4)).toBe("2000.0000");
 	});
@@ -1826,10 +1812,8 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 		);
 		// 成本按原汇率重算：800 × 7.248 = 5,798.4
 		expect(holding.cost.toFixed(4)).toBe("5798.4000");
-		const account = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const account = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		expect(account.balance.toFixed(4)).toBe("800.0000");
 	});
@@ -1914,10 +1898,8 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			where: { userId: userB.userId, currencyCode: "HKD" },
 		});
 		expect(lots).toHaveLength(0); // 数量 0 不生成空批次
-		const account = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: userB.userId, currencyCode: "HKD" },
-			},
+		const account = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: userB.userId, currencyCode: "HKD" },
 		});
 		expect(account.balance.toFixed(4)).toBe("0.0000"); // 账户归零保留
 	});
@@ -2167,10 +2149,8 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			where: { userId: user.userId, currencyCode: "CAD" },
 		});
 		expect(cadLot.sourceId).toBe(holdingId);
-		const cadAccount = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "CAD" },
-			},
+		const cadAccount = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "CAD" },
 		});
 		expect(cadAccount.balance.toFixed(4)).toBe("1000.0000");
 	});
@@ -2458,18 +2438,13 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 				transactedAt: daysAgo(3).toISOString(),
 			})
 			.expect(201);
-		// 设账本起点（UTC+8 今天），下界校验生效；settings 已由 ensureOnboarded 建，改 upsert
-		await ctx.prisma.userSettings.upsert({
-			where: { userId: user.userId },
-			update: { ledgerStartedAt: new Date(Date.now() - 86_400_000) },
-			create: {
-				userId: user.userId,
-				baseCurrency: "CNY",
-				locale: "zh-CN",
-				region: "CN",
-				ledgerStartedAt: new Date(Date.now() - 86_400_000),
-			},
-		});
+		// 设账本起点（UTC+8 今天），下界校验生效；同步更新个人与组织设置
+		await ensureOnboarded(
+			ctx.prisma,
+			user.userId,
+			"CNY",
+			new Date(Date.now() - 86_400_000),
+		);
 
 		// JPY 数量带小数 → 400
 		await request(app.getHttpServer())

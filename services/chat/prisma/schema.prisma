@@ -283,7 +283,7 @@ model TermsConsent {
 }
 
 /// 按币种虚拟账户（同币种单账户；余额 0 保留不删）
-/// MIG-A：organizationId/createdById 增量可空；唯一约束仍为 (userId, currencyCode)，MIG-E 收紧时替换
+/// MIG-C：唯一约束切换为 (organizationId, currencyCode)，保留 (userId, currencyCode) 普通索引及 legacy 部分唯一索引
 model Account {
   id            String   @id @default(cuid())
   userId        String   @map("user_id")
@@ -297,8 +297,8 @@ model Account {
   updatedAt     DateTime @updatedAt @map("updated_at")
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, currencyCode])
-  @@index([organizationId, currencyCode])
+  @@unique([organizationId, currencyCode])
+  @@index([userId, currencyCode])
   @@map("accounts")
 }
 
@@ -348,8 +348,8 @@ model InitialHolding {
   updatedAt      DateTime @updatedAt @map("updated_at")
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, currencyCode])
-  @@index([organizationId, currencyCode])
+  @@unique([organizationId, currencyCode])
+  @@index([userId, currencyCode])
   @@map("initial_holdings")
 }
 
@@ -534,7 +534,8 @@ model Reminder {
   user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   readStates     ReminderRead[]
 
-  @@unique([userId, dedupKey, scheduledFor])
+  @@unique([organizationId, dedupKey, scheduledFor])
+  @@index([userId, dedupKey, scheduledFor])
   @@index([userId, scheduledFor])
   @@index([organizationId, scheduledFor])
   @@map("reminders")

@@ -1,5 +1,7 @@
 import { HttpException } from "@nestjs/common";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuditService } from "../audit/audit.service";
+import type { ActorContext } from "../authorization/authorization.types";
 import type { PrismaService } from "../prisma/prisma.service";
 import { RateSourceUnavailableException } from "../rate/rate.errors";
 import type { RateService } from "../rate/rate.service";
@@ -28,23 +30,49 @@ const validWizard = {
 	reminderEnabled: true,
 };
 
+const DEFAULT_ACTOR: ActorContext = {
+	userId: "u1",
+	organizationId: "org-default",
+	membershipId: "mem-1",
+	role: "OWNER",
+	authMethod: "USER",
+	isDefaultOrganization: true,
+};
+
 function createPrismaMock() {
 	const userSettings = {
-		findUnique: vi.fn(),
+		findUnique: vi.fn().mockResolvedValue(null),
 		create: vi.fn(),
+		upsert: vi.fn(async ({ create }: { create: { locale: string; region: string } }) => ({
+			locale: create.locale,
+			region: create.region,
+		})),
 	};
 	// 组织偏好解析（评审 I-10）：默认无 OrganizationSettings；组织活跃 Owner 与
 	// 用户的默认组织都指向 u1 / org-default（单组织存量用户形态）
 	const organizationSettings = {
 		findUnique: vi.fn().mockResolvedValue(null),
+		create: vi.fn(async ({ data }: any) => ({ ...data })),
+		upsert: vi.fn(async ({ create }: any) => ({ ...create })),
 	};
 	const membership = {
 		// 组织的活跃 Owner（resolveOrganizationPreferences）
 		findFirst: vi.fn(() => Promise.resolve({ userId: "u1" })),
+		// lockOrganizationForActor 锁内重读操作者成员行
+		findUnique: vi.fn().mockResolvedValue({
+			organizationId: "org-default",
+			role: "OWNER",
+			status: "ACTIVE",
+		}),
 	};
 	// 默认组织解析 resolveDefaultOrganizationId 走原生 SQL（评审 R2-I03）：
 	// u1 创建的最早组织 = org-default
-	const $queryRaw = vi.fn(async () => [{ organizationId: "org-default" }]);
+	const $queryRaw = vi.fn(async (strings: TemplateStringsArray) => {
+		const sql = strings.join(" ");
+		if (sql.includes("FROM accounts")) return [];
+		return [{ organizationId: "org-default" }];
+	});
+	const $executeRaw = vi.fn().mockResolvedValue(1);
 	const termsConsent = {
 		count: vi.fn(),
 		upsert: vi.fn(),
@@ -58,6 +86,8 @@ function createPrismaMock() {
 		aggregate: vi.fn(),
 	};
 	const account = {
+		findFirst: vi.fn().mockResolvedValue(null),
+		update: vi.fn(),
 		upsert: vi.fn(),
 	};
 	const prisma = {
@@ -65,6 +95,7 @@ function createPrismaMock() {
 		organizationSettings,
 		membership,
 		$queryRaw,
+		$executeRaw,
 		termsConsent,
 		initialHolding,
 		costLot,
@@ -74,6 +105,16 @@ function createPrismaMock() {
 		),
 	};
 	return prisma;
+}
+
+function createAuditServiceMock() {
+	return {
+		recordInTx: vi.fn().mockResolvedValue(undefined),
+		recordStandalone: vi.fn().mockResolvedValue(undefined),
+	} as unknown as {
+		recordInTx: ReturnType<typeof vi.fn>;
+		recordStandalone: ReturnType<typeof vi.fn>;
+	} & AuditService;
 }
 
 function createRateServiceMock() {
@@ -118,6 +159,7 @@ describe("OnboardingService", () => {
 	let prisma: ReturnType<typeof createPrismaMock>;
 	let rateService: ReturnType<typeof createRateServiceMock>;
 	let logger: ReturnType<typeof createLoggerMock>;
+	let auditService: ReturnType<typeof createAuditServiceMock>;
 	let service: OnboardingService;
 
 	beforeEach(() => {
@@ -125,10 +167,12 @@ describe("OnboardingService", () => {
 		prisma = createPrismaMock();
 		rateService = createRateServiceMock();
 		logger = createLoggerMock();
+		auditService = createAuditServiceMock();
 		service = new OnboardingService(
 			prisma as unknown as PrismaService,
 			rateService,
 			logger,
+			auditService,
 		);
 	});
 
@@ -139,8 +183,9 @@ describe("OnboardingService", () => {
 	/** 建账成功前置：条款齐全、无既有设置、create 原样回显 */
 	function mockCompleteSuccess() {
 		prisma.termsConsent.count.mockResolvedValue(2);
+		prisma.organizationSettings.findUnique.mockResolvedValue(null);
 		prisma.userSettings.findUnique.mockResolvedValue(null);
-		prisma.userSettings.create.mockImplementation(async ({ data }: any) => ({
+		prisma.organizationSettings.create.mockImplementation(async ({ data }: any) => ({
 			...data,
 		}));
 	}
@@ -321,29 +366,50 @@ describe("OnboardingService", () => {
 			prisma.termsConsent.count.mockResolvedValue(1);
 
 			const { status, body } = await errorOf(
-				() => service.complete("u1", { ...validWizard }),
+				() => service.complete(DEFAULT_ACTOR, { ...validWizard }),
 				OnboardingConsentRequiredException,
 			);
 
 			expect(status).toBe(400);
 			expect(body.code).toBe("CONSENT_REQUIRED");
-			expect(prisma.userSettings.create).not.toHaveBeenCalled();
+			expect(prisma.organizationSettings.create).not.toHaveBeenCalled();
 		});
 
 		it("非法本位币 → 400 INVALID_BASE_CURRENCY", async () => {
 			prisma.termsConsent.count.mockResolvedValue(2);
 
 			const { body } = await errorOf(
-				() => service.complete("u1", { ...validWizard, baseCurrency: "FOO" }),
+				() => service.complete(DEFAULT_ACTOR, { ...validWizard, baseCurrency: "FOO" }),
 				OnboardingInvalidCurrencyException,
 			);
 
 			expect(body.code).toBe("INVALID_BASE_CURRENCY");
-			expect(prisma.userSettings.create).not.toHaveBeenCalled();
+			expect(prisma.organizationSettings.create).not.toHaveBeenCalled();
 		});
 
-		it("已有设置 → 409 ONBOARDING_ALREADY_COMPLETED，不重复创建", async () => {
+		it("已有组织设置 → 409 ONBOARDING_ALREADY_COMPLETED，不重复创建", async () => {
 			prisma.termsConsent.count.mockResolvedValue(2);
+			prisma.organizationSettings.findUnique.mockResolvedValue({
+				baseCurrency: "HKD",
+				prepPreference: "balanced",
+				reminderEnabled: true,
+				ledgerStartedAt: T0,
+			});
+
+			const { status, body } = await errorOf(
+				() => service.complete(DEFAULT_ACTOR, { ...validWizard }),
+				OnboardingAlreadyCompletedException,
+			);
+
+			expect(status).toBe(409);
+			expect(body.code).toBe("ONBOARDING_ALREADY_COMPLETED");
+			expect(prisma.organizationSettings.create).not.toHaveBeenCalled();
+		});
+
+		it("多组织独立建账：本人已有 Org A UserSettings 时为新建 Org B complete 不被 409 阻塞，且不覆盖 Org A baseCurrency", async () => {
+			prisma.termsConsent.count.mockResolvedValue(2);
+			prisma.organizationSettings.findUnique.mockResolvedValue(null);
+			// Org B 不是默认组织，即使 u1 名下已有 Org A 的 UserSettings(HKD)
 			prisma.userSettings.findUnique.mockResolvedValue({
 				baseCurrency: "HKD",
 				locale: "zh-CN",
@@ -352,31 +418,119 @@ describe("OnboardingService", () => {
 				reminderEnabled: true,
 				ledgerStartedAt: T0,
 			});
-
-			const { status, body } = await errorOf(
-				() => service.complete("u1", { ...validWizard }),
-				OnboardingAlreadyCompletedException,
-			);
-
-			expect(status).toBe(409);
-			expect(body.code).toBe("ONBOARDING_ALREADY_COMPLETED");
-			expect(prisma.userSettings.create).not.toHaveBeenCalled();
-		});
-
-		it("成功：事务内创建设置（ledgerStartedAt = 完成当日 UTC+8 日初）", async () => {
-			mockCompleteSuccess();
-
-			const result = await service.complete("u1", {
-				...validWizard,
-				baseCurrency: "usd",
+			prisma.membership.findUnique.mockResolvedValue({
+				organizationId: "org-b",
+				role: "OWNER",
+				status: "ACTIVE",
 			});
 
-			expect(prisma.userSettings.create).toHaveBeenCalledWith({
+			const result = await service.complete(
+				{
+					...DEFAULT_ACTOR,
+					organizationId: "org-b",
+					isDefaultOrganization: false,
+				},
+				{ ...validWizard, baseCurrency: "USD", region: "HK", locale: "en" },
+				"req-org-b",
+			);
+
+			expect(result.settings.baseCurrency).toBe("USD");
+			expect(prisma.organizationSettings.create).toHaveBeenCalledWith({
 				data: {
-					userId: "u1",
+					organizationId: "org-b",
+					baseCurrency: "USD",
+					prepPreference: "balanced",
+					reminderEnabled: true,
+					ledgerStartedAt: utc8DayStart(T0),
+				},
+			});
+			const [upsertArg] = prisma.userSettings.upsert.mock.calls[0];
+			expect(upsertArg.create.baseCurrency).toBe("");
+			expect(upsertArg.create.ledgerStartedAt).toBeNull();
+			expect(upsertArg.update).toEqual({ locale: "en", region: "HK" });
+			expect("baseCurrency" in upsertArg.update).toBe(false);
+			expect("ledgerStartedAt" in upsertArg.update).toBe(false);
+			expect(auditService.recordInTx).toHaveBeenCalledWith(
+				prisma,
+				expect.objectContaining({
+					organizationId: "org-b",
+					actorUserId: "u1",
+					action: "onboarding.complete",
+					result: "SUCCESS",
+					requestId: "req-org-b",
+					detail: { baseCurrency: "USD", holdingsCount: 0 },
+				}),
+			);
+		});
+
+		it("非默认组织先建账（无 UserSettings 行）→ 仅写占位 baseCurrency=\"\"，绝不把默认组织标为已建账", async () => {
+			prisma.termsConsent.count.mockResolvedValue(2);
+			prisma.organizationSettings.findUnique.mockResolvedValue(null);
+			prisma.userSettings.findUnique.mockResolvedValue(null);
+			prisma.membership.findUnique.mockResolvedValue({
+				organizationId: "org-b",
+				role: "OWNER",
+				status: "ACTIVE",
+			});
+
+			await service.complete(
+				{
+					...DEFAULT_ACTOR,
+					organizationId: "org-b",
+					isDefaultOrganization: false,
+				},
+				{ ...validWizard, baseCurrency: "USD" },
+			);
+
+			const [upsertArg] = prisma.userSettings.upsert.mock.calls[0];
+			expect(upsertArg.create.baseCurrency).toBe("");
+			expect(upsertArg.create.ledgerStartedAt).toBeNull();
+			expect(upsertArg.update).toEqual({ locale: "zh-CN", region: "CN" });
+		});
+
+		it("锁等期间降权 → 403 PERMISSION_DENIED + recordStandalone DENIED + 事务零写入", async () => {
+			prisma.termsConsent.count.mockResolvedValue(2);
+			prisma.membership.findUnique.mockResolvedValue({
+				organizationId: "org-default",
+				role: "OPERATOR",
+				status: "ACTIVE",
+			});
+
+			const { status, body } = await errorOf(() =>
+				service.complete(DEFAULT_ACTOR, { ...validWizard }, "req-demoted"),
+			);
+
+			expect(status).toBe(403);
+			expect(body.code).toBe("PERMISSION_DENIED");
+			expect(prisma.organizationSettings.create).not.toHaveBeenCalled();
+			expect(auditService.recordInTx).not.toHaveBeenCalled();
+			expect(auditService.recordStandalone).toHaveBeenCalledWith({
+				organizationId: "org-default",
+				actorUserId: "u1",
+				actorType: "USER",
+				action: "permission.denied.settings.update",
+				result: "DENIED",
+				requestId: "req-demoted",
+				detail: { required: "settings.update", role: "OPERATOR" },
+			});
+		});
+
+		it("成功：事务内创建设置（ledgerStartedAt = 完成当日 UTC+8 日初）+ 同事务写审计", async () => {
+			mockCompleteSuccess();
+
+			const result = await service.complete(
+				DEFAULT_ACTOR,
+				{
+					...validWizard,
+					baseCurrency: "usd",
+				},
+				"req-ok",
+			);
+
+			expect(prisma.organizationSettings.create).toHaveBeenCalledWith({
+				data: {
+					organizationId: "org-default",
 					baseCurrency: "USD", // 规范化大写
-					locale: "zh-CN",
-					region: "CN",
 					prepPreference: "balanced",
 					reminderEnabled: true,
 					ledgerStartedAt: utc8DayStart(T0), // 起点对齐完成当日 UTC+8 日初
@@ -384,17 +538,28 @@ describe("OnboardingService", () => {
 			});
 			expect(result.settings.baseCurrency).toBe("USD");
 			expect(result.ledgerStartedAt).toEqual(utc8DayStart(T0));
+			expect(auditService.recordInTx).toHaveBeenCalledWith(
+				prisma,
+				expect.objectContaining({
+					organizationId: "org-default",
+					actorUserId: "u1",
+					action: "onboarding.complete",
+					result: "SUCCESS",
+					requestId: "req-ok",
+					detail: { baseCurrency: "USD", holdingsCount: 0 },
+				}),
+			);
 		});
 
 		it("并发兜底：插入撞唯一约束 P2002 → 409 ONBOARDING_ALREADY_COMPLETED", async () => {
 			prisma.termsConsent.count.mockResolvedValue(2);
-			prisma.userSettings.findUnique.mockResolvedValue(null);
-			prisma.userSettings.create.mockRejectedValue(
+			prisma.organizationSettings.findUnique.mockResolvedValue(null);
+			prisma.organizationSettings.create.mockRejectedValue(
 				Object.assign(new Error("Unique constraint failed"), { code: "P2002" }),
 			);
 
 			const { status, body } = await errorOf(
-				() => service.complete("u1", { ...validWizard }),
+				() => service.complete(DEFAULT_ACTOR, { ...validWizard }),
 				OnboardingAlreadyCompletedException,
 			);
 
@@ -404,35 +569,35 @@ describe("OnboardingService", () => {
 
 		it("非 P2002 的创建错误原样抛出", async () => {
 			prisma.termsConsent.count.mockResolvedValue(2);
-			prisma.userSettings.findUnique.mockResolvedValue(null);
-			prisma.userSettings.create.mockRejectedValue(
+			prisma.organizationSettings.findUnique.mockResolvedValue(null);
+			prisma.organizationSettings.create.mockRejectedValue(
 				new Error("connection refused"),
 			);
 
-			await expect(service.complete("u1", { ...validWizard })).rejects.toThrow(
-				"connection refused",
-			);
+			await expect(
+				service.complete(DEFAULT_ACTOR, { ...validWizard }),
+			).rejects.toThrow("connection refused");
 		});
 
 		it("prepPreference / reminderEnabled 缺省：服务端兜底 balanced / true", async () => {
 			mockCompleteSuccess();
 
-			await service.complete("u1", {
+			await service.complete(DEFAULT_ACTOR, {
 				region: "CN",
 				locale: "zh-CN",
 				baseCurrency: "CNY",
 			});
 
-			const [arg] = prisma.userSettings.create.mock.calls[0];
+			const [arg] = prisma.organizationSettings.create.mock.calls[0];
 			expect(arg.data.prepPreference).toBe("balanced");
 			expect(arg.data.reminderEnabled).toBe(true);
 		});
 
-		it("带 2 币种 holdings 成功：采用价 sellRate 优先、8 位舍入、成本按本位币精度、批次与账户重算", async () => {
+		it("带 2 币种 holdings 成功：先取组织账本锁、采用价 sellRate 优先、8 位舍入、成本按本位币精度、批次与组织账户重算", async () => {
 			mockCompleteSuccess();
 			mockGroupQuotes();
 
-			const result = await service.complete("u1", {
+			const result = await service.complete(DEFAULT_ACTOR, {
 				...validWizard,
 				initialHoldings: [
 					{ currencyCode: "usd", amount: "1000.00" }, // 混合大小写，规范化 USD
@@ -440,13 +605,26 @@ describe("OnboardingService", () => {
 				],
 			});
 
+			// lockOrgLedgerAccounts 在写前按 COLLATE "C" 升序取 advisory 锁（JPY < USD）
+			const lockKeys = prisma.$executeRaw.mock.calls.map(
+				(call) => call[1] as string,
+			);
+			expect(lockKeys).toContain("membership:org-default");
+			expect(lockKeys).toContain("ledger-write:org:org-default:JPY");
+			expect(lockKeys).toContain("ledger-write:org:org-default:USD");
+			expect(lockKeys.indexOf("ledger-write:org:org-default:JPY")).toBeLessThan(
+				lockKeys.indexOf("ledger-write:org:org-default:USD"),
+			);
+
 			// getLatestForBooking 以规范化后的币种代码取价（base = 本位币）
 			expect(rateService.getLatestForBooking).toHaveBeenCalledWith("CNY", ["USD", "JPY"]);
 
-			// InitialHolding × 2：rate = sellRate ?? rate（8 位 HALF_UP），rawRate = 原值
+			// InitialHolding × 2：带 organizationId / createdById
 			const holdingCalls = prisma.initialHolding.create.mock.calls;
 			expect(holdingCalls).toHaveLength(2);
 			const usdData = holdingCalls[0][0].data;
+			expect(usdData.organizationId).toBe("org-default");
+			expect(usdData.createdById).toBe("u1");
 			expect(usdData.currencyCode).toBe("USD");
 			expect(usdData.amount.toFixed(4)).toBe("1000.0000");
 			expect(usdData.rate.toFixed(8)).toBe("7.26000000"); // 采用现汇卖出价
@@ -461,10 +639,11 @@ describe("OnboardingService", () => {
 			expect(jpyData.rawRate.toFixed(10)).toBe("0.0480000000");
 			expect(jpyData.cost.toFixed(4)).toBe("4800.0000"); // 100000 × 0.048
 
-			// CostLot × 2：字段口径与 buildPurchaseLot（PURCHASE）一致
+			// CostLot × 2：带 organizationId
 			const lotCalls = prisma.costLot.create.mock.calls;
 			expect(lotCalls).toHaveLength(2);
 			const usdLot = lotCalls[0][0].data;
+			expect(usdLot.organizationId).toBe("org-default");
 			expect(usdLot.sourceType).toBe("INITIAL");
 			expect(usdLot.sourceId).toBe("holding-USD");
 			expect(usdLot.quantity.toFixed(4)).toBe("1000.0000");
@@ -473,16 +652,27 @@ describe("OnboardingService", () => {
 			expect(usdLot.totalCost.toFixed(4)).toBe("7260.0000");
 			expect(usdLot.acquiredAt).toEqual(utc8DayStart(T0)); // = ledgerStartedAt
 
-			// Account 按批次汇总重算（costLot.aggregate → account.upsert）
+			// Account 按组织批次汇总重算（costLot.aggregate → account.upsert by organizationId_currencyCode）
 			expect(prisma.costLot.aggregate).toHaveBeenCalledWith({
 				_sum: { remainingQty: true },
-				where: { userId: "u1", currencyCode: "USD" },
+				where: {
+					currencyCode: "USD",
+					OR: [
+						{ organizationId: "org-default" },
+						{ organizationId: null, userId: "u1" },
+					],
+				},
 			});
 			expect(prisma.account.upsert).toHaveBeenCalledTimes(2);
 			const [upsertArg] = prisma.account.upsert.mock.calls[0];
 			expect(upsertArg.where).toEqual({
-				userId_currencyCode: { userId: "u1", currencyCode: "USD" },
+				organizationId_currencyCode: {
+					organizationId: "org-default",
+					currencyCode: "USD",
+				},
 			});
+			expect(upsertArg.create.organizationId).toBe("org-default");
+			expect(upsertArg.create.createdById).toBe("u1");
 			expect(upsertArg.create.balance.toFixed(4)).toBe("1000.0000");
 
 			// 响应出参不变：settings + ledgerStartedAt
@@ -514,7 +704,7 @@ describe("OnboardingService", () => {
 			});
 			prisma.account.upsert.mockResolvedValue({});
 
-			await service.complete("u1", {
+			await service.complete(DEFAULT_ACTOR, {
 				...validWizard,
 				initialHoldings: [{ currencyCode: "USD", amount: "100.00" }],
 			});
@@ -542,7 +732,7 @@ describe("OnboardingService", () => {
 
 			const { body } = await errorOf(
 				() =>
-					service.complete("u1", {
+					service.complete(DEFAULT_ACTOR, {
 						...validWizard,
 						initialHoldings: [{ currencyCode: "USD", amount: "0.01" }],
 					}),
@@ -550,7 +740,6 @@ describe("OnboardingService", () => {
 			);
 
 			expect(body.code).toBe("INVALID_AMOUNT");
-			// 整单回滚语义：事务回调内抛出即回滚（mock 下以 create 未产生后续断言体现）
 			expect(prisma.account.upsert).not.toHaveBeenCalled();
 		});
 
@@ -572,7 +761,7 @@ describe("OnboardingService", () => {
 
 			const { body } = await errorOf(
 				() =>
-					service.complete("u1", {
+					service.complete(DEFAULT_ACTOR, {
 						...validWizard,
 						initialHoldings: [{ currencyCode: "USD", amount: "1000000000" }],
 					}),
@@ -597,7 +786,7 @@ describe("OnboardingService", () => {
 
 			const { body } = await errorOf(
 				() =>
-					service.complete("u1", {
+					service.complete(DEFAULT_ACTOR, {
 						...validWizard,
 						initialHoldings: [{ currencyCode: "USD", amount: "100.00" }],
 					}),
@@ -618,7 +807,6 @@ describe("OnboardingService", () => {
 						target: "USD",
 						rate: "7.25",
 						source: "er-api",
-						// 日级源发布时间恒早于 5 分钟窗口：fresh 以系统确认为锚
 						observedAt: new Date(T0.getTime() - 60 * 60 * 1000).toISOString(),
 						validUntil: new Date(T0.getTime() + 30 * 60 * 1000).toISOString(),
 						fresh: true,
@@ -627,14 +815,13 @@ describe("OnboardingService", () => {
 			});
 			vi.setSystemTime(new Date(T0.getTime() + 6 * 60 * 1000));
 
-			await service.complete("u1", {
+			await service.complete(DEFAULT_ACTOR, {
 				...validWizard,
 				initialHoldings: [{ currencyCode: "USD", amount: "100.00" }],
 			});
 
 			const holding = prisma.initialHolding.create.mock.calls.at(-1)![0]
 				.data as { rateObservedAt: Date };
-			// 发布时间原样落库（rateObservedAt），不因早于窗口被拒
 			expect(holding.rateObservedAt).toEqual(
 				new Date(T0.getTime() - 60 * 60 * 1000),
 			);
@@ -650,13 +837,11 @@ describe("OnboardingService", () => {
 				validUntil: new Date(T0.getTime() - 60 * 60 * 1000).toISOString(),
 				fresh: true,
 			};
-			// fresh=true 与过期 validUntil 并存（取价与写账间隙跨过有效期）：
-			// validUntil 判定过期 → 整单拒绝
 			rateService.getLatestForBooking.mockResolvedValueOnce({ base: "CNY", items: [contradictionItem] });
 
 			const { body } = await errorOf(
 				() =>
-					service.complete("u1", {
+					service.complete(DEFAULT_ACTOR, {
 						...validWizard,
 						initialHoldings: [{ currencyCode: "USD", amount: "100.00" }],
 					}),
@@ -680,7 +865,7 @@ describe("OnboardingService", () => {
 
 			const { body } = await errorOf(
 				() =>
-					service.complete("u1", {
+					service.complete(DEFAULT_ACTOR, {
 						...validWizard,
 						initialHoldings: [{ currencyCode: "USD", amount: "100.00" }],
 					}),
@@ -691,13 +876,11 @@ describe("OnboardingService", () => {
 		});
 
 		it("固定 UTC+8 00:05 / 14:30 / 23:55 三时点：按确认时效入账（FX-04 时段覆盖）", async () => {
-			// 日级源 observedAt = 2026-09-14T16:05:00Z（UTC+8 09-15 00:05）：
-			// 建账发生在三个固定 UTC+8 时点，均按系统确认时效入账
 			const observedAt = new Date("2026-09-14T16:05:00.000Z");
 			for (const [label, instant] of [
-				["00:05", "2026-09-15T16:05:00.000Z"], // = UTC+8 09-16 00:05
-				["14:30", "2026-09-15T06:30:00.000Z"], // = UTC+8 09-15 14:30
-				["23:55", "2026-09-15T15:55:00.000Z"], // = UTC+8 09-15 23:55
+				["00:05", "2026-09-15T16:05:00.000Z"],
+				["14:30", "2026-09-15T06:30:00.000Z"],
+				["23:55", "2026-09-15T15:55:00.000Z"],
 			] as const) {
 				mockCompleteSuccess();
 				mockGroupQuotes();
@@ -714,10 +897,13 @@ describe("OnboardingService", () => {
 				};
 				rateService.getLatestForBooking.mockResolvedValueOnce({ base: "CNY", items: [freshItem] });
 
-				await service.complete(`u1-${label}`, {
-					...validWizard,
-					initialHoldings: [{ currencyCode: "TWD", amount: "1000" }],
-				});
+				await service.complete(
+					{ ...DEFAULT_ACTOR, userId: `u1-${label}` },
+					{
+						...validWizard,
+						initialHoldings: [{ currencyCode: "TWD", amount: "1000" }],
+					},
+				);
 
 				expect(rateService.getLatestForBooking).toHaveBeenCalledExactlyOnceWith("CNY", ["TWD"]);
 				const holding = prisma.initialHolding.create.mock.calls.at(-1)![0]
@@ -736,7 +922,7 @@ describe("OnboardingService", () => {
 
 			const { status, body } = await errorOf(
 				() =>
-					service.complete("u1", {
+					service.complete(DEFAULT_ACTOR, {
 						...validWizard,
 						initialHoldings: [{ currencyCode: "USD", amount: "100.00" }],
 					}),
@@ -745,8 +931,7 @@ describe("OnboardingService", () => {
 
 			expect(status).toBe(400);
 			expect(body.code).toBe("RATE_UNAVAILABLE");
-			// settings.create 已执行（取价在其后），事务回调抛出 → 整体回滚语义
-			expect(prisma.userSettings.create).toHaveBeenCalled();
+			expect(prisma.organizationSettings.create).toHaveBeenCalled();
 			expect(prisma.initialHolding.create).not.toHaveBeenCalled();
 		});
 
@@ -798,7 +983,7 @@ describe("OnboardingService", () => {
 			mockCompleteSuccess();
 			mockGroupQuotes();
 
-			await service.complete("u1", {
+			await service.complete(DEFAULT_ACTOR, {
 				...validWizard,
 				initialHoldings: [
 					{ currencyCode: "USD", amount: "1000.00" },
@@ -824,14 +1009,17 @@ describe("OnboardingService", () => {
 		};
 		const settingsRow = {
 			baseCurrency: "CNY",
+			prepPreference: "balanced",
+			reminderEnabled: true,
 			ledgerStartedAt: utc8DayStart(T0),
 		};
 
 		it("未建账 → 409 ONBOARDING_NOT_COMPLETED", async () => {
+			prisma.organizationSettings.findUnique.mockResolvedValue(null);
 			prisma.userSettings.findUnique.mockResolvedValue(null);
 
 			const { status, body } = await errorOf(
-				() => service.saveInitialHoldings("u1", backfillDto),
+				() => service.saveInitialHoldings(DEFAULT_ACTOR, backfillDto),
 				OnboardingNotCompletedException,
 			);
 
@@ -840,13 +1028,13 @@ describe("OnboardingService", () => {
 		});
 
 		it("币种已有初始记录 → 409 INITIAL_HOLDING_EXISTS（整单拒绝）", async () => {
-			prisma.userSettings.findUnique.mockResolvedValue(settingsRow);
+			prisma.organizationSettings.findUnique.mockResolvedValue(settingsRow);
 			prisma.initialHolding.findMany.mockResolvedValue([
 				{ currencyCode: "EUR" },
 			]);
 
 			const { body } = await errorOf(
-				() => service.saveInitialHoldings("u1", backfillDto),
+				() => service.saveInitialHoldings(DEFAULT_ACTOR, backfillDto),
 				InitialHoldingExistsException,
 			);
 
@@ -854,10 +1042,9 @@ describe("OnboardingService", () => {
 			expect(rateService.getLatestForBooking).not.toHaveBeenCalled();
 		});
 
-		it("正常补录：单目标平铺响应归一、ledgerStartedAt 取建账起点", async () => {
-			prisma.userSettings.findUnique.mockResolvedValue(settingsRow);
+		it("正常补录：单目标平铺响应归一、ledgerStartedAt 取建账起点、写审计", async () => {
+			prisma.organizationSettings.findUnique.mockResolvedValue(settingsRow);
 			prisma.initialHolding.findMany.mockResolvedValue([]);
-			// 单目标响应为平铺结构（无 items）→ 归一为单元素
 			rateService.getLatestForBooking.mockResolvedValue({
 				base: "CNY",
 				target: "EUR",
@@ -876,7 +1063,11 @@ describe("OnboardingService", () => {
 			});
 			prisma.account.upsert.mockResolvedValue({});
 
-			const result = await service.saveInitialHoldings("u1", backfillDto);
+			const result = await service.saveInitialHoldings(
+				DEFAULT_ACTOR,
+				backfillDto,
+				"req-backfill",
+			);
 
 			expect(rateService.getLatestForBooking).toHaveBeenCalledWith("CNY", ["EUR"]);
 			expect(result.created).toHaveLength(1);
@@ -886,22 +1077,37 @@ describe("OnboardingService", () => {
 				rate: "0.7900000000",
 				rawRate: "0.7900000000",
 				rateSource: "frankfurter",
-				cost: "395.0000", // 500 × 0.79
+				cost: "395.0000",
 			});
 			expect(result.created[0].rateObservedAt).toEqual(T0);
 			expect(result.ledgerStartedAt).toEqual(utc8DayStart(T0));
 
 			const [lotArg] = prisma.costLot.create.mock.calls[0];
 			expect(lotArg.data.sourceType).toBe("INITIAL");
+			expect(lotArg.data.organizationId).toBe("org-default");
 			expect(lotArg.data.acquiredAt).toEqual(utc8DayStart(T0));
+			expect(auditService.recordInTx).toHaveBeenCalledWith(
+				prisma,
+				expect.objectContaining({
+					organizationId: "org-default",
+					actorUserId: "u1",
+					action: "onboarding.initial_holdings",
+					result: "SUCCESS",
+					requestId: "req-backfill",
+				}),
+			);
 		});
 
-		it("ledgerStartedAt 为 null 的存量：兜底当日 UTC+8 日初", async () => {
+		it("OWNER_LEGACY 组织补录时先固化 OrganizationSettings 并兼容升级 legacy Account", async () => {
+			prisma.organizationSettings.findUnique.mockResolvedValue(null);
 			prisma.userSettings.findUnique.mockResolvedValue({
 				baseCurrency: "CNY",
+				prepPreference: "balanced",
+				reminderEnabled: true,
 				ledgerStartedAt: null,
 			});
 			prisma.initialHolding.findMany.mockResolvedValue([]);
+			prisma.account.findFirst.mockResolvedValue({ id: "acc-legacy-eur" });
 			rateService.getLatestForBooking.mockResolvedValue({
 				base: "CNY",
 				target: "EUR",
@@ -920,15 +1126,19 @@ describe("OnboardingService", () => {
 			});
 			prisma.account.upsert.mockResolvedValue({});
 
-			const result = await service.saveInitialHoldings("u1", backfillDto);
+			const result = await service.saveInitialHoldings(DEFAULT_ACTOR, backfillDto);
 
 			expect(result.ledgerStartedAt).toEqual(utc8DayStart(T0));
+			expect(prisma.organizationSettings.upsert).toHaveBeenCalledTimes(1);
+			expect(prisma.account.update).toHaveBeenCalledWith({
+				where: { id: "acc-legacy-eur" },
+				data: { organizationId: "org-default", createdById: "u1" },
+			});
 		});
 
 		it("并发兜底：InitialHolding 插入撞 P2002 → 409 INITIAL_HOLDING_EXISTS", async () => {
-			prisma.userSettings.findUnique.mockResolvedValue(settingsRow);
+			prisma.organizationSettings.findUnique.mockResolvedValue(settingsRow);
 			prisma.initialHolding.findMany.mockResolvedValue([]);
-			// 取价需先成功（并发双请求都通过预检查与取价，插入时才分出胜负）
 			rateService.getLatestForBooking.mockResolvedValue({
 				base: "CNY",
 				target: "EUR",
@@ -943,7 +1153,7 @@ describe("OnboardingService", () => {
 			);
 
 			const { body } = await errorOf(
-				() => service.saveInitialHoldings("u1", backfillDto),
+				() => service.saveInitialHoldings(DEFAULT_ACTOR, backfillDto),
 				InitialHoldingExistsException,
 			);
 

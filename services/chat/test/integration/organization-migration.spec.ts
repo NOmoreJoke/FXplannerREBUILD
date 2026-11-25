@@ -1358,4 +1358,43 @@ describe("MIG-B 默认组织回填与核对", () => {
 			await cleanupUser(db as CleanupDb, strayId);
 		}
 	});
+
+	test("W22 个人占位行（baseCurrency=\"\"）不触发 MIG-B 复制 OrganizationSettings 且核对零误报", async () => {
+		const placeholderUserId = await createUser("placeholder", "个人占位演练用户");
+		try {
+			await db.userSettings.create({
+				data: {
+					userId: placeholderUserId,
+					baseCurrency: "",
+					locale: "en",
+					region: "HK",
+				},
+			});
+
+			const dry = await backfillDefaultOrganizations(db, {
+				dryRun: true,
+				userIds: [placeholderUserId],
+			});
+			expect(dry.organizationSettingsCreated).toBe(0);
+
+			const run = await backfillDefaultOrganizations(db, {
+				userIds: [placeholderUserId],
+			});
+			expect(run.organizationSettingsCreated).toBe(0);
+			const orgId = await resolveDefaultOrganizationId(db, placeholderUserId);
+			expect(orgId).not.toBeNull();
+			expect(
+				await db.organizationSettings.findUnique({
+					where: { organizationId: orgId! },
+				}),
+			).toBeNull();
+
+			const reconcile = await reconcileMigration(db, {
+				userIds: [placeholderUserId],
+			});
+			expect(reconcile.diffs).toEqual([]);
+		} finally {
+			await cleanupUser(db as CleanupDb, placeholderUserId);
+		}
+	});
 });

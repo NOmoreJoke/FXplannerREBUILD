@@ -14,6 +14,7 @@ import {
 	roundRateTo8,
 } from "@fxplanner-new/money";
 import { PrismaService } from "../prisma/prisma.service";
+import { lockOrgLedgerAccounts } from "../prisma/ledger-write-lock";
 import { RateService } from "../rate/rate.service";
 import type {
 	LatestRateGroupResponse,
@@ -21,10 +22,23 @@ import type {
 	LatestRateResponse,
 } from "../rate/rate.service";
 import { utc8DayStart } from "../transaction/transaction-calculator";
-import type { ReadScope } from "../authorization/organization-scope";
+import { AuditService } from "../audit/audit.service";
+import { PermissionDeniedException } from "../authorization/authorization.errors";
+import type {
+	ActorContext,
+	OrganizationRole,
+} from "../authorization/authorization.types";
 import {
+	compatReadWhere,
+	type ReadScope,
+} from "../authorization/organization-scope";
+import { can } from "../authorization/permission-policy";
+import { lockOrganizationForActor } from "../organization/default-organization";
+import {
+	materializeLegacyOrganizationSettings,
 	PERSONAL_DEFAULT_LOCALE,
 	PERSONAL_DEFAULT_REGION,
+	PERSONAL_PLACEHOLDER_BASE_CURRENCY,
 	resolveOrganizationPreferences,
 } from "../organization/organization-preferences";
 import {
@@ -198,6 +212,7 @@ export class OnboardingService {
 		@Inject(PrismaService) private readonly prisma: PrismaService,
 		@Inject(RateService) private readonly rateService: RateService,
 		@Inject(Logger) private readonly logger: Logger,
+		@Inject(AuditService) private readonly auditService: AuditService,
 	) {}
 
 	/**
@@ -289,135 +304,276 @@ export class OnboardingService {
 	}
 
 	/**
-	 * 完成设置（技术方案 §3.1）：全程交互式事务——
-	 * ① 条款校验 ② 币种校验 ③ 已有设置 → 409 ④ 创建 UserSettings
-	 * （ledgerStartedAt = 事务内同一时刻）⑤ 可选 initialHoldings 入账
-	 * （任一币种失败整体回滚，settings 与初始批次原子一致）。
-	 * 并发/重复提交的最终防线是 UserSettings.userId 唯一约束：
-	 * 同时通过检查的两个请求，第二个在插入处触发 P2002 → 映射 409，
-	 * 不依赖"先查后建"（check-then-act 竞态窗口）。
+	 * 完成设置（ToB R1 W22 组织独立建账 + 锁内复验 + 组织账本锁 + 同事务审计）：
+	 * ① 个人条款校验 ② 本位币校验 ③ 事务内 lockOrganizationForActor 复验 settings.update
+	 * ④ 校验当前组织建账态（resolveOrganizationPreferences 非空 → 409，不因本人 UserSettings 阻塞新组织）
+	 * ⑤ 若带 initialHoldings：assertHoldings 后在写前先取组织级账本锁 lockOrgLedgerAccounts
+	 * ⑥ 创建 OrganizationSettings（P2002 → 409）+ 维护本人 UserSettings（仅补建或只改 locale/region）
+	 * ⑦ 入账初始持仓（带 organizationId / createdById）+ 同事务写 onboarding.complete 审计。
 	 */
 	async complete(
-		userId: string,
+		actor: ActorContext,
 		dto: CompleteOnboardingDto,
+		requestId: string | null = null,
 	): Promise<OnboardingCompleteResultDto> {
-		return this.prisma.$transaction(async (tx) => {
-			await this.assertRequiredConsents(tx.termsConsent, userId);
-			const baseCurrency = this.assertBaseCurrency(dto.baseCurrency);
+		await this.assertRequiredConsents(this.prisma.termsConsent, actor.userId);
+		const baseCurrency = this.assertBaseCurrency(dto.baseCurrency);
 
-			const existing = await tx.userSettings.findUnique({
-				where: { userId },
-			});
-			if (existing) {
-				this.warnFailure(userId, "UNIQUE", "首次设置已完成，重复提交");
-				throw new OnboardingAlreadyCompletedException();
-			}
+		let deniedRole: OrganizationRole = actor.role;
+		try {
+			return await this.prisma.$transaction(async (tx) => {
+				const latestRole = await lockOrganizationForActor(tx, actor);
+				if (!can(latestRole, "settings.update")) {
+					deniedRole = latestRole;
+					throw new PermissionDeniedException();
+				}
 
-			// 记账起点 = 完成设置当日（UTC+8）日初：
-			// 若取精确时刻，用户当天在 UI 录入交易（表单提交当日 00:00Z = 北京 08:00）会早于起点被拒；
-			// 对齐日初后当天任意时刻可录入，历史日期（< 当日）照旧拒绝
-			const completedAt = utc8DayStart(new Date());
-			const settings = await tx.userSettings
-				.create({
-					data: {
-						userId,
-						baseCurrency,
+				const existingPreferences = await resolveOrganizationPreferences(
+					tx,
+					actor.organizationId,
+				);
+				if (existingPreferences !== null) {
+					this.warnFailure(actor.userId, "UNIQUE", "首次设置已完成，重复提交");
+					throw new OnboardingAlreadyCompletedException();
+				}
+
+				const holdings = dto.initialHoldings ?? [];
+				if (holdings.length > 0) {
+					this.assertHoldings(baseCurrency, holdings);
+					const codes = holdings.map((item) =>
+						item.currencyCode.trim().toUpperCase(),
+					);
+					await lockOrgLedgerAccounts(tx, actor.organizationId, codes);
+				}
+
+				// 记账起点 = 完成设置当日（UTC+8）日初：
+				// 若取精确时刻，用户当天在 UI 录入交易（表单提交当日 00:00Z = 北京 08:00）会早于起点被拒；
+				// 对齐日初后当天任意时刻可录入，历史日期（< 当日）照旧拒绝
+				const completedAt = utc8DayStart(new Date());
+				const prepPreference = dto.prepPreference ?? "balanced";
+				const reminderEnabled = dto.reminderEnabled ?? true;
+
+				const orgSettings = await tx.organizationSettings
+					.create({
+						data: {
+							organizationId: actor.organizationId,
+							baseCurrency,
+							prepPreference,
+							reminderEnabled,
+							ledgerStartedAt: completedAt,
+						},
+					})
+					.catch((error: unknown) => {
+						if ((error as { code?: string }).code === "P2002") {
+							this.warnFailure(
+								actor.userId,
+								"UNIQUE",
+								"组织设置唯一约束冲突（并发重复提交）",
+							);
+							throw new OnboardingAlreadyCompletedException();
+						}
+						throw error;
+					});
+
+				// 个人展示行维护：仅当当前组织为个人默认组织（isDefaultOrganization === true）且尚无有效
+				// baseCurrency（无行或占位 ""）时才写入本位币与记账起点；非默认组织新建账绝不向
+				// UserSettings 写非空 baseCurrency/ledgerStartedAt（防默认组织误判为 OWNER_LEGACY 已建账）。
+				const existingPersonal = await tx.userSettings.findUnique({
+					where: { userId: actor.userId },
+					select: { baseCurrency: true },
+				});
+				const canWriteLegacyPersonalColumns =
+					actor.isDefaultOrganization === true &&
+					(!existingPersonal ||
+						existingPersonal.baseCurrency === PERSONAL_PLACEHOLDER_BASE_CURRENCY);
+				const personal = await tx.userSettings.upsert({
+					where: { userId: actor.userId },
+					create: {
+						userId: actor.userId,
+						baseCurrency: canWriteLegacyPersonalColumns
+							? baseCurrency
+							: PERSONAL_PLACEHOLDER_BASE_CURRENCY,
 						locale: dto.locale,
 						region: dto.region,
-						// 缺省兜底：向导不再收集偏好（技术方案 §4.1）
-						prepPreference: dto.prepPreference ?? "balanced",
-						reminderEnabled: dto.reminderEnabled ?? true,
-						ledgerStartedAt: completedAt,
+						prepPreference: orgSettings.prepPreference,
+						reminderEnabled: orgSettings.reminderEnabled,
+						ledgerStartedAt: canWriteLegacyPersonalColumns ? completedAt : null,
 					},
-				})
-				.catch((error: unknown) => {
-					if ((error as { code?: string }).code === "P2002") {
-						this.warnFailure(userId, "UNIQUE", "用户设置唯一约束冲突（并发重复提交）");
-						throw new OnboardingAlreadyCompletedException();
-					}
-					throw error;
+					update: canWriteLegacyPersonalColumns
+						? {
+								baseCurrency,
+								locale: dto.locale,
+								region: dto.region,
+								prepPreference: orgSettings.prepPreference,
+								reminderEnabled: orgSettings.reminderEnabled,
+								ledgerStartedAt: completedAt,
+							}
+						: {
+								locale: dto.locale,
+								region: dto.region,
+							},
+					select: { locale: true, region: true },
 				});
 
-			// 可选初始持仓：与 settings 同事务入账，任一失败整体回滚
-			let created: InitialHoldingCreatedDto[] = [];
-			if (dto.initialHoldings && dto.initialHoldings.length > 0) {
-				created = await this.recordInitialHoldings(
-					tx,
-					userId,
-					baseCurrency,
-					completedAt,
-					dto.initialHoldings,
-				);
-			}
-			this.logHoldingsSuccess("onboarding_complete", userId, created);
+				// 可选初始持仓：与 settings 同事务入账，任一失败整体回滚
+				let created: InitialHoldingCreatedDto[] = [];
+				if (holdings.length > 0) {
+					created = await this.recordInitialHoldings(
+						tx,
+						actor,
+						baseCurrency,
+						completedAt,
+						holdings,
+					);
+				}
 
-			return {
-				settings: this.toSettingsView(settings),
-				ledgerStartedAt: completedAt,
-			};
-		});
+				await this.auditService.recordInTx(tx, {
+					organizationId: actor.organizationId,
+					actorUserId: actor.userId,
+					actorType: "USER",
+					action: "onboarding.complete",
+					targetType: "organization_settings",
+					targetId: actor.organizationId,
+					result: "SUCCESS",
+					requestId: requestId ?? null,
+					detail: {
+						baseCurrency,
+						holdingsCount: created.length,
+					},
+				});
+
+				this.logHoldingsSuccess("onboarding_complete", actor.userId, created);
+
+				return {
+					settings: this.toSettingsView({
+						baseCurrency: orgSettings.baseCurrency,
+						locale: personal.locale,
+						region: personal.region,
+						prepPreference: orgSettings.prepPreference,
+						reminderEnabled: orgSettings.reminderEnabled,
+						ledgerStartedAt: orgSettings.ledgerStartedAt,
+					}),
+					ledgerStartedAt: completedAt,
+				};
+			});
+		} catch (error) {
+			if (error instanceof PermissionDeniedException) {
+				await this.recordDeniedAudit(actor, deniedRole, requestId);
+			}
+			throw error;
+		}
 	}
 
 	/**
-	 * 建账后补录初始持仓（技术方案 §4.2）：与 complete 共用同一入账方法。
-	 * - 未建账 → 409 ONBOARDING_NOT_COMPLETED（反向语义）；
-	 * - 传入币种任一已有 InitialHolding → 409 INITIAL_HOLDING_EXISTS（整单拒绝，不做部分成功）；
-	 * - ledgerStartedAt 取建账起点（存量无起点时兜底当日 UTC+8 日初）。
+	 * 建账后补录初始持仓（ToB R1 W22 组织作用域 + 账本锁 + 同事务审计）：
+	 * - 事务内 lockOrganizationForActor 复验 settings.update；
+	 * - 未建账 → 409 ONBOARDING_NOT_COMPLETED；OWNER_LEGACY 先固化为 OrganizationSettings；
+	 * - assertHoldings 后先取组织账本锁，再按 compatReadWhere(actor) 查重（409 INITIAL_HOLDING_EXISTS）；
+	 * - 写入带 organizationId / createdById 的记录并同事务写 onboarding.initial_holdings 审计。
 	 */
 	async saveInitialHoldings(
-		userId: string,
+		actor: ActorContext,
 		dto: { holdings: InitialHoldingItemDto[] },
+		requestId: string | null = null,
 	): Promise<InitialHoldingsResultDto> {
-		return this.prisma.$transaction(async (tx) => {
-			const settings = await tx.userSettings.findUnique({ where: { userId } });
-			if (!settings) {
-				this.warnFailure(userId, "CONSENT", "补录前置检查：尚未完成首次设置");
-				throw new OnboardingNotCompletedException();
-			}
+		let deniedRole: OrganizationRole = actor.role;
+		try {
+			return await this.prisma.$transaction(async (tx) => {
+				const latestRole = await lockOrganizationForActor(tx, actor);
+				if (!can(latestRole, "settings.update")) {
+					deniedRole = latestRole;
+					throw new PermissionDeniedException();
+				}
 
-			// 预检查整单拒绝（不做部分成功）；并发兜底由 InitialHolding 唯一约束 P2002 承担
-			const codes = dto.holdings.map((item) =>
-				item.currencyCode.trim().toUpperCase(),
-			);
-			const existing = await tx.initialHolding.findMany({
-				where: { userId, currencyCode: { in: codes } },
-				select: { currencyCode: true },
-			});
-			if (existing.length > 0) {
-				this.warnFailure(
-					userId,
-					"UNIQUE",
-					`币种已有初始持仓记录：${existing.map((row) => row.currencyCode).join(",")}`,
+				const preferences = await resolveOrganizationPreferences(
+					tx,
+					actor.organizationId,
 				);
-				throw new InitialHoldingExistsException();
+				if (!preferences) {
+					this.warnFailure(
+						actor.userId,
+						"CONSENT",
+						"补录前置检查：尚未完成首次设置",
+					);
+					throw new OnboardingNotCompletedException();
+				}
+				if (preferences.source === "OWNER_LEGACY") {
+					await materializeLegacyOrganizationSettings(tx, actor.organizationId);
+				}
+
+				this.assertHoldings(preferences.baseCurrency, dto.holdings);
+				const codes = dto.holdings.map((item) =>
+					item.currencyCode.trim().toUpperCase(),
+				);
+				await lockOrgLedgerAccounts(tx, actor.organizationId, codes);
+
+				// 锁内按 compatReadWhere(actor) 查重（不做部分成功）；并发兜底由唯一约束承担
+				const existing = await tx.initialHolding.findMany({
+					where: {
+						...compatReadWhere(actor),
+						currencyCode: { in: codes },
+					},
+					select: { currencyCode: true },
+				});
+				if (existing.length > 0) {
+					this.warnFailure(
+						actor.userId,
+						"UNIQUE",
+						`币种已有初始持仓记录：${existing.map((row) => row.currencyCode).join(",")}`,
+					);
+					throw new InitialHoldingExistsException();
+				}
+
+				const ledgerStartedAt =
+					preferences.ledgerStartedAt ?? utc8DayStart(new Date());
+				const created = await this.recordInitialHoldings(
+					tx,
+					actor,
+					preferences.baseCurrency,
+					ledgerStartedAt,
+					dto.holdings,
+				);
+
+				await this.auditService.recordInTx(tx, {
+					organizationId: actor.organizationId,
+					actorUserId: actor.userId,
+					actorType: "USER",
+					action: "onboarding.initial_holdings",
+					targetType: "organization_settings",
+					targetId: actor.organizationId,
+					result: "SUCCESS",
+					requestId: requestId ?? null,
+					detail: {
+						baseCurrency: preferences.baseCurrency,
+						holdingsCount: created.length,
+						currencies: created.map((item) => item.currencyCode),
+					},
+				});
+
+				this.logHoldingsSuccess("onboarding_backfill", actor.userId, created);
+
+				return { created, ledgerStartedAt };
+			});
+		} catch (error) {
+			if (error instanceof PermissionDeniedException) {
+				await this.recordDeniedAudit(actor, deniedRole, requestId);
 			}
-
-			const ledgerStartedAt =
-				settings.ledgerStartedAt ?? utc8DayStart(new Date());
-			const created = await this.recordInitialHoldings(
-				tx,
-				userId,
-				settings.baseCurrency,
-				ledgerStartedAt,
-				dto.holdings,
-			);
-			this.logHoldingsSuccess("onboarding_backfill", userId, created);
-
-			return { created, ledgerStartedAt };
-		});
+			throw error;
+		}
 	}
 
 	/**
-	 * 初始持仓入账（complete 与补录共用唯一入口，技术方案 §5.1）：
+	 * 初始持仓入账（complete 与补录共用唯一入口，技术方案 §5.1 / ToB R1 W22）：
 	 * ① 币种/金额校验 ② 批量取价（现汇卖出价优先，项级错误统一 400）③ 逐币种：
 	 *    8 位舍入 → 成本折算（按本位币精度）→ 按当前确认时刻复核 fresh/validUntil →
 	 *    写 InitialHolding（P2002 → 409）→ 写 CostLot(sourceType=INITIAL) →
-	 *    Account 余额按该币种全部批次 remainingQty 汇总重算（非增量累加，防丢更新）。
-	 * 本方法必须在事务内调用：任一异常抛出即整体回滚。
+	 *    Account 余额按组织（含默认组织兼容）全部批次 remainingQty 汇总重算，
+	 *    兼容升级默认组织存量 organizationId: null 账户行后按 organizationId_currencyCode upsert。
+	 * 本方法必须在持有组织账本锁的事务内调用：任一异常抛出即整体回滚。
 	 */
 	private async recordInitialHoldings(
 		tx: Prisma.TransactionClient,
-		userId: string,
+		actor: ActorContext,
 		baseCurrency: string,
 		ledgerStartedAt: Date,
 		items: InitialHoldingItemDto[],
@@ -427,14 +583,32 @@ export class OnboardingService {
 
 		// 取价：base=本位币、target=外币（rate/sellRate 均为「1 外币 = X 本位币」，
 		// 采用价 = sellRate ?? rate，对齐前端 rate-latest 录入价口径）
-		const itemByTarget = await this.fetchLatestQuotes(userId, baseCurrency, codes);
+		const itemByTarget = await this.fetchLatestQuotes(
+			actor.userId,
+			baseCurrency,
+			codes,
+		);
+
+		// 默认组织写入前按 COLLATE "C" 升序锁定可能存在的 legacy organizationId: null 账户行
+		if (actor.isDefaultOrganization) {
+			const sortedCodes = [...new Set(codes)].sort((a, b) =>
+				a < b ? -1 : a > b ? 1 : 0,
+			);
+			await tx.$queryRaw`
+				SELECT id FROM accounts
+				WHERE user_id = ${actor.userId}
+					AND organization_id IS NULL
+					AND currency_code = ANY(${sortedCodes}::text[])
+				ORDER BY currency_code COLLATE "C"
+				FOR UPDATE`;
+		}
 
 		const created: InitialHoldingCreatedDto[] = [];
 		for (const item of items) {
 			const code = item.currencyCode.trim().toUpperCase();
 			const quote = itemByTarget.get(code);
 			if (!quote || "error" in quote) {
-				this.warnFailure(userId, "RATE", `币种 ${code} 无有效报价`);
+				this.warnFailure(actor.userId, "RATE", `币种 ${code} 无有效报价`);
 				throw new RateUnavailableException();
 			}
 			const adopted = quote.sellRate ?? quote.rate;
@@ -451,7 +625,7 @@ export class OnboardingService {
 				cost = finalAmountOf(amount, rate, baseCurrencyInfo!.decimalPlaces);
 				assertAmountLimit(cost);
 			} catch (error) {
-				this.warnFailure(userId, "LIMIT", `币种 ${code} 折算成本被拒`);
+				this.warnFailure(actor.userId, "LIMIT", `币种 ${code} 折算成本被拒`);
 				throw new InvalidAmountException(
 					`${code} 折算成本非法：${this.moneyErrorMessage(error)}`,
 				);
@@ -460,13 +634,19 @@ export class OnboardingService {
 			// 前一币种的异步写入可能跨过本报价的有效期。
 			const confirmedAt = Date.now();
 			if (!this.isFreshQuote(quote, confirmedAt)) {
-				this.warnFailure(userId, "RATE", `币种 ${code} 报价在写账前已失效`);
+				this.warnFailure(
+					actor.userId,
+					"RATE",
+					`币种 ${code} 报价在写账前已失效`,
+				);
 				throw new RateUnavailableException();
 			}
 			const holding = await tx.initialHolding
 				.create({
 					data: {
-						userId,
+						userId: actor.userId,
+						organizationId: actor.organizationId,
+						createdById: actor.userId,
 						currencyCode: code,
 						amount,
 						rate,
@@ -481,7 +661,7 @@ export class OnboardingService {
 				.catch((error: unknown) => {
 					if ((error as { code?: string }).code === "P2002") {
 						this.warnFailure(
-							userId,
+							actor.userId,
 							"UNIQUE",
 							`币种 ${code} 初始持仓唯一约束冲突（并发补录）`,
 						);
@@ -495,7 +675,8 @@ export class OnboardingService {
 			// acquiredAt=ledgerStartedAt（INITIAL 批次排同日 PURCHASE 之前，满足未来消耗排序前置）
 			await tx.costLot.create({
 				data: {
-					user: { connect: { id: userId } },
+					user: { connect: { id: actor.userId } },
+					organizationId: actor.organizationId,
 					currencyCode: code,
 					sourceType: "INITIAL",
 					sourceId: holding.id,
@@ -507,16 +688,48 @@ export class OnboardingService {
 				},
 			});
 
-			// 余额按该币种全部 CostLot remainingQty 汇总重算（非增量累加）：
-			// 双端并发补录不同币种不会丢更新；同币种并发已被 InitialHolding 唯一约束串行化
+			// 余额按组织（含默认组织兼容存量行）全部 CostLot remainingQty 汇总重算
 			const aggregated = await tx.costLot.aggregate({
 				_sum: { remainingQty: true },
-				where: { userId, currencyCode: code },
+				where: {
+					currencyCode: code,
+					...compatReadWhere(actor),
+				},
 			});
 			const balance = new Prisma.Decimal(aggregated._sum.remainingQty ?? 0);
+			if (actor.isDefaultOrganization) {
+				const legacyAccount = await tx.account.findFirst({
+					where: {
+						userId: actor.userId,
+						organizationId: null,
+						currencyCode: code,
+					},
+					select: { id: true },
+				});
+				if (legacyAccount) {
+					await tx.account.update({
+						where: { id: legacyAccount.id },
+						data: {
+							organizationId: actor.organizationId,
+							createdById: actor.userId,
+						},
+					});
+				}
+			}
 			await tx.account.upsert({
-				where: { userId_currencyCode: { userId, currencyCode: code } },
-				create: { userId, currencyCode: code, balance },
+				where: {
+					organizationId_currencyCode: {
+						organizationId: actor.organizationId,
+						currencyCode: code,
+					},
+				},
+				create: {
+					userId: actor.userId,
+					organizationId: actor.organizationId,
+					createdById: actor.userId,
+					currencyCode: code,
+					balance,
+				},
 				update: { balance },
 			});
 
@@ -531,6 +744,28 @@ export class OnboardingService {
 			});
 		}
 		return created;
+	}
+
+	private async recordDeniedAudit(
+		actor: ActorContext,
+		role: OrganizationRole,
+		requestId: string | null,
+	): Promise<void> {
+		try {
+			await this.auditService.recordStandalone({
+				organizationId: actor.organizationId,
+				actorUserId: actor.userId,
+				actorType: "USER",
+				action: "permission.denied.settings.update",
+				result: "DENIED",
+				requestId,
+				detail: { required: "settings.update", role },
+			});
+		} catch (error) {
+			this.logger.warn(
+				`DENIED 审计写入失败（不影响 403 返回）: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
 	}
 
 	/**

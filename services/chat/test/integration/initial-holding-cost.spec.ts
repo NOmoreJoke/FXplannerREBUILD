@@ -240,10 +240,8 @@ describe("初始持仓成本口径（集成）", () => {
 			where: { userId: user.userId, currencyCode: "THB" },
 		});
 		expect(lots).toHaveLength(1);
-		const account = await ctx.prisma.account.findUnique({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "THB" },
-			},
+		const account = await ctx.prisma.account.findFirst({
+			where: { userId: user.userId, currencyCode: "THB" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("100.0000");
 	});

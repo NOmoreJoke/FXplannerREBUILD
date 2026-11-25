@@ -431,10 +431,8 @@ describe("TransactionController（接口）", () => {
 
 	it("#16 组合级不变式：USD 账户 Σ costLot.remainingQty === balance（10000 + 250.25）", async () => {
 		// 前序用例累计：#2 doc 05（10000）+ #6（250.25）= 10250.25
-		const account = await ctx.prisma.account.findUnique({
-			where: {
-				userId_currencyCode: { userId: userA.userId, currencyCode: "USD" },
-			},
+		const account = await ctx.prisma.account.findFirst({
+			where: { userId: userA.userId, currencyCode: "USD" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("10250.2500");
 

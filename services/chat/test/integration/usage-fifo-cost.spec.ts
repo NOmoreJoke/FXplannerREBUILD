@@ -137,10 +137,8 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 		]); // 原始数量不动
 
 		// 三方一致：账户余额 800、PlanAllocation.usedAmount = 1,200
-		const account = await prisma.account.findUnique({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const account = await prisma.account.findFirst({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("800.0000");
 		const allocation = await prisma.planAllocation.findUnique({
@@ -191,10 +189,8 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 			},
 		});
 		// 恒等式修复：直插 INITIAL 批次不入账户，同步余额至 ΣremainingQty = 2,000
-		await prisma.account.update({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "CAD" },
-			},
+		await prisma.account.updateMany({
+			where: { userId: user.userId, currencyCode: "CAD" },
 			data: { balance: "2000" },
 		});
 
@@ -241,10 +237,8 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 		expect(usedAfter).toEqual(["4000.0000", "8000.0000", "10000.0000"]);
 
 		// 恒等式守恒（§8.3 场景 4）：余额 = Σ各计划剩余分配 + 未分配；Σ批次剩余 = 余额
-		const account = await prisma.account.findUnique({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const account = await prisma.account.findFirst({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		const plans = await prisma.plan.findMany({
 			where: { userId: user.userId, targetCurrency: "USD" },
@@ -315,10 +309,8 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 		// 整笔不生效（需求 §7 中途中断）：零新增、余额与 usedAmount 不变
 		expect(await prisma.usageRecord.count()).toBe(beforeUsageCount);
 		expect(await prisma.usageLotAllocation.count()).toBe(beforeAllocCount);
-		const account = await prisma.account.findUnique({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const account = await prisma.account.findFirst({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("10000.0000");
 		const allocation = await prisma.planAllocation.findUnique({
