@@ -64,7 +64,10 @@ describe("Swagger 接口说明", () => {
 		// + ToB R1 W19 成员/邀请 11 端点：GET/PATCH/DELETE /members、POST /members/leave、
 		//   POST /transfer-ownership、POST/GET/DELETE /invitations、
 		//   GET /organization-invitations/:token、POST accept/decline = 72
-		expect(operations).toHaveLength(72);
+		// + ToB R1 W22 个人/组织设置分离 2 端点：GET/PATCH /api/settings/personal
+		//   （W24 同步本计数：W22 新增两端点后此处仍停在 72，导致该用例在分支上一直失败）
+		//   = 74。W24 只扩充既有端点的说明与出参，未新增端点。
+		expect(operations).toHaveLength(74);
 		for (const { path, method, operation } of operations) {
 			expect(
 				operation.summary,

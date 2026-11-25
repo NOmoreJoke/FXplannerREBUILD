@@ -88,6 +88,15 @@ export class UsageDto {
 	remark!: string | null;
 
 	@ApiProperty({
+		description:
+			"记录人用户 ID（LEDGER-01.4：组织账本由成员共享，记录人仅用于展示与审计，不是权限筛选条件；组织化之前的存量记录为 null）",
+		example: "cme…",
+		type: String,
+		nullable: true,
+	})
+	createdById!: string | null;
+
+	@ApiProperty({
 		description: "本笔使用成本（FIFO 分摊合计，本位币，固定 4 位小数字符串）",
 		example: "9400.0000",
 		type: String,

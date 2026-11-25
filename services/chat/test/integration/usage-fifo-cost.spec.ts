@@ -2,7 +2,7 @@ import "reflect-metadata";
 import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
 import { Prisma } from "@prisma/client";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PrismaService } from "../../src/prisma/prisma.service";
 import { utc8DayStart } from "../../src/transaction/transaction-calculator";
 import {
@@ -10,10 +10,25 @@ import {
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
 import { ensureOnboarded } from "../helpers/onboarding-helper";
-import { seedPlanWithAllocation } from "../helpers/plan-test-helper";
+import {
+	PLAN_EXPECT_USE_DATE,
+	PLAN_START_DATE,
+	seedPlanWithAllocation,
+} from "../helpers/plan-test-helper";
+import { closeTestApps } from "../helpers/test-http";
+import { raceBehindAdvisoryLock } from "../helpers/postgres-lock-barrier";
+import {
+	cleanupOrgLedgers,
+	createOrgLedger,
+	orgHeaders,
+	type OrgLedger,
+	purchaseBody,
+	readOrgLedgerSnapshot,
+} from "../helpers/organization-ledger-test-helper";
 
 // 关闭全局接口限流（先例：transaction.spec/plan.spec——APP_GUARD token 无法 override，只能 mock 类）
 vi.mock("@nestjs/throttler", async (importOriginal) => {
@@ -330,19 +345,11 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 			targetAmount: "1000",
 			allocatedAmount: "1000",
 		});
-		// 账本起点 = 10 天前（UTC+8 日初）：对齐 onboarding 建账口径
+		// 账本起点 = 10 天前（UTC+8 日初）：对齐 onboarding 建账口径。ToB R1 W24 起使用写入口
+		// 读取**组织**的记账起点，ensureOnboarded 同步更新 UserSettings 与默认组织
+		// OrganizationSettings（transaction.spec #11 同款夹具）
 		const start = utc8DayStart(new Date(Date.now() - 10 * 24 * 60 * 60 * 1000));
-		await prisma.userSettings.upsert({
-			where: { userId: user.userId },
-			update: { ledgerStartedAt: start },
-			create: {
-				userId: user.userId,
-				baseCurrency: "CNY",
-				locale: "zh-CN",
-				region: "CN",
-				ledgerStartedAt: start,
-			},
-		});
+		await ensureOnboarded(prisma, user.userId, "CNY", start);
 
 		// 起点 9-9（前一日）拒
 		const tooEarly = await postUsage(user, planId, {
@@ -357,4 +364,270 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 			usedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
 		}).expect(201);
 	});
+});
+
+/** 相对今天的过去第 n 天（固定时刻，避开 UTC+8 日界边界） */
+function daysAgo(n: number): Date {
+	return new Date(Date.now() - n * 86_400_000 - 2 * 3_600_000);
+}
+
+/**
+ * ToB R1 W24：组织共享 FIFO 池在多成员并发下的一致性（LEDGER-01 / LEDGER-04.2）。
+ * 并发用 postgres-lock-barrier 的 raceBehindAdvisoryLock 做确定性竞争：屏障先持组织锁
+ * （membership:${orgId}），确认全部请求都已通过 Guard 并阻塞在锁上后再同时放行。
+ * 每个用例自建组织与成员并在 afterEach 清理；支持按用例名 `-t` 独立运行。
+ */
+describe("W24 组织共享 FIFO 池的多成员并发一致性（集成）", () => {
+	let ctx: TestContext;
+	let app: INestApplication;
+	let prisma: PrismaService;
+	const orgs: OrgLedger[] = [];
+
+	beforeAll(async () => {
+		ctx = await createTestApp();
+		app = ctx.app;
+		prisma = ctx.prisma;
+	}, 30_000);
+
+	afterEach(async () => {
+		if (orgs.length > 0) {
+			await cleanupOrgLedgers(prisma, ...orgs.splice(0));
+		}
+	});
+
+	afterAll(async () => {
+		await closeTestApps(app);
+	});
+
+	function postUsageAs(
+		user: TestUser,
+		orgId: string,
+		planId: string,
+		body: Record<string, unknown>,
+	) {
+		return request(app.getHttpServer())
+			.post(`/api/plans/${planId}/usages`)
+			.set(orgHeaders(user, orgId))
+			.send(body);
+	}
+
+	/** 造共享池：Finance 1 买入两批（1,000@7.8、1,000@8）→ Finance 2 建计划（分配 1,600） */
+	async function seedSharedPool(org: OrgLedger) {
+		const [finance1, finance2] = org.members;
+		const purchaseIds: string[] = [];
+		for (const [days, unitCost] of [
+			[4, "7.8"],
+			[3, "8"],
+		] as const) {
+			const res = await request(app.getHttpServer())
+				.post("/api/transactions")
+				.set(orgHeaders(finance1, org.orgId))
+				.send(purchaseBody("USD", "1000", unitCost, daysAgo(days)))
+				.expect(201);
+			purchaseIds.push(res.body.data.id);
+		}
+		const plan = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(orgHeaders(finance2, org.orgId))
+			.send({
+				targetCurrency: "USD",
+				targetAmount: "2000",
+				expectUseDate: PLAN_EXPECT_USE_DATE,
+				prepLeadDays: 3,
+				pacePreference: "balanced",
+				startDate: PLAN_START_DATE,
+				allocatedAmount: "1600",
+			})
+			.expect(201);
+		return { finance1, finance2, purchaseIds, planId: plan.body.data.id as string };
+	}
+
+	/** 不变式：Σ批次剩余 = 账户余额；每片成本 = 数量 × 批次单价（4 位）；分摊数量合计 = 使用金额 */
+	async function expectPoolInvariants(orgId: string, expectedBalance: string) {
+		const snapshot = await readOrgLedgerSnapshot(prisma, orgId);
+		const unitCostBySource = new Map(
+			snapshot.lots.map((lot) => [lot.sourceId, lot.unitCost]),
+		);
+		expect(snapshot.accounts).toHaveLength(1);
+		expect(snapshot.accounts[0].balance).toBe(expectedBalance);
+		const lotRemainingSum = snapshot.lots.reduce(
+			(sum, lot) => sum.add(new Prisma.Decimal(lot.remainingQty)),
+			new Prisma.Decimal(0),
+		);
+		expect(lotRemainingSum.toFixed(4)).toBe(expectedBalance);
+		for (const usage of snapshot.usages) {
+			const slices = snapshot.allocations.filter((row) => row.usageId === usage.id);
+			const quantitySum = slices.reduce(
+				(sum, slice) => sum.add(new Prisma.Decimal(slice.quantity)),
+				new Prisma.Decimal(0),
+			);
+			expect(quantitySum.toFixed(4)).toBe(usage.amount);
+			for (const slice of slices) {
+				expect(
+					new Prisma.Decimal(slice.quantity)
+						.mul(new Prisma.Decimal(unitCostBySource.get(slice.sourceId)!))
+						.toFixed(4),
+				).toBe(slice.cost);
+			}
+		}
+		return snapshot;
+	}
+
+	it("W24-FIFO-1 两名成员并发更正同一笔使用（各自带同一份预览）：锁内重读 baseVersion → 一个 201、一个 409 CORRECTION_TARGET_CHANGED，FIFO 与余额终态确定", async () => {
+		const org = await createOrgLedger(app, prisma, "w24-fifo-correct-race", [
+			"FINANCE",
+			"FINANCE",
+		]);
+		orgs.push(org);
+		const { finance1, finance2, purchaseIds, planId } = await seedSharedPool(org);
+		const usageId = (
+			await postUsageAs(finance2, org.orgId, planId, {
+				amount: "1200",
+				usedAt: utc8DayStart(new Date()).toISOString(),
+			}).expect(201)
+		).body.data.usage.id as string;
+
+		// 两人各自预览同一份改动（改小到 800）：组织账本对两人一致，影响指纹相同
+		const payload = {
+			targetType: "USAGE",
+			targetId: usageId,
+			baseVersion: 1,
+			reason: "并发更正：使用金额多记了 400",
+			changes: { amount: "800" },
+		};
+		const previewAs = (user: TestUser) =>
+			request(app.getHttpServer())
+				.post("/api/corrections/preview")
+				.set(orgHeaders(user, org.orgId))
+				.send(payload);
+		const [preview1, preview2] = await Promise.all([
+			previewAs(finance1).expect(200),
+			previewAs(finance2).expect(200),
+		]);
+		expect(preview1.body.data.blockers).toEqual([]);
+		expect(preview2.body.data.expectedUsageImpact).toBe(
+			preview1.body.data.expectedUsageImpact,
+		);
+		const expectedUsageImpact = preview1.body.data.expectedUsageImpact as string;
+		const requestIds = [`req-w24-fifo-race-1-${Date.now()}`, `req-w24-fifo-race-2-${Date.now()}`];
+		const applyAs = (user: TestUser, requestId: string) =>
+			request(app.getHttpServer())
+				.post("/api/corrections")
+				.set(orgHeaders(user, org.orgId, requestId))
+				.send({ ...payload, expectedUsageImpact });
+
+		const [first, second] = await raceBehindAdvisoryLock(prisma, `membership:${org.orgId}`, [
+			() => applyAs(finance1, requestIds[0]),
+			() => applyAs(finance2, requestIds[1]),
+		]);
+
+		// 一胜一负：后到者带的是旧 baseVersion，被锁内重读拦下，不覆盖先到者的结果
+		expect([first.status, second.status].sort()).toEqual([201, 409]);
+		const [winner, loser] = first.status === 201 ? [first, second] : [second, first];
+		const winnerActor = winner === first ? finance1 : finance2;
+		expect(loser.body.code).toBe("CORRECTION_TARGET_CHANGED");
+
+		// 终态与谁胜出无关：使用 800 只耗买入一（800×7.8 = 6,240）；改小 400 → 分配 1,600 → 1,200，已用 800
+		const snapshot = await expectPoolInvariants(org.orgId, "1200.0000");
+		expect(snapshot.usages.map((usage) => [usage.id, usage.amount, usage.version])).toEqual([
+			[usageId, "800.0000", 2],
+		]);
+		expect(snapshot.allocations).toEqual([
+			{ usageId, sourceId: purchaseIds[0], quantity: "800.0000", cost: "6240.0000" },
+		]);
+		expect(
+			Object.fromEntries(snapshot.lots.map((lot) => [lot.sourceId, lot.remainingQty])),
+		).toEqual({
+			[purchaseIds[0]]: "200.0000",
+			[purchaseIds[1]]: "1000.0000",
+		});
+		// 重建后的批次仍归买入人
+		expect(new Set(snapshot.lots.map((lot) => lot.userId))).toEqual(
+			new Set([finance1.userId]),
+		);
+		expect(snapshot.planAllocations).toEqual([
+			{ planId, amount: "1200.0000", usedAmount: "800.0000" },
+		]);
+		// 只留一条 APPLIED 与一条 SUCCESS 审计，操作者都是胜者；败者不留 FAILED
+		expect(
+			await prisma.correction.findMany({ where: { targetId: usageId } }),
+		).toEqual([
+			expect.objectContaining({
+				id: winner.body.data.correctionId,
+				status: "APPLIED",
+				organizationId: org.orgId,
+				actorUserId: winnerActor.userId,
+			}),
+		]);
+		expect(
+			await prisma.auditLog.findMany({
+				where: { organizationId: org.orgId, action: "correction.apply" },
+			}),
+		).toEqual([
+			expect.objectContaining({
+				actorUserId: winnerActor.userId,
+				targetType: "usage_record",
+				targetId: usageId,
+				result: "SUCCESS",
+			}),
+		]);
+	}, 30_000);
+
+	it("W24-FIFO-2 两名成员并发对同一计划记使用（共享 Finance 1 的 FIFO 池）：均 201，分配 / 余额 / 批次扣减无丢失", async () => {
+		const org = await createOrgLedger(app, prisma, "w24-fifo-usage-race", [
+			"FINANCE",
+			"FINANCE",
+		]);
+		orgs.push(org);
+		const { finance1, finance2, purchaseIds, planId } = await seedSharedPool(org);
+		const usedAt = utc8DayStart(new Date()).toISOString();
+
+		// 800 与 400 都会跨买入一的批次边界：谁先谁后决定各自成本，但不影响总量与不变式
+		const [usageByFinance1, usageByFinance2] = await raceBehindAdvisoryLock(
+			prisma,
+			`membership:${org.orgId}`,
+			[
+				() => postUsageAs(finance1, org.orgId, planId, { amount: "800", usedAt }),
+				() => postUsageAs(finance2, org.orgId, planId, { amount: "400", usedAt }),
+			],
+		);
+		expect(usageByFinance1.status).toBe(201);
+		expect(usageByFinance2.status).toBe(201);
+
+		// 总量确定：共使用 1,200 = 买入一 1,000 + 买入二 200 → 7,800 + 1,600 = 9,400
+		const snapshot = await expectPoolInvariants(org.orgId, "800.0000");
+		expect(snapshot.usages).toHaveLength(2);
+		expect(
+			Object.fromEntries(snapshot.lots.map((lot) => [lot.sourceId, lot.remainingQty])),
+		).toEqual({
+			[purchaseIds[0]]: "0.0000",
+			[purchaseIds[1]]: "800.0000",
+		});
+		expect(snapshot.planAllocations).toEqual([
+			{ planId, amount: "1600.0000", usedAmount: "1200.0000" },
+		]);
+		const totalCost = snapshot.allocations.reduce(
+			(sum, slice) => sum.add(new Prisma.Decimal(slice.cost)),
+			new Prisma.Decimal(0),
+		);
+		expect(totalCost.toFixed(4)).toBe("9400.0000");
+		// 两笔使用各自只分摊到自己的那一份，合计等于其金额
+		const quantityByUsage = new Map<string, Prisma.Decimal>();
+		for (const slice of snapshot.allocations) {
+			quantityByUsage.set(
+				slice.usageId,
+				(quantityByUsage.get(slice.usageId) ?? new Prisma.Decimal(0)).add(slice.quantity),
+			);
+		}
+		expect(
+			[...quantityByUsage.values()].map((quantity) => quantity.toFixed(4)).sort(),
+		).toEqual(["400.0000", "800.0000"]);
+		// 记录人各异：两笔 usage.create 审计分别归属 Finance 1 与 Finance 2
+		const usageAudits = await prisma.auditLog.findMany({
+			where: { organizationId: org.orgId, action: "usage.create", result: "SUCCESS" },
+		});
+		expect(usageAudits.map((row) => row.actorUserId).sort()).toEqual(
+			[finance1.userId, finance2.userId].sort(),
+		);
+	}, 30_000);
 });

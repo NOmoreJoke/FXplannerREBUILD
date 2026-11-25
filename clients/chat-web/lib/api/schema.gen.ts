@@ -770,13 +770,13 @@ export interface paths {
         };
         /**
          * 使用记录列表（usedAt 倒序，limit 100 兑底）
-         * @description 返回该计划的使用记录（含每笔 FIFO 使用成本），usedAt 倒序、同刻按录入先后倒序；个人工具量级无分页，服务端 limit 100 兑底。计划不存在或不属于本人均 404（防枚举）。
+         * @description 返回该计划的使用记录（含每笔 FIFO 使用成本），usedAt 倒序、同刻按录入先后倒序；个人工具量级无分页，服务端 limit 100 兑底。组织共享账本：同组织成员记录的使用均可见（createdById 标识记录人，不是筛选条件）。计划不存在或不属于当前组织均 404（防枚举）。
          */
         get: operations["UsageController_list"];
         put?: never;
         /**
          * 记录使用（五步事务：扣分配/扣余额/FIFO 分摊）
-         * @description 事务内依次执行：① $executeRaw 条件扣分配（used + 本次 ≤ 分配总额，行数 = 0 返回 409 INSUFFICIENT_PLAN_ALLOCATION 附当前剩余）→ ② 条件扣账户余额（防御兜底）→ ③ 插使用记录（version = 1）→ ④ FIFO 成本分摊（同日先初始持仓再按买入先后）→ ⑤ 写分摊明细 + 递减批次；任一失败整体回滚。非幂等：一次确认 = 一笔新使用。出参含提交后计划资金面快照（fundStatus/canComplete），前端一次往返即可刷新进度区。
+         * @description 组织共享账本：须具备 usage.create 权限（OWNER/ADMIN/FINANCE；OPERATOR/VIEWER 403 PERMISSION_DENIED 并写 DENIED 审计）。事务内依次执行：锁组织并按最新角色复验权限（锁等期间降权同样 403）→ 校验组织已建账（409 ONBOARDING_NOT_COMPLETED）与使用日期 → 锁组织账本账户与计划行（计划不属于当前组织 404 PLAN_NOT_FOUND）→ ① $executeRaw 条件扣分配（used + 本次 ≤ 分配总额，行数 = 0 返回 409 INSUFFICIENT_PLAN_ALLOCATION 附当前剩余）→ ② 条件扣组织账户余额（防御兜底）→ ③ 插使用记录（version = 1，organizationId + createdById）→ ④ FIFO 成本分摊（同组织全部成员的活跃批次构成同一个 FIFO 池；同日先初始持仓再按买入先后）→ ⑤ 写分摊明细 + 递减批次 → ⑥ 同事务写审计日志；任一失败整体回滚。非幂等：一次确认 = 一笔新使用。出参含提交后计划资金面快照（fundStatus/canComplete），前端一次往返即可刷新进度区。
          */
         post: operations["UsageController_create"];
         delete?: never;
@@ -814,13 +814,13 @@ export interface paths {
         };
         /**
          * 修改记录列表（版本历史）
-         * @description 按 targetType+targetId 返回修改记录（createdAt 倒序分页；含 APPLIED 与 FAILED，FAILED 附 failReason），供记录详情页版本历史区展示。目标不存在或不属于本人一律 404（不泄露存在性）；targetType/targetId 缺失 400。
+         * @description 按 targetType+targetId 返回修改记录（createdAt 倒序分页；含 APPLIED 与 FAILED，FAILED 附 failReason），供记录详情页版本历史区展示；每条含所属组织 organizationId 与实际操作者 actorUserId。目标不存在或不属于当前组织一律 404（不泄露存在性）；targetType/targetId 缺失 400。
          */
         get: operations["CorrectionController_list"];
         put?: never;
         /**
          * 提交更正（事务）
-         * @description 事务内锁定受影响币种账户并重算。USAGE 须确认本次影响，初始持仓改币种须确认预览报价。版本或使用影响失配返回 409 CORRECTION_TARGET_CHANGED，报价失配返回 409 CORRECTION_QUOTE_CHANGED，均须重新预览。校验通过后重放账本并写入 APPLIED；资金、分配或历史缺口拒绝时，业务数据零变化，另写 FAILED 尝试留痕。
+         * @description 组织共享账本：须具备 correction.apply 权限（OWNER/ADMIN/FINANCE；OPERATOR/VIEWER 403 PERMISSION_DENIED 并写 DENIED 审计）。事务内依次执行：锁组织并按最新角色复验权限（锁等期间降权同样 403）→ 校验组织已建账 → 锁定受影响币种的组织账户（兼容窗口内先把默认组织创建者的存量账本行收口进组织）与相关计划行 → 按组织账本重算。USAGE 须确认本次影响，初始持仓改币种须确认预览报价。版本或使用影响失配返回 409 CORRECTION_TARGET_CHANGED（另一成员已更新目标时不覆盖后者，须重新预览），报价失配返回 409 CORRECTION_QUOTE_CHANGED。校验通过后重放账本并写入 APPLIED（含所属组织与操作者）；资金、分配或历史缺口拒绝时，业务数据零变化，另写带组织与操作者的 FAILED 尝试留痕及 FAILED 审计。
          */
         post: operations["CorrectionController_apply"];
         delete?: never;
@@ -838,7 +838,7 @@ export interface paths {
         };
         /**
          * 更正目标当前内容
-         * @description 返回被更正记录的当前完整内容（金额 4 位、时间 ISO；含乐观校验基准字段 version / updatedAt），作为更正页表单初值数据源。仅本人可见：不存在或不属于本人一律 404（不泄露存在性）。
+         * @description 返回被更正记录的当前完整内容（金额 4 位、时间 ISO；含乐观校验基准字段 version / updatedAt），作为更正页表单初值数据源。组织共享账本：同组织成员的记录均可查看。不存在或不属于当前组织一律 404（不泄露存在性）。
          */
         get: operations["CorrectionController_getTarget"];
         put?: never;
@@ -3311,6 +3311,11 @@ export interface components {
              */
             remark: string | null;
             /**
+             * @description 记录人用户 ID（LEDGER-01.4：组织账本由成员共享，记录人仅用于展示与审计，不是权限筛选条件；组织化之前的存量记录为 null）
+             * @example cme…
+             */
+            createdById: string | null;
+            /**
              * @description 本笔使用成本（FIFO 分摊合计，本位币，固定 4 位小数字符串）
              * @example 9400.0000
              */
@@ -3634,6 +3639,16 @@ export interface components {
              * @example cmbC...
              */
             id: string;
+            /**
+             * @description 所属组织 ID（LEDGER-04.4：更正日志须显示所属组织；组织化之前尚未回填的存量记录为 null）
+             * @example cmbO...
+             */
+            organizationId: string | null;
+            /**
+             * @description 实际操作者用户 ID（LEDGER-04.4：发起本次更正的成员；组织化之前尚未回填的存量记录为 null）
+             * @example cme…
+             */
+            actorUserId: string | null;
             /**
              * @description 目标类型
              * @example TRANSACTION
@@ -5793,7 +5808,7 @@ export interface operations {
                     "application/json": components["schemas"]["UsageListRespDto"];
                 };
             };
-            /** @description 计划不存在或不属于本人（PLAN_NOT_FOUND，防枚举） */
+            /** @description 计划不存在或不属于当前组织（PLAN_NOT_FOUND，防枚举） */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -5826,7 +5841,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreateUsageRespDto"];
                 };
             };
-            /** @description 参数非法（INVALID_USAGE_PARAMS：金额/精度/上限/日期上下界/备注长度） */
+            /** @description 参数非法（INVALID_USAGE_PARAMS：金额/精度/上限/日期上下界/备注长度）或缺少组织上下文（ORGANIZATION_REQUIRED） */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -5835,7 +5850,16 @@ export interface operations {
                     "application/json": components["schemas"]["UsageErrorDto"];
                 };
             };
-            /** @description 计划不存在或不属于本人（PLAN_NOT_FOUND，防枚举） */
+            /** @description 无 usage.create 权限（PERMISSION_DENIED，如 OPERATOR/VIEWER；写 DENIED 审计） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageErrorDto"];
+                };
+            };
+            /** @description 计划不存在或不属于当前组织（PLAN_NOT_FOUND，防枚举）；非有效成员或已禁用（ORGANIZATION_NOT_FOUND） */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -5844,7 +5868,7 @@ export interface operations {
                     "application/json": components["schemas"]["UsageErrorDto"];
                 };
             };
-            /** @description 非进行中计划（PLAN_INVALID_TRANSITION）/ 剩余分配不足（INSUFFICIENT_PLAN_ALLOCATION，附 remainingAllocation）/ 余额不足（INSUFFICIENT_ACCOUNT_BALANCE）/ 批次不足（USAGE_LOT_SHORTAGE） */
+            /** @description 非进行中计划（PLAN_INVALID_TRANSITION）/ 剩余分配不足（INSUFFICIENT_PLAN_ALLOCATION，附 remainingAllocation）/ 余额不足（INSUFFICIENT_ACCOUNT_BALANCE）/ 批次不足（USAGE_LOT_SHORTAGE）/ 组织尚未完成首次设置（ONBOARDING_NOT_COMPLETED） */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -5891,7 +5915,7 @@ export interface operations {
                     "application/json": components["schemas"]["CorrectionErrorDto"];
                 };
             };
-            /** @description 目标不存在或不属于本人（CORRECTION_TARGET_NOT_FOUND） */
+            /** @description 目标不存在或不属于当前组织（CORRECTION_TARGET_NOT_FOUND） */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -5943,7 +5967,7 @@ export interface operations {
                     "application/json": components["schemas"]["CorrectionErrorDto"];
                 };
             };
-            /** @description 目标不存在或不属于本人（CORRECTION_TARGET_NOT_FOUND） */
+            /** @description 目标不存在或不属于当前组织（CORRECTION_TARGET_NOT_FOUND） */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -5981,7 +6005,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description 参数非法（INVALID_CORRECTION_PARAMS）/ 待确定项拦截（CORRECTION_NOT_ALLOWED）/ 报价不可得（RATE_QUOTE_UNAVAILABLE） */
+            /** @description 参数非法（INVALID_CORRECTION_PARAMS）/ 待确定项拦截（CORRECTION_NOT_ALLOWED）/ 报价不可得（RATE_QUOTE_UNAVAILABLE）/ 缺少组织上下文（ORGANIZATION_REQUIRED） */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -5990,7 +6014,16 @@ export interface operations {
                     "application/json": components["schemas"]["CorrectionErrorDto"];
                 };
             };
-            /** @description 目标不存在或不属于本人（CORRECTION_TARGET_NOT_FOUND） */
+            /** @description 无 correction.apply 权限（PERMISSION_DENIED，如 OPERATOR/VIEWER；写 DENIED 审计） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrectionErrorDto"];
+                };
+            };
+            /** @description 目标不存在或不属于当前组织（CORRECTION_TARGET_NOT_FOUND）；非有效成员或已禁用（ORGANIZATION_NOT_FOUND） */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -5999,7 +6032,7 @@ export interface operations {
                     "application/json": components["schemas"]["CorrectionErrorDto"];
                 };
             };
-            /** @description 版本或使用影响失配（CORRECTION_TARGET_CHANGED）/ 报价确认键缺失或失配（CORRECTION_QUOTE_CHANGED）/ 资金缺口（CORRECTION_INSUFFICIENT_FUNDS）/ 分配冲突（CORRECTION_ALLOCATION_CONFLICT）/ 历史时点缺口（CORRECTION_HISTORICAL_SHORTFALL） */
+            /** @description 版本或使用影响失配（CORRECTION_TARGET_CHANGED）/ 报价确认键缺失或失配（CORRECTION_QUOTE_CHANGED）/ 资金缺口（CORRECTION_INSUFFICIENT_FUNDS）/ 分配冲突（CORRECTION_ALLOCATION_CONFLICT）/ 历史时点缺口（CORRECTION_HISTORICAL_SHORTFALL）/ 组织尚未完成首次设置（ONBOARDING_NOT_COMPLETED） */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6033,7 +6066,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description 目标不存在或不属于本人（CORRECTION_TARGET_NOT_FOUND） */
+            /** @description 目标不存在或不属于当前组织（CORRECTION_TARGET_NOT_FOUND） */
             404: {
                 headers: {
                     [name: string]: unknown;

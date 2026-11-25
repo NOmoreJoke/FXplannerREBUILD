@@ -3,10 +3,13 @@
  * 走 test-app 基建；世界造数：POST /api/transactions（汇率 1 → unitCost = 1，
  * 精确构造用填法 A 非整汇率）+ seedPlanWithAllocation 直插计划/分配行。
  * 日期断言锚定 UTC+8 日界（transaction.spec 同款 yesterday/now 口径）。
+ * 末尾为 ToB R1 W24 组织化用例（权限矩阵 / 跨组织隔离 / 锁内降权 / 审计回滚 / 共享 FIFO）。
  */
 import type { INestApplication } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { AuditService } from "../../src/audit/audit.service";
 import {
 	bearer,
 	cleanupUser,
@@ -15,9 +18,24 @@ import {
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
-import { seedPlanWithAllocation } from "../helpers/plan-test-helper";
+import {
+	PLAN_EXPECT_USE_DATE,
+	PLAN_START_DATE,
+	seedPlanWithAllocation,
+} from "../helpers/plan-test-helper";
 import { ensureOnboarded } from "../helpers/onboarding-helper";
 import { utc8DayStart } from "../../src/usage/usage-calculator";
+import { closeTestApps } from "../helpers/test-http";
+import { runBehindAdvisoryLock } from "../helpers/postgres-lock-barrier";
+import {
+	cleanupOrgLedgers,
+	createOrgLedger,
+	createSecondOrg,
+	orgHeaders,
+	type OrgLedger,
+	purchaseBody,
+	readOrgLedgerSnapshot,
+} from "../helpers/organization-ledger-test-helper";
 
 // 关闭全局接口限流（先例：transaction.spec/plan.spec——APP_GUARD token 无法 override，只能 mock 类）
 vi.mock("@nestjs/throttler", async (importOriginal) => {
@@ -164,25 +182,16 @@ describe("UsageController（接口）", () => {
 		planMain = await seedWorld(userMain, { rate: "0.78" });
 		// #3 世界：分配 2,000（余额 10,000，超额拦截看分配侧）
 		planErr = await seedWorld(userErr, { allocatedAmount: "2000" });
-		// #5 世界：账本起点 = 10 天前（UTC+8 日初）；settings 已由 ensureOnboarded 建，改 upsert
+		// #5 世界：账本起点 = 10 天前（UTC+8 日初）。ToB R1 W24 起使用写入口读取**组织**的
+		// 记账起点（resolveOrganizationPreferences），ensureOnboarded 同步更新 UserSettings 与
+		// 默认组织 OrganizationSettings（transaction.spec #11 同款夹具）
 		await postTx(userLedgerStart, simpleBody("USD", "1000")).expect(201);
-		await ctx.prisma.userSettings.upsert({
-			where: { userId: userLedgerStart.userId },
-			update: {
-				ledgerStartedAt: utc8DayStart(
-					new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
-				),
-			},
-			create: {
-				userId: userLedgerStart.userId,
-				baseCurrency: "CNY",
-				locale: "zh-CN",
-				region: "CN",
-				ledgerStartedAt: utc8DayStart(
-					new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
-				),
-			},
-		});
+		await ensureOnboarded(
+			ctx.prisma,
+			userLedgerStart.userId,
+			"CNY",
+			utc8DayStart(new Date(Date.now() - 10 * 24 * 60 * 60 * 1000)),
+		);
 		planStart = await seedPlanWithAllocation(
 			ctx.prisma,
 			userLedgerStart.userId,
@@ -560,5 +569,408 @@ describe("未建账写入口防线（BE-03 回归）", () => {
 			})
 			.expect(201);
 		expect(res.body.data.status).toBe("ACTIVE");
+	});
+});
+
+/** 相对今天的过去第 n 天（固定时刻，避开 UTC+8 日界边界） */
+function daysAgo(n: number): Date {
+	return new Date(Date.now() - n * 86_400_000 - 2 * 3_600_000);
+}
+
+/**
+ * ToB R1 W24：Usage 写接口 Actor 化（LEDGER-01 / AUTH-01）。
+ * 组织共享账本下的权限矩阵、跨组织隔离、锁内降权 / 禁用、审计原子性与跨成员共享 FIFO 池。
+ * 每个用例自建组织与成员并在 afterEach 清理（先清派生行再删用户，不留孤儿组织），
+ * 写入全部走带 X-Organization-Id 的接口；支持按用例名 `-t` 独立运行。
+ */
+describe("ToB R1 W24：Usage 写接口 Actor 化 + 权限矩阵 + 跨组织隔离 + 锁内降权 + 审计回滚 + 共享 FIFO（支持 -t 独立运行）", () => {
+	let ctx: TestContext;
+	let app: INestApplication;
+	const orgs: OrgLedger[] = [];
+
+	beforeAll(async () => {
+		ctx = await createTestApp();
+		app = ctx.app;
+	}, 30_000);
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		if (orgs.length > 0) {
+			await cleanupOrgLedgers(ctx.prisma, ...orgs.splice(0));
+		}
+	});
+
+	afterAll(async () => {
+		await closeTestApps(app);
+	});
+
+	function orgPostUsage(
+		user: TestUser,
+		orgId: string,
+		planId: string,
+		body: Record<string, unknown>,
+		requestId?: string,
+	) {
+		return request(app.getHttpServer())
+			.post(`/api/plans/${planId}/usages`)
+			.set(orgHeaders(user, orgId, requestId))
+			.send(body);
+	}
+
+	function getUsagesAs(user: TestUser, orgId: string, planId: string) {
+		return request(app.getHttpServer())
+			.get(`/api/plans/${planId}/usages`)
+			.set(orgHeaders(user, orgId));
+	}
+
+	/**
+	 * 组织世界：buyer 买入 USD + 接口建计划（目标额 = 买入量，分配额 = 目标额的 80%，
+	 * 给排期留出非零的分批总额；全额分配会因排期金额为 0 被 400 拒绝），返回计划 id
+	 */
+	async function seedOrgWorld(
+		org: OrgLedger,
+		options: { buyer?: TestUser; quantity?: string; unitCost?: string } = {},
+	): Promise<string> {
+		const buyer = options.buyer ?? org.owner;
+		const quantity = options.quantity ?? "10000";
+		await request(app.getHttpServer())
+			.post("/api/transactions")
+			.set(orgHeaders(buyer, org.orgId))
+			.send(purchaseBody("USD", quantity, options.unitCost ?? "1", daysAgo(1)))
+			.expect(201);
+		const plan = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(orgHeaders(org.owner, org.orgId))
+			.send({
+				targetCurrency: "USD",
+				targetAmount: quantity,
+				expectUseDate: PLAN_EXPECT_USE_DATE,
+				prepLeadDays: 3,
+				pacePreference: "balanced",
+				startDate: PLAN_START_DATE,
+				allocatedAmount: new Prisma.Decimal(quantity).mul("0.8").toFixed(4),
+			})
+			.expect(201);
+		return plan.body.data.id as string;
+	}
+
+	it.each(["OPERATOR", "VIEWER"] as const)(
+		"W24-USAGE-1 %s 记录使用 → 403 PERMISSION_DENIED + DENIED 审计（带 requestId）+ 零账本写入",
+		async (role) => {
+			const org = await createOrgLedger(app, ctx.prisma, `w24-usage-denied-${role.toLowerCase()}`, [
+				role,
+			]);
+			orgs.push(org);
+			const member = org.members[0];
+			const planId = await seedOrgWorld(org);
+			const requestId = `req-w24-usage-denied-${role}-${Date.now()}`;
+
+			const res = await orgPostUsage(
+				member,
+				org.orgId,
+				planId,
+				{ amount: "100", usedAt: todayIso() },
+				requestId,
+			).expect(403);
+			expect(res.body.code).toBe("PERMISSION_DENIED");
+
+			// 零账本写入：无使用记录、余额与已用额不动、无 usage.create 审计
+			expect(
+				await ctx.prisma.usageRecord.count({ where: { organizationId: org.orgId } }),
+			).toBe(0);
+			const account = await ctx.prisma.account.findFirstOrThrow({
+				where: { organizationId: org.orgId, currencyCode: "USD" },
+			});
+			expect(account.balance.toFixed(4)).toBe("10000.0000");
+			const allocation = await ctx.prisma.planAllocation.findUniqueOrThrow({
+				where: { planId },
+			});
+			expect(allocation.usedAmount.toFixed(4)).toBe("0.0000");
+			expect(
+				await ctx.prisma.auditLog.count({
+					where: { organizationId: org.orgId, action: "usage.create" },
+				}),
+			).toBe(0);
+
+			// DENIED 审计：组织、操作者、权限点、角色与 requestId 齐全
+			const denied = await ctx.prisma.auditLog.findMany({
+				where: {
+					organizationId: org.orgId,
+					actorUserId: member.userId,
+					action: "permission.denied.usage.create",
+					result: "DENIED",
+					requestId,
+				},
+			});
+			expect(denied).toHaveLength(1);
+			expect(denied[0].detail).toMatchObject({
+				required: "usage.create",
+				role,
+			});
+		},
+	);
+
+	it("W24-USAGE-2 跨组织 planId：多组织用户带 Org B 头对 Org A 计划记使用 → 404 PLAN_NOT_FOUND（与不存在 id 同响应），零写入", async () => {
+		const org = await createOrgLedger(app, ctx.prisma, "w24-usage-cross-org");
+		orgs.push(org);
+		const owner = org.owner;
+		const planId = await seedOrgWorld(org);
+		const orgB = await createSecondOrg(ctx.prisma, owner, "W24 使用跨组织 B");
+		orgs.push(orgB);
+
+		const body = { amount: "100", usedAt: todayIso() };
+		const cross = await orgPostUsage(owner, orgB.orgId, planId, body).expect(404);
+		expect(cross.body.code).toBe("PLAN_NOT_FOUND");
+		const nonexistent = await orgPostUsage(owner, orgB.orgId, "nonexistent-plan-id", body).expect(
+			404,
+		);
+		// 防枚举：跨组织计划与不存在的 id 响应体一致
+		expect(cross.body).toEqual(nonexistent.body);
+
+		// Org A 零写入；两个组织都没有这次越权请求的任何痕迹
+		expect(await ctx.prisma.usageRecord.count({ where: { planId } })).toBe(0);
+		const allocation = await ctx.prisma.planAllocation.findUniqueOrThrow({ where: { planId } });
+		expect(allocation.usedAmount.toFixed(4)).toBe("0.0000");
+		expect(
+			await ctx.prisma.auditLog.count({
+				where: {
+					organizationId: { in: [org.orgId, orgB.orgId] },
+					action: { in: ["usage.create", "permission.denied.usage.create"] },
+				},
+			}),
+		).toBe(0);
+
+		// 对照：同一用户带 Org A 头即可记录
+		await orgPostUsage(owner, org.orgId, planId, body).expect(201);
+	});
+
+	it("W24-USAGE-3 锁等期间降权（FINANCE → OPERATOR）：事务内按最新角色复验 → 403 + DENIED 审计（记录降权后的角色）+ 零写入", async () => {
+		const org = await createOrgLedger(app, ctx.prisma, "w24-usage-demote", ["FINANCE"]);
+		orgs.push(org);
+		const finance = org.members[0];
+		const planId = await seedOrgWorld(org);
+		const requestId = `req-w24-usage-demote-${Date.now()}`;
+
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			`membership:${org.orgId}`,
+			() =>
+				orgPostUsage(
+					finance,
+					org.orgId,
+					planId,
+					{ amount: "100", usedAt: todayIso() },
+					requestId,
+				),
+			async () => {
+				// 请求已通过 Guard（当时是 FINANCE）并阻塞在组织锁上：此刻把它降为 OPERATOR
+				await ctx.prisma.membership.update({
+					where: {
+						organizationId_userId: {
+							organizationId: org.orgId,
+							userId: finance.userId,
+						},
+					},
+					data: { role: "OPERATOR" },
+				});
+			},
+		);
+
+		expect(res.status).toBe(403);
+		expect(res.body.code).toBe("PERMISSION_DENIED");
+		expect(
+			await ctx.prisma.usageRecord.count({ where: { organizationId: org.orgId } }),
+		).toBe(0);
+		const allocation = await ctx.prisma.planAllocation.findUniqueOrThrow({ where: { planId } });
+		expect(allocation.usedAmount.toFixed(4)).toBe("0.0000");
+		// 审计记的是锁内重读到的最新角色（OPERATOR），不是 Guard 放行时的 FINANCE
+		const denied = await ctx.prisma.auditLog.findMany({
+			where: {
+				organizationId: org.orgId,
+				actorUserId: finance.userId,
+				action: "permission.denied.usage.create",
+				result: "DENIED",
+				requestId,
+			},
+		});
+		expect(denied).toHaveLength(1);
+		expect(denied[0].detail).toMatchObject({
+			required: "usage.create",
+			role: "OPERATOR",
+		});
+	});
+
+	it("W24-USAGE-4 锁等期间被禁用：已禁用成员 → 404 ORGANIZATION_NOT_FOUND（不泄露组织数据）+ 零写入零 SUCCESS 审计", async () => {
+		const org = await createOrgLedger(app, ctx.prisma, "w24-usage-disabled", ["FINANCE"]);
+		orgs.push(org);
+		const finance = org.members[0];
+		const planId = await seedOrgWorld(org);
+
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			`membership:${org.orgId}`,
+			() => orgPostUsage(finance, org.orgId, planId, { amount: "100", usedAt: todayIso() }),
+			async () => {
+				await ctx.prisma.membership.update({
+					where: {
+						organizationId_userId: {
+							organizationId: org.orgId,
+							userId: finance.userId,
+						},
+					},
+					data: { status: "DISABLED" },
+				});
+			},
+		);
+
+		expect(res.status).toBe(404);
+		expect(res.body.code).toBe("ORGANIZATION_NOT_FOUND");
+		expect(
+			await ctx.prisma.usageRecord.count({ where: { organizationId: org.orgId } }),
+		).toBe(0);
+		expect(
+			await ctx.prisma.auditLog.count({
+				where: { organizationId: org.orgId, action: "usage.create" },
+			}),
+		).toBe(0);
+	});
+
+	it("W24-USAGE-5 AuditService.recordInTx 故障注入：使用记录 / 分摊明细 / 批次扣减 / 账户余额 / 分配已用整单回滚", async () => {
+		const org = await createOrgLedger(app, ctx.prisma, "w24-usage-audit-fault", ["FINANCE"]);
+		orgs.push(org);
+		const finance = org.members[0];
+		// owner 与 finance 各买一批：回滚必须覆盖跨成员的批次扣减
+		const planId = await seedOrgWorld(org, { quantity: "1000" });
+		await request(app.getHttpServer())
+			.post("/api/transactions")
+			.set(orgHeaders(finance, org.orgId))
+			.send(purchaseBody("USD", "500", "2", daysAgo(1)))
+			.expect(201);
+		const before = await readOrgLedgerSnapshot(ctx.prisma, org.orgId);
+
+		vi.spyOn(app.get(AuditService), "recordInTx").mockRejectedValueOnce(
+			new Error("injected tx audit failure"),
+		);
+		// 600 = owner 的 1,000@1 批次先耗 600
+		await orgPostUsage(finance, org.orgId, planId, {
+			amount: "600",
+			usedAt: todayIso(),
+		}).expect(500);
+
+		// 账本逐行回到写前（含批次剩余量与余额），没有「账已改但审计丢」
+		expect(await readOrgLedgerSnapshot(ctx.prisma, org.orgId)).toEqual(before);
+		expect(
+			await ctx.prisma.auditLog.count({
+				where: { organizationId: org.orgId, action: "usage.create" },
+			}),
+		).toBe(0);
+
+		// 对照：故障只注入一次，同一请求随后可正常记账并写审计
+		const ok = await orgPostUsage(finance, org.orgId, planId, {
+			amount: "600",
+			usedAt: todayIso(),
+		}).expect(201);
+		expect(ok.body.data.usage.cost).toBe("600.0000");
+		expect(
+			await ctx.prisma.auditLog.count({
+				where: { organizationId: org.orgId, action: "usage.create", result: "SUCCESS" },
+			}),
+		).toBe(1);
+	});
+
+	it("W24-USAGE-6 跨成员共享 FIFO：Finance 1 买入两批 → Finance 2 记使用消耗的是 Finance 1 的批次，记录人 / 审计归属 Finance 2", async () => {
+		const org = await createOrgLedger(app, ctx.prisma, "w24-usage-shared-fifo", [
+			"FINANCE",
+			"FINANCE",
+		]);
+		orgs.push(org);
+		const [finance1, finance2] = org.members;
+		const purchaseIds: string[] = [];
+		for (const [days, unitCost] of [
+			[4, "7.8"],
+			[3, "8"],
+		] as const) {
+			const purchase = await request(app.getHttpServer())
+				.post("/api/transactions")
+				.set(orgHeaders(finance1, org.orgId))
+				.send(purchaseBody("USD", "1000", unitCost, daysAgo(days)))
+				.expect(201);
+			purchaseIds.push(purchase.body.data.id);
+		}
+		const plan = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(orgHeaders(finance2, org.orgId))
+			.send({
+				targetCurrency: "USD",
+				targetAmount: "2000",
+				expectUseDate: PLAN_EXPECT_USE_DATE,
+				prepLeadDays: 3,
+				pacePreference: "balanced",
+				startDate: PLAN_START_DATE,
+				allocatedAmount: "1600",
+			})
+			.expect(201);
+		const planId = plan.body.data.id as string;
+		const requestId = `req-w24-usage-shared-${Date.now()}`;
+
+		const res = await orgPostUsage(
+			finance2,
+			org.orgId,
+			planId,
+			{ amount: "1200", usedAt: todayIso() },
+			requestId,
+		).expect(201);
+		// Finance 2 自己没有任何买入：1,200 只能来自 Finance 1 的两批 → 1,000×7.8 + 200×8
+		const usageId = res.body.data.usage.id as string;
+		expect(res.body.data.usage).toMatchObject({
+			id: usageId,
+			cost: "9400.0000",
+			createdById: finance2.userId,
+		});
+
+		const snapshot = await readOrgLedgerSnapshot(ctx.prisma, org.orgId);
+		expect(snapshot.usages).toEqual([
+			expect.objectContaining({
+				id: usageId,
+				userId: finance2.userId,
+				createdById: finance2.userId,
+				organizationId: org.orgId,
+			}),
+		]);
+		expect(snapshot.lots.map((lot) => lot.userId)).toEqual([
+			finance1.userId,
+			finance1.userId,
+		]);
+		// 按来源批次比对剩余量（不依赖行 id 字典序）：买入一 1,000 全耗，买入二只耗 200
+		const remainingBySource = new Map(
+			snapshot.lots.map((lot) => [lot.sourceId, lot.remainingQty]),
+		);
+		expect(remainingBySource.get(purchaseIds[0])).toBe("0.0000");
+		expect(remainingBySource.get(purchaseIds[1])).toBe("800.0000");
+		expect(snapshot.allocations).toEqual([
+			{ usageId, sourceId: purchaseIds[0], quantity: "1000.0000", cost: "7800.0000" },
+			{ usageId, sourceId: purchaseIds[1], quantity: "200.0000", cost: "1600.0000" },
+		]);
+		expect(snapshot.accounts[0].balance).toBe("800.0000");
+
+		// Finance 1 读到 Finance 2 记的使用；审计带组织、记录人与 requestId
+		const list = await getUsagesAs(finance1, org.orgId, planId).expect(200);
+		expect(list.body.data.items).toEqual([
+			expect.objectContaining({ id: usageId, cost: "9400.0000", createdById: finance2.userId }),
+		]);
+		expect(
+			await ctx.prisma.auditLog.findMany({
+				where: { organizationId: org.orgId, action: "usage.create" },
+			}),
+		).toEqual([
+			expect.objectContaining({
+				actorUserId: finance2.userId,
+				actorType: "USER",
+				targetType: "usage_record",
+				targetId: usageId,
+				result: "SUCCESS",
+				requestId,
+			}),
+		]);
 	});
 });

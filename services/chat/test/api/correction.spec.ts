@@ -6,8 +6,10 @@ import { randomUUID } from "node:crypto";
  * USAGE 更正场景覆盖计划分配、资金来源、成本重放与拦截。
  */
 import type { INestApplication } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { AuditService } from "../../src/audit/audit.service";
 import {
 	bearer,
 	cleanupUser,
@@ -17,6 +19,21 @@ import {
 	type TestUser,
 } from "../helpers/test-app";
 import { ensureOnboarded } from "../helpers/onboarding-helper";
+import { closeTestApps } from "../helpers/test-http";
+import { runBehindAdvisoryLock } from "../helpers/postgres-lock-barrier";
+import {
+	cleanupOrgLedgers,
+	createOrgLedger,
+	createSecondOrg,
+	orgHeaders,
+	type OrgLedger,
+	purchaseBody,
+	readOrgLedgerSnapshot,
+} from "../helpers/organization-ledger-test-helper";
+import {
+	PLAN_EXPECT_USE_DATE,
+	PLAN_START_DATE,
+} from "../helpers/plan-test-helper";
 import { RateProvider } from "../../src/rate/rate.provider";
 import { utc8DayStart } from "../../src/transaction/transaction-calculator";
 import type { UsageDto } from "../../src/usage/dto/usage.dto";
@@ -2557,5 +2574,486 @@ describe("CorrectionController（POST /api/corrections*）", () => {
 			feeAmount: null,
 			version: 1,
 		});
+	});
+});
+
+/**
+ * ToB R1 W24：更正写接口 Actor 化（LEDGER-04 / AUTH-01）。
+ * 组织共享账本下的权限矩阵、跨组织隔离、FAILED 留痕、锁内降权、审计原子性与组织账本重放。
+ * 每个用例自建组织与成员并在 afterEach 清理（先清派生行再删用户，不留孤儿组织），
+ * 写入全部走带 X-Organization-Id 的接口；支持按用例名 `-t` 独立运行。
+ */
+describe("ToB R1 W24：Correction 写接口 Actor 化 + 权限矩阵 + 跨组织隔离 + FAILED 留痕 + 锁内降权 + 审计回滚（支持 -t 独立运行）", () => {
+	let ctx: TestContext;
+	let app: INestApplication;
+	const orgs: OrgLedger[] = [];
+
+	beforeAll(async () => {
+		ctx = await createTestApp();
+		app = ctx.app;
+	}, 30_000);
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		if (orgs.length > 0) {
+			await cleanupOrgLedgers(ctx.prisma, ...orgs.splice(0));
+		}
+	});
+
+	afterAll(async () => {
+		await closeTestApps(app);
+	});
+
+	function orgPreview(user: TestUser, orgId: string, body: Record<string, unknown>) {
+		return request(app.getHttpServer())
+			.post("/api/corrections/preview")
+			.set(orgHeaders(user, orgId))
+			.send(body);
+	}
+
+	function orgApply(
+		user: TestUser,
+		orgId: string,
+		body: Record<string, unknown>,
+		requestId?: string,
+	) {
+		return request(app.getHttpServer())
+			.post("/api/corrections")
+			.set(orgHeaders(user, orgId, requestId))
+			.send(body);
+	}
+
+	function orgPostUsage(
+		user: TestUser,
+		orgId: string,
+		planId: string,
+		body: Record<string, unknown>,
+	) {
+		return request(app.getHttpServer())
+			.post(`/api/plans/${planId}/usages`)
+			.set(orgHeaders(user, orgId))
+			.send(body);
+	}
+
+	/**
+	 * 组织世界：buyer 买入 USD + 接口建计划（目标额 = 买入量；分配额缺省为买入量的 80%，
+	 * 全额分配会因排期金额为 0 被拒绝），返回交易 id 与计划 id
+	 */
+	async function seedOrgWorld(
+		org: OrgLedger,
+		options: {
+			buyer?: TestUser;
+			quantity?: string;
+			unitCost?: string;
+			boughtAt?: Date;
+			allocatedAmount?: string;
+		} = {},
+	) {
+		const quantity = options.quantity ?? "1000";
+		const purchase = await request(app.getHttpServer())
+			.post("/api/transactions")
+			.set(orgHeaders(options.buyer ?? org.owner, org.orgId))
+			.send(
+				purchaseBody(
+					"USD",
+					quantity,
+					options.unitCost ?? "7.8",
+					options.boughtAt ?? daysAgo(3),
+				),
+			)
+			.expect(201);
+		const plan = await request(app.getHttpServer())
+			.post("/api/plans")
+			.set(orgHeaders(org.owner, org.orgId))
+			.send({
+				targetCurrency: "USD",
+				targetAmount: quantity,
+				expectUseDate: PLAN_EXPECT_USE_DATE,
+				prepLeadDays: 3,
+				pacePreference: "balanced",
+				startDate: PLAN_START_DATE,
+				allocatedAmount:
+					options.allocatedAmount ??
+					new Prisma.Decimal(quantity).mul("0.8").toFixed(4),
+			})
+			.expect(201);
+		return {
+			transactionId: purchase.body.data.id as string,
+			planId: plan.body.data.id as string,
+		};
+	}
+
+	it.each(["OPERATOR", "VIEWER"] as const)(
+		"W24-CORR-1 %s 提交更正 → 403 PERMISSION_DENIED + DENIED 审计（带 requestId）+ 账本零变化",
+		async (role) => {
+			const org = await createOrgLedger(app, ctx.prisma, `w24-corr-denied-${role.toLowerCase()}`, [
+				role,
+			]);
+			orgs.push(org);
+			const member = org.members[0];
+			const { transactionId } = await seedOrgWorld(org);
+			const requestId = `req-w24-corr-denied-${role}-${Date.now()}`;
+			const before = await readOrgLedgerSnapshot(ctx.prisma, org.orgId);
+
+			const res = await orgApply(
+				member,
+				org.orgId,
+				{
+					targetType: "TRANSACTION",
+					targetId: transactionId,
+					baseVersion: 1,
+					reason: "无权成员尝试更正",
+					changes: { feeAmount: "20" },
+				},
+				requestId,
+			).expect(403);
+			expect(res.body.code).toBe("PERMISSION_DENIED");
+
+			// 账本逐行不变（目标版本、批次、余额），没有任何更正留痕
+			expect(await readOrgLedgerSnapshot(ctx.prisma, org.orgId)).toEqual(before);
+			expect(
+				await ctx.prisma.correction.count({ where: { organizationId: org.orgId } }),
+			).toBe(0);
+			const denied = await ctx.prisma.auditLog.findMany({
+				where: {
+					organizationId: org.orgId,
+					actorUserId: member.userId,
+					action: "permission.denied.correction.apply",
+					result: "DENIED",
+					requestId,
+				},
+			});
+			expect(denied).toHaveLength(1);
+			expect(denied[0].detail).toMatchObject({
+				required: "correction.apply",
+				role,
+			});
+		},
+	);
+
+	it("W24-CORR-2 跨组织目标：多组织用户带 Org B 头对 Org A 记录 preview / apply / target / list → 一律 404 CORRECTION_TARGET_NOT_FOUND，零留痕零变化", async () => {
+		const org = await createOrgLedger(app, ctx.prisma, "w24-corr-cross-org");
+		orgs.push(org);
+		const owner = org.owner;
+		const { transactionId } = await seedOrgWorld(org);
+		const orgB = await createSecondOrg(ctx.prisma, owner, "W24 更正跨组织 B");
+		orgs.push(orgB);
+		const before = await readOrgLedgerSnapshot(ctx.prisma, org.orgId);
+
+		const body = {
+			targetType: "TRANSACTION",
+			targetId: transactionId,
+			baseVersion: 1,
+			reason: "带错组织头",
+			changes: { feeAmount: "1" },
+		};
+		const crossPreview = await orgPreview(owner, orgB.orgId, body).expect(404);
+		expect(crossPreview.body.code).toBe("CORRECTION_TARGET_NOT_FOUND");
+		// 防枚举：跨组织目标与不存在的 id 响应体一致，且不带回账本重放内容
+		const missingPreview = await orgPreview(owner, orgB.orgId, {
+			...body,
+			targetId: "nonexistent-target-id",
+		}).expect(404);
+		expect(crossPreview.body).toEqual(missingPreview.body);
+		expect(crossPreview.body.data).toBeUndefined();
+		const crossApply = await orgApply(owner, orgB.orgId, body).expect(404);
+		expect(crossApply.body.code).toBe("CORRECTION_TARGET_NOT_FOUND");
+		const crossTarget = await request(app.getHttpServer())
+			.get(`/api/corrections/target?targetType=TRANSACTION&targetId=${transactionId}`)
+			.set(orgHeaders(owner, orgB.orgId))
+			.expect(404);
+		expect(crossTarget.body.code).toBe("CORRECTION_TARGET_NOT_FOUND");
+		await request(app.getHttpServer())
+			.get(`/api/corrections?targetType=TRANSACTION&targetId=${transactionId}`)
+			.set(orgHeaders(owner, orgB.orgId))
+			.expect(404);
+
+		// 零副作用：无留痕、无审计，Org A 账本逐行不变（没有为一次 404 做收口或重建）
+		expect(await ctx.prisma.correction.count({ where: { targetId: transactionId } })).toBe(0);
+		expect(
+			await ctx.prisma.auditLog.count({
+				where: {
+					organizationId: { in: [org.orgId, orgB.orgId] },
+					action: { in: ["correction.apply", "permission.denied.correction.apply"] },
+				},
+			}),
+		).toBe(0);
+		expect(await readOrgLedgerSnapshot(ctx.prisma, org.orgId)).toEqual(before);
+
+		// 对照：同一用户带 Org A 头即可预览这笔记录
+		const ownPreview = await orgPreview(owner, org.orgId, body).expect(200);
+		expect(ownPreview.body.data.blockers).toEqual([]);
+	});
+
+	it("W24-CORR-3 复核不通过（历史时点缺口）：FAILED 留痕与 FAILED 审计均带 organizationId / actorUserId / requestId，账本零变化", async () => {
+		const org = await createOrgLedger(app, ctx.prisma, "w24-corr-failed", ["FINANCE"]);
+		orgs.push(org);
+		const finance = org.members[0];
+		const { transactionId, planId } = await seedOrgWorld(org, {
+			buyer: finance,
+			boughtAt: daysAgo(4),
+		});
+		await orgPostUsage(finance, org.orgId, planId, {
+			amount: "400",
+			usedAt: daysAgo(2).toISOString(),
+		}).expect(201);
+		const before = await readOrgLedgerSnapshot(ctx.prisma, org.orgId);
+		const requestId = `req-w24-corr-failed-${Date.now()}`;
+
+		// 把买入改到使用之后：使用发生时资金不足（V3）
+		const res = await orgApply(
+			finance,
+			org.orgId,
+			{
+				targetType: "TRANSACTION",
+				targetId: transactionId,
+				baseVersion: 1,
+				reason: "买入日期记错了，实际更晚",
+				changes: { transactedAt: daysAgo(1).toISOString() },
+			},
+			requestId,
+		).expect(409);
+		expect(res.body.code).toBe("CORRECTION_HISTORICAL_SHORTFALL");
+
+		const failed = await ctx.prisma.correction.findMany({
+			where: { targetId: transactionId },
+		});
+		expect(failed).toHaveLength(1);
+		expect(failed[0]).toMatchObject({
+			status: "FAILED",
+			organizationId: org.orgId,
+			actorUserId: finance.userId,
+			userId: finance.userId,
+		});
+		expect(failed[0].failReason).toContain("CORRECTION_HISTORICAL_SHORTFALL");
+		// 事务外独立审计：谁、在哪个组织、对哪条记录、为何被拒
+		expect(
+			await ctx.prisma.auditLog.findMany({
+				where: { organizationId: org.orgId, action: "correction.apply" },
+			}),
+		).toEqual([
+			expect.objectContaining({
+				actorUserId: finance.userId,
+				actorType: "USER",
+				targetType: "transaction",
+				targetId: transactionId,
+				result: "FAILED",
+				requestId,
+				detail: expect.objectContaining({
+					correctionId: failed[0].id,
+					// 拒绝码须原文可读（键名 failCode；若误用 code 会被审计脱敏器抹成 [REDACTED]）
+					failCode: "CORRECTION_HISTORICAL_SHORTFALL",
+				}),
+			}),
+		]);
+		// 业务写入已整体回滚：批次、分摊、余额、分配逐行不变
+		expect(await readOrgLedgerSnapshot(ctx.prisma, org.orgId)).toEqual(before);
+	});
+
+	it("W24-CORR-4 锁等期间降权（FINANCE → OPERATOR）：事务内按最新角色复验 → 403 + DENIED 审计（记录降权后的角色）+ 零写入零留痕", async () => {
+		const org = await createOrgLedger(app, ctx.prisma, "w24-corr-demote", ["FINANCE"]);
+		orgs.push(org);
+		const finance = org.members[0];
+		const { transactionId } = await seedOrgWorld(org);
+		const before = await readOrgLedgerSnapshot(ctx.prisma, org.orgId);
+		const requestId = `req-w24-corr-demote-${Date.now()}`;
+
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			`membership:${org.orgId}`,
+			() =>
+				orgApply(
+					finance,
+					org.orgId,
+					{
+						targetType: "TRANSACTION",
+						targetId: transactionId,
+						baseVersion: 1,
+						reason: "锁等期间被降权",
+						changes: { feeAmount: "20" },
+					},
+					requestId,
+				),
+			async () => {
+				// 请求已通过 Guard（当时是 FINANCE）并阻塞在组织锁上：此刻把它降为 OPERATOR
+				await ctx.prisma.membership.update({
+					where: {
+						organizationId_userId: {
+							organizationId: org.orgId,
+							userId: finance.userId,
+						},
+					},
+					data: { role: "OPERATOR" },
+				});
+			},
+		);
+
+		expect(res.status).toBe(403);
+		expect(res.body.code).toBe("PERMISSION_DENIED");
+		// 降权拦截不留 FAILED 尝试，账本逐行不变
+		expect(await readOrgLedgerSnapshot(ctx.prisma, org.orgId)).toEqual(before);
+		expect(
+			await ctx.prisma.correction.count({ where: { organizationId: org.orgId } }),
+		).toBe(0);
+		const denied = await ctx.prisma.auditLog.findMany({
+			where: {
+				organizationId: org.orgId,
+				actorUserId: finance.userId,
+				action: "permission.denied.correction.apply",
+				result: "DENIED",
+				requestId,
+			},
+		});
+		expect(denied).toHaveLength(1);
+		expect(denied[0].detail).toMatchObject({
+			required: "correction.apply",
+			role: "OPERATOR",
+		});
+	});
+
+	it("W24-CORR-5 AuditService.recordInTx 故障注入：更正全链路（目标行 / 分配 / 批次 / 分摊 / 余额 / 留痕 / 补分配日志）整单回滚", async () => {
+		const org = await createOrgLedger(app, ctx.prisma, "w24-corr-audit-fault", ["FINANCE"]);
+		orgs.push(org);
+		const finance = org.members[0];
+		const { planId } = await seedOrgWorld(org, {
+			buyer: finance,
+			quantity: "2000",
+			allocatedAmount: "1200",
+		});
+		const usage = await orgPostUsage(finance, org.orgId, planId, {
+			amount: "1200",
+			usedAt: utc8DayStart(new Date()).toISOString(),
+		}).expect(201);
+		const usageId = usage.body.data.usage.id as string;
+		// 1,200 → 1,500：超出本计划剩余分配 0 → 补分配 300（会写 PlanChangeLog）
+		const preview = await orgPreview(finance, org.orgId, {
+			targetType: "USAGE",
+			targetId: usageId,
+			baseVersion: 1,
+			reason: "使用金额少记了 300",
+			changes: { amount: "1500" },
+		}).expect(200);
+		expect(preview.body.data.blockers).toEqual([]);
+		const payload = {
+			targetType: "USAGE",
+			targetId: usageId,
+			baseVersion: 1,
+			reason: "使用金额少记了 300",
+			changes: { amount: "1500" },
+			expectedUsageImpact: preview.body.data.expectedUsageImpact,
+		};
+		const before = await readOrgLedgerSnapshot(ctx.prisma, org.orgId);
+
+		vi.spyOn(app.get(AuditService), "recordInTx").mockRejectedValueOnce(
+			new Error("injected tx audit failure"),
+		);
+		await orgApply(finance, org.orgId, payload).expect(500);
+
+		// 账、批次、分摊、分配逐行回到写前（含批次行 id——重建已回滚），且无任何留痕与审计
+		expect(await readOrgLedgerSnapshot(ctx.prisma, org.orgId)).toEqual(before);
+		expect(
+			await ctx.prisma.correction.count({ where: { targetId: usageId } }),
+		).toBe(0);
+		expect(await ctx.prisma.planChangeLog.count({ where: { planId } })).toBe(0);
+		expect(
+			await ctx.prisma.auditLog.count({
+				where: { organizationId: org.orgId, action: "correction.apply" },
+			}),
+		).toBe(0);
+
+		// 对照：故障只注入一次，同一预览随后可正常提交
+		await orgApply(finance, org.orgId, payload).expect(201);
+		expect(
+			await ctx.prisma.auditLog.count({
+				where: { organizationId: org.orgId, action: "correction.apply", result: "SUCCESS" },
+			}),
+		).toBe(1);
+	});
+
+	it("W24-CORR-6 受邀成员更正他人买入：预览与提交都按组织账本重放（不是自己的空账本），重建批次仍归买入人", async () => {
+		const org = await createOrgLedger(app, ctx.prisma, "w24-corr-member-replay", [
+			"FINANCE",
+			"FINANCE",
+		]);
+		orgs.push(org);
+		const [finance1, finance2] = org.members;
+		const { transactionId } = await seedOrgWorld(org, {
+			buyer: finance1,
+			quantity: "1000",
+		});
+		const requestId = `req-w24-corr-member-${Date.now()}`;
+		const body = {
+			targetType: "TRANSACTION",
+			targetId: transactionId,
+			baseVersion: 1,
+			reason: "手续费当时漏填",
+			changes: { feeAmount: "20" },
+		};
+
+		// Finance 2 名下没有任何买入：预览余额来自组织账本（1,000），不是自己的 0
+		const preview = await orgPreview(finance2, org.orgId, body).expect(200);
+		expect(preview.body.data.blockers).toEqual([]);
+		expect(preview.body.data.impacts.balances).toEqual([
+			{ currencyCode: "USD", before: "1000.0000", after: "1000.0000" },
+		]);
+
+		const applied = await orgApply(finance2, org.orgId, body, requestId).expect(201);
+		expect(applied.body.data).toMatchObject({
+			status: "APPLIED",
+			targetVersion: 2,
+		});
+		// 留痕与更正日志显示所属组织与实际操作者（LEDGER-04.4）；买入人 Finance 1 也看得到这条日志
+		const history = await request(app.getHttpServer())
+			.get(`/api/corrections?targetType=TRANSACTION&targetId=${transactionId}`)
+			.set(orgHeaders(finance1, org.orgId))
+			.expect(200);
+		expect(history.body.data.items).toEqual([
+			{
+				id: applied.body.data.correctionId,
+				organizationId: org.orgId,
+				actorUserId: finance2.userId,
+				targetType: "TRANSACTION",
+				targetId: transactionId,
+				status: "APPLIED",
+				reason: "手续费当时漏填",
+				failReason: null,
+				beforeSnapshot: expect.any(Object),
+				afterSnapshot: expect.any(Object),
+				createdAt: expect.any(String),
+			},
+		]);
+
+		const snapshot = await readOrgLedgerSnapshot(ctx.prisma, org.orgId);
+		expect(snapshot.accounts).toEqual([
+			expect.objectContaining({
+				userId: finance1.userId,
+				organizationId: org.orgId,
+				balance: "1000.0000",
+			}),
+		]);
+		// 批次重建：单价 (7,800 + 20) ÷ 1,000 = 7.82，仍归买入人 Finance 1
+		expect(snapshot.lots).toHaveLength(1);
+		expect(snapshot.lots[0]).toMatchObject({
+			sourceId: transactionId,
+			userId: finance1.userId,
+			organizationId: org.orgId,
+			unitCost: "7.82000000",
+		});
+		expect(
+			await ctx.prisma.transaction.findUniqueOrThrow({ where: { id: transactionId } }),
+		).toMatchObject({ createdById: finance1.userId, version: 2 });
+		expect(
+			await ctx.prisma.auditLog.findMany({
+				where: { organizationId: org.orgId, action: "correction.apply" },
+			}),
+		).toEqual([
+			expect.objectContaining({
+				actorUserId: finance2.userId,
+				targetType: "transaction",
+				targetId: transactionId,
+				result: "SUCCESS",
+				requestId,
+			}),
+		]);
 	});
 });
