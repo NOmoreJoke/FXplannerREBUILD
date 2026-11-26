@@ -17,18 +17,27 @@ type Schemas = components["schemas"];
 
 // W6-08：验证计划回跳、单笔历史隔离以及真实成功与失败日志的前后值展示。
 test("使用更正确认和取消返回所属计划，单笔历史展示成功与失败", async ({ page }) => {
-	const { accessToken, organizationId } = await seedRegisterAndLogin("usage-history");
-	await seedOnboarding(accessToken);
-	await seedTransaction(accessToken, "CAD", "7800");
-	const planId = await seedPlanWithAllocation(accessToken, "CAD", "3000");
-	const usage = await seedUsage(accessToken, planId, "800");
-	await seedUsage(accessToken, planId, "200");
+	const { accessToken, defaultOrganizationId } = await seedRegisterAndLogin(
+		"usage-history",
+	);
+	const orgHeaders = { "X-Organization-Id": defaultOrganizationId };
+	await seedOnboarding(accessToken, "CNY", defaultOrganizationId);
+	await seedTransaction(accessToken, "CAD", "7800", defaultOrganizationId);
+	const planId = await seedPlanWithAllocation(
+		accessToken,
+		"CAD",
+		"3000",
+		undefined,
+		defaultOrganizationId,
+	);
+	const usage = await seedUsage(accessToken, planId, "800", defaultOrganizationId);
+	await seedUsage(accessToken, planId, "200", defaultOrganizationId);
 	await injectLoginCookie(page.context(), accessToken, BASE_URL);
 
 	const query = new URLSearchParams({ targetType: "USAGE", targetId: usage.id });
 	const { target } = await api<{ target: { version: number; usedAt: string } }>(
 		`/api/corrections/target?${query}`,
-		{ method: "GET", token: accessToken },
+		{ method: "GET", token: accessToken, headers: orgHeaders },
 	);
 	const date = target.usedAt.slice(0, 10);
 	const appliedReason = "收据核对后修正金额";
@@ -64,6 +73,7 @@ test("使用更正确认和取消返回所属计划，单笔历史展示成功�
 	const blocked = await api<Schemas["CorrectionPreviewDto"]>("/api/corrections/preview", {
 		method: "POST",
 		token: accessToken,
+		headers: orgHeaders,
 		body: rejectedChange,
 	});
 	expect(blocked.blockers).toEqual(
@@ -75,8 +85,7 @@ test("使用更正确认和取消返回所属计划，单笔历史展示成功�
 		headers: {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${accessToken}`,
-			// W30（MIG-D）：更正提交是组织域端点——缺组织头一律 400 ORGANIZATION_REQUIRED
-			"X-Organization-Id": organizationId,
+			...orgHeaders,
 		},
 		body: JSON.stringify({
 			...rejectedChange,

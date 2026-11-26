@@ -11,7 +11,7 @@
  * 插一条测试汇率缓存行，重试后立即按 id 清理）——Prisma 连接与库校验都在该 helper 内。
  */
 
-import { api } from "./api-seeder";
+import { api, resolveOrganizationId } from "./api-seeder";
 import {
 	injectFreshRateCacheRows,
 	removeRateCacheRows,
@@ -23,7 +23,12 @@ import {
  */
 async function apiWithRetry<T>(
 	path: string,
-	init: { method: string; token?: string; body?: unknown },
+	init: {
+		method: string;
+		token?: string;
+		body?: unknown;
+		headers?: Record<string, string>;
+	},
 	attempts = 3,
 ): Promise<T> {
 	let lastError: unknown;
@@ -56,10 +61,13 @@ export async function seedPlan(
 		targetAmount: string;
 		allocatedAmount: string;
 	},
+	organizationId?: string,
 ): Promise<string> {
+	const orgId = await resolveOrganizationId(token, organizationId);
 	const data = await apiWithRetry<{ id: string }>("/api/plans", {
 		method: "POST",
 		token,
+		headers: { "X-Organization-Id": orgId },
 		body: {
 			targetCurrency: options.targetCurrency,
 			targetAmount: options.targetAmount,
@@ -79,10 +87,13 @@ export async function seedPurchase(
 	currencyCode: string,
 	quantity: string,
 	fee?: string | null,
+	organizationId?: string,
 ): Promise<string> {
+	const orgId = await resolveOrganizationId(token, organizationId);
 	const data = await apiWithRetry<{ id: string }>("/api/transactions", {
 		method: "POST",
 		token,
+		headers: { "X-Organization-Id": orgId },
 		body: {
 			currencyCode,
 			principalAmount: quantity,
@@ -100,12 +111,15 @@ export async function seedUsage(
 	token: string,
 	planId: string,
 	amount: string,
+	organizationId?: string,
 ): Promise<string> {
+	const orgId = await resolveOrganizationId(token, organizationId);
 	const data = await apiWithRetry<{ usage: { id: string } }>(
 		`/api/plans/${planId}/usages`,
 		{
 			method: "POST",
 			token,
+			headers: { "X-Organization-Id": orgId },
 			body: { amount, usedAt: nowIso() },
 		},
 	);
@@ -116,10 +130,13 @@ export async function seedUsage(
 export async function seedCompletePlan(
 	token: string,
 	planId: string,
+	organizationId?: string,
 ): Promise<void> {
+	const orgId = await resolveOrganizationId(token, organizationId);
 	await apiWithRetry(`/api/plans/${planId}/complete`, {
 		method: "POST",
 		token,
+		headers: { "X-Organization-Id": orgId },
 	});
 }
 
@@ -128,14 +145,18 @@ export async function seedAdjustTarget(
 	token: string,
 	planId: string,
 	newTargetAmount: string,
+	organizationId?: string,
 ): Promise<void> {
+	const orgId = await resolveOrganizationId(token, organizationId);
+	const headers = { "X-Organization-Id": orgId };
 	const detail = await apiWithRetry<{ updatedAt: string }>(
 		`/api/plans/${planId}`,
-		{ method: "GET", token },
+		{ method: "GET", token, headers },
 	);
 	await apiWithRetry(`/api/plans/${planId}`, {
 		method: "PATCH",
 		token,
+		headers,
 		body: {
 			newTargetAmount,
 			expectedUpdatedAt: detail.updatedAt,
@@ -147,18 +168,27 @@ export async function seedAdjustTarget(
 export async function seedCancelPlan(
 	token: string,
 	planId: string,
+	organizationId?: string,
 ): Promise<void> {
-	await apiWithRetry(`/api/plans/${planId}/cancel`, { method: "POST", token });
+	const orgId = await resolveOrganizationId(token, organizationId);
+	await apiWithRetry(`/api/plans/${planId}/cancel`, {
+		method: "POST",
+		token,
+		headers: { "X-Organization-Id": orgId },
+	});
 }
 
 /** POST /api/onboarding/initial-holdings（带网络层重试；业务错误原样抛出） */
-function postInitialHoldings(
+async function postInitialHoldings(
 	token: string,
 	holdings: { currencyCode: string; amount: string }[],
+	organizationId?: string,
 ): Promise<unknown> {
+	const orgId = await resolveOrganizationId(token, organizationId);
 	return apiWithRetry("/api/onboarding/initial-holdings", {
 		method: "POST",
 		token,
+		headers: { "X-Organization-Id": orgId },
 		body: { holdings },
 	});
 }
@@ -189,10 +219,12 @@ export async function seedInitialHoldings(
 	token: string,
 	holdings: { currencyCode: string; amount: string }[],
 	baseCurrency = "CNY",
+	organizationId?: string,
 ): Promise<void> {
+	const orgId = await resolveOrganizationId(token, organizationId);
 	let rateError: unknown;
 	try {
-		await postInitialHoldings(token, holdings);
+		await postInitialHoldings(token, holdings, orgId);
 		return;
 	} catch (error) {
 		if (!isRateUnavailable(error)) throw error;
@@ -213,7 +245,7 @@ export async function seedInitialHoldings(
 		);
 	}
 	try {
-		await postInitialHoldings(token, holdings);
+		await postInitialHoldings(token, holdings, orgId);
 	} finally {
 		await removeRateCacheRows(injected.map((row) => row.id));
 	}
