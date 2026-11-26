@@ -8,9 +8,7 @@ import {
 import { getCurrency } from "@fxplanner-new/money";
 import { Prisma } from "@prisma/client";
 import {
-	adoptLegacyOrgLedgerRows,
 	lockOrgPlanRow,
-	mergeLegacyOrgAccountIfExists,
 	lockOrgPlanAccount,
 } from "../prisma/ledger-write-lock";
 import { PrismaService } from "../prisma/prisma.service";
@@ -26,16 +24,12 @@ import type {
 } from "../authorization/authorization.types";
 import {
 	assertParentChildSameOrg,
-	compatReadPredicate,
-	compatReadWhere,
+	orgWhere,
 	type ReadScope,
 } from "../authorization/organization-scope";
 import { can } from "../authorization/permission-policy";
 import { lockOrganizationForActor } from "../organization/default-organization";
-import {
-	materializeLegacyOrganizationSettings,
-	resolveOrganizationPreferences,
-} from "../organization/organization-preferences";
+import { resolveOrganizationPreferences } from "../organization/organization-preferences";
 import {
 	checkCompleteReady,
 	computeDerived,
@@ -183,7 +177,7 @@ export class UsageService {
 	 * 可被成员 B 的使用记录消耗；金额全程 Decimal，批次与账户只按组织维度取用。
 	 * 交互式事务——
 	 * ⓪ lockOrganizationForActor 重读最新角色并复验 usage.create（锁等降权 → 403 + DENIED 审计）
-	 * ① resolveOrganizationPreferences 解析组织建账态（409）与记账起点；OWNER_LEGACY 先固化
+	 * ① resolveOrganizationPreferences 解析组织建账态（409）与记账起点
 	 * ② lockOrgPlanAccount 锁组织账本账户 → FOR UPDATE 锁目标 Plan 行（跨组织 / 不存在 → 404）
 	 * ③ $executeRaw 条件扣分配（WHERE used + amt <= amount，列间比较单语句原子）
 	 * ④ 组织账户条件扣余额（WHERE balance >= amt）
@@ -218,12 +212,6 @@ export class UsageService {
 				if (!preferences) {
 					throw new OnboardingNotCompletedException(
 						"尚未完成首次设置，请先前往 /onboarding 完成建账后再记录使用",
-					);
-				}
-				if (preferences.source === "OWNER_LEGACY") {
-					await materializeLegacyOrganizationSettings(
-						tx,
-						actor.organizationId,
 					);
 				}
 
@@ -263,8 +251,8 @@ export class UsageService {
 				}
 
 				// ④ 条件扣余额（列对常量，原生 updateMany 表达；恒等式下不应失败，防御兜底）。
-				// 组织账户唯一（loadPlanContext 已把默认组织创建者的 legacy 账户并入），
-				// 扣减只按组织维度命中——成员 B 的使用扣的是组织余额，不是自己的行。
+				// 组织内同币种账户唯一，扣减只按组织维度命中——成员 B 的使用扣的是组织余额，
+				// 不是某个成员的私有行。
 				const balanceUpdated = await tx.account.updateMany({
 					where: {
 						organizationId: actor.organizationId,
@@ -289,7 +277,6 @@ export class UsageService {
 				// ⑤ 落使用记录（version = 1，M8 更正预留；createdById = 记录人，仅审计用）
 				const usage = await tx.usageRecord.create({
 					data: {
-						userId: actor.userId,
 						organizationId: actor.organizationId,
 						createdById: actor.userId,
 						planId,
@@ -302,9 +289,8 @@ export class UsageService {
 				});
 
 				// ⑥ 批次重建会刷新批次时间与 ID，FIFO 沿用来源记录的首录键。
-				// 跨成员共享 FIFO 池：组织内全部活跃批次 + 默认组织创建者尚未收口的存量批次
-				// （compat 口径）；严禁按 userId 过滤批次——否则成员 B 记使用时看不到成员 A 的买入。
-				const scope = compatReadPredicate(actor);
+				// 跨成员共享 FIFO 池：组织内全部活跃批次构成同一个池；
+				// 严禁按 userId 过滤批次——否则成员 B 记使用时看不到成员 A 的买入。
 				const lots = await tx.$queryRaw<FifoLotInput[]>`
 					SELECT lot.id, lot.source_id AS "sourceId", lot.source_type AS "sourceType",
 						lot.remaining_qty AS "remainingQty", lot.unit_cost AS "unitCost",
@@ -316,8 +302,7 @@ export class UsageService {
 					LEFT JOIN initial_holdings AS holding ON lot.source_type = 'INITIAL'
 						AND holding.id = lot.source_id
 					WHERE lot.currency_code = ${context.currencyCode}
-						AND (lot.organization_id = ${scope.organizationId}
-							OR (${scope.includeLegacy} AND lot.organization_id IS NULL AND lot.user_id = ${scope.userId}))
+						AND lot.organization_id = ${actor.organizationId}
 						AND lot.remaining_qty > 0
 				`;
 				let totalCost: Prisma.Decimal;
@@ -356,7 +341,7 @@ export class UsageService {
 					})),
 				});
 				for (const slice of slices) {
-					// @org-scope-exempt: post-lock 主键更新（cost_lots 已在同事务 lockOrgPlanAccount 后按 organizationId/compat 过滤取出）
+					// @org-scope-exempt: post-lock 主键更新（cost_lots 已在同事务 lockOrgPlanAccount 后按 organizationId 过滤取出）
 					await tx.costLot.update({
 						where: { id: slice.lotId },
 						data: { remainingQty: { decrement: slice.quantity } },
@@ -365,7 +350,7 @@ export class UsageService {
 
 				// 资金面快照（事务内已扣减的最新值，前端一次往返刷新进度区）
 				const [freshPlan, freshAllocation] = await Promise.all([
-					// @org-scope-exempt: post-lock 主键重读（loadPlanContext 已按 lockOrgPlanRow + compatReadWhere 锁定并校验计划归属）
+					// @org-scope-exempt: post-lock 主键重读（loadPlanContext 已按 lockOrgPlanRow + orgWhere 锁定并校验计划归属）
 					tx.plan.findUnique({ where: { id: planId } }),
 					tx.planAllocation.findUnique({ where: { planId } }),
 				]);
@@ -428,16 +413,14 @@ export class UsageService {
 	 * 组织共享账本：同组织任一成员记录的使用都对其他成员可见（createdById 仅标识记录人）。
 	 */
 	async list(scope: ReadScope, planId: string): Promise<UsageListRespDto> {
-		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const plan = await this.prisma.plan.findFirst({
-			where: { id: planId, ...compatReadWhere(scope) },
+			where: { id: planId, ...orgWhere(scope) },
 		});
 		if (!plan) {
 			throw new UsagePlanNotFoundException();
 		}
-		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const records = await this.prisma.usageRecord.findMany({
-			where: { planId, ...compatReadWhere(scope) },
+			where: { planId, ...orgWhere(scope) },
 			orderBy: [{ usedAt: "desc" }, { createdAt: "desc" }],
 			take: USAGE_LIST_LIMIT,
 		});
@@ -467,9 +450,9 @@ export class UsageService {
 	/**
 	 * 事务内装载计划上下文（§3.1 loadPlanContext / W24 组织化）：
 	 * 权限复验与未建账 409 由调用方先行（BE-03：409 优先于计划 404——未建账组织必然
-	 * 无计划，409 引导去 /onboarding 而非泄露 404）→ 锁组织账本账户（含默认组织创建者
-	 * legacy 行）→ FOR UPDATE 锁目标 Plan 行 → 归属 404 防枚举（compatReadWhere(actor)：
-	 * 跨组织计划一律不可见）→ 状态闸门（仅 ACTIVE）→ 币种精度。
+	 * 无计划，409 引导去 /onboarding 而非泄露 404）→ 锁组织账本账户 → FOR UPDATE 锁目标
+	 * Plan 行 → 归属 404 防枚举（orgWhere(actor)：跨组织计划一律不可见）→ 状态闸门
+	 * （仅 ACTIVE）→ 币种精度。
 	 */
 	private async loadPlanContext(
 		tx: Prisma.TransactionClient,
@@ -483,9 +466,8 @@ export class UsageService {
 		if (!(await lockOrgPlanRow(tx, actor, planId))) {
 			throw new UsagePlanNotFoundException();
 		}
-		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const plan = await tx.plan.findFirst({
-			where: { id: planId, ...compatReadWhere(actor) },
+			where: { id: planId, ...orgWhere(actor) },
 			select: {
 				id: true,
 				organizationId: true,
@@ -496,23 +478,7 @@ export class UsageService {
 		if (!plan) {
 			throw new UsagePlanNotFoundException();
 		}
-		if (plan.organizationId !== null) {
-			assertParentChildSameOrg(plan.organizationId, actor.organizationId);
-		}
-		// 锁内 compat 收口（W23 plan.service 先例 + W24）：默认组织创建者在该币种遗留的
-		// organizationId: null 账本行（批次 / 持仓 / 交易 / 使用记录）无条件并入组织，再把其
-		// legacy 账户并入组织账户。必须在取 FIFO 池之前——任何成员记使用都从同一个完整的
-		// 组织账本取批次，否则成员看不到创建者未收口的存量批次，FIFO 顺序与创建者不一致
-		await adoptLegacyOrgLedgerRows(
-			tx,
-			actor.organizationId,
-			plan.targetCurrency,
-		);
-		await mergeLegacyOrgAccountIfExists(
-			tx,
-			actor.organizationId,
-			plan.targetCurrency,
-		);
+		assertParentChildSameOrg(plan.organizationId, actor.organizationId);
 		if (plan.status !== "ACTIVE") {
 			throw new UsagePlanInvalidTransitionException(
 				"仅进行中的计划可记录使用",

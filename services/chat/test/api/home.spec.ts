@@ -4,10 +4,10 @@ import { ThrottlerStorage } from "@nestjs/throttler";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 import {
-	bearer,
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -82,7 +82,7 @@ describe("HomeController（e2e）", () => {
 	it("#2 新注册用户（无设置/账户/计划）应该三布尔全 false、列表全空", async () => {
 		const res = await request(app.getHttpServer())
 			.get("/api/home/state")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		expect(res.body.success).toBe(true);
@@ -104,7 +104,7 @@ describe("HomeController（e2e）", () => {
 		try {
 			const res = await request(app.getHttpServer())
 				.get("/api/home/state")
-				.set(bearer(user.accessToken))
+				.set(orgBearer(user))
 				.expect(200);
 			expect(res.body.data.latestRateObservedAt).toBeNull();
 		} finally {
@@ -118,15 +118,20 @@ describe("HomeController（e2e）", () => {
 		await ctx.prisma.userSettings.create({
 			data: {
 				userId: user.userId,
-				baseCurrency: "CNY",
 				locale: "zh-CN",
 				region: "CN",
+			},
+		});
+		await ctx.prisma.organizationSettings.create({
+			data: {
+				organizationId: user.defaultOrganizationId,
+				baseCurrency: "CNY",
 			},
 		});
 
 		const res = await request(app.getHttpServer())
 			.get("/api/home/state")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		expect(res.body.data).toMatchObject({
@@ -141,7 +146,8 @@ describe("HomeController（e2e）", () => {
 	it("#4 有 1 个账户、无计划：hasAccounts=true，balance 为 4 位小数字符串", async () => {
 		await ctx.prisma.account.create({
 			data: {
-				userId: user.userId,
+				organizationId: user.defaultOrganizationId,
+				createdById: user.userId,
 				currencyCode: "USD",
 				balance: "1500.0000",
 			},
@@ -149,7 +155,7 @@ describe("HomeController（e2e）", () => {
 
 		const res = await request(app.getHttpServer())
 			.get("/api/home/state")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		expect(res.body.data.hasAccounts).toBe(true);
@@ -162,7 +168,8 @@ describe("HomeController（e2e）", () => {
 	it("#5 有 1 个计划（有分配）：hasPlans=true，remainingAmount = amount − usedAmount", async () => {
 		const plan = await ctx.prisma.plan.create({
 			data: {
-				userId: user.userId,
+				organizationId: user.defaultOrganizationId,
+				createdById: user.userId,
 				targetCurrency: "USD",
 				targetAmount: "10000.0000",
 				expectUseDate: EXPECT_USE_DATE,
@@ -180,7 +187,7 @@ describe("HomeController（e2e）", () => {
 
 		const res = await request(app.getHttpServer())
 			.get("/api/home/state")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		expect(res.body.data.hasPlans).toBe(true);
@@ -201,7 +208,8 @@ describe("HomeController（e2e）", () => {
 	it("#6 有 1 个计划（无分配记录）：allocatedAmount / remainingAmount 均为 0.0000", async () => {
 		const plan = await ctx.prisma.plan.create({
 			data: {
-				userId: user.userId,
+				organizationId: user.defaultOrganizationId,
+				createdById: user.userId,
 				targetCurrency: "JPY",
 				targetAmount: "120000.0000",
 				expectUseDate: EXPECT_USE_DATE,
@@ -211,7 +219,7 @@ describe("HomeController（e2e）", () => {
 
 		const res = await request(app.getHttpServer())
 			.get("/api/home/state")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		// createdAt 降序：后创建的 JPY 计划在前
@@ -229,7 +237,7 @@ describe("HomeController（e2e）", () => {
 	it("#7 数据隔离：用户 B 全空，用户 A 的数据不泄露", async () => {
 		const resB = await request(app.getHttpServer())
 			.get("/api/home/state")
-			.set(bearer(other.accessToken))
+			.set(orgBearer(other))
 			.expect(200);
 
 		expect(resB.body.data).toMatchObject({
@@ -243,7 +251,7 @@ describe("HomeController（e2e）", () => {
 		// 同一时刻 A 的状态不受影响
 		const resA = await request(app.getHttpServer())
 			.get("/api/home/state")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		expect(resA.body.data.hasAccounts).toBe(true);
 		expect(resA.body.data.hasPlans).toBe(true);
@@ -274,7 +282,7 @@ describe("HomeController（e2e）", () => {
 
 		const res = await request(app.getHttpServer())
 			.get("/api/home/state")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		expect(res.body.data.latestRateObservedAt).toBe("2030-01-01T00:00:00.000Z");
@@ -283,20 +291,24 @@ describe("HomeController（e2e）", () => {
 	it("#10 重复调用（幂等）：两次结果一致，无副作用", async () => {
 		const first = await request(app.getHttpServer())
 			.get("/api/home/state")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		const second = await request(app.getHttpServer())
 			.get("/api/home/state")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		expect(second.body.data).toEqual(first.body.data);
 		// 幂等的落库证据：测试造的数据量不变（无新增账户/计划/分配/汇率行）
 		expect(
-			await ctx.prisma.account.count({ where: { userId: user.userId } }),
+			await ctx.prisma.account.count({
+				where: { organizationId: user.defaultOrganizationId },
+			}),
 		).toBe(1);
 		expect(
-			await ctx.prisma.plan.count({ where: { userId: user.userId } }),
+			await ctx.prisma.plan.count({
+				where: { organizationId: user.defaultOrganizationId },
+			}),
 		).toBe(2);
 		expect(
 			await ctx.prisma.planAllocation.count({
@@ -306,13 +318,13 @@ describe("HomeController（e2e）", () => {
 	});
 
 	// ── 以下 portfolio（契约 §2）：CostLot 聚合 + 本位币 ──
-	// 造数说明：CostLot 随用户级联删除（schema onDelete: Cascade），cleanupUser 已覆盖，
-	// 无需额外清理；本组用例依赖前序场景已为 user 建 settings（baseCurrency=CNY）
+	// 造数说明：CostLot 随组织清理，cleanupUser 已覆盖；
+	// 本组用例依赖前序场景已为 user 默认组织建 OrganizationSettings（baseCurrency=CNY）
 
 	it("#11 portfolio 无任何 CostLot：totalRemainingCost=0.0000、byCurrency=[]，baseCurrency 取自设置", async () => {
 		const res = await request(app.getHttpServer())
 			.get("/api/home/portfolio")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		expect(res.body.success).toBe(true);
@@ -329,7 +341,7 @@ describe("HomeController（e2e）", () => {
 		// USD 两条（lot1 部分消耗：quantity 1000 → remainingQty 600）
 		await ctx.prisma.costLot.create({
 			data: {
-				userId: user.userId,
+				organizationId: user.defaultOrganizationId,
 				currencyCode: "USD",
 				sourceType: "INITIAL",
 				sourceId: "home-test-usd-1",
@@ -342,7 +354,7 @@ describe("HomeController（e2e）", () => {
 		});
 		await ctx.prisma.costLot.create({
 			data: {
-				userId: user.userId,
+				organizationId: user.defaultOrganizationId,
 				currencyCode: "USD",
 				sourceType: "PURCHASE",
 				sourceId: "home-test-usd-2",
@@ -356,7 +368,7 @@ describe("HomeController（e2e）", () => {
 		// JPY 一条；CAD 一条已耗尽（remainingQty=0，应排除）
 		await ctx.prisma.costLot.create({
 			data: {
-				userId: user.userId,
+				organizationId: user.defaultOrganizationId,
 				currencyCode: "JPY",
 				sourceType: "INITIAL",
 				sourceId: "home-test-jpy-1",
@@ -369,7 +381,7 @@ describe("HomeController（e2e）", () => {
 		});
 		await ctx.prisma.costLot.create({
 			data: {
-				userId: user.userId,
+				organizationId: user.defaultOrganizationId,
 				currencyCode: "CAD",
 				sourceType: "INITIAL",
 				sourceId: "home-test-cad-1",
@@ -383,7 +395,7 @@ describe("HomeController（e2e）", () => {
 
 		const res = await request(app.getHttpServer())
 			.get("/api/home/portfolio")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		// USD：ΣremainingQty=1100、Σ成本=4350+3750=8100、均值=8100/1100=7.3636363636…（toFixed(10)）
@@ -408,10 +420,10 @@ describe("HomeController（e2e）", () => {
 		});
 	});
 
-	it("#13 portfolio 无 UserSettings：baseCurrency=null，聚合仍正常返回", async () => {
+	it("#13 portfolio 无 OrganizationSettings：baseCurrency=null，聚合仍正常返回", async () => {
 		const res = await request(app.getHttpServer())
 			.get("/api/home/portfolio")
-			.set(bearer(other.accessToken))
+			.set(orgBearer(other))
 			.expect(200);
 
 		expect(res.body.data.baseCurrency).toBeNull();

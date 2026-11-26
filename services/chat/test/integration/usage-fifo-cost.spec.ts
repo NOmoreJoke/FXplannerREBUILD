@@ -6,10 +6,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { PrismaService } from "../../src/prisma/prisma.service";
 import { utc8DayStart } from "../../src/transaction/transaction-calculator";
 import {
-	bearer,
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -58,7 +58,7 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 	function postTx(user: TestUser, body: Record<string, unknown>) {
 		return request(app.getHttpServer())
 			.post("/api/transactions")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(body);
 	}
 
@@ -69,7 +69,7 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 	) {
 		return request(app.getHttpServer())
 			.post(`/api/plans/${planId}/usages`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(body);
 	}
 
@@ -139,7 +139,7 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 
 		// 批次递减：两 lot remainingQty = 0 / 800（记录使用不删除、不改动原买入记录）
 		const lots = await prisma.costLot.findMany({
-			where: { userId: user.userId, currencyCode: "USD" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "USD" },
 			orderBy: { unitCost: "asc" },
 		});
 		expect(lots.map((l) => l.remainingQty.toFixed(4))).toEqual([
@@ -153,7 +153,7 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 
 		// 三方一致：账户余额 800、PlanAllocation.usedAmount = 1,200
 		const account = await prisma.account.findFirst({
-			where: { userId: user.userId, currencyCode: "USD" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "USD" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("800.0000");
 		const allocation = await prisma.planAllocation.findUnique({
@@ -183,7 +183,7 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 		await postTx(user, buyA("CAD", "1000", "1", sameInstant)).expect(201);
 		const purchaseLot = await prisma.costLot.findFirstOrThrow({
 			where: {
-				userId: user.userId,
+				organizationId: user.defaultOrganizationId,
 				currencyCode: "CAD",
 				sourceType: "PURCHASE",
 			},
@@ -191,7 +191,7 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 		// 直插 INITIAL 批次：acquiredAt 与买入批次完全相同、createdAt 更早（首次录入语义）
 		const initialLot = await prisma.costLot.create({
 			data: {
-				userId: user.userId,
+				organizationId: user.defaultOrganizationId,
 				currencyCode: "CAD",
 				sourceType: "INITIAL",
 				sourceId: `manual-initial-${Date.now()}`,
@@ -205,7 +205,7 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 		});
 		// 恒等式修复：直插 INITIAL 批次不入账户，同步余额至 ΣremainingQty = 2,000
 		await prisma.account.updateMany({
-			where: { userId: user.userId, currencyCode: "CAD" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "CAD" },
 			data: { balance: "2000" },
 		});
 
@@ -253,10 +253,10 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 
 		// 恒等式守恒（§8.3 场景 4）：余额 = Σ各计划剩余分配 + 未分配；Σ批次剩余 = 余额
 		const account = await prisma.account.findFirst({
-			where: { userId: user.userId, currencyCode: "USD" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "USD" },
 		});
 		const plans = await prisma.plan.findMany({
-			where: { userId: user.userId, targetCurrency: "USD" },
+			where: { organizationId: user.defaultOrganizationId, targetCurrency: "USD" },
 			select: { id: true },
 		});
 		const allocations = await prisma.planAllocation.findMany({
@@ -268,7 +268,7 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 		);
 		expect(account?.balance.minus(remainingSum).toFixed(4)).toBe("0.0000");
 		const lotRemaining = await prisma.costLot.aggregate({
-			where: { userId: user.userId, currencyCode: "USD" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "USD" },
 			_sum: { remainingQty: true },
 		});
 		expect(lotRemaining._sum.remainingQty?.toFixed(4)).toBe(
@@ -278,7 +278,7 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 		// 第三笔后：fundStatus = USED_UP、canComplete = true（资金快照随最后一笔返回）
 		const detail = await request(app.getHttpServer())
 			.get(`/api/plans/${planId}`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		expect(detail.body.data.fundStatus).toBe("USED_UP");
 		expect(detail.body.data.canComplete).toBe(true);
@@ -286,7 +286,7 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 		// 完成永远由用户点击触发：确认后计划转 COMPLETED
 		await request(app.getHttpServer())
 			.post(`/api/plans/${planId}/complete`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		const completed = await prisma.plan.findUnique({ where: { id: planId } });
 		expect(completed?.status).toBe("COMPLETED");
@@ -305,7 +305,7 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 		});
 		// 人工制造数据异常：批次剩余 5,000 < 分配/余额 10,000（破坏恒等式）
 		await prisma.costLot.updateMany({
-			where: { userId: user.userId, currencyCode: "USD" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "USD" },
 			data: { remainingQty: "5000" },
 		});
 
@@ -325,7 +325,7 @@ describe("使用扣减 FIFO 成本（集成）", () => {
 		expect(await prisma.usageRecord.count()).toBe(beforeUsageCount);
 		expect(await prisma.usageLotAllocation.count()).toBe(beforeAllocCount);
 		const account = await prisma.account.findFirst({
-			where: { userId: user.userId, currencyCode: "USD" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "USD" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("10000.0000");
 		const allocation = await prisma.planAllocation.findUnique({
@@ -541,8 +541,13 @@ describe("W24 组织共享 FIFO 池的多成员并发一致性（集成）", () 
 			[purchaseIds[0]]: "200.0000",
 			[purchaseIds[1]]: "1000.0000",
 		});
-		// 重建后的批次仍归买入人
-		expect(new Set(snapshot.lots.map((lot) => lot.userId))).toEqual(
+		// 重建后的批次仍归买入人（W30 MIG-E：批次直连组织，创建人落在
+		// Transaction.createdById——批次不再持有 user_id 列）
+		const rebuiltLotOwners = await prisma.transaction.findMany({
+			where: { id: { in: snapshot.lots.map((lot) => lot.sourceId) } },
+			select: { createdById: true },
+		});
+		expect(new Set(rebuiltLotOwners.map((row) => row.createdById))).toEqual(
 			new Set([finance1.userId]),
 		);
 		expect(snapshot.planAllocations).toEqual([

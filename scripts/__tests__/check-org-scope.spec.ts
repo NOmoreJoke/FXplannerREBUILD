@@ -106,19 +106,20 @@ describe("check-org-scope static guard", () => {
 		);
 	});
 
-	test("negative #2: blocks userId-only queries and unannotated compatReadWhere on shared ledger models (RULE_B_USER_ONLY_OR_COMPAT)", () => {
+	test("negative #2: blocks userId-only queries and the removed compat fallback (organizationId: null) on shared ledger models (RULE_B_USER_ONLY_OR_COMPAT)", () => {
 		withTempWorkspace(
 			{
 				"services/chat/src/plan/bad-user-only.service.ts": `
 					export async function bad(prisma: any, userId: string, scope: any) {
 						await prisma.plan.findMany({ where: { userId } });
-						await prisma.account.findFirst({ where: { currencyCode: "USD", ...compatReadWhere(scope) } });
+						await prisma.account.findFirst({ where: { organizationId: null, userId } });
+						await prisma.costLot.findMany({ where: { organizationId: null } });
 					}
 				`,
 			},
 			(rootDir) => {
 				const result = scanOrgScope({ rootDir });
-				expect(result.violations).toHaveLength(2);
+				expect(result.violations).toHaveLength(3);
 				expect(
 					result.violations.every(
 						(v) => v.rule === "RULE_B_USER_ONLY_OR_COMPAT",
@@ -133,6 +134,23 @@ describe("check-org-scope static guard", () => {
 				expect(cliRes.stderr).toContain("RULE_B_USER_ONLY_OR_COMPAT");
 			},
 		);
+	});
+
+	test("positive #2b (W30): pure org-scope helpers (organizationLedgerScope / conversationOrgWhere) are NOT treated as transitional compat", () => {
+		const result = scanOrgScope({
+			virtualFiles: [
+				{
+					filePath: "services/chat/src/data-request/ok-pure-org-scope.service.ts",
+					content: `
+						export async function ok(prisma: any, tx: any, organizationId: string, userId: string, scope: any) {
+							await prisma.plan.findMany({ where: { ...organizationLedgerScope(organizationId) } });
+							await prisma.aiConversation.findMany({ where: { AND: [{ userId }, conversationOrgWhere(scope)] } });
+						}
+					`,
+				},
+			],
+		});
+		expect(result.violations).toEqual([]);
 	});
 
 	test("negative #3: blocks aiConversation query with userId but missing organizationId", () => {
@@ -221,7 +239,7 @@ describe("check-org-scope static guard", () => {
 					export async function okExempt(prisma: any, id: string, userId: string) {
 						// @org-scope-exempt: verified org ownership via lock
 						await prisma.plan.findUnique({ where: { id } });
-						// @org-scope-exempt: W30 MIG-D/F 待清理
+						// @org-scope-exempt: 已由组织账本行锁校验归属，仅按主键回读
 						await prisma.plan.findMany({ where: { userId } });
 						// @org-scope-exempt: 历史汇总脚本全库只读核对
 						await prisma.$queryRaw\`SELECT count(*) FROM plans\`;
@@ -396,6 +414,53 @@ describe("check-org-scope static guard", () => {
 				);
 				expect(emptyReasons).toHaveLength(3);
 				expect(ruleViolations).toHaveLength(6);
+
+				const cliRes = spawnSync("bun", ["run", SCRIPT_PATH, "--cwd", rootDir], {
+					cwd: REPO_ROOT,
+					encoding: "utf8",
+				});
+				expect(cliRes.status).toBe(1);
+			},
+		);
+	});
+
+	test("negative #12 (W30): blocks mutated let, uninitialized variable, or cast/shadowed OrganizationLedgerScope bypasses", () => {
+		withTempWorkspace(
+			{
+				"services/chat/src/data-request/bad-type-bypass.service.ts": `
+					type OrganizationLedgerScope = { userId: string };
+					export async function badTypeBypass(
+						prisma: any,
+						id: string,
+						organizationId: string,
+						userId: string,
+					) {
+						let mutableScope: OrganizationLedgerScope = { organizationId } as any;
+						mutableScope = { userId };
+						await prisma.plan.findMany({ where: mutableScope });
+
+						let uninitializedScope: OrganizationLedgerScope;
+						uninitializedScope = { id } as any;
+						await prisma.plan.findUnique({ where: uninitializedScope });
+
+						const castScope = ({ userId } as unknown) as OrganizationLedgerScope;
+						await prisma.account.findMany({ where: castScope });
+
+						const shadowedScope: OrganizationLedgerScope = { userId };
+						await prisma.transaction.findMany({ where: shadowedScope });
+					}
+				`,
+			},
+			(rootDir) => {
+				const result = scanOrgScope({ rootDir });
+				expect(result.violations).toHaveLength(4);
+				expect(
+					result.violations.every(
+						(v) =>
+							v.rule === "RULE_A_BARE_ID" ||
+							v.rule === "RULE_B_USER_ONLY_OR_COMPAT",
+					),
+				).toBe(true);
 
 				const cliRes = spawnSync("bun", ["run", SCRIPT_PATH, "--cwd", rootDir], {
 					cwd: REPO_ROOT,

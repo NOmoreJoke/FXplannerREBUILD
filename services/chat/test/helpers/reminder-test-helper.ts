@@ -1,9 +1,10 @@
 import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
-import { bearer, type TestUser } from "./test-app";
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
+import { bearer, orgBearer, type TestUser } from "./test-app";
 import { ensureAccount } from "./plan-test-helper";
 import { TEST_PASSWORD } from "../fixtures/test-credentials";
-import type { PrismaService } from "../../src/prisma/prisma.service";
+import { PrismaService } from "../../src/prisma/prisma.service";
 
 /**
  * 提醒域测试共享工具（test/helpers，禁止 spec 间复制——AGENTS.md 测试约定）。
@@ -72,11 +73,20 @@ export async function createOnboardedUser(
 		.post("/api/auth/login")
 		.send({ email, password })
 		.expect(200);
+	const userId: string = res.body.data.user.id;
+	const defaultOrganizationId = await resolveDefaultOrganizationId(
+		app.get(PrismaService),
+		userId,
+	);
+	if (!defaultOrganizationId) {
+		throw new Error(`createOnboardedUser(${label}): 未解析到默认组织`);
+	}
 	const user: TestUser = {
 		email,
 		password,
 		accessToken: res.body.data.accessToken,
-		userId: res.body.data.user.id,
+		userId,
+		defaultOrganizationId,
 	};
 	await request(app.getHttpServer())
 		.post("/api/onboarding/consents")
@@ -85,7 +95,7 @@ export async function createOnboardedUser(
 		.expect(201);
 	await request(app.getHttpServer())
 		.post("/api/onboarding/complete")
-		.set(bearer(user.accessToken))
+		.set(orgBearer(user))
 		.send({
 			baseCurrency: "CNY",
 			locale: "zh-CN",
@@ -105,7 +115,7 @@ export function createPlanToday(
 ) {
 	return request(app.getHttpServer())
 		.post("/api/plans")
-		.set(bearer(user.accessToken))
+		.set(orgBearer(user))
 		.send({
 			targetCurrency: "USD",
 			targetAmount: "10000",
@@ -122,5 +132,5 @@ export function createPlanToday(
 export function getReminders(app: INestApplication, user: TestUser) {
 	return request(app.getHttpServer())
 		.get("/api/reminders")
-		.set(bearer(user.accessToken));
+		.set(orgBearer(user));
 }

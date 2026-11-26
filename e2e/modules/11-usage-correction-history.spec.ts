@@ -17,7 +17,7 @@ type Schemas = components["schemas"];
 
 // W6-08：验证计划回跳、单笔历史隔离以及真实成功与失败日志的前后值展示。
 test("使用更正确认和取消返回所属计划，单笔历史展示成功与失败", async ({ page }) => {
-	const { accessToken } = await seedRegisterAndLogin("usage-history");
+	const { accessToken, organizationId } = await seedRegisterAndLogin("usage-history");
 	await seedOnboarding(accessToken);
 	await seedTransaction(accessToken, "CAD", "7800");
 	const planId = await seedPlanWithAllocation(accessToken, "CAD", "3000");
@@ -75,6 +75,8 @@ test("使用更正确认和取消返回所属计划，单笔历史展示成功�
 		headers: {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${accessToken}`,
+			// W30（MIG-D）：更正提交是组织域端点——缺组织头一律 400 ORGANIZATION_REQUIRED
+			"X-Organization-Id": organizationId,
 		},
 		body: JSON.stringify({
 			...rejectedChange,

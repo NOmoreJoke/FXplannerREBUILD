@@ -344,7 +344,7 @@ describe("captureMigrationSnapshot 的跨作用域批次解析（对抗审 R1-I2
 					const where = (
 						args as { where?: { id?: { in?: string[] } } }
 					).where;
-					costLotQueries.push((args as { where?: unknown }).where ?? {});
+					costLotQueries.push((where ?? {}) as Record<string, unknown>);
 					// 范围内批次查询（按 user_id 限定）→ 空（该批次在范围外）
 					if (!where?.id) return [];
 					// 作用域外关联批次补查（按 id 限定）

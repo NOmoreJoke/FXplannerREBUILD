@@ -19,33 +19,30 @@ export async function ensureOnboarded(
 	userId: string,
 	baseCurrency = "CNY",
 	ledgerStartedAt: Date | null = null,
-	options: { legacyOnly?: boolean } = {},
+	options: { organizationId?: string } = {},
 ): Promise<void> {
 	await prisma.userSettings.upsert({
 		where: { userId },
-		update: { baseCurrency, ledgerStartedAt },
+		update: { locale: "zh-CN", region: "CN" },
 		create: {
 			userId,
-			baseCurrency,
 			locale: "zh-CN",
 			region: "CN",
+		},
+	});
+	const organizationId =
+		options.organizationId ??
+		(await resolveDefaultOrganizationId(prisma, userId));
+	if (!organizationId) {
+		throw new Error(`ensureOnboarded(${userId}): 未找到默认组织`);
+	}
+	await prisma.organizationSettings.upsert({
+		where: { organizationId },
+		update: { baseCurrency, ledgerStartedAt },
+		create: {
+			organizationId,
+			baseCurrency,
 			ledgerStartedAt,
 		},
 	});
-	if (options.legacyOnly) return;
-	const defaultOrganizationId = await resolveDefaultOrganizationId(
-		prisma,
-		userId,
-	);
-	if (defaultOrganizationId) {
-		await prisma.organizationSettings.upsert({
-			where: { organizationId: defaultOrganizationId },
-			update: { baseCurrency, ledgerStartedAt },
-			create: {
-				organizationId: defaultOrganizationId,
-				baseCurrency,
-				ledgerStartedAt,
-			},
-		});
-	}
 }

@@ -11,7 +11,6 @@ import { Prisma } from "@prisma/client";
 import {
 	lockOrgLedgerAccounts,
 	lockOrgPlanAccount,
-	mergeLegacyOrgAccountIfExists,
 } from "../prisma/ledger-write-lock";
 import { PrismaService } from "../prisma/prisma.service";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
@@ -27,16 +26,12 @@ import type {
 } from "../authorization/authorization.types";
 import {
 	assertParentChildSameOrg,
-	compatReadWhere,
+	orgWhere,
 	type ReadScope,
 } from "../authorization/organization-scope";
-import { planReservationWhere } from "../authorization/default-organization";
 import { can } from "../authorization/permission-policy";
 import { lockOrganizationForActor } from "../organization/default-organization";
-import {
-	materializeLegacyOrganizationSettings,
-	resolveOrganizationPreferences,
-} from "../organization/organization-preferences";
+import { resolveOrganizationPreferences } from "../organization/organization-preferences";
 import type {
 	AdjustPreviewDto,
 	AdjustPreviewResultDto,
@@ -247,9 +242,9 @@ export class PlanService {
 	/**
 	 * 创建计划（POST /api/plans，方案 §5.2 / ToB R1 W23）：全程交互式事务——
 	 * ① lockOrganizationForActor 重读最新角色并复验 plan.create（锁等降权 → 403 + DENIED 审计）
-	 * ② resolveOrganizationPreferences 解析组织建账态（409）与本位币；OWNER_LEGACY 先固化
+	 * ② resolveOrganizationPreferences 解析组织建账态（409）与本位币
 	 * ③ 锁组织账本账户 lockOrgLedgerAccounts 后重检 caps（并发安全权威防线）
-	 * ④ 插入 Plan（userId + organizationId + createdById）、PlanAllocation、PlanInstallment
+	 * ④ 插入 Plan（organizationId + createdById）、PlanAllocation、PlanInstallment
 	 * ⑤ 同事务写入 plan.create 审计日志；任一失败全部回滚。
 	 */
 	async create(
@@ -281,9 +276,6 @@ export class PlanService {
 						"尚未完成首次设置，请先前往 /onboarding 完成建账后再创建计划",
 					);
 				}
-				if (preferences.source === "OWNER_LEGACY") {
-					await materializeLegacyOrganizationSettings(tx, actor.organizationId);
-				}
 				if (params.targetCurrency === preferences.baseCurrency) {
 					throw new PlanInvalidParamsException(
 						`目标币种不能与本位币相同（本位币：${preferences.baseCurrency}）`,
@@ -294,11 +286,6 @@ export class PlanService {
 					tx,
 					actor.organizationId,
 					[params.targetCurrency],
-				);
-				await mergeLegacyOrgAccountIfExists(
-					tx,
-					actor.organizationId,
-					params.targetCurrency,
 				);
 				// 事务内重检（READ COMMITTED 下读到其他事务已提交的最新余额/分配）
 				const caps = await this.computeCaps(
@@ -328,7 +315,6 @@ export class PlanService {
 
 				const plan = await tx.plan.create({
 					data: {
-						userId: actor.userId,
 						organizationId: actor.organizationId,
 						createdById: actor.userId,
 						name: dto.name?.trim() ? dto.name.trim() : null,
@@ -418,9 +404,8 @@ export class PlanService {
 		scope: ReadScope,
 		status?: string,
 	): Promise<{ items: PlanListItemDto[] }> {
-		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const plans = await this.prisma.plan.findMany({
-			where: { ...compatReadWhere(scope), ...(status ? { status } : {}) },
+			where: { ...orgWhere(scope), ...(status ? { status } : {}) },
 			orderBy: { updatedAt: "desc" },
 			take: PLAN_LIST_LIMIT,
 		});
@@ -470,9 +455,8 @@ export class PlanService {
 	 * 由服务端按状态与数据计算，前端据此显隐按钮。
 	 */
 	async getDetail(scope: ReadScope, planId: string): Promise<PlanDetailDto> {
-		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const plan = await this.prisma.plan.findFirst({
-			where: { id: planId, ...compatReadWhere(scope) },
+			where: { id: planId, ...orgWhere(scope) },
 		});
 		if (!plan) {
 			throw new PlanNotFoundException();
@@ -481,16 +465,15 @@ export class PlanService {
 	}
 
 	/**
-	 * 写路径收尾详情（原 getDetail 语义）：事务提交后按 compatReadWhere(scope) 重读，
+	 * 写路径收尾详情（原 getDetail 语义）：事务提交后按 orgWhere(scope) 重读，
 	 * 含本次写入的变更记录。
 	 */
 	private async detailAfterWrite(
 		scope: ReadScope,
 		planId: string,
 	): Promise<PlanDetailDto> {
-		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const plan = await this.prisma.plan.findFirst({
-			where: { id: planId, ...compatReadWhere(scope) },
+			where: { id: planId, ...orgWhere(scope) },
 		});
 		if (!plan) {
 			throw new PlanNotFoundException();
@@ -499,7 +482,7 @@ export class PlanService {
 	}
 
 	/**
-	 * 详情组装：查询已按 compatReadWhere(scope) 校验计划归属，直接组装详情，
+	 * 详情组装：查询已按 orgWhere(scope) 校验计划归属，直接组装详情，
 	 * 不重复归属查询（写路径收尾通过 detailAfterWrite 重读最新状态）。
 	 */
 	private async buildDetail(plan: Plan): Promise<PlanDetailDto> {
@@ -612,9 +595,9 @@ export class PlanService {
 	 * 提交修改 / 重新开启（PATCH /api/plans/:id，§3.2 时序 / ToB R1 W23）：
 	 * $transaction 内：
 	 * ① lockOrganizationForActor 重读最新角色并复验 plan.adjust（锁等降权 → 403 + DENIED 审计）
-	 * ② resolveOrganizationPreferences 解析组织建账态与固化 OWNER_LEGACY
+	 * ② resolveOrganizationPreferences 解析组织建账态
 	 * ③ lockOrgPlanAccount 锁组织账本账户 + FOR UPDATE 锁目标 Plan 行
-	 * ④ 条件更新（WHERE id + compatReadWhere(actor) + updatedAt = expected）原子完成乐观锁检查
+	 * ④ 条件更新（WHERE id + orgWhere(actor) + updatedAt = expected）原子完成乐观锁检查
 	 * ⑤ 重算重校验 → confirmReopen 规则 → 落库 Plan / PlanAllocation / PlanInstallment
 	 * ⑥ 写 plan_change_logs（带 organizationId + actorUserId）+ 同事务写入 plan.adjust 审计日志。
 	 */
@@ -648,41 +631,27 @@ export class PlanService {
 						"尚未完成首次设置，请先前往 /onboarding 完成建账后再修改计划",
 					);
 				}
-				if (preferences.source === "OWNER_LEGACY") {
-					await materializeLegacyOrganizationSettings(tx, actor.organizationId);
-				}
-
 				if (!(await lockOrgPlanAccount(tx, actor, planId))) {
 					throw new PlanNotFoundException();
 				}
 				await this.lockScopedPlanRow(tx, actor, planId);
-				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const current = await tx.plan.findFirst({
-					where: { id: planId, ...compatReadWhere(actor) },
+					where: { id: planId, ...orgWhere(actor) },
 				});
 				if (!current) {
 					throw new PlanNotFoundException();
 				}
-				if (current.organizationId !== null) {
-					assertParentChildSameOrg(current.organizationId, actor.organizationId);
-				}
-				await mergeLegacyOrgAccountIfExists(
-					tx,
-					actor.organizationId,
-					current.targetCurrency,
-				);
+				assertParentChildSameOrg(current.organizationId, actor.organizationId);
 
 				// 条件更新 = 乐观锁检查 + 行写（原子；检查与写入合并为单条语句）
-				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const checkpoint = await tx.plan.updateMany({
 					where: {
 						id: planId,
-						...compatReadWhere(actor),
+						...orgWhere(actor),
 						updatedAt: expectedUpdatedAt,
 					},
 					data: {
 						status: current.status,
-						...legacyPlanAdoptFields(current, actor.organizationId),
 					},
 				});
 				if (checkpoint.count === 0) {
@@ -716,7 +685,7 @@ export class PlanService {
 				}
 
 				// 落库：计划主行 + 分配行（金额/目标一律以事务内重算结果为准）
-				// @org-scope-exempt: post-lock 主键更新（adjust 已持 lockScopedPlanRow 锁并经 compatReadWhere + updateMany 乐观锁校验）
+				// @org-scope-exempt: post-lock 主键更新（adjust 已持 lockScopedPlanRow 锁并经 orgWhere + updateMany 乐观锁校验）
 				await tx.plan.update({
 					where: { id: planId },
 					data: {
@@ -834,41 +803,30 @@ export class PlanService {
 						"尚未完成首次设置，请先前往 /onboarding 完成建账后再完成计划",
 					);
 				}
-				if (preferences.source === "OWNER_LEGACY") {
-					await materializeLegacyOrganizationSettings(tx, actor.organizationId);
-				}
-
 				if (!(await lockOrgPlanAccount(tx, actor, planId))) {
 					throw new PlanNotFoundException();
 				}
 				await this.lockScopedPlanRow(tx, actor, planId);
-				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const current = await tx.plan.findFirst({
-					where: { id: planId, ...compatReadWhere(actor) },
+					where: { id: planId, ...orgWhere(actor) },
 					select: {
 						id: true,
 						organizationId: true,
-						userId: true,
-						createdById: true,
 					},
 				});
 				if (!current) {
 					throw new PlanNotFoundException();
 				}
-				if (current.organizationId !== null) {
-					assertParentChildSameOrg(current.organizationId, actor.organizationId);
-				}
+				assertParentChildSameOrg(current.organizationId, actor.organizationId);
 
-				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const updated = await tx.plan.updateMany({
 					where: {
 						id: planId,
-						...compatReadWhere(actor),
+						...orgWhere(actor),
 						status: "ACTIVE",
 					},
 					data: {
 						status: "COMPLETED",
-						...legacyPlanAdoptFields(current, actor.organizationId),
 					},
 				});
 				if (updated.count === 0) {
@@ -878,7 +836,7 @@ export class PlanService {
 				}
 				// 检查点后重读（行锁已持有，本计划不再被并发修改；used 读 allocation 行最新值）
 				const [freshPlan, allocation] = await Promise.all([
-					// @org-scope-exempt: post-lock 主键重读（complete 已持 lockScopedPlanRow 锁并经 compatReadWhere + updateMany 状态校验）
+					// @org-scope-exempt: post-lock 主键重读（complete 已持 lockScopedPlanRow 锁并经 orgWhere + updateMany 状态校验）
 					tx.plan.findUnique({ where: { id: planId } }),
 					tx.planAllocation.findUnique({ where: { planId } }),
 				]);
@@ -974,41 +932,30 @@ export class PlanService {
 						"尚未完成首次设置，请先前往 /onboarding 完成建账后再取消计划",
 					);
 				}
-				if (preferences.source === "OWNER_LEGACY") {
-					await materializeLegacyOrganizationSettings(tx, actor.organizationId);
-				}
-
 				if (!(await lockOrgPlanAccount(tx, actor, planId))) {
 					throw new PlanNotFoundException();
 				}
 				await this.lockScopedPlanRow(tx, actor, planId);
-				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const current = await tx.plan.findFirst({
-					where: { id: planId, ...compatReadWhere(actor) },
+					where: { id: planId, ...orgWhere(actor) },
 					select: {
 						id: true,
 						organizationId: true,
-						userId: true,
-						createdById: true,
 					},
 				});
 				if (!current) {
 					throw new PlanNotFoundException();
 				}
-				if (current.organizationId !== null) {
-					assertParentChildSameOrg(current.organizationId, actor.organizationId);
-				}
+				assertParentChildSameOrg(current.organizationId, actor.organizationId);
 
-				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const updated = await tx.plan.updateMany({
 					where: {
 						id: planId,
-						...compatReadWhere(actor),
+						...orgWhere(actor),
 						status: "ACTIVE",
 					},
 					data: {
 						status: "CANCELLED",
-						...legacyPlanAdoptFields(current, actor.organizationId),
 					},
 				});
 				if (updated.count === 0) {
@@ -1017,7 +964,7 @@ export class PlanService {
 					);
 				}
 				const [freshPlan, allocation] = await Promise.all([
-					// @org-scope-exempt: post-lock 主键重读（cancel 已持 lockScopedPlanRow 锁并经 compatReadWhere + updateMany 状态校验）
+					// @org-scope-exempt: post-lock 主键重读（cancel 已持 lockScopedPlanRow 锁并经 orgWhere + updateMany 状态校验）
 					tx.plan.findUnique({ where: { id: planId } }),
 					tx.planAllocation.findUnique({ where: { planId } }),
 				]);
@@ -1169,7 +1116,7 @@ private toAdjustPlanState(
  * 计划（404 归属校验）→ 分配行（1:1，缺行防御性 404）→ 同币种账户余额 →
  * 同币种「其他」计划分配快照（computeCaps otherPlanAllocations 必须按 targetCurrency 过滤）。
  * db 传 PrismaService 或事务客户端均可。
- * 全部按 compatReadWhere(scope) 组织作用域读取（零 userId 旁路）。
+ * 全部按 orgWhere(scope) 组织作用域读取（零 userId 旁路）。
  */
 private async loadAdjustContext(
 	db: CapsDb,
@@ -1180,9 +1127,7 @@ private async loadAdjustContext(
 	allocation: PlanAllocation;
 	context: AdjustPreviewContext;
 }> {
-	const owner = compatReadWhere(scope);
-	const reservationOwner = await planReservationWhere(db, scope);
-	// @org-scope-exempt: W30 MIG-D/F 待清理
+	const owner = orgWhere(scope);
 	const plan = await db.plan.findFirst({ where: { id: planId, ...owner } });
 	if (!plan) {
 		throw new PlanNotFoundException();
@@ -1194,17 +1139,15 @@ private async loadAdjustContext(
 		throw new PlanNotFoundException(); // 创建事务保证 1:1，此处防御性兑底
 	}
 	const [accounts, siblingPlans] = await Promise.all([
-		// @org-scope-exempt: W30 MIG-D/F 待清理
 		db.account.findMany({
 			where: { currencyCode: plan.targetCurrency, ...owner },
 			select: { balance: true },
 		}),
-		// @org-scope-exempt: W30 MIG-D/F 待清理
 		db.plan.findMany({
 			where: {
 				targetCurrency: plan.targetCurrency,
 				id: { not: planId },
-				...reservationOwner,
+				...owner,
 			},
 			select: { id: true },
 		}),
@@ -1666,7 +1609,7 @@ private parseAdjustChange(dto: AdjustPreviewDto): {
 	 * DB 读取在此（账户余额 + 同币种全部计划分配），公式下沉 plan-calculator 唯一实现——
 	 * 未分配余额 = max(0, balance − Σ同币种剩余分配)；创建上限 = min(未分配余额, 还需准备金额)。
 	 * 事务内调用即为「创建时重检余额」（并发安全的权威防线）。
-	 * 全部按 compatReadWhere(scope) 组织作用域读取（零 userId 旁路）。
+	 * 全部按 orgWhere(scope) 组织作用域读取（零 userId 旁路）。
 	 */
 	private async computeCaps(
 		db: CapsDb,
@@ -1674,17 +1617,14 @@ private parseAdjustChange(dto: AdjustPreviewDto): {
 		currencyCode: string,
 		targetAmount: Prisma.Decimal,
 	): Promise<AllocatableCaps> {
-		const owner = compatReadWhere(scope);
-		const reservationOwner = await planReservationWhere(db, scope);
+		const owner = orgWhere(scope);
 		const [accounts, plans] = await Promise.all([
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			db.account.findMany({
 				where: { currencyCode, ...owner },
 				select: { balance: true },
 			}),
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			db.plan.findMany({
-				where: { targetCurrency: currencyCode, ...reservationOwner },
+				where: { targetCurrency: currencyCode, ...owner },
 				select: { id: true },
 			}),
 		]);
@@ -1717,7 +1657,7 @@ private parseAdjustChange(dto: AdjustPreviewDto): {
 		};
 	}
 
-	/** 锁内按 compatReadWhere(scope) 对目标 Plan 行加 FOR UPDATE 锁，防止跨组织泄露与并发写竞态 */
+	/** 锁内按 orgWhere(scope) 对目标 Plan 行加 FOR UPDATE 锁，防止跨组织泄露与并发写竞态 */
 	private async lockScopedPlanRow(
 		tx: Prisma.TransactionClient,
 		scope: ReadScope,
@@ -1726,10 +1666,7 @@ private parseAdjustChange(dto: AdjustPreviewDto): {
 		const rows = await tx.$queryRaw<Array<{ id: string }>>`
 			SELECT id FROM plans
 			WHERE id = ${planId}
-				AND (
-					organization_id = ${scope.organizationId}
-					OR (${scope.isDefaultOrganization === true} AND organization_id IS NULL AND user_id = ${scope.userId})
-				)
+				AND organization_id = ${scope.organizationId}
 			FOR UPDATE`;
 		if (rows.length === 0) {
 			throw new PlanNotFoundException();
@@ -1788,18 +1725,6 @@ private parseAdjustChange(dto: AdjustPreviewDto): {
 }
 
 // ── 模块内工具（不依赖注入）─────────────────────────────
-
-/** 收口 legacy (organizationId: null) Plan 时同步回填 organizationId 与 createdById（N-8）。 */
-function legacyPlanAdoptFields(
-	plan: { organizationId: string | null; userId: string; createdById: string | null },
-	organizationId: string,
-): { organizationId: string; createdById: string } | Record<string, never> {
-	if (plan.organizationId !== null) return {};
-	return {
-		organizationId,
-		createdById: plan.createdById ?? plan.userId,
-	};
-}
 
 /**
  * 修改变更主类型归类（§3.3：多字段同改时以目标金额变化优先）：

@@ -20,19 +20,22 @@ model User {
   // M0 schema 冻结：以下为新增业务模型的反向关系（Prisma 关系必须双侧声明）
   userSettings    UserSettings?
   termsConsents   TermsConsent[]
-  accounts        Account[]
-  transactions    Transaction[]
-  costLots        CostLot[]
-  plans           Plan[]
-  usageRecords    UsageRecord[]
-  corrections     Correction[]
-  reminders       Reminder[]
-  dataRequests    DataRequest[]
-  initialHoldings InitialHolding[]
-  aiConversations AiConversation[]
   // ToB R1：组织成员身份与成员级提醒已读
-  memberships     Membership[]
-  reminderReads   ReminderRead[]
+  memberships   Membership[]
+  reminderReads ReminderRead[]
+  // W30（MIG-E/MIG-F）：8 张共享账本表已解绑 User 级联，作者改由 createdById /
+  // actorUserId 记录（ON DELETE SET NULL）——删除用户不再级联删除企业账本。
+  createdAccounts        Account[]       @relation("AccountCreatedBy")
+  createdTransactions    Transaction[]   @relation("TransactionCreatedBy")
+  createdInitialHoldings InitialHolding[] @relation("InitialHoldingCreatedBy")
+  createdPlans           Plan[]          @relation("PlanCreatedBy")
+  createdUsageRecords    UsageRecord[]   @relation("UsageRecordCreatedBy")
+  actedCorrections       Correction[]    @relation("CorrectionActor")
+  actedPlanChangeLogs    PlanChangeLog[] @relation("PlanChangeLogActor")
+  // AI 会话仍是个人所有（会话所有者），随个人清理级联
+  aiConversations AiConversation[]
+  // 数据权利请求的发起人（可空：用户注销后保留请求记录，ON DELETE SET NULL）
+  requesterDataRequests DataRequest[] @relation("DataRequestRequester")
 
   @@map("users")
 }
@@ -54,6 +57,19 @@ model Organization {
   memberships Membership[]
   settings    OrganizationSettings?
   invitations OrganizationInvitation[]
+  // W30（MIG-E）：共享账本表改为直连 Organization（ON DELETE RESTRICT），
+  // 组织删除必须显式事务清理子表（技术方案 §5.3 #5），不再依赖 User 级联。
+  accounts        Account[]
+  transactions    Transaction[]
+  initialHoldings InitialHolding[]
+  costLots        CostLot[]
+  plans           Plan[]
+  planChangeLogs  PlanChangeLog[]
+  usageRecords    UsageRecord[]
+  corrections     Correction[]
+  reminders       Reminder[]
+  // AI 会话随组织删除级联清理
+  aiConversations AiConversation[]
 
   @@map("organizations")
 }
@@ -235,19 +251,17 @@ model WorkflowCheckpoint {
 // 金额列统一 Decimal(20, 4)；汇率/单位成本统一 Decimal(20, 10)。
 // ─────────────────────────────────────────────────────────────
 
-/// 用户偏好设置（本位币、地区语言、准备偏好、账本起点；1:1）
+/// 用户偏好设置（个人展示维度：语言/地区；1:1）
+/// W30（MIG-F）：baseCurrency / prepPreference / reminderEnabled / ledgerStartedAt
+/// 已迁往 OrganizationSettings，本表只保留个人展示字段。
 model UserSettings {
-  id              String    @id @default(cuid())
-  userId          String    @unique @map("user_id")
-  baseCurrency    String    @map("base_currency")
-  locale          String
-  region          String
-  prepPreference  String    @default("balanced") @map("prep_preference")
-  reminderEnabled Boolean   @default(true) @map("reminder_enabled")
-  ledgerStartedAt DateTime? @map("ledger_started_at")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String   @id @default(cuid())
+  userId    String   @unique @map("user_id")
+  locale    String
+  region    String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_settings")
 }
@@ -283,130 +297,114 @@ model TermsConsent {
 }
 
 /// 按币种虚拟账户（同币种单账户；余额 0 保留不删）
-/// 唯一约束按 (organizationId, currencyCode) 收口：原属技术方案 MIG-E 项，在 Goal #3B W22
-/// （20261125094500_tob_r1_mig_c_org_unique_indexes）有意提前切换并保留
-/// accounts_legacy_user_currency_uidx（WHERE organization_id IS NULL）以支持多组织同币种
-/// 记账；organization_id SET NOT NULL、User 级联解绑与删过渡索引留待 Goal #3C W30（MIG-E）。
+/// 唯一约束按 (organizationId, currencyCode) 收口（W30 MIG-E 起 organization_id NOT NULL，
+/// 过渡部分唯一索引 accounts_legacy_user_currency_uidx 已删除）。
 model Account {
-  id            String   @id @default(cuid())
-  userId        String   @map("user_id")
-  /// ToB R1 租户列（可空 = 兼容存量个人行；MIG-B 回填后非空）
-  organizationId String? @map("organization_id")
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
   /// 创建者审计快照（可空；成员移除/注销不级联删除组织账本）
-  createdById   String?  @map("created_by_id")
-  currencyCode  String   @map("currency_code")
-  balance       Decimal  @default(0) @db.Decimal(20, 4)
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdById    String?      @map("created_by_id")
+  currencyCode   String       @map("currency_code")
+  balance        Decimal      @default(0) @db.Decimal(20, 4)
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy      User?        @relation("AccountCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, currencyCode])
-  @@index([userId, currencyCode])
   @@map("accounts")
 }
 
 /// 买入交易（feeAmount：null=未知，0=无；version 为更正版本号，从 1 递增）
 model Transaction {
-  id              String   @id @default(cuid())
-  userId          String   @map("user_id")
-  /// ToB R1 租户列（MIG-A 增量可空；createdById 来源原 userId）
-  organizationId  String?  @map("organization_id")
-  createdById     String?  @map("created_by_id")
-  currencyCode    String   @map("currency_code")
-  quantity        Decimal  @db.Decimal(20, 4)
-  principalAmount Decimal  @map("principal_amount") @db.Decimal(20, 4)
-  feeAmount       Decimal? @map("fee_amount") @db.Decimal(20, 4)
-  exchangeRate    Decimal  @map("exchange_rate") @db.Decimal(20, 10)
-  rateSource      String   @map("rate_source")
-  rateObservedAt  DateTime @map("rate_observed_at")
-  planId          String?  @map("plan_id")
-  transactedAt    DateTime @map("transacted_at")
-  version         Int      @default(1)
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id              String       @id @default(cuid())
+  organizationId  String       @map("organization_id")
+  createdById     String?      @map("created_by_id")
+  currencyCode    String       @map("currency_code")
+  quantity        Decimal      @db.Decimal(20, 4)
+  principalAmount Decimal      @map("principal_amount") @db.Decimal(20, 4)
+  feeAmount       Decimal?     @map("fee_amount") @db.Decimal(20, 4)
+  exchangeRate    Decimal      @map("exchange_rate") @db.Decimal(20, 10)
+  rateSource      String       @map("rate_source")
+  rateObservedAt  DateTime     @map("rate_observed_at")
+  planId          String?      @map("plan_id")
+  transactedAt    DateTime     @map("transacted_at")
+  version         Int          @default(1)
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy       User?        @relation("TransactionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
-  @@index([userId, transactedAt])
   @@index([organizationId, transactedAt])
   @@map("transactions")
 }
 
 /// 初始持仓记录（onboarding-rework 技术方案 §3.2：每币种仅一笔；rate 采用价
 /// 8 位小数，rawRate 为来源原值；CostLot.sourceId 指向本表，与 PURCHASE→Transaction 同构）。
-/// 唯一约束按 (organizationId, currencyCode) 收口：原属 MIG-E 项，在 Goal #3B W22
-/// （20261125094500_tob_r1_mig_c_org_unique_indexes）提前切换并保留
-/// initial_holdings_legacy_user_currency_uidx（WHERE organization_id IS NULL）；
-/// NOT NULL / User 级联解绑与删过渡索引留待 Goal #3C W30（MIG-E）。
+/// 唯一约束按 (organizationId, currencyCode) 收口（W30 MIG-E 起 organization_id NOT NULL）。
 model InitialHolding {
-  id             String   @id @default(cuid())
-  userId         String   @map("user_id")
-  /// ToB R1 租户列（MIG-A 增量可空）
-  organizationId String?  @map("organization_id")
-  createdById    String?  @map("created_by_id")
-  currencyCode   String   @map("currency_code")
-  amount         Decimal  @db.Decimal(20, 4)
-  rate           Decimal  @map("rate") @db.Decimal(20, 10)
-  rawRate        Decimal  @map("raw_rate") @db.Decimal(20, 10)
-  rateSource     String   @map("rate_source")
-  rateObservedAt DateTime @map("rate_observed_at")
-  cost           Decimal  @db.Decimal(20, 4)
-  confirmedAt    DateTime @map("confirmed_at")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  createdById    String?      @map("created_by_id")
+  currencyCode   String       @map("currency_code")
+  amount         Decimal      @db.Decimal(20, 4)
+  rate           Decimal      @map("rate") @db.Decimal(20, 10)
+  rawRate        Decimal      @map("raw_rate") @db.Decimal(20, 10)
+  rateSource     String       @map("rate_source")
+  rateObservedAt DateTime     @map("rate_observed_at")
+  cost           Decimal      @db.Decimal(20, 4)
+  confirmedAt    DateTime     @map("confirmed_at")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy      User?        @relation("InitialHoldingCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, currencyCode])
-  @@index([userId, currencyCode])
   @@map("initial_holdings")
 }
 
 /// FIFO 成本批次（sourceType：INITIAL / PURCHASE；sourceId 指向来源记录）
 model CostLot {
-  id             String   @id @default(cuid())
-  userId         String   @map("user_id")
-  /// ToB R1 租户列（MIG-A 增量可空；必须随来源记录同组织，由 organization-scope 断言）
-  organizationId String?  @map("organization_id")
-  currencyCode   String   @map("currency_code")
-  sourceType     String   @map("source_type")
-  sourceId       String   @map("source_id")
-  quantity       Decimal  @db.Decimal(20, 4)
-  remainingQty   Decimal  @map("remaining_qty") @db.Decimal(20, 4)
-  unitCost       Decimal  @map("unit_cost") @db.Decimal(20, 10)
-  totalCost      Decimal  @map("total_cost") @db.Decimal(20, 4)
-  acquiredAt     DateTime @map("acquired_at")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  currencyCode   String       @map("currency_code")
+  sourceType     String       @map("source_type")
+  sourceId       String       @map("source_id")
+  quantity       Decimal      @db.Decimal(20, 4)
+  remainingQty   Decimal      @map("remaining_qty") @db.Decimal(20, 4)
+  unitCost       Decimal      @map("unit_cost") @db.Decimal(20, 10)
+  totalCost      Decimal      @map("total_cost") @db.Decimal(20, 4)
+  acquiredAt     DateTime     @map("acquired_at")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
 
-  @@index([userId, currencyCode, acquiredAt, createdAt])
   @@index([organizationId, currencyCode, acquiredAt])
   @@map("cost_lots")
 }
 
 /// 换汇计划（status：ACTIVE / COMPLETED / CANCELLED，CANCELLED 为终态）
 model Plan {
-  id             String   @id @default(cuid())
-  userId         String   @map("user_id")
-  /// ToB R1 租户列（MIG-A 增量可空；createdById 来源原 userId）
-  organizationId String?  @map("organization_id")
-  createdById    String?  @map("created_by_id")
-  name           String?  @map("name")
-  pacePreference String   @default("balanced") @map("pace_preference")
-  targetCurrency String   @map("target_currency")
-  targetAmount   Decimal  @map("target_amount") @db.Decimal(20, 4)
-  expectUseDate  DateTime @map("expect_use_date")
-  prepLeadDays   Int      @default(3) @map("prep_lead_days")
-  latestPrepDate DateTime @map("latest_prep_date")
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  createdById    String?      @map("created_by_id")
+  name           String?      @map("name")
+  pacePreference String       @default("balanced") @map("pace_preference")
+  targetCurrency String       @map("target_currency")
+  targetAmount   Decimal      @map("target_amount") @db.Decimal(20, 4)
+  expectUseDate  DateTime     @map("expect_use_date")
+  prepLeadDays   Int          @default(3) @map("prep_lead_days")
+  latestPrepDate DateTime     @map("latest_prep_date")
   /// 开始准备日（M5 落库：M2 创建时只算不存；NULL = 未落基线，重建排期时回退「明天起首个工作日」）
-  planStartDate  DateTime? @map("plan_start_date") @db.Timestamptz(3)
-  status         String   @default("ACTIVE")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
-  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planStartDate  DateTime?    @map("plan_start_date") @db.Timestamptz(3)
+  status         String       @default("ACTIVE")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy      User?        @relation("PlanCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   installments   PlanInstallment[]
   changeLogs     PlanChangeLog[]
 
-  @@index([userId, status])
   @@index([organizationId, status])
   @@map("plans")
 }
@@ -440,23 +438,25 @@ model PlanAllocation {
 /// 计划变更记录（M5：目标/分配/完成/取消/重开留痕；完整变更明细由 JSON 快照承载）
 /// 通过 plan 关系显式对齐 migration SQL 中已有的 REFERENCES plans(id) ON DELETE CASCADE（零 DDL 变更）
 model PlanChangeLog {
-  id             String   @id @default(cuid())
-  planId         String   @map("plan_id")
-  /// ToB R1 租户列（MIG-A 增量可空；回填按父 Plan.organizationId 校对，孤儿阻断）
-  organizationId String?  @map("organization_id")
+  id             String       @id @default(cuid())
+  planId         String       @map("plan_id")
+  /// ToB R1 租户列（W30 MIG-E 起 NOT NULL）
+  organizationId String       @map("organization_id")
   /// 实际操作者（可空；成员移除/注销不丢历史）
-  actorUserId    String?  @map("actor_user_id")
+  actorUserId    String?      @map("actor_user_id")
   /// 主类型用于筛选：TARGET_ADJUSTED | ALLOCATION_ADJUSTED | COMPLETED | CANCELLED | REOPENED
-  changeType     String   @map("change_type")
-  beforeTarget   Decimal  @map("before_target") @db.Decimal(20, 4)
-  afterTarget    Decimal  @map("after_target") @db.Decimal(20, 4)
-  beforeAlloc    Decimal  @map("before_alloc") @db.Decimal(20, 4)
-  afterAlloc     Decimal  @map("after_alloc") @db.Decimal(20, 4)
-  releasedAmount Decimal  @default(0) @map("released_amount") @db.Decimal(20, 4)
-  beforeSnapshot Json     @map("before_snapshot")
-  afterSnapshot  Json     @map("after_snapshot")
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  plan           Plan     @relation(fields: [planId], references: [id], onDelete: Cascade)
+  changeType     String       @map("change_type")
+  beforeTarget   Decimal      @map("before_target") @db.Decimal(20, 4)
+  afterTarget    Decimal      @map("after_target") @db.Decimal(20, 4)
+  beforeAlloc    Decimal      @map("before_alloc") @db.Decimal(20, 4)
+  afterAlloc     Decimal      @map("after_alloc") @db.Decimal(20, 4)
+  releasedAmount Decimal      @default(0) @map("released_amount") @db.Decimal(20, 4)
+  beforeSnapshot Json         @map("before_snapshot")
+  afterSnapshot  Json         @map("after_snapshot")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  plan           Plan         @relation(fields: [planId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  actor          User?        @relation("PlanChangeLogActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
   @@index([planId, createdAt(sort: Desc)])
   @@index([organizationId, planId, createdAt(sort: Desc)])
@@ -465,23 +465,21 @@ model PlanChangeLog {
 
 /// 资金使用记录（分次使用 = 多行；version 为更正版本号）
 model UsageRecord {
-  id             String   @id @default(cuid())
-  userId         String   @map("user_id")
-  /// ToB R1 租户列（MIG-A 增量可空；createdById 来源原 userId）
-  organizationId String?  @map("organization_id")
-  createdById    String?  @map("created_by_id")
-  planId         String   @map("plan_id")
-  currencyCode   String   @map("currency_code")
-  amount         Decimal  @db.Decimal(20, 4)
-  usedAt         DateTime @map("used_at")
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  createdById    String?      @map("created_by_id")
+  planId         String       @map("plan_id")
+  currencyCode   String       @map("currency_code")
+  amount         Decimal      @db.Decimal(20, 4)
+  usedAt         DateTime     @map("used_at")
   /// 备注（M7 增量：可空，无默认值，兼容存量；≤ 200 字符由业务层校验）
   remark         String?
-  version        Int      @default(1)
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  version        Int          @default(1)
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy      User?        @relation("UsageRecordCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
-  @@index([userId, usedAt])
   @@index([organizationId, usedAt])
   @@map("usage_records")
 }
@@ -502,21 +500,20 @@ model UsageLotAllocation {
 
 /// 更正历史（before/after 快照；FAILED 保留失败尝试与原因）
 model Correction {
-  id             String   @id @default(cuid())
-  userId         String   @map("user_id")
-  /// ToB R1 租户列（MIG-A 增量可空；actorUserId = 历史操作者快照）
-  organizationId String?  @map("organization_id")
-  actorUserId    String?  @map("actor_user_id")
-  targetType     String   @map("target_type")
-  targetId       String   @map("target_id")
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  actorUserId    String?      @map("actor_user_id")
+  targetType     String       @map("target_type")
+  targetId       String       @map("target_id")
   reason         String
-  beforeSnapshot Json     @map("before_snapshot")
-  afterSnapshot  Json     @map("after_snapshot")
-  status         String   @default("APPLIED")
-  failReason     String?  @map("fail_reason")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  beforeSnapshot Json         @map("before_snapshot")
+  afterSnapshot  Json         @map("after_snapshot")
+  status         String       @default("APPLIED")
+  failReason     String?      @map("fail_reason")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  actor          User?        @relation("CorrectionActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
   @@index([targetType, targetId])
   @@index([organizationId, targetType, targetId])
@@ -524,38 +521,30 @@ model Correction {
 }
 
 /// 站内提醒（同计划同日合并防打扰：organizationId + dedupKey + scheduledFor 唯一）。
-/// 唯一约束按组织维度收口：原属 MIG-E 项，在 Goal #3B W22
-/// （20261125094500_tob_r1_mig_c_org_unique_indexes）提前切换并保留
-/// reminders_legacy_user_dedup_scheduled_uidx（WHERE organization_id IS NULL）；
-/// NOT NULL / User 级联解绑与删过渡索引留待 Goal #3C W30（MIG-E）。
+/// W30（MIG-F）：readAt 已迁至成员级 ReminderRead，本表不再承载个人读态。
 model Reminder {
-  id             String         @id @default(cuid())
-  userId         String         @map("user_id")
-  /// ToB R1 租户列（MIG-A 增量可空；业务事件随组织隔离）
-  organizationId String?        @map("organization_id")
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
   type           String
-  planId         String?        @map("plan_id")
-  dedupKey       String         @map("dedup_key")
-  scheduledFor   DateTime       @map("scheduled_for")
-  /// 已读时间（M9：null = 未读；读时派生 matters，行仅承载「何时该提醒 + 是否已读」）
-  /// MIG-B 后个人已读拆分至 ReminderRead（成员级），本列保留为存量个人读态回退
-  readAt         DateTime?      @map("read_at") @db.Timestamptz(3)
-  createdAt      DateTime       @default(now()) @map("created_at")
-  updatedAt      DateTime       @updatedAt @map("updated_at")
-  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId         String?      @map("plan_id")
+  dedupKey       String       @map("dedup_key")
+  scheduledFor   DateTime     @map("scheduled_for")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   readStates     ReminderRead[]
 
   @@unique([organizationId, dedupKey, scheduledFor])
-  @@index([userId, dedupKey, scheduledFor])
-  @@index([userId, scheduledFor])
   @@index([organizationId, scheduledFor])
   @@map("reminders")
 }
 
 /// 数据权利请求（type：EXPORT / CLEAR / DELETION）
+/// W30（MIG-F）：userId 更名 requesterUserId 并改 ON DELETE SET NULL——
+/// 用户注销后保留请求记录本身（不再随 User 级联删除）。
 model DataRequest {
   id                String    @id @default(cuid())
-  userId            String    @map("user_id")
+  requesterUserId   String?   @map("requester_user_id")
   /// ToB R1（技术方案 §9）：PERSONAL / ORGANIZATION；MIG-B 映射 EXPORT/DELETION→PERSONAL、历史 CLEAR→默认组织
   scope             String    @default("PERSONAL")
   /// ToB R1 租户列（MIG-A 增量可空；仅 scope=ORGANIZATION 时填充）
@@ -573,30 +562,30 @@ model DataRequest {
   processedAt       DateTime? @map("processed_at") @db.Timestamptz(3)
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")
-  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requester         User?     @relation("DataRequestRequester", fields: [requesterUserId], references: [id], onDelete: SetNull)
 
   /// 同时服务互斥查询、锁守卫查询与「查当前请求」，避免每请求多索引开销
-  @@index([userId, status])
+  @@index([requesterUserId, status])
   @@index([organizationId, status])
   @@map("data_requests")
 }
 
 /// AI 助手会话（ai-assistant 技术方案 §3.2；标题 = 首条消息前 20 字）
 model AiConversation {
-  id             String   @id @default(cuid())
-  userId         String   @map("user_id")
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  /// ToB R1 租户列（MIG-A 增量可空；查询按 (userId, organizationId) 严格隔离）
-  organizationId String?  @map("organization_id")
+  id             String       @id @default(cuid())
+  userId         String       @map("user_id")
+  organizationId String       @map("organization_id")
   title          String
-  lastMessageAt  DateTime @default(now()) @map("last_message_at")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  lastMessageAt  DateTime     @default(now()) @map("last_message_at")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   messages       AiMessage[]
 
   @@index([userId, updatedAt(sort: Desc)], map: "idx_user_updated")
   @@index([userId, organizationId, updatedAt(sort: Desc)])
-  /// 组织打头的访问路径（组织级导出/清空、按组织核对）；既有两条索引均以 user_id 打头
+  /// 组织打头的访问路径（组织级导出/清空、按组织核对）
   @@index([organizationId, lastMessageAt(sort: Desc)])
   @@map("ai_conversations")
 }

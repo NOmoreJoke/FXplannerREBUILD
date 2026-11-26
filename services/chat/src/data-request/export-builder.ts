@@ -23,7 +23,7 @@ import { getCurrency, roundToCurrency } from "@fxplanner-new/money";
 // 行类型（Prisma Decimal 序列化为字符串后进入本层，保持纯函数无 ORM 依赖）
 // ─────────────────────────────────────────────────────────────
 
-/** 组织偏好（本位币/准备偏好/提醒开关/记账起点）；时间戳在兼容回落（无组织设置行）时为 null */
+/** 组织偏好（本位币/准备偏好/提醒开关/记账起点）；时间戳在组织尚未建账（无组织设置行）时为 null */
 export interface ExportSettingsRow {
 	baseCurrency: string;
 	prepPreference: string;

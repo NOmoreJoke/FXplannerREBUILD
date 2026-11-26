@@ -21,7 +21,7 @@ import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
-import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { OrganizationContextGuard } from "../authorization/guards/organization-context.guard";
 import { PermissionGuard } from "../authorization/guards/permission.guard";
 import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
@@ -112,7 +112,7 @@ export class AccountController {
 			},
 		},
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("account.read")
 	async listAccounts(
 		@CurrentUser() user: User,
@@ -148,7 +148,7 @@ export class AccountController {
 		description: "该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND）",
 		type: AccountErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("account.read")
 	async getAccount(
 		@CurrentUser() user: User,
@@ -195,7 +195,7 @@ export class AccountController {
 		description: "该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND）",
 		type: AccountErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("account.read")
 	async getAllocations(
 		@CurrentUser() user: User,
@@ -235,7 +235,7 @@ export class AccountController {
 		description: "该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND）",
 		type: AccountErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("account.read")
 	async getLedger(
 		@CurrentUser() user: User,

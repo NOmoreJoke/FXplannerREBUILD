@@ -3,12 +3,6 @@ import path from "node:path";
 import { readEnvFile } from "./env-local";
 
 interface CorrectionDb {
-	userSettings: {
-		update(args: {
-			where: { userId: string; user: { email: string } };
-			data: { ledgerStartedAt: Date };
-		}): Promise<unknown>;
-	};
 	organizationSettings: {
 		updateMany(args: {
 			where: {
@@ -25,11 +19,7 @@ interface CorrectionDb {
 /**
  * 只调整刚创建测试用户的账本起点，以便通过真实 API 造历史交易。
  *
- * 记账起点两处同步改（后端 resolveOrganizationPreferences 的真相顺序）：
- * - OrganizationSettings：组织的唯一真相（W22 起 seedOnboarding 落这一行）；
- * - UserSettings：兼容窗口回落（组织尚无 OrganizationSettings 时以所有者个人设置代表）。
- * 只改后者会被组织偏好覆盖，POST /api/transactions 仍按当天起点报 400
- * INVALID_TRANSACTION_PARAMS「交易日期不能早于账本起点」。
+ * W30（MIG-F）：记账起点只存在于 OrganizationSettings（UserSettings 已删除该列）。
  */
 export async function setTestLedgerStart(
 	user: { userId: string; email: string },
@@ -59,10 +49,6 @@ export async function setTestLedgerStart(
 	};
 	const prisma = new PrismaClient({ datasourceUrl: databaseUrl });
 	try {
-		await prisma.userSettings.update({
-			where: { userId: user.userId, user: { email: user.email } },
-			data: { ledgerStartedAt },
-		});
 		// 测试用户只拥有注册时建的个人工作台（OWNER）：按成员关系定位其组织，不全表改
 		await prisma.organizationSettings.updateMany({
 			where: {

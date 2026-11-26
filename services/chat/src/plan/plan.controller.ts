@@ -32,7 +32,7 @@ import type { Request } from "express";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
-import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { OrganizationContextGuard } from "../authorization/guards/organization-context.guard";
 import { PermissionGuard } from "../authorization/guards/permission.guard";
 import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
@@ -126,7 +126,7 @@ export class PlanController {
 	// 读作用域（评审 R2-I02——此前只传 user.id，守卫形同虚设：带其他组织头仍返回
 	// 本人在该组织的余额 caps，受邀成员则命中自己的空账本）
 	@Post("schedule-preview")
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.create")
 	@ApiOperation({
 		summary: "分批排期预览（只读，不落库）",
@@ -160,7 +160,7 @@ export class PlanController {
 	}
 
 	@Post()
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.create")
 	@ApiOperation({
 		summary: "创建换汇计划（事务）",
@@ -214,7 +214,7 @@ export class PlanController {
 		description: "status 非法（不在三值枚举内），无模块 code",
 		type: PlanErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.read")
 	async list(
 		@CurrentUser() user: User,
@@ -249,7 +249,7 @@ export class PlanController {
 		description: "计划不存在或不属于本人（PLAN_NOT_FOUND）",
 		type: PlanErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.read")
 	async getDetail(
 		@CurrentUser() user: User,
@@ -266,7 +266,7 @@ export class PlanController {
 
 	@Post(":id/adjust-preview")
 	@HttpCode(HttpStatus.OK)
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.adjust")
 	@ApiOperation({
 		summary: "修改预览（只读，不落库）",
@@ -312,7 +312,7 @@ export class PlanController {
 	}
 
 	@Patch(":id")
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.adjust")
 	@ApiOperation({
 		summary: "提交修改 / 重新开启（事务 + 乐观锁）",
@@ -362,7 +362,7 @@ export class PlanController {
 
 	@Post(":id/complete")
 	@HttpCode(HttpStatus.OK)
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.adjust")
 	@ApiOperation({
 		summary: "完成确认（仅进行中；数据不变）",
@@ -408,7 +408,7 @@ export class PlanController {
 
 	@Post(":id/cancel")
 	@HttpCode(HttpStatus.OK)
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.adjust")
 	@ApiOperation({
 		summary: "取消计划（释放剩余分配，终态）",

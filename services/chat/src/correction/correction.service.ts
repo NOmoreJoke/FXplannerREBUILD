@@ -14,21 +14,16 @@ import {
 	type UsageRecord,
 } from "@prisma/client";
 import {
-	adoptLegacyOrgLedgerRows,
 	lockOrgLedgerAccounts,
-	upsertOrgAccountWithLegacyMerge,
+	upsertOrgAccount,
 } from "../prisma/ledger-write-lock";
 import { PrismaService } from "../prisma/prisma.service";
 import { RateService } from "../rate/rate.service";
+import { resolveOrganizationPreferences } from "../organization/organization-preferences";
 import {
-	materializeLegacyOrganizationSettings,
-	resolveOrganizationPreferences,
-} from "../organization/organization-preferences";
-import {
-	compatReadWhere,
+	orgWhere,
 	type ReadScope,
 } from "../authorization/organization-scope";
-import { planReservationWhere } from "../authorization/default-organization";
 import { can } from "../authorization/permission-policy";
 import { lockOrganizationForActor } from "../organization/default-organization";
 import { PermissionDeniedException } from "../authorization/authorization.errors";
@@ -119,9 +114,6 @@ export interface ReplayFailure {
 /** 交易目标的内存形态（变更前/后通用；Decimal 全精度） */
 export interface EffectiveTransaction {
 	id: string;
-	userId: string;
-	/** 记录创建者（审计快照；存量行可能为 null，批次归属回退 userId） */
-	createdById: string | null;
 	currencyCode: string;
 	quantity: Prisma.Decimal;
 	principalAmount: Prisma.Decimal;
@@ -136,9 +128,6 @@ export interface EffectiveTransaction {
 /** 初始持仓目标的内存形态（变更前/后通用；Decimal 全精度） */
 export interface EffectiveHolding {
 	id: string;
-	userId: string;
-	/** 记录创建者（审计快照；存量行可能为 null，批次归属回退 userId） */
-	createdById: string | null;
 	currencyCode: string;
 	amount: Prisma.Decimal;
 	rate: Prisma.Decimal;
@@ -154,7 +143,6 @@ export interface EffectiveHolding {
 /** 使用记录目标的内存形态（变更前/后通用；Decimal 全精度；MVP-F0-3 接线） */
 export interface EffectiveUsage {
 	id: string;
-	userId: string;
 	planId: string;
 	currencyCode: string;
 	amount: Prisma.Decimal;
@@ -200,11 +188,9 @@ type CorrectionDb = Pick<
 	| "usageLotAllocation"
 	| "plan"
 	| "planAllocation"
-	| "userSettings"
 	| "account"
 	// resolveOrganizationPreferences 的最小数据面（只读预览取组织偏好）
 	| "organizationSettings"
-	| "membership"
 	| "$queryRaw"
 >;
 
@@ -352,12 +338,12 @@ export class CorrectionService {
 	 * 提交更正（POST /api/corrections，方案 §5.4 事务编排 / ToB R1 W24）：
 	 * ⓪ 锁外按组织作用域预载目标（跨组织 / 不存在即刻 404，不进事务、不留 FAILED）
 	 * → 事务内 ① lockOrganizationForActor 重读最新角色并复验 correction.apply
-	 * （锁等降权 → 403 + 事务外 DENIED 审计）→ ② 组织建账态（409）与 OWNER_LEGACY 固化
-	 * → ③ lockOrgLedgerAccounts 锁受影响币种账户 → 收口默认组织创建者存量行 → Plan 行 FOR UPDATE
+	 * （锁等降权 → 403 + 事务外 DENIED 审计）→ ② 组织建账态（409）
+	 * → ③ lockOrgLedgerAccounts 锁受影响币种账户 → Plan 行 FOR UPDATE
 	 * → ④ 重读目标比对 baseVersion（并发更正 → 409 CORRECTION_TARGET_CHANGED）
 	 * → ⑤ 新鲜数据重放 + V0~V4（复核不通过：主事务回滚 + 事务外 FAILED 留痕与 FAILED 审计）
 	 * → ⑥ 目标行 update + version+1 → 删除受影响币种 CostLot/UsageLotAllocation 后按重放结果重建
-	 * （批次沿用来源记录创建者）→ ⑦ Account.balance = finalBalance → ⑧ Correction(status=APPLIED)
+	 * （批次沿用来源记录）→ ⑦ Account.balance = finalBalance → ⑧ Correction(status=APPLIED)
 	 * 与补分配 PlanChangeLog 留痕（organizationId + actorUserId）→ ⑨ 同事务 correction.apply 审计。
 	 * 任一失败全部回滚（审计写失败同样回滚）。
 	 */
@@ -438,11 +424,9 @@ export class CorrectionService {
 			targetType,
 			targetId,
 		);
-		const where = { targetType, targetId, ...compatReadWhere(scope) };
+		const where = { targetType, targetId, ...orgWhere(scope) };
 		const [total, rows] = await Promise.all([
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.correction.count({ where }),
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.correction.findMany({
 				where,
 				orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -518,8 +502,7 @@ export class CorrectionService {
 		_beforeTarget: LoadedTarget,
 		requestId: string | null,
 	): Promise<CorrectionApplyResultDto> {
-		// ① 组织建账态：未建账不允许更正（与记交易 / 记使用 / 改计划写入口同一道 BE-03 防线）；
-		//    OWNER_LEGACY 回落值先固化成组织自己的设置（评审 R2-I03）
+		// ① 组织建账态：未建账不允许更正（与记交易 / 记使用 / 改计划写入口同一道 BE-03 防线）
 		const preferences = await resolveOrganizationPreferences(
 			tx,
 			actor.organizationId,
@@ -528,9 +511,6 @@ export class CorrectionService {
 			throw new OnboardingNotCompletedException(
 				"尚未完成首次设置，请先前往 /onboarding 完成建账后再提交更正",
 			);
-		}
-		if (preferences.source === "OWNER_LEGACY") {
-			await materializeLegacyOrganizationSettings(tx, actor.organizationId);
 		}
 
 		// ② 行锁范围按「目标当前币种 + 拟改新币种」解析；lockOrgLedgerAccounts 内部按币种码
@@ -547,14 +527,11 @@ export class CorrectionService {
 			affectedCurrencies,
 		);
 
-		// ③ 重放前收口：默认组织创建者在这些币种下遗留的存量账本行并入组织——必须先于
-		//    下面的账本读取，否则它们不参与本次重放，提交后余额与批次对不上
+		// ③ 涉及币种的计划行加 FOR UPDATE（组织作用域；必须在 lockOrgLedgerAccounts
+		//    之后调用：账户行 → 计划行）
 		const lockedCurrencies = [...new Set(affectedCurrencies)].sort((a, b) =>
 			a < b ? -1 : a > b ? 1 : 0,
 		);
-		for (const currencyCode of lockedCurrencies) {
-			await adoptLegacyOrgLedgerRows(tx, actor.organizationId, currencyCode);
-		}
 		await this.lockScopedPlanRows(tx, actor, lockedCurrencies);
 
 		// ④ 事务内重读目标 + 乐观校验（预览后目标已被其他成员的更正更新 → 409，
@@ -591,10 +568,10 @@ export class CorrectionService {
 			await this.rebuildLots(tx, actor, currencyCode, replay);
 		}
 		for (const [currencyCode, replay] of evaluation.replayByCurrency) {
-			// 重放终态即该币种账户余额的唯一真相（账本已含刚收口的存量行；existingBalance 不参与，
+			// 重放终态即该币种账户余额的唯一真相（existingBalance 不参与，
 			// 否则同一笔流入被计两次）。经统一入口写入：组织内同币种只保留一行账户，
-			// 默认组织创建者的 legacy 账户行一并并入；新币种无账户时由操作者建户
-			await upsertOrgAccountWithLegacyMerge({
+			// 新币种无账户时由操作者建户
+			await upsertOrgAccount({
 				tx,
 				organizationId: actor.organizationId,
 				currencyCode,
@@ -612,7 +589,6 @@ export class CorrectionService {
 		);
 		const correction = await tx.correction.create({
 			data: {
-				userId: actor.userId,
 				organizationId: actor.organizationId,
 				actorUserId: actor.userId,
 				targetType: evaluation.targetType,
@@ -671,10 +647,9 @@ export class CorrectionService {
 	}
 
 	/**
-	 * 锁内对涉及币种的 Plan 行加 FOR UPDATE（组织行 + 默认组织创建者尚未收口的存量行，
-	 * 与 compatReadWhere(scope) 同口径）：更正会读这些计划的分配做 V2 校验、改 USAGE
-	 * 所在计划的分配，行锁挡住绕过组织锁的直接写入。按 id 排序取锁；必须在
-	 * lockOrgLedgerAccounts 之后调用（账户行 → 计划行）。
+	 * 锁内对涉及币种的 Plan 行加 FOR UPDATE（纯组织作用域，与 orgWhere(scope) 同口径）：
+	 * 更正会读这些计划的分配做 V2 校验、改 USAGE 所在计划的分配，行锁挡住绕过组织锁的
+	 * 直接写入。按 id 排序取锁；必须在 lockOrgLedgerAccounts 之后调用（账户行 → 计划行）。
 	 */
 	private async lockScopedPlanRows(
 		tx: Prisma.TransactionClient,
@@ -684,11 +659,7 @@ export class CorrectionService {
 		await tx.$queryRaw`
 			SELECT id FROM plans
 			WHERE target_currency = ANY(${[...currencyCodes]}::text[])
-				AND (
-					organization_id = ${scope.organizationId}
-					OR (${scope.isDefaultOrganization === true}
-						AND organization_id IS NULL AND user_id = ${scope.userId})
-				)
+				AND organization_id = ${scope.organizationId}
 			ORDER BY id
 			FOR UPDATE`;
 	}
@@ -714,8 +685,7 @@ export class CorrectionService {
 			dto.targetId,
 		);
 		this.assertOptimisticMatch(dto, target);
-		// 本位币 / 记账起点取组织偏好（OrganizationSettings 优先；默认组织兼容回落到
-		// 所有者个人设置——受邀成员没有自己的 UserSettings）
+		// 本位币 / 记账起点取组织偏好（唯一真相 = OrganizationSettings；组织尚无该行即未建账）
 		const preferences = await resolveOrganizationPreferences(
 			db,
 			actor.organizationId,
@@ -789,8 +759,6 @@ export class CorrectionService {
 		const planIdDetached = currencyChanged && original.planId !== null;
 		const effective: EffectiveTransaction = {
 			id: original.id,
-			userId: original.userId,
-			createdById: original.createdById,
 			currencyCode: changes.currencyCode ?? original.currencyCode,
 			quantity: changes.quantity ?? original.quantity,
 			principalAmount: changes.principalAmount ?? original.principalAmount,
@@ -908,14 +876,12 @@ export class CorrectionService {
 		);
 
 		// 计划与分配装载（UsageRecord.planId 非空；缺失即数据异常，拒绝更正）。
-		// 计划按「计划占用」的对称口径读取（planReservationWhere）：使用记录本身已按组织作用域
-		// 校验归属；兼容窗口内默认组织创建者尚未收口的存量计划在逻辑上属于本组织，不应因
-		// 租户列还没回填就被误报成「数据异常」
-		// @org-scope-exempt: W30 MIG-D/F 待清理
+		// 计划按组织作用域读取（orgWhere）：使用记录本身已按组织作用域校验归属，
+		// 组织内成员算出的未分配余额一致，V2 不会因看不到对方的计划占用而放行超额更正
 		const usagePlan = await db.plan.findFirst({
 			where: {
 				id: originalUsage.planId,
-				...(await planReservationWhere(db, scope)),
+				...orgWhere(scope),
 			},
 			select: { id: true, status: true, targetAmount: true },
 		});
@@ -939,7 +905,6 @@ export class CorrectionService {
 
 		const effective: EffectiveUsage = {
 			id: originalUsage.id,
-			userId: originalUsage.userId,
 			planId: originalUsage.planId,
 			currencyCode: originalUsage.currencyCode,
 			amount: changes.amount ?? originalUsage.amount,
@@ -1178,8 +1143,6 @@ export class CorrectionService {
 
 		const effective: EffectiveHolding = {
 			id: original.id,
-			userId: original.userId,
-			createdById: original.createdById,
 			currencyCode: nextCode,
 			amount: nextAmount,
 			rate: nextRate,
@@ -1315,7 +1278,6 @@ export class CorrectionService {
 			// 排到确认日导致 V3 误报/批次漂移）。起点缺失兜底确认时刻（存量防御）。
 			happenedAt: ledgerStartedAt ?? holding.confirmedAt,
 			createdAt: holding.createdAt,
-			ownerUserId: holding.createdById ?? holding.userId,
 			quantity: holding.amount,
 			unitCost: holding.rate,
 			totalCost: holding.cost,
@@ -1328,7 +1290,6 @@ export class CorrectionService {
 			id: transaction.id,
 			happenedAt: transaction.transactedAt,
 			createdAt: transaction.createdAt,
-			ownerUserId: transaction.createdById ?? transaction.userId,
 			quantity: transaction.quantity,
 			principalAmount: transaction.principalAmount,
 			feeAmount: transaction.feeAmount,
@@ -1434,7 +1395,7 @@ export class CorrectionService {
 		evaluation: Evaluation,
 	): Promise<void> {
 		const effective = evaluation.afterTransaction!;
-		// @org-scope-exempt: post-lock 主键更新（applyInTransaction 已持组织账本锁并经 loadTarget+compatReadWhere 校验归属）
+		// @org-scope-exempt: post-lock 主键更新（applyInTransaction 已持组织账本锁并经 loadTarget+orgWhere 校验归属）
 		await tx.transaction.update({
 			where: { id: effective.id },
 			data: {
@@ -1460,7 +1421,7 @@ export class CorrectionService {
 		const effective = evaluation.afterUsage!;
 		const delta = evaluation.usageAllocationDelta!;
 		const usagePlan = evaluation.usagePlan!;
-		// @org-scope-exempt: post-lock 主键更新（applyInTransaction 已持组织账本锁并经 loadTarget+compatReadWhere 校验归属）
+		// @org-scope-exempt: post-lock 主键更新（applyInTransaction 已持组织账本锁并经 loadTarget+orgWhere 校验归属）
 		await tx.usageRecord.update({
 			where: { id: effective.id },
 			data: {
@@ -1542,7 +1503,7 @@ export class CorrectionService {
 		evaluation: Evaluation,
 	): Promise<void> {
 		const effective = evaluation.afterHolding!;
-		// @org-scope-exempt: post-lock 主键更新（applyInTransaction 已持组织账本锁并经 loadTarget+compatReadWhere 校验归属）
+		// @org-scope-exempt: post-lock 主键更新（applyInTransaction 已持组织账本锁并经 loadTarget+orgWhere 校验归属）
 		await tx.initialHolding.update({
 			where: { id: effective.id },
 			data: {
@@ -1561,11 +1522,10 @@ export class CorrectionService {
 	 * 成本批次重建（方案 §5.4 ⑤；W24 组织化）：先删该币种组织作用域内的
 	 * UsageLotAllocation（裸外键先删引用）与 CostLot，再按重放结果重建；分摊明细按
 	 * sourceId → 新批次 id 映射落库。
-	 * - 删除范围 = compatReadWhere(actor)：组织行 + 默认组织创建者尚未收口的存量行，
-	 *   绝不按请求者 userId 删（否则其他成员的批次留下、重建后成重复批次）；
-	 * - 新批次携带 organizationId，userId 沿用**来源记录的创建者**（买入人 / 建账人，
-	 *   兼容列 CostLot.userId 即批次创建者；由重放事件 ownerUserId 原样带出）——更正者
-	 *   只出现在 Correction 与审计里，不把别人的批次改挂到自己名下；
+	 * - 删除范围 = orgWhere(actor)：组织内全部成员的批次，绝不按请求者 userId 删
+	 *   （否则其他成员的批次留下、重建后成重复批次）；
+	 * - 新批次只带 organizationId——批次归属由来源记录（Transaction / InitialHolding 的
+	 *   createdById）承担，更正者只出现在 Correction 与审计里，不把别人的批次改挂到自己名下；
 	 * - 账户行锁保护下与余额更新同事务，杜绝半更新；千级事件毫秒级完成（方案 §2）。
 	 */
 	private async rebuildLots(
@@ -1574,8 +1534,7 @@ export class CorrectionService {
 		currencyCode: string,
 		replay: ReplayResult,
 	): Promise<void> {
-		const owner = compatReadWhere(actor);
-		// @org-scope-exempt: W30 MIG-D/F 待清理
+		const owner = orgWhere(actor);
 		const oldLots = await tx.costLot.findMany({
 			where: { currencyCode, ...owner },
 			select: { id: true },
@@ -1595,20 +1554,12 @@ export class CorrectionService {
 				},
 			});
 		}
-		// @org-scope-exempt: W30 MIG-D/F 待清理
 		await tx.costLot.deleteMany({ where: { currencyCode, ...owner } });
 
 		const lotIdBySource = new Map<string, string>();
 		for (const lot of replay.lots) {
-			if (!lot.ownerUserId) {
-				// 防御：流入事件必带来源记录创建者，缺失即数据 bug，整体回滚
-				throw new Error(
-					`批次重建缺少来源记录创建者：source=${lot.sourceType}:${lot.sourceId}`,
-				);
-			}
 			const created = await tx.costLot.create({
 				data: {
-					user: { connect: { id: lot.ownerUserId } },
 					organizationId: actor.organizationId,
 					currencyCode,
 					sourceType: lot.sourceType,
@@ -1643,8 +1594,8 @@ export class CorrectionService {
 
 	/**
 	 * FAILED 尝试留痕（业务事务已回滚，事务外独立写入，尽力而为；方案 §5.4：失败也保存
-	 * 尝试记录）。留痕带所属组织与实际操作者（organizationId / actorUserId，兼容列
-	 * userId = 操作者），并另写一条 result=FAILED 的 correction.apply 独立审计——
+	 * 尝试记录）。留痕带所属组织与实际操作者（organizationId / actorUserId），并另写一条
+	 * result=FAILED 的 correction.apply 独立审计——
 	 * 「谁在什么时候尝试了哪次更正、为何被拒」必须有迹可循。两者任一失败只记日志，
 	 * 不影响 409 错误响应（调用方 catch）。
 	 */
@@ -1671,7 +1622,6 @@ export class CorrectionService {
 					: this.serializeHolding(this.toEffectiveHolding(beforeTarget.holding!));
 		const correction = await this.prisma.correction.create({
 			data: {
-				userId: actor.userId,
 				organizationId: actor.organizationId,
 				actorUserId: actor.userId,
 				targetType: dto.targetType,
@@ -1713,8 +1663,7 @@ export class CorrectionService {
 
 	/**
 	 * 目标加载（preview / apply / list / target 统一口径，W24）：按组织作用域
-	 * compatReadWhere(actor) 查找——组织行跨成员共享，默认组织创建者尚未收口的存量行
-	 * 仅本人在默认组织上下文可见；跨组织与不存在一律 404（不泄露存在性）。
+	 * orgWhere(actor) 查找——组织行跨成员共享；跨组织与不存在一律 404（不泄露存在性）。
 	 */
 	private async loadTarget(
 		db: CorrectionDb,
@@ -1722,9 +1671,8 @@ export class CorrectionService {
 		targetType: CorrectionTargetTypeValue,
 		targetId: string,
 	): Promise<LoadedTarget> {
-		const owner = compatReadWhere(scope);
+		const owner = orgWhere(scope);
 		if (targetType === "TRANSACTION") {
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			const transaction = await db.transaction.findFirst({
 				where: { id: targetId, ...owner },
 			});
@@ -1732,14 +1680,12 @@ export class CorrectionService {
 			return { type: "TRANSACTION", transaction };
 		}
 		if (targetType === "USAGE") {
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			const usage = await db.usageRecord.findFirst({
 				where: { id: targetId, ...owner },
 			});
 			if (!usage) throw new CorrectionTargetNotFoundException();
 			return { type: "USAGE", usage };
 		}
-		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const holding = await db.initialHolding.findFirst({
 			where: { id: targetId, ...owner },
 		});
@@ -1819,12 +1765,9 @@ export class CorrectionService {
 	/**
 	 * 组织内单币种（或多币种）账本上下文加载（该币种全部事件来源行 + 计划分配现状）。
 	 * PlanAllocation 与 Plan 裸外键：先查该币种计划，再按 planId 批量取分配。
-	 * 归属（W24，preview 与 apply 同口径）：
-	 * - 初始持仓 / 交易 / 使用：compatReadWhere(actor)——组织全体成员的账本行，
-	 *   严禁按请求者 userId 过滤（否则成员更正时按自己的空账本重放）；
-	 * - 计划占用：planReservationWhere——在 compat 之上对称纳入默认组织创建者尚未收口的
-	 *   存量计划（R2-I1），受邀成员与创建者算出的未分配余额一致，V2 不会因看不到对方的
-	 *   计划占用而放行超额更正。
+	 * 归属（W24，preview 与 apply 同口径）：初始持仓 / 交易 / 使用 / 计划一律按
+	 * orgWhere(actor) 读取——组织全体成员的账本行与计划占用，严禁按请求者 userId 过滤
+	 * （否则成员更正时按自己的空账本重放）。
 	 */
 	private async loadLedgerContexts(
 		db: CorrectionDb,
@@ -1832,24 +1775,19 @@ export class CorrectionService {
 		currencies: string[],
 	): Promise<Map<string, CurrencyLedgerContext>> {
 		const currencyList = [...new Set(currencies)];
-		const owner = compatReadWhere(scope);
-		const reservationOwner = await planReservationWhere(db, scope);
+		const owner = orgWhere(scope);
 		const [initialHoldings, transactions, usageRecords, plans] = await Promise.all([
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			db.initialHolding.findMany({
 				where: { currencyCode: { in: currencyList }, ...owner },
 			}),
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			db.transaction.findMany({
 				where: { currencyCode: { in: currencyList }, ...owner },
 			}),
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			db.usageRecord.findMany({
 				where: { currencyCode: { in: currencyList }, ...owner },
 			}),
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			db.plan.findMany({
-				where: { targetCurrency: { in: currencyList }, ...reservationOwner },
+				where: { targetCurrency: { in: currencyList }, ...owner },
 				select: {
 					id: true,
 					targetCurrency: true,
@@ -1943,8 +1881,6 @@ export class CorrectionService {
 	): EffectiveTransaction {
 		return {
 			id: transaction.id,
-			userId: transaction.userId,
-			createdById: transaction.createdById,
 			currencyCode: transaction.currencyCode,
 			quantity: transaction.quantity,
 			principalAmount: transaction.principalAmount,
@@ -1960,8 +1896,6 @@ export class CorrectionService {
 	private toEffectiveHolding(holding: InitialHolding): EffectiveHolding {
 		return {
 			id: holding.id,
-			userId: holding.userId,
-			createdById: holding.createdById,
 			currencyCode: holding.currencyCode,
 			amount: holding.amount,
 			rate: holding.rate,
@@ -1978,7 +1912,6 @@ export class CorrectionService {
 	private toEffectiveUsage(usage: UsageRecord): EffectiveUsage {
 		return {
 			id: usage.id,
-			userId: usage.userId,
 			planId: usage.planId,
 			currencyCode: usage.currencyCode,
 			amount: usage.amount,

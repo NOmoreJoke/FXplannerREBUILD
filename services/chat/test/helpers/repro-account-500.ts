@@ -17,13 +17,16 @@ async function main() {
 		where: { currencyCode: "HKD" },
 	});
 	if (!hkAccount) throw new Error("no HKD account");
-	const userId = hkAccount.userId;
-	console.log("userId =", userId);
+	const scope = {
+		userId: hkAccount.createdById ?? "repro-user",
+		organizationId: hkAccount.organizationId,
+	};
+	console.log("organizationId =", scope.organizationId);
 
 	for (const [name, fn] of [
-		["detail", () => service.detail(userId, "HKD")],
-		["ledger", () => service.ledger(userId, "HKD")],
-		["list", () => service.list(userId)],
+		["detail", () => service.detail(scope, "HKD")],
+		["ledger", () => service.ledger(scope, "HKD")],
+		["list", () => service.list(scope)],
 	] as const) {
 		try {
 			const result = await fn();

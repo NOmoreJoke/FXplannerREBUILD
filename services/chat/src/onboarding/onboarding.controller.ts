@@ -26,7 +26,7 @@ import type { Request } from "express";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
-import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { OrganizationContextGuard } from "../authorization/guards/organization-context.guard";
 import { PermissionGuard } from "../authorization/guards/permission.guard";
 import {
 	RequiresPermission,
@@ -69,12 +69,12 @@ export class OnboardingController {
 	// 只读状态查询与业务 GET 同一守卫链（评审 I-10：此前漏挂，离职成员/跨组织上下文
 	// 仍可读，且完成态只看个人设置——现按当前组织的偏好判定）
 	@Get("status")
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("settings.read")
 	@ApiOperation({
 		summary: "查询首次设置状态（按当前组织）",
 		description:
-			"完成态判定 / 条款确认进度 / 已保存设置 / 当前条款版本。只读无副作用。完成态与设置以当前组织为准（组织设置优先；兼容窗口内回落到默认组织所有者的个人设置）；条款确认进度为个人维度。无组织头的单组织用户回落到其默认组织，多组织须带 X-Organization-Id。",
+			"完成态判定 / 条款确认进度 / 已保存设置 / 当前条款版本。只读无副作用。完成态与设置以当前组织为准（组织设置为唯一真相）；条款确认进度为个人维度。须带 X-Organization-Id——W30（MIG-D）起组织上下文唯一，缺头一律 400 ORGANIZATION_REQUIRED，不再回落默认组织。",
 	})
 	@ApiOkResponse({
 		description: "状态查询成功，响应体为 { success, data, message } 包装",
@@ -103,7 +103,7 @@ export class OnboardingController {
 	}
 
 	@Post("complete")
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("settings.update")
 	@ApiOperation({
 		summary: "完成首次设置（当前组织，最终提交，不可重复）",
@@ -142,7 +142,7 @@ export class OnboardingController {
 	}
 
 	@Post("initial-holdings")
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("settings.update")
 	@ApiOperation({
 		summary: "补录初始持仓（当前组织建账后，每币种仅一笔）",

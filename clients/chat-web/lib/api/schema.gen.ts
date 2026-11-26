@@ -134,7 +134,7 @@ export interface paths {
         };
         /**
          * 查询首次设置状态（按当前组织）
-         * @description 完成态判定 / 条款确认进度 / 已保存设置 / 当前条款版本。只读无副作用。完成态与设置以当前组织为准（组织设置优先；兼容窗口内回落到默认组织所有者的个人设置）；条款确认进度为个人维度。无组织头的单组织用户回落到其默认组织，多组织须带 X-Organization-Id。
+         * @description 完成态判定 / 条款确认进度 / 已保存设置 / 当前条款版本。只读无副作用。完成态与设置以当前组织为准（组织设置为唯一真相）；条款确认进度为个人维度。须带 X-Organization-Id——W30（MIG-D）起组织上下文唯一，缺头一律 400 ORGANIZATION_REQUIRED，不再回落默认组织。
          */
         get: operations["OnboardingController_getStatus"];
         put?: never;
@@ -522,7 +522,7 @@ export interface paths {
         };
         /**
          * 交易详情
-         * @description 返回单条买入记录（数量/本金/手续费/总成本/汇率等）；手续费未知时 feeAmount=null、totalCost=null、feeKnown=false，前端显示「费用未明确」。仅本人可见：不存在或不属于本人一律 404 TRANSACTION_NOT_FOUND。
+         * @description 返回单条买入记录（数量/本金/手续费/总成本/汇率等）；手续费未知时 feeAmount=null、totalCost=null、feeKnown=false，前端显示「费用未明确」。仅当前组织可见：不存在或不属于当前组织一律 404 TRANSACTION_NOT_FOUND。
          */
         get: operations["TransactionController_detail"];
         put?: never;
@@ -692,7 +692,7 @@ export interface paths {
         put?: never;
         /**
          * 单条已读（幂等，成员级）
-         * @description 将**当前成员**的一条提醒标记为已读：已读态写入成员级 ReminderRead(reminderId, userId)，不写入共享的 Reminder.readAt（一名成员标已读不影响同组织其他成员的未读态）。目标提醒按当前组织作用域校验：不存在或跨组织一律 404 REMINDER_NOT_FOUND（不泄露存在性）；未受邀或已被移除（DISABLED）的成员由守卫统一返回 404。重复调用幂等返回既有 readAt。
+         * @description 将**当前成员**的一条提醒标记为已读：已读态只写入成员级 ReminderRead(reminderId, userId)（提醒行本身不再承载任何共享已读态，一名成员标已读不影响同组织其他成员的未读态）。目标提醒按当前组织作用域校验：不存在或跨组织一律 404 REMINDER_NOT_FOUND（不泄露存在性）；未受邀或已被移除（DISABLED）的成员由守卫统一返回 404。重复调用幂等返回既有 readAt。
          */
         post: operations["ReminderController_markRead"];
         delete?: never;
@@ -712,7 +712,7 @@ export interface paths {
         put?: never;
         /**
          * 全部已读（幂等，成员级）
-         * @description 将当前组织作用域内、**当前成员尚未读过**的提醒全部标记为已读：只写当前成员自己的 ReminderRead（事务内批量插入、并发去重），不修改任何共享 Reminder.readAt。返回本次新增的成员级已读行数；重复调用 updatedCount = 0，天然幂等。
+         * @description 将当前组织作用域内、**当前成员尚未读过**的提醒全部标记为已读：只写当前成员自己的 ReminderRead（事务内批量插入、并发去重），不修改任何共享读态。返回本次新增的成员级已读行数；重复调用 updatedCount = 0，天然幂等。
          */
         post: operations["ReminderController_markAllRead"];
         delete?: never;
@@ -820,7 +820,7 @@ export interface paths {
         put?: never;
         /**
          * 提交更正（事务）
-         * @description 组织共享账本：须具备 correction.apply 权限（OWNER/ADMIN/FINANCE；OPERATOR/VIEWER 403 PERMISSION_DENIED 并写 DENIED 审计）。事务内依次执行：锁组织并按最新角色复验权限（锁等期间降权同样 403）→ 校验组织已建账 → 锁定受影响币种的组织账户（兼容窗口内先把默认组织创建者的存量账本行收口进组织）与相关计划行 → 按组织账本重算。USAGE 须确认本次影响，初始持仓改币种须确认预览报价。版本或使用影响失配返回 409 CORRECTION_TARGET_CHANGED（另一成员已更新目标时不覆盖后者，须重新预览），报价失配返回 409 CORRECTION_QUOTE_CHANGED。校验通过后重放账本并写入 APPLIED（含所属组织与操作者）；资金、分配或历史缺口拒绝时，业务数据零变化，另写带组织与操作者的 FAILED 尝试留痕及 FAILED 审计。
+         * @description 组织共享账本：须具备 correction.apply 权限（OWNER/ADMIN/FINANCE；OPERATOR/VIEWER 403 PERMISSION_DENIED 并写 DENIED 审计）。事务内依次执行：锁组织并按最新角色复验权限（锁等期间降权同样 403）→ 校验组织已建账 → 锁定受影响币种的组织账户与相关计划行（W30 MIG-E/F 后组织账本恒有归属，无存量收口步骤） → 按组织账本重算。USAGE 须确认本次影响，初始持仓改币种须确认预览报价。版本或使用影响失配返回 409 CORRECTION_TARGET_CHANGED（另一成员已更新目标时不覆盖后者，须重新预览），报价失配返回 409 CORRECTION_QUOTE_CHANGED。校验通过后重放账本并写入 APPLIED（含所属组织与操作者）；资金、分配或历史缺口拒绝时，业务数据零变化，另写带组织与操作者的 FAILED 尝试留痕及 FAILED 审计。
          */
         post: operations["CorrectionController_apply"];
         delete?: never;
@@ -1318,7 +1318,7 @@ export interface paths {
         };
         /**
          * 会话列表
-         * @description 仅返回本人且属于当前组织的会话，按 lastMessageAt 倒序；幂等只读。默认组织上下文附带本人存量（organizationId IS NULL）会话，其他组织严格只看当前组织会话。未配 LLM key 或总开关关闭时 503 整体降级。
+         * @description 仅返回本人且属于当前组织的会话，按 lastMessageAt 倒序；幂等只读。严格只看当前组织会话（组织维度无兼容回落分支）。未配 LLM key 或总开关关闭时 503 整体降级。
          */
         get: operations["AiController_listConversations"];
         put?: never;
@@ -2851,7 +2851,7 @@ export interface components {
         };
         AccountListDto: {
             /**
-             * @description 本位币（成本币种，取组织本位币（兼容窗口回落创建者默认设置））；新用户无设置行时为 null（前端成本列退化为纯金额）
+             * @description 本位币（成本币种，取组织本位币（organization_settings.base_currency））；组织尚未建账时为 null（前端成本列退化为纯金额）
              * @example CNY
              */
             baseCurrency: string | null;
@@ -2880,7 +2880,7 @@ export interface components {
              */
             unallocatedAmount: string;
             /**
-             * @description 本位币（成本币种，取组织本位币（兼容窗口回落创建者默认设置））；新用户无设置行时为 null
+             * @description 本位币（成本币种，取组织本位币（organization_settings.base_currency））；组织尚未建账时为 null
              * @example CNY
              */
             baseCurrency: string | null;
@@ -2935,7 +2935,7 @@ export interface components {
         };
         AccountLedgerDto: {
             /**
-             * @description 本位币（成本列币种，取组织本位币（兼容窗口回落创建者默认设置））；无设置行时为 null
+             * @description 本位币（成本列币种，取组织本位币（organization_settings.base_currency））；组织尚未建账时为 null
              * @example CNY
              */
             baseCurrency: string | null;
@@ -3009,7 +3009,7 @@ export interface components {
              */
             locale: string;
             /**
-             * @description 本位币（只读，来源 user_settings.base_currency；无任何更新通道，建账时锁定）
+             * @description 本位币（只读，来源 organization_settings.base_currency；无任何更新通道，建账时锁定）
              * @example CNY
              */
             baseCurrency: string;
@@ -3140,7 +3140,7 @@ export interface components {
              * @example 2026-09-17T00:00:00.000Z
              */
             scheduledFor: string;
-            /** @description 已读时间（null = 未读） */
+            /** @description 当前成员的已读时间（成员级 ReminderRead；null = 未读；其他成员读过不影响本成员） */
             readAt: string | null;
             /**
              * @description 首写类型（诊断用途；展示以 matters 为准）
@@ -3236,7 +3236,7 @@ export interface components {
         };
         ReportPlanListDto: {
             /**
-             * @description 本位币（成本币种，取组织本位币（兼容窗口回落创建者默认设置））；新用户无设置行时为 null
+             * @description 本位币（成本币种，取组织本位币（organization_settings.base_currency））；组织尚未建账时为 null
              * @example CNY
              */
             baseCurrency: string | null;
@@ -5444,7 +5444,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description 交易不存在或不属于本人（TRANSACTION_NOT_FOUND） */
+            /** @description 交易不存在或不属于当前组织（TRANSACTION_NOT_FOUND） */
             404: {
                 headers: {
                     [name: string]: unknown;

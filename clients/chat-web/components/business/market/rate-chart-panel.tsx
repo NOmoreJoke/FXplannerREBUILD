@@ -42,7 +42,10 @@ interface RateChartPanelProps {
 	/** 各币种序列状态（参与成图与失败摘要） */
 	series: UseRateHistoryResult["series"];
 	isLoading: boolean;
-	isAllUnavailable: boolean;
+	/**
+	 * 「全部币种不可用」由 `series` 推导（失败 + 空数据序列），不再单独传 prop——
+	 * 空态原因清单与该标志同源，避免两处口径漂移（存量 lint error 清理）。
+	 */
 	onRetry: () => void;
 }
 
@@ -125,7 +128,6 @@ export function RateChartPanel({
 	rows,
 	series,
 	isLoading,
-	isAllUnavailable,
 	onRetry,
 }: RateChartPanelProps) {
 	const chartCurrencies =

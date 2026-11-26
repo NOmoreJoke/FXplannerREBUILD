@@ -40,6 +40,7 @@ import type { Prisma } from "@prisma/client";
 import {
 	detectMigrationSchemaCapabilities,
 	type MigrationSchemaCapabilities,
+	serializeCapabilities,
 } from "./migration-schema-capabilities";
 
 /**
@@ -73,6 +74,26 @@ export interface ReconcileResult {
 	sharded: boolean;
 	/** 本次核对所处的库阶段能力（MIG-F 前瞻：MIG-F 后走「组织维度基础校验」分支） */
 	capabilities?: MigrationSchemaCapabilities;
+}
+
+/**
+ * 核对结果的 JSON 友好投影：能力快照里的 `Set` 展开成数组（`Set` 直接
+ * JSON.stringify 会变成 `{}`，运维看日志会误读）。
+ */
+export function serializeReconcileResult(result: ReconcileResult): {
+	checks: number;
+	diffs: ReconcileDiff[];
+	sharded: boolean;
+	capabilities: Record<string, unknown> | null;
+} {
+	return {
+		checks: result.checks,
+		diffs: result.diffs,
+		sharded: result.sharded,
+		capabilities: result.capabilities
+			? serializeCapabilities(result.capabilities)
+			: null,
+	};
 }
 
 type QueryRunner = Prisma.TransactionClient["$queryRaw"];

@@ -6,8 +6,10 @@ import {
 	createCapturingEmailOtpChannel,
 	type CapturingEmailOtpChannel,
 } from "./capturing-email-otp-channel";
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
 import {
 	createTestApp,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "./test-app";
@@ -37,8 +39,8 @@ export async function createDataRequestTestApp(): Promise<DataRequestTestEnv> {
 			.useValue([otpChannel])
 			.overrideProvider(OTP_OPTIONS)
 			.useValue({
-				targetMaxRequests: 100,
-				ipMaxRequests: 100,
+				targetMaxRequests: 1000,
+				ipMaxRequests: 1000,
 				// 测试集中发码：同步放开 1h/24h 发送上限（频控语义由 otp.spec 覆盖）
 				sendMaxPerHour: 1000,
 				sendMaxPerDay: 1000,
@@ -55,9 +57,18 @@ export async function createDataRequestTestApp(): Promise<DataRequestTestEnv> {
 /** 完成首次设置（consents + complete），返回 settings 行 */
 export async function completeOnboarding(
 	app: INestApplication,
-	token: string,
+	userOrToken: string | TestUser,
 	baseCurrency = "CNY",
+	organizationId?: string,
 ): Promise<void> {
+	const token =
+		typeof userOrToken === "string" ? userOrToken : userOrToken.accessToken;
+	const orgHeaders =
+		typeof userOrToken !== "string"
+			? orgBearer(userOrToken)
+			: organizationId
+				? { Authorization: `Bearer ${token}`, "X-Organization-Id": organizationId }
+				: { Authorization: `Bearer ${token}` };
 	await request(app.getHttpServer())
 		.post("/api/onboarding/consents")
 		.set("Authorization", `Bearer ${token}`)
@@ -65,7 +76,7 @@ export async function completeOnboarding(
 		.expect(201);
 	await request(app.getHttpServer())
 		.post("/api/onboarding/complete")
-		.set("Authorization", `Bearer ${token}`)
+		.set(orgHeaders)
 		.send({
 			baseCurrency,
 			locale: "zh-CN",
@@ -153,18 +164,20 @@ export async function seedBusinessData(
 	userId: string,
 	scope?: { organizationId: string },
 ): Promise<SeedBusinessDataResult> {
-	const tenant = scope ? { organizationId: scope.organizationId } : {};
-	const creator = scope ? { createdById: userId } : {};
-	const actor = scope ? { actorUserId: userId } : {};
+	const organizationId =
+		scope?.organizationId ??
+		(await resolveDefaultOrganizationId(prisma, userId));
+	if (!organizationId) {
+		throw new Error(`seedBusinessData(${userId}): 未找到默认组织`);
+	}
 	const now = new Date();
 	const account = await prisma.account.create({
-		data: { userId, ...tenant, ...creator, currencyCode: "USD", balance: "900.0000" },
+		data: { organizationId, createdById: userId, currencyCode: "USD", balance: "900.0000" },
 	});
 	const holding = await prisma.initialHolding.create({
 		data: {
-			userId,
-			...tenant,
-			...creator,
+			organizationId,
+			createdById: userId,
 			currencyCode: "CAD",
 			amount: "100.0000",
 			rate: "5.0000000000",
@@ -177,9 +190,8 @@ export async function seedBusinessData(
 	});
 	const transaction = await prisma.transaction.create({
 		data: {
-			userId,
-			...tenant,
-			...creator,
+			organizationId,
+			createdById: userId,
 			currencyCode: "USD",
 			quantity: "100.0000",
 			principalAmount: "720.0000",
@@ -192,8 +204,7 @@ export async function seedBusinessData(
 	});
 	const costLot = await prisma.costLot.create({
 		data: {
-			userId,
-			...tenant,
+			organizationId,
 			currencyCode: "USD",
 			sourceType: "PURCHASE",
 			sourceId: transaction.id,
@@ -206,9 +217,8 @@ export async function seedBusinessData(
 	});
 	const plan = await prisma.plan.create({
 		data: {
-			userId,
-			...tenant,
-			...creator,
+			organizationId,
+			createdById: userId,
 			name: "测试计划",
 			targetCurrency: "USD",
 			targetAmount: "1000.0000",
@@ -223,9 +233,8 @@ export async function seedBusinessData(
 	});
 	const usage = await prisma.usageRecord.create({
 		data: {
-			userId,
-			...tenant,
-			...creator,
+			organizationId,
+			createdById: userId,
 			planId: plan.id,
 			currencyCode: "USD",
 			amount: "40.0000",
@@ -242,9 +251,8 @@ export async function seedBusinessData(
 	});
 	const correction = await prisma.correction.create({
 		data: {
-			userId,
-			...tenant,
-			...actor,
+			organizationId,
+			actorUserId: userId,
 			targetType: "TRANSACTION",
 			targetId: transaction.id,
 			reason: "手续费补录",
@@ -255,8 +263,7 @@ export async function seedBusinessData(
 	});
 	const reminder = await prisma.reminder.create({
 		data: {
-			userId,
-			...tenant,
+			organizationId,
 			type: "PREP",
 			planId: plan.id,
 			dedupKey: `PREP:${plan.id}`,

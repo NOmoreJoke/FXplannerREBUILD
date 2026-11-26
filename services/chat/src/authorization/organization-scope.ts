@@ -4,6 +4,10 @@
  * 纪律（§4.4.5）：禁止「先按 id 查全表再比对 orgId」的越权读取反模式——
  * 查询条件本身必须携带 organizationId；本模块产出 where 片段与断言函数，
  * 供业务 Service 组装 Prisma 查询（W18 起）。
+ *
+ * W30（MIG-D/E/F）：兼容窗口（缺 `X-Organization-Id` 时猜唯一默认组织、
+ * 读侧回落 `organizationId IS NULL` 存量行）已彻底关闭。组织上下文唯一，
+ * 本模块只保留**纯组织作用域**的 where 产出函数与父子一致断言。
  */
 
 import type { ActorContext } from "./authorization.types";
@@ -19,17 +23,31 @@ export class ParentChildOrgMismatchError extends Error {
 	}
 }
 
+/**
+ * 业务读作用域：请求者 + 当前组织。
+ * 结构上与 ActorContext 兼容——Controller 直接传 actor 即可。
+ *
+ * W30（MIG-D）：不再携带 `isDefaultOrganization`——兼容回落分支已删除，
+ * 组织作用域恒为 `{ organizationId }`。
+ */
+export interface ReadScope {
+	userId: string;
+	organizationId: string;
+}
+
 /** 组织范围 where 片段：列表/汇总/报告/清理/导出统一以此收口（§4.4.3） */
-export function orgWhere(actor: ActorContext): { organizationId: string } {
-	return { organizationId: actor.organizationId };
+export function orgWhere(scope: ReadScope | ActorContext): {
+	organizationId: string;
+} {
+	return { organizationId: scope.organizationId };
 }
 
 /** 详情/更新/删除的「{ id, organizationId }」条件（§4.4.2：跨组织与不存在统一 404） */
 export function ownedRecordWhere(
 	id: string,
-	actor: ActorContext,
+	scope: ReadScope | ActorContext,
 ): { id: string; organizationId: string } {
-	return { id, organizationId: actor.organizationId };
+	return { id, organizationId: scope.organizationId };
 }
 
 /**
@@ -46,58 +64,4 @@ export function assertParentChildSameOrg(
 			childOrganizationId,
 		);
 	}
-}
-
-// ─────────────────────────────────────────────────────────────
-// W18 兼容窗口读作用域（GOAL-3A W18；技术方案 §7.3 迁移期兼容规则）
-// ─────────────────────────────────────────────────────────────
-
-/**
- * 业务读作用域：请求者 + 当前组织 + 是否默认组织。
- * 结构上与 ActorContext 兼容——Controller 直接传 actor 即可。
- */
-export interface ReadScope {
-	userId: string;
-	organizationId: string;
-	/** 缺省（undefined）按 false 处理：不带存量回落，fail-closed */
-	isDefaultOrganization?: boolean;
-}
-
-type CompatBranch =
-	| { organizationId: string }
-	| { organizationId: null; userId: string };
-
-/**
- * 兼容窗口读 where 片段（W18 起用，持续至 Goal #3C MIG-D/MIG-E 切完存量 NULL 行）：
- * - `organizationId = 当前组织`：MIG-B 已回填行 / 显式组织行（跨用户可见，
- *   同组织成员共享）；
- * - `organizationId IS NULL AND userId = 请求者`：MIG-A 之后、写侧 Actor 化
- *   （Goal #3B）之前经旧写路径产生的过渡期行——逻辑上属请求者的**默认组织**，
- *   仅本人可见，禁止跨用户共享（计划占用汇总另由 planReservationWhere 对称覆盖
- *   默认组织创建者存量计划，防止成员超配）。
- *
- * 评审 I-08：NULL 分支**仅在默认组织上下文**拼接。此前它对任何组织无条件生效，
- *   用户新建组织 B 或受邀加入组织 C 后，其个人未迁移记录会整批渗入 B/C。
- *   `isDefaultOrganization` 由 Guard 按「该用户创建的最早组织」判定
- *   （default-organization.ts；不随所有权转移漂移，评审 R2-I03）；缺省一律不带回落。
- */
-export function compatReadWhere(scope: ReadScope): { OR: CompatBranch[] } {
-	const branches: CompatBranch[] = [{ organizationId: scope.organizationId }];
-	if (scope.isDefaultOrganization === true) {
-		branches.push({ organizationId: null, userId: scope.userId });
-	}
-	return { OR: branches };
-}
-
-/** SQL（$queryRaw/$executeRaw）用的同口径谓词片段参数（与 compatReadWhere 一致） */
-export function compatReadPredicate(scope: ReadScope): {
-	organizationId: string;
-	userId: string;
-	includeLegacy: boolean;
-} {
-	return {
-		organizationId: scope.organizationId,
-		userId: scope.userId,
-		includeLegacy: scope.isDefaultOrganization === true,
-	};
 }

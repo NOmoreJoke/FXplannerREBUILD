@@ -159,7 +159,6 @@ export default function MarketPage() {
 				rows={history.rows}
 				series={history.series}
 				isLoading={history.isLoading}
-				isAllUnavailable={history.isAllUnavailable}
 				onRetry={history.refetch}
 			/>
 		</div>

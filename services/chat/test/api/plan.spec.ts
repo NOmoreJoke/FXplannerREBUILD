@@ -26,6 +26,7 @@ import {
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -94,14 +95,14 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 	function postPreview(user: TestUser, body: Record<string, unknown>) {
 		return request(app.getHttpServer())
 			.post("/api/plans/schedule-preview")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(body);
 	}
 
 	function postCreate(user: TestUser, body: Record<string, unknown>) {
 		return request(app.getHttpServer())
 			.post("/api/plans")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(body);
 	}
 
@@ -187,7 +188,9 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 		});
 		// 只读不落库
 		expect(
-			await ctx.prisma.plan.count({ where: { userId: userFresh.userId } }),
+			await ctx.prisma.plan.count({
+				where: { organizationId: userFresh.defaultOrganizationId },
+			}),
 		).toBe(0);
 	});
 
@@ -358,7 +361,7 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 
 	it("#7 create 超限：409 INSUFFICIENT_ALLOCATABLE_BALANCE 附 caps 现值", async () => {
 		const before = await ctx.prisma.plan.count({
-			where: { userId: userCaps.userId },
+			where: { organizationId: userCaps.defaultOrganizationId },
 		});
 		const res = await postCreate(
 			userCaps,
@@ -372,7 +375,9 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 		});
 		// 事务回滚：未产生计划
 		expect(
-			await ctx.prisma.plan.count({ where: { userId: userCaps.userId } }),
+			await ctx.prisma.plan.count({
+				where: { organizationId: userCaps.defaultOrganizationId },
+			}),
 		).toBe(before);
 	});
 
@@ -398,12 +403,14 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 		expect(preview.body.code).toBe("NO_AVAILABLE_DATES");
 
 		const before = await ctx.prisma.plan.count({
-			where: { userId: userErr.userId },
+			where: { organizationId: userErr.defaultOrganizationId },
 		});
 		const created = await postCreate(userErr, body).expect(400);
 		expect(created.body.code).toBe("NO_AVAILABLE_DATES");
 		expect(
-			await ctx.prisma.plan.count({ where: { userId: userErr.userId } }),
+			await ctx.prisma.plan.count({
+				where: { organizationId: userErr.defaultOrganizationId },
+			}),
 		).toBe(before); // 任一失败全部回滚
 	});
 
@@ -414,12 +421,14 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 		expect(preview.body.code).toBe("AMOUNT_TOO_SMALL");
 
 		const before = await ctx.prisma.plan.count({
-			where: { userId: userErr.userId },
+			where: { organizationId: userErr.defaultOrganizationId },
 		});
 		const created = await postCreate(userErr, body).expect(400);
 		expect(created.body.code).toBe("AMOUNT_TOO_SMALL");
 		expect(
-			await ctx.prisma.plan.count({ where: { userId: userErr.userId } }),
+			await ctx.prisma.plan.count({
+				where: { organizationId: userErr.defaultOrganizationId },
+			}),
 		).toBe(before);
 	});
 
@@ -443,7 +452,7 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 	});
 
 	it("目标币种 = 本位币：preview / create 均 400 INVALID_PLAN_PARAMS（大小写归一，不落库）", async () => {
-		// 本位币来自 UserSettings（ensureOnboarded 默认 CNY），显式重申防默认值漂移
+		// 本位币来自 OrganizationSettings（ensureOnboarded 默认 CNY），显式重申防默认值漂移
 		await ensureOnboarded(ctx.prisma, userErr.userId, "CNY");
 		for (const targetCurrency of ["CNY", "cny"]) {
 			const preview = await postPreview(
@@ -455,7 +464,7 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 		}
 
 		const before = await ctx.prisma.plan.count({
-			where: { userId: userErr.userId },
+			where: { organizationId: userErr.defaultOrganizationId },
 		});
 		const created = await postCreate(
 			userErr,
@@ -463,7 +472,9 @@ describe("PlanController（接口）—— 存量回归基线", () => {
 		).expect(400);
 		expect(created.body.code).toBe("INVALID_PLAN_PARAMS");
 		expect(
-			await ctx.prisma.plan.count({ where: { userId: userErr.userId } }),
+			await ctx.prisma.plan.count({
+				where: { organizationId: userErr.defaultOrganizationId },
+			}),
 		).toBe(before);
 	});
 
@@ -566,13 +577,13 @@ describe("PlanController（接口）—— M5 管理端点", () => {
 	function getPlans(user: TestUser, query = "") {
 		return request(app.getHttpServer())
 			.get(`/api/plans${query}`)
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	function getDetail(user: TestUser, planId: string) {
 		return request(app.getHttpServer())
 			.get(`/api/plans/${planId}`)
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	function postAdjustPreview(
@@ -582,7 +593,7 @@ describe("PlanController（接口）—— M5 管理端点", () => {
 	) {
 		return request(app.getHttpServer())
 			.post(`/api/plans/${planId}/adjust-preview`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(body);
 	}
 
@@ -593,27 +604,27 @@ describe("PlanController（接口）—— M5 管理端点", () => {
 	) {
 		return request(app.getHttpServer())
 			.patch(`/api/plans/${planId}`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(body);
 	}
 
 	function postComplete(user: TestUser, planId: string) {
 		return request(app.getHttpServer())
 			.post(`/api/plans/${planId}/complete`)
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	function postCancel(user: TestUser, planId: string) {
 		return request(app.getHttpServer())
 			.post(`/api/plans/${planId}/cancel`)
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	/** 存量 schedule-preview 探针：返回该用户 USD 未分配余额（caps 回收断言用） */
 	async function previewCaps(user: TestUser): Promise<string> {
 		const res = await request(app.getHttpServer())
 			.post("/api/plans/schedule-preview")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(planBody())
 			.expect(200);
 		return res.body.data.caps.allocatableBalance as string;
@@ -736,7 +747,7 @@ describe("PlanController（接口）—— M5 管理端点", () => {
 		const res = await getPlans(other).expect(200);
 		expect(res.body.data.items).toEqual([]); // 空列表
 		const listUserPlans = await ctx.prisma.plan.findMany({
-			where: { userId: { not: other.userId } },
+			where: { organizationId: { not: other.defaultOrganizationId } },
 			select: { id: true },
 			take: 1,
 		});
@@ -967,7 +978,7 @@ describe("PlanController（接口）—— M5 管理端点", () => {
 		});
 		// 释放原子生效：账户余额不动，分配行下调，caps 回收 2000
 		const account = await ctx.prisma.account.findFirst({
-			where: { userId: user.userId, currencyCode: "USD" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "USD" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("10000.0000");
 		const allocation = await ctx.prisma.planAllocation.findUnique({
@@ -1374,7 +1385,7 @@ describe("PlanController（接口）—— M5 管理端点", () => {
 		});
 		// 账户余额与真实记录不动；释放后未分配余额回升至全额
 		const account = await ctx.prisma.account.findFirst({
-			where: { userId: user.userId, currencyCode: "USD" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "USD" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("10000.0000");
 		expect(await previewCaps(user)).toBe("10000.0000");
@@ -1407,12 +1418,16 @@ describe("PlanController（接口）—— M5 管理端点", () => {
 			.$transaction(async (tx) => {
 				started = true;
 				await tx.plan.findFirst({
-					where: { id: planId, userId: user.userId },
+					where: { id: planId, organizationId: user.defaultOrganizationId },
 				});
 				await gate; // A 暂停：B 可完整提交
 				// A 恢复：条件更新基于最新已提交行重估 WHERE status=ACTIVE
 				const updated = await tx.plan.updateMany({
-					where: { id: planId, userId: user.userId, status: "ACTIVE" },
+					where: {
+						id: planId,
+						organizationId: user.defaultOrganizationId,
+						status: "ACTIVE",
+					},
 					data: { status: "COMPLETED" },
 				});
 				if (updated.count === 0) {
@@ -2033,63 +2048,50 @@ describe("ToB R1 W23：Plan 写接口 Actor 化 + OPERATOR/VIEWER 矩阵 + 跨�
 		).toBe(0);
 	});
 
-	it("W23-PLAN-6（N-8）存量 legacy Plan（organizationId=null）：受邀成员改之 404，Owner 修改同步收口 organizationId 与 createdById", async () => {
-		const { owner, operator, orgId } = await setupOrgWithMembers("legacy-adopt");
-		const legacyPlanId = await seedPlanWithAllocation(ctx.prisma, owner.userId, {
+	it("W23-PLAN-6（N-8）MIG-E/F 后组织内协作编辑：Owner 创建的组织计划，受邀 OPERATOR 可修改且保留 organizationId", async () => {
+		const { owner, operator, orgId } = await setupOrgWithMembers("org-collab");
+		const orgPlanId = await seedPlanWithAllocation(ctx.prisma, owner.userId, {
 			targetAmount: "500",
 			allocatedAmount: "0",
 		});
-		scopedPlanIds.push(legacyPlanId);
+		scopedPlanIds.push(orgPlanId);
 		const before = await ctx.prisma.plan.findUniqueOrThrow({
-			where: { id: legacyPlanId },
+			where: { id: orgPlanId },
 		});
-		expect(before.organizationId).toBeNull();
-		expect(before.createdById).toBeNull();
+		expect(before.organizationId).toBe(orgId);
+		expect(before.createdById).toBe(owner.userId);
 
-		// 受邀 OPERATOR 无权触碰 Owner 尚未迁入的 legacy NULL 计划 → 404 PLAN_NOT_FOUND
-		const memberAttempt = await request(app.getHttpServer())
-			.patch(`/api/plans/${legacyPlanId}`)
+		// 同组织受邀 OPERATOR 修改该计划 → 200 且 organizationId 不变
+		await request(app.getHttpServer())
+			.patch(`/api/plans/${orgPlanId}`)
 			.set(bearer(operator.accessToken))
 			.set("X-Organization-Id", orgId)
 			.send({
 				newTargetAmount: "600",
 				expectedUpdatedAt: before.updatedAt.toISOString(),
 			})
-			.expect(404);
-		expect(memberAttempt.body.code).toBe("PLAN_NOT_FOUND");
-
-		// Owner 在默认组织修改该 legacy 计划 → 200 并同时写入 organizationId + createdById
-		await request(app.getHttpServer())
-			.patch(`/api/plans/${legacyPlanId}`)
-			.set(bearer(owner.accessToken))
-			.set("X-Organization-Id", orgId)
-			.send({
-				newTargetAmount: "700",
-				expectedUpdatedAt: before.updatedAt.toISOString(),
-			})
 			.expect(200);
 
-		const adopted = await ctx.prisma.plan.findUniqueOrThrow({
-			where: { id: legacyPlanId },
+		const updated = await ctx.prisma.plan.findUniqueOrThrow({
+			where: { id: orgPlanId },
 		});
-		expect(adopted.organizationId).toBe(orgId);
-		expect(adopted.createdById).toBe(owner.userId);
-		expect(adopted.targetAmount.toFixed(4)).toBe("700.0000");
+		expect(updated.organizationId).toBe(orgId);
+		expect(updated.targetAmount.toFixed(4)).toBe("600.0000");
 	});
 
-	it("W23-PLAN-7（R2-I1）计划占用对称性：Owner 存量 legacy 计划(80)对受邀 OPERATOR 计入占用，禁止超配至 180", async () => {
+	it("W23-PLAN-7（R2-I1）计划占用对称性：Owner 组织内计划(80)对受邀 OPERATOR 计入占用，禁止超配至 180", async () => {
 		const { owner, operator, orgId } = await setupOrgWithMembers("r2-i1-symmetry");
-		// 构造 Owner 存量 legacy (organizationId: null) USD 账户(100) + ACTIVE 计划占用(80)
+		// 构造 Owner 组织内 USD 账户(100) + ACTIVE 计划占用(80)
 		await ensureAccount(ctx.prisma, owner.userId, "USD", "100");
-		const legacyPlanId = await seedPlanWithAllocation(ctx.prisma, owner.userId, {
+		const ownerPlanId = await seedPlanWithAllocation(ctx.prisma, owner.userId, {
 			targetCurrency: "USD",
 			targetAmount: "500",
 			allocatedAmount: "80",
 			usedAmount: "0",
 		});
-		scopedPlanIds.push(legacyPlanId);
+		scopedPlanIds.push(ownerPlanId);
 
-		// 1. 尚在 legacy 状态时，OPERATOR 尝试超额分配 100 → 事务内合并账户并计入 Owner 80 占用，409 拦截
+		// 1. OPERATOR 尝试超额分配 100 → 计入 Owner 80 占用，409 拦截
 		const firstAttempt = await request(app.getHttpServer())
 			.post("/api/plans")
 			.set(bearer(operator.accessToken))
@@ -2099,7 +2101,7 @@ describe("ToB R1 W23：Plan 写接口 Actor 化 + OPERATOR/VIEWER 矩阵 + 跨�
 		expect(firstAttempt.body.code).toBe("INSUFFICIENT_ALLOCATABLE_BALANCE");
 		expect(firstAttempt.body.data.allocatableBalance).toBe("20.0000");
 
-		// 2. OPERATOR 建一笔 0 分配计划，合法触发组织账户升级（Owner legacy Plan 仍保持 null）
+		// 2. OPERATOR 建一笔 0 分配计划
 		const zeroAllocRes = await request(app.getHttpServer())
 			.post("/api/plans")
 			.set(bearer(operator.accessToken))
@@ -2109,8 +2111,8 @@ describe("ToB R1 W23：Plan 写接口 Actor 化 + OPERATOR/VIEWER 矩阵 + 跨�
 		const zeroPlanId = zeroAllocRes.body.data.id as string;
 		scopedPlanIds.push(zeroPlanId);
 
-		// 3. 账户已升级为组织行后：OPERATOR 的 schedule-preview / adjust-preview / GET accounts / create
-		//    均须计入 Owner 的 legacy Plan(80)，仅剩余 20.0000 可分配
+		// 3. OPERATOR 的 schedule-preview / adjust-preview / GET accounts / create
+		//    均计入 Owner 的计划占用(80)，仅剩余 20.0000 可分配
 		const preview = await request(app.getHttpServer())
 			.post("/api/plans/schedule-preview")
 			.set(bearer(operator.accessToken))

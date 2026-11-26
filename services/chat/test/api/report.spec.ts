@@ -12,10 +12,10 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSwaggerConfig } from "../../src/config/swagger";
 import {
-	bearer,
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -61,13 +61,13 @@ describe("ReportController（接口）", () => {
 	function getPlans(user: TestUser, query = "") {
 		return request(app.getHttpServer())
 			.get(`/api/reports/plans${query}`)
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	function getDetail(user: TestUser, planId: string) {
 		return request(app.getHttpServer())
 			.get(`/api/reports/plans/${planId}`)
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	beforeAll(async () => {
@@ -280,7 +280,7 @@ describe("ReportController（接口）", () => {
 	it("#9 越权/不存在：他人计划与随机 id 均 404 PLAN_NOT_FOUND（防枚举）", async () => {
 		// userForeign 的计划 id 对 userSeeded 不可见：用 userSeeded 的 token 访问他人 id
 		const foreignPlan = await ctx.prisma.plan.findFirst({
-			where: { userId: userForeign.userId },
+			where: { organizationId: userForeign.defaultOrganizationId },
 		});
 		const res = await getDetail(userSeeded, foreignPlan?.id ?? "x").expect(404);
 		expect(res.body.code).toBe("PLAN_NOT_FOUND");
@@ -329,7 +329,7 @@ describe("usedQuantity 双接口口径一致（UI-P0③ 回归）", () => {
 		// 全 API 链路：买入 10,000 @1 → 建计划（分配 2,000）→ 录使用 500
 		await request(app.getHttpServer())
 			.post("/api/transactions")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				currencyCode: "USD",
 				principalAmount: "5000.00",
@@ -341,7 +341,7 @@ describe("usedQuantity 双接口口径一致（UI-P0③ 回归）", () => {
 			.expect(201);
 		const planRes = await request(app.getHttpServer())
 			.post("/api/plans")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				name: "口径一致性回归",
 				targetCurrency: "USD",
@@ -356,7 +356,7 @@ describe("usedQuantity 双接口口径一致（UI-P0③ 回归）", () => {
 		planIds.push(planId);
 		await request(app.getHttpServer())
 			.post(`/api/plans/${planId}/usages`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				amount: "500",
 				usedAt: new Date().toISOString(),
@@ -378,15 +378,15 @@ describe("usedQuantity 双接口口径一致（UI-P0③ 回归）", () => {
 	it("录使用后：plans 详情 usedAmount = reports 单计划/列表 usedQuantity = 500", async () => {
 		const detail = await request(app.getHttpServer())
 			.get(`/api/plans/${planId}`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		const report = await request(app.getHttpServer())
 			.get(`/api/reports/plans/${planId}`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		const list = await request(app.getHttpServer())
 			.get("/api/reports/plans")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		// 四处同值：plans 详情 / reports 单计划 / reports 列表项
@@ -406,7 +406,7 @@ describe("usedQuantity 双接口口径一致（UI-P0③ 回归）", () => {
 		// 同一用户新计划（分配 0，无使用）：两接口都应为 0，且与详情一致
 		const planRes = await request(app.getHttpServer())
 			.post("/api/plans")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				name: "未使用计划",
 				targetCurrency: "USD",
@@ -421,11 +421,11 @@ describe("usedQuantity 双接口口径一致（UI-P0③ 回归）", () => {
 
 		const detail = await request(app.getHttpServer())
 			.get(`/api/plans/${emptyPlanId}`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		const report = await request(app.getHttpServer())
 			.get(`/api/reports/plans/${emptyPlanId}`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		expect(detail.body.data.usedAmount).toBe("0.0000");
 		expect(report.body.data.plan.usedQuantity).toBe("0.0000");
@@ -434,12 +434,14 @@ describe("usedQuantity 双接口口径一致（UI-P0③ 回归）", () => {
 });
 
 /**
- * 报告与默认组织创建者存量计划的对称口径（Goal #3B W25；收口 W24 对抗审 N-1 / P-2）。
+ * 报告的组织维度对称口径（Goal #3B W25；收口 W24 对抗审 N-1 / P-2）。
  *
- * 背景：W24 已把使用记录收口到组织，但创建者仍可能有**未回填 organizationId** 的
- * 存量 Plan（及其使用记录 / 成本批次）。若报告按 compatReadWhere(actor) 读计划，
- * 创建者（默认组织上下文能看到自己的 NULL 行）与受邀成员（非默认组织上下文看不到
- * 行主的 NULL 行）会看到**不同的计划集合**：成员报告缺计划、缺 Plan 维度的成本归属。
+ * 背景：W24 曾把使用记录收口到组织，但创建者仍可能有**未回填 organizationId** 的
+ * 存量 Plan（及其使用记录 / 成本批次）。若报告按个人维度读计划，创建者与受邀成员
+ * 会看到**不同的计划集合**：成员报告缺计划、缺 Plan 维度的成本归属。
+ *
+ * W30（MIG-E/F）后该形态已不存在（`organization_id` NOT NULL、无 `user_id` 列），
+ * 报告一律按**纯组织作用域**读取——同组织成员的报告视图天然逐字段一致。
  *
  * 断言：同组织的 Owner 与受邀成员对同一组织得到**逐字段一致**的报告视图
  * （列表项集合一致 + 单计划详情 200 且数值一致）。
@@ -455,12 +457,12 @@ describe("ReportController（成员与创建者的报告视图对称，W25）", 
 		app = ctx.app;
 		org = await createOrgLedger(app, ctx.prisma, "rpt-org", ["FINANCE"]);
 
-		// 存量计划：创建者名下、organizationId 尚未回填（兼容窗口形态）
+		// 组织维度计划（MIG-E/F：直接挂 organizationId，createdById 记录创建者）
 		const plan = await ctx.prisma.plan.create({
 			data: {
-				userId: org.owner.userId,
-				organizationId: null,
-				name: "存量计划",
+				createdById: org.owner.userId,
+				organizationId: org.orgId,
+				name: "组织协同计划",
 				targetCurrency: "USD",
 				targetAmount: "10000",
 				expectUseDate: new Date("2026-12-01T00:00:00.000Z"),
@@ -472,8 +474,8 @@ describe("ReportController（成员与创建者的报告视图对称，W25）", 
 		await ctx.prisma.planAllocation.create({
 			data: { planId: plan.id, amount: "0", usedAmount: "0" },
 		});
-		// 买入批次 + 使用记录（同为存量 NULL 行）
 		const lot = await seedCostLot(ctx.prisma, org.owner.userId, "USD", {
+			organizationId: org.orgId,
 			sourceType: "PURCHASE",
 			quantity: "1000",
 			principal: "7800",
@@ -481,6 +483,7 @@ describe("ReportController（成员与创建者的报告视图对称，W25）", 
 			planId: plan.id,
 		});
 		await seedUsage(ctx.prisma, org.owner.userId, {
+			organizationId: org.orgId,
 			planId: plan.id,
 			currencyCode: "USD",
 			amount: "1000",
@@ -496,7 +499,7 @@ describe("ReportController（成员与创建者的报告视图对称，W25）", 
 		}
 	});
 
-	it("W25-RPT-1 同组织 Owner 与受邀成员的报告视图逐字段一致（存量 NULL 计划同样可见）", async () => {
+	it("W25-RPT-1 同组织 Owner 与受邀成员的报告视图逐字段一致（同组织计划双方同样可见）", async () => {
 		const ownerList = await request(app.getHttpServer())
 			.get("/api/reports/plans")
 			.set(orgHeaders(org.owner, org.orgId))

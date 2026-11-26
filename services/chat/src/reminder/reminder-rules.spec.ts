@@ -146,7 +146,7 @@ describe("reminder-rules 生成判定（computeDueDrafts，§4.3 判定表）", 
 			today: TODAY,
 			existingRows: [],
 		});
-		// 同计划同日仅一行由唯一键 [userId, dedupKey, scheduledFor] + skipDuplicates 承载：
+		// 同计划同日仅一行由唯一键 [organizationId, dedupKey, scheduledFor] + skipDuplicates 承载：
 		// 两个 draft 的 dedupKey/scheduledFor 完全一致，落库后必合并为一行
 		expect(drafts).toHaveLength(2);
 		expect(new Set(draftTypes(drafts))).toEqual(

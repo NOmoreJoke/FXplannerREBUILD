@@ -495,9 +495,22 @@ async function backfillUser(
 	// 该复制分支变为 no-op（组织设置在 MIG-F 之前已复制完毕）。
 	let settingsCreated = 0;
 	if (capabilities.hasUserSettingsLegacyColumns) {
-		const userSettings = await tx.userSettings.findUnique({
-			where: { userId: user.id },
-		});
+		const [userSettings] = await tx.$queryRaw<
+			Array<{
+				baseCurrency: string;
+				prepPreference: string;
+				reminderEnabled: boolean;
+				ledgerStartedAt: Date | null;
+			}>
+		>`
+			SELECT
+				base_currency AS "baseCurrency",
+				prep_preference AS "prepPreference",
+				reminder_enabled AS "reminderEnabled",
+				ledger_started_at AS "ledgerStartedAt"
+			FROM user_settings
+			WHERE user_id = ${user.id}
+			LIMIT 1`;
 		if (userSettings && userSettings.baseCurrency.trim() !== "") {
 			const existing = await tx.organizationSettings.findUnique({
 				where: { organizationId },
@@ -533,16 +546,18 @@ async function backfillUser(
 		capabilities.hasReminderReadAtColumn &&
 		capabilities.legacyUserIdTables.has("reminders")
 	) {
-		const readReminders = await tx.reminder.findMany({
-			where: { userId: user.id, readAt: { not: null } },
-			select: { id: true, userId: true, readAt: true },
-		});
+		const readReminders = await tx.$queryRaw<
+			Array<{ id: string; userId: string; readAt: Date }>
+		>`
+			SELECT id, user_id AS "userId", read_at AS "readAt"
+			FROM reminders
+			WHERE user_id = ${user.id} AND read_at IS NOT NULL`;
 		if (readReminders.length > 0) {
 			const created = await tx.reminderRead.createMany({
 				data: readReminders.map((r) => ({
 					reminderId: r.id,
 					userId: r.userId,
-					readAt: r.readAt as Date,
+					readAt: r.readAt,
 				})),
 				skipDuplicates: true,
 			});
@@ -562,6 +577,109 @@ async function backfillUser(
 		reminderReadsCreated,
 		dataRequestsRescoped,
 	};
+}
+
+/**
+ * 共享账本表「待回填存量行」的原生 SQL 计数（`organization_id IS NULL`）。
+ *
+ * 为什么用**原生 SQL**而不是 Prisma 类型化 `count({ where: { organizationId: null } })`：
+ * MIG-E 之后 `organization_id` 是必填 `String`，Prisma 客户端会对
+ * `organizationId: null` 直接抛 `Argument organizationId must not be null`
+ * ——**即使目标库仍是 pre-MIG-E 的可空列**。原生 SQL 不经 Prisma 类型检查，
+ * 因此同一份 CLI：
+ * - 跑 pre-MIG-E 库 → 估出真实的待回填行数（迁移期 dry-run 的核心用途）；
+ * - 跑 post-MIG-F 库 → 列已 NOT NULL，恒为 0（且不会因列已删而报 column does not exist）。
+ *
+ * 分片变体带 `user_id = ANY(...)`：仅在目标表**仍有** `user_id` 列（pre-MIG-F）时
+ * 使用——post-MIG-F 库上该列已删，不能出现在 SQL 里（Postgres 在解析期解析列名，
+ * 即便 CASE 为假也会报 column does not exist，故必须分语句而非拼条件）。
+ *
+ * SQL 纪律：静态语句 + 绑定参数；表名/列名均为源码内字面量，不拼接外部输入。
+ */
+type LegacyCountRow = { n: bigint };
+type LegacyCountDb = Pick<Db, "$queryRaw">;
+
+const LEGACY_ROW_COUNT = {
+	accounts: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM accounts WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM accounts WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	transactions: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM transactions WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM transactions WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	initial_holdings: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM initial_holdings WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM initial_holdings WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	cost_lots: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM cost_lots WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM cost_lots WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	plans: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM plans WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM plans WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	usage_records: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM usage_records WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM usage_records WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	corrections: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM corrections WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM corrections WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	reminders: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM reminders WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM reminders WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	ai_conversations: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM ai_conversations WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM ai_conversations WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+} as const;
+
+type LegacyCountTable = keyof typeof LEGACY_ROW_COUNT;
+
+/**
+ * 统计某表「待回填的存量行」（organization_id IS NULL）。
+ *
+ * - 目标表仍有 `user_id` 列（pre-MIG-F）→ 分片时按 user_id 限定；
+ * - 分片时若无 `user_id` 列（post-MIG-F），退化为全表计数——此时该列已 NOT NULL，
+ *   结果恒为 0，分片语义无影响。
+ */
+async function countLegacyRows(
+	db: LegacyCountDb,
+	table: LegacyCountTable,
+	options: {
+		capabilities: MigrationSchemaCapabilities;
+		shardIds: string[];
+	},
+): Promise<number> {
+	const statements = LEGACY_ROW_COUNT[table];
+	const hasUserId = options.capabilities.legacyUserIdTables.has(table);
+	const useShard = options.shardIds.length > 0 && hasUserId;
+	const rows = useShard
+		? await statements.byUser(db, options.shardIds)
+		: await statements.base(db);
+	return Number(rows[0]?.n ?? 0n);
 }
 
 function emptyRows(): BackfillSummary["rowsBackfilled"] {
@@ -640,14 +758,7 @@ export async function backfillDefaultOrganizations(
 		orderBy: { id: "asc" },
 	});
 	const userIds = users.map((user) => user.id);
-	const userScope = sharded ? { userId: { in: userIds } } : {};
 	// 待回填行的过滤条件：MIG-F 前按 user_id 限定分片；MIG-F 后该列已删，只剩
-	// 「organization_id IS NULL」（且此时该列已 NOT NULL → 恒为 0 行）
-	const legacyWhere = (table: string): Record<string, unknown> =>
-		capabilities.legacyUserIdTables.has(table)
-			? { organizationId: null, ...userScope }
-			: { organizationId: null };
-
 	const summary: BackfillSummary = {
 		usersProcessed: users.length,
 		organizationsCreated: 0,
@@ -691,31 +802,15 @@ export async function backfillDefaultOrganizations(
 		// 待回填行：organizationId IS NULL 的用户行
 		// MIG-F 前瞻：MIG-F 后各表无 user_id 列 → 只按 organization_id IS NULL 统计
 		// （此时该列已 NOT NULL，结果恒为 0）
-		summary.rowsBackfilled.accounts = await prisma.account.count({
-			where: legacyWhere("accounts"),
-		});
-		summary.rowsBackfilled.transactions = await prisma.transaction.count({
-			where: legacyWhere("transactions"),
-		});
-		summary.rowsBackfilled.initialHoldings =
-			await prisma.initialHolding.count({ where: legacyWhere("initial_holdings") });
-		summary.rowsBackfilled.costLots = await prisma.costLot.count({
-			where: legacyWhere("cost_lots"),
-		});
-		summary.rowsBackfilled.plans = await prisma.plan.count({
-			where: legacyWhere("plans"),
-		});
-		summary.rowsBackfilled.usageRecords = await prisma.usageRecord.count({
-			where: legacyWhere("usage_records"),
-		});
-		summary.rowsBackfilled.corrections = await prisma.correction.count({
-			where: legacyWhere("corrections"),
-		});
-		summary.rowsBackfilled.reminders = await prisma.reminder.count({
-			where: legacyWhere("reminders"),
-		});
-		summary.rowsBackfilled.aiConversations =
-			await prisma.aiConversation.count({ where: legacyWhere("ai_conversations") });
+		summary.rowsBackfilled.accounts = await countLegacyRows(prisma, "accounts", { capabilities, shardIds });
+		summary.rowsBackfilled.transactions = await countLegacyRows(prisma, "transactions", { capabilities, shardIds });
+		summary.rowsBackfilled.initialHoldings = await countLegacyRows(prisma, "initial_holdings", { capabilities, shardIds });
+		summary.rowsBackfilled.costLots = await countLegacyRows(prisma, "cost_lots", { capabilities, shardIds });
+		summary.rowsBackfilled.plans = await countLegacyRows(prisma, "plans", { capabilities, shardIds });
+		summary.rowsBackfilled.usageRecords = await countLegacyRows(prisma, "usage_records", { capabilities, shardIds });
+		summary.rowsBackfilled.corrections = await countLegacyRows(prisma, "corrections", { capabilities, shardIds });
+		summary.rowsBackfilled.reminders = await countLegacyRows(prisma, "reminders", { capabilities, shardIds });
+		summary.rowsBackfilled.aiConversations = await countLegacyRows(prisma, "ai_conversations", { capabilities, shardIds });
 		// PlanChangeLog 无 userId 列：经父 Plan 归属。与 backfillUserRows 的写入条件逐项
 		// 一致——父计划尚未挂组织，或已挂该用户的默认组织（回填重跑）；父计划已挂其他
 		// 组织的变更日志不会被写入，也不计入（评审 R2-I05）。defaults CTE 与
@@ -750,19 +845,16 @@ export async function backfillDefaultOrganizations(
 		// ORGANIZATION 但尚未挂组织的行，此前漏计，评审 R2-I05）
 		// MIG-F 前瞻：data_requests.user_id 被重命名 → 该估算分支 no-op
 		if (capabilities.legacyUserIdTables.has("data_requests")) {
-			summary.dataRequestsRescoped = await prisma.dataRequest.count({
-				where: {
-					organizationId: null,
-					...userScope,
-					OR: [
-						{
-							type: { in: ["EXPORT", "DELETION"] },
-							scope: { not: "PERSONAL" },
-						},
-						{ type: "CLEAR" },
-					],
-				},
-			});
+			const [pendingRequests] = await prisma.$queryRaw<Array<{ n: bigint }>>`
+				SELECT count(*) AS n
+				FROM data_requests
+				WHERE organization_id IS NULL
+					AND (
+						(type IN ('EXPORT', 'DELETION') AND scope <> 'PERSONAL')
+						OR type = 'CLEAR'
+					)
+					AND (NOT ${sharded} OR user_id = ANY(${shardIds}::text[]))`;
+			summary.dataRequestsRescoped = Number(pendingRequests?.n ?? 0n);
 		}
 		// 待补建的已读行：行主已读、但尚无**行主本人**的成员级已读行（与真实写入的
 		// createMany 条件及 reconcileMigration 的 reminder_read.parity 同口径；

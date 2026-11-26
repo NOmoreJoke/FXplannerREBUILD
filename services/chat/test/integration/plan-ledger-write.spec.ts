@@ -12,6 +12,7 @@ import {
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 } from "../helpers/test-app";
 
@@ -114,7 +115,7 @@ describe("计划与账本写入串行化（W6-02）", () => {
 		const user = await createTestUser(app, "plan-ledger-lock");
 		userId = user.userId;
 		await ensureOnboarded(prisma, user.userId);
-		const auth = bearer(user.accessToken);
+		const auth = orgBearer(user);
 		const http = request(app.getHttpServer());
 		await http.post("/api/transactions").set(auth).send({
 			currencyCode: "USD",
@@ -177,7 +178,11 @@ describe("计划与账本写入串行化（W6-02）", () => {
 			expect(second.body.code).toBe(scenario.rejection);
 		}
 		if ("reconfirm" in scenario) {
-			expect(await prisma.correction.count({ where: { userId: user.userId } })).toBe(0);
+			expect(
+				await prisma.correction.count({
+					where: { organizationId: user.defaultOrganizationId },
+				}),
+			).toBe(0);
 			const refreshed = (await preview().expect(200)).body.data;
 			expect(refreshed.expectedUsageImpact).not.toBe(initial.expectedUsageImpact);
 			await confirm(refreshed.expectedUsageImpact).expect(201);
@@ -191,11 +196,19 @@ describe("计划与账本写入串行化（W6-02）", () => {
 			prisma.plan.findUniqueOrThrow({ where: { id: plan.id } }),
 			prisma.planAllocation.findUniqueOrThrow({ where: { planId: plan.id } }),
 			prisma.account.findFirstOrThrow({
-				where: { userId: user.userId, currencyCode: "USD" },
+				where: {
+					organizationId: user.defaultOrganizationId,
+					currencyCode: "USD",
+				},
 			}),
-			prisma.costLot.aggregate({ where: { userId: user.userId }, _sum: { remainingQty: true } }),
+			prisma.costLot.aggregate({
+				where: { organizationId: user.defaultOrganizationId },
+				_sum: { remainingQty: true },
+			}),
 			prisma.usageRecord.findMany({ where: { planId: plan.id }, orderBy: { usedAt: "asc" } }),
-			prisma.correction.findMany({ where: { userId: user.userId } }),
+			prisma.correction.findMany({
+				where: { organizationId: user.defaultOrganizationId },
+			}),
 		]);
 		expect(persistedPlan.status).toBe(scenario.planStatus);
 		expect(allocation.amount.toString()).toBe(scenario.allocated);

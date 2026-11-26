@@ -27,7 +27,7 @@ import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
-import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { OrganizationContextGuard } from "../authorization/guards/organization-context.guard";
 import { PermissionGuard } from "../authorization/guards/permission.guard";
 import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
@@ -78,7 +78,7 @@ interface StreamWriteParams {
 /**
  * AI 助手接口（ai-assistant 技术方案 §4）：4 JSON + 1 SSE 流式（5 端点），全部需登录。
  * 会话相关端点（列表 / 建会话 / 追问 / 消息列表 / 删除）一律挂
- * BusinessOrgScopeGuard + PermissionGuard + @RequiresPermission("agent.use")：
+ * OrganizationContextGuard + PermissionGuard + @RequiresPermission("agent.use")：
  * 会话按「本人 + 当前组织」分区（Goal #3B W25 收口 §6.4）；模型白名单端点
  * （GET /ai/models）为静态目录，不含组织数据，保持仅登录。
  * 流式端点持有 res 直写（绕过全局 JSON 包装；先例：app.controller 探针不走包装），
@@ -114,7 +114,7 @@ export class AiController {
 	@ApiOperation({
 		summary: "会话列表",
 		description:
-			"仅返回本人且属于当前组织的会话，按 lastMessageAt 倒序；幂等只读。默认组织上下文附带本人存量（organizationId IS NULL）会话，其他组织严格只看当前组织会话。未配 LLM key 或总开关关闭时 503 整体降级。",
+			"仅返回本人且属于当前组织的会话，按 lastMessageAt 倒序；幂等只读。严格只看当前组织会话（组织维度无兼容回落分支）。未配 LLM key 或总开关关闭时 503 整体降级。",
 	})
 	@ApiOkResponse({
 		description: "获取成功，响应体为 { success, data, message } 包装",
@@ -126,7 +126,7 @@ export class AiController {
 			},
 		},
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("agent.use")
 	async listConversations(
 		@CurrentUser() user: User,
@@ -170,7 +170,7 @@ export class AiController {
 		description:
 			"以首条消息创建会话（标题=消息前 20 字，会话绑定当前组织）后立即开始流式回复；body 可选 modelKey 指定模型（缺省用服务端默认，非法 key 400 AI_MODEL_UNKNOWN）。响应为 text/event-stream（帧协议 meta/tool/token/done/error），不走统一 JSON 包装。发消息 5/min/IP；用户级日配额超限 429 AI_QUOTA_EXCEEDED；系统并发满 429 AI_BUSY。",
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("agent.use")
 	async createWithMessage(
 		@Req() req: Request,
@@ -202,7 +202,7 @@ export class AiController {
 		description:
 			"向既有会话追加消息并流式回复；body 可选 modelKey 指定模型（缺省用服务端默认，非法 key 400 AI_MODEL_UNKNOWN）。会话归属校验：非本人 / 不在当前组织 / 不存在统一 404（防枚举）；同会话流进行中再发 409 AI_CONVERSATION_BUSY（先标忙碌再落用户消息，无并发窗口）。",
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("agent.use")
 	async sendMessage(
 		@Req() req: Request,
@@ -244,7 +244,7 @@ export class AiController {
 			},
 		},
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("agent.use")
 	async listMessages(
 		@CurrentUser() user: User,
@@ -267,7 +267,7 @@ export class AiController {
 		description:
 			"物理删除本人且属于当前组织的会话及其全部消息；流进行中 409 拒绝删除；非本人 / 跨组织 / 不存在统一 404（防枚举）。",
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("agent.use")
 	async deleteConversation(
 		@CurrentActor() actor: ActorContext,

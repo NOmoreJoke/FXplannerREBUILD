@@ -5,7 +5,6 @@ import {
 	buildRateHistoryQueryKey,
 	RATE_HISTORY_QUERY_STEM,
 	useRateHistory,
-	type MarketPeriod,
 } from "./use-rate-history";
 import { ratesApi, REFERENCE_RATE_SOURCE } from "@/lib/api/rates";
 import { ApiError } from "@/lib/api/client";

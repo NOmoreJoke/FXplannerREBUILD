@@ -27,10 +27,10 @@ import {
 import { seedInitialHolding } from "../helpers/correction-fixture";
 import { seedPlanWithAllocation } from "../helpers/plan-test-helper";
 import {
-	bearer,
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestUser,
 } from "../helpers/test-app";
 
@@ -68,14 +68,15 @@ function usageAt(n: number): Date {
  */
 async function buildEventsFromDb(
 	prisma: PrismaService,
-	userId: string,
+	organizationId: string,
 	currencyCode: string,
 ): Promise<LedgerEvent[]> {
 	const [holdings, transactions, usages, settings] = await Promise.all([
-		prisma.initialHolding.findMany({ where: { userId, currencyCode } }),
-		prisma.transaction.findMany({ where: { userId, currencyCode } }),
-		prisma.usageRecord.findMany({ where: { userId, currencyCode } }),
-		prisma.userSettings.findUnique({ where: { userId } }),
+		prisma.initialHolding.findMany({ where: { organizationId, currencyCode } }),
+		prisma.transaction.findMany({ where: { organizationId, currencyCode } }),
+		prisma.usageRecord.findMany({ where: { organizationId, currencyCode } }),
+		// W30（MIG-F）：记账起点归 OrganizationSettings（组织偏好唯一真相）
+		prisma.organizationSettings.findUnique({ where: { organizationId } }),
 	]);
 	const start = settings?.ledgerStartedAt ?? null;
 	const events: LedgerEvent[] = [];
@@ -120,11 +121,11 @@ interface MirrorSnapshot {
 /** 增量事实：DB 中每笔 usage 的分摊片（lotId → sourceId，裸外键两段解析） */
 async function readIncrementalFacts(
 	prisma: PrismaService,
-	userId: string,
+	organizationId: string,
 	currencyCode: string,
 ): Promise<Map<string, MirrorSnapshot>> {
 	const records = await prisma.usageRecord.findMany({
-		where: { userId, currencyCode },
+		where: { organizationId, currencyCode },
 	});
 	const snapshot = new Map<string, MirrorSnapshot>();
 	if (records.length === 0) return snapshot;
@@ -178,12 +179,12 @@ function readReplayFacts(replay: ReplayResult): Map<string, MirrorSnapshot> {
 /** 镜像断言：增量 ≡ 重放（逐片 quantity/cost、每笔总成本、余额、无 V3、批次时刻） */
 async function assertMirror(
 	prisma: PrismaService,
-	userId: string,
+	organizationId: string,
 	currencyCode: string,
 	replay: ReplayResult,
 	expectedUsageIds?: Set<string>,
 ): Promise<void> {
-	const incremental = await readIncrementalFacts(prisma, userId, currencyCode);
+	const incremental = await readIncrementalFacts(prisma, organizationId, currencyCode);
 	const replayed = readReplayFacts(replay);
 	const ids = expectedUsageIds ?? new Set(incremental.keys());
 	for (const usageId of ids) {
@@ -202,14 +203,14 @@ async function assertMirror(
 	}
 	// 余额镜像：重放终态 == 账户余额（全量守恒）
 	const account = await prisma.account.findFirstOrThrow({
-		where: { userId, currencyCode },
+		where: { organizationId, currencyCode },
 	});
 	expect(replay.finalBalance.toFixed(4)).toBe(account.balance.toFixed(4));
 	// 跨日数据下重放不得产生历史时点缺口（BE-02 误报已根治）
 	expect(replay.violations).toEqual([]);
 	// 批次取得时刻镜像：重放 acquiredAt == DB CostLot.acquiredAt（INITIAL=起点日锁死）
 	const dbLots = await prisma.costLot.findMany({
-		where: { userId, currencyCode },
+		where: { organizationId, currencyCode },
 	});
 	const dbBySource = new Map(dbLots.map((lot) => [lot.sourceId, lot]));
 	for (const lot of replay.lots) {
@@ -227,7 +228,7 @@ describe("FIFO 口径镜像（增量 ≡ 重放，BE-01/BE-02 回归）", () => 
 	function postTx(user: TestUser, body: Record<string, unknown>) {
 		return request(app.getHttpServer())
 			.post("/api/transactions")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(body);
 	}
 
@@ -238,7 +239,7 @@ describe("FIFO 口径镜像（增量 ≡ 重放，BE-01/BE-02 回归）", () => 
 	) {
 		return request(app.getHttpServer())
 			.post(`/api/plans/${planId}/usages`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(body);
 	}
 
@@ -267,12 +268,16 @@ describe("FIFO 口径镜像（增量 ≡ 重放，BE-01/BE-02 回归）", () => 
 		users.push(user);
 		await prisma.userSettings.upsert({
 			where: { userId: user.userId },
-			update: { ledgerStartedAt: LEDGER_START },
+			update: { locale: "zh-CN", region: "CN" },
+			create: { userId: user.userId, locale: "zh-CN", region: "CN" },
+		});
+		// W30（MIG-F）：本位币与记账起点归 OrganizationSettings
+		await prisma.organizationSettings.upsert({
+			where: { organizationId: user.defaultOrganizationId },
+			update: { baseCurrency: "CNY", ledgerStartedAt: LEDGER_START },
 			create: {
-				userId: user.userId,
+				organizationId: user.defaultOrganizationId,
 				baseCurrency: "CNY",
-				locale: "zh-CN",
-				region: "CN",
 				ledgerStartedAt: LEDGER_START,
 			},
 		});
@@ -311,9 +316,9 @@ describe("FIFO 口径镜像（增量 ≡ 重放，BE-01/BE-02 回归）", () => 
 		expect(usage.body.data.usage.cost).toBe("9560.0000");
 
 		const replay = replayCurrencyLedger(
-			await buildEventsFromDb(prisma, user.userId, "USD"),
+			await buildEventsFromDb(prisma, user.defaultOrganizationId, "USD"),
 		);
-		await assertMirror(prisma, user.userId, "USD", replay);
+		await assertMirror(prisma, user.defaultOrganizationId, "USD", replay);
 	});
 
 	it("场景 2 · INITIAL 与 PURCHASE 同刻：INITIAL 先耗（type 层），片舍入镜像", async () => {
@@ -346,9 +351,9 @@ describe("FIFO 口径镜像（增量 ≡ 重放，BE-01/BE-02 回归）", () => 
 		expect(usage.body.data.usage.cost).toBe("4348.9800");
 
 		const replay = replayCurrencyLedger(
-			await buildEventsFromDb(prisma, user.userId, "USD"),
+			await buildEventsFromDb(prisma, user.defaultOrganizationId, "USD"),
 		);
-		await assertMirror(prisma, user.userId, "USD", replay);
+		await assertMirror(prisma, user.defaultOrganizationId, "USD", replay);
 	});
 
 	it("场景 3 · 跨日补录初始持仓（BE-02）：INITIAL=起点日锁死、补录后新使用镜像、无 V3", async () => {
@@ -385,12 +390,12 @@ describe("FIFO 口径镜像（增量 ≡ 重放，BE-01/BE-02 回归）", () => 
 		expect(usage2.body.data.usage.cost).toBe("3600.0000"); // 500×7.2（先耗起点日 INITIAL）
 
 		const replay = replayCurrencyLedger(
-			await buildEventsFromDb(prisma, user.userId, "USD"),
+			await buildEventsFromDb(prisma, user.defaultOrganizationId, "USD"),
 		);
 		// 核心镜像：补录后的新使用（usage2）增量 ≡ 重放逐片相等
 		await assertMirror(
 			prisma,
-			user.userId,
+			user.defaultOrganizationId,
 			"USD",
 			replay,
 			new Set([usage2.body.data.usage.id]),
@@ -421,7 +426,8 @@ describe("FIFO 口径镜像（增量 ≡ 重放，BE-01/BE-02 回归）", () => 
 			const tx = await prisma.transaction.create({
 				data: {
 					id: `${sourcePrefix}-${user.userId}`,
-					userId: user.userId,
+					organizationId: user.defaultOrganizationId,
+					createdById: user.userId,
 					currencyCode: "USD",
 					principalAmount: new Prisma.Decimal(quantity).mul(rate).toFixed(4),
 					exchangeRate: new Prisma.Decimal(rate).toFixed(8),
@@ -438,7 +444,7 @@ describe("FIFO 口径镜像（增量 ≡ 重放，BE-01/BE-02 回归）", () => 
 			await prisma.costLot.create({
 				data: {
 					id: `${lotPrefix}-${user.userId}`,
-					userId: user.userId,
+					organizationId: user.defaultOrganizationId,
 					currencyCode: "USD",
 					sourceType: "PURCHASE",
 					sourceId: tx.id,
@@ -451,7 +457,10 @@ describe("FIFO 口径镜像（增量 ≡ 重放，BE-01/BE-02 回归）", () => 
 				},
 			});
 			const existingAccount = await prisma.account.findFirst({
-				where: { userId: user.userId, currencyCode: "USD" },
+				where: {
+					organizationId: user.defaultOrganizationId,
+					currencyCode: "USD",
+				},
 				select: { id: true },
 			});
 			if (existingAccount) {
@@ -462,7 +471,8 @@ describe("FIFO 口径镜像（增量 ≡ 重放，BE-01/BE-02 回归）", () => 
 			} else {
 				await prisma.account.create({
 					data: {
-						userId: user.userId,
+						organizationId: user.defaultOrganizationId,
+						createdById: user.userId,
 						currencyCode: "USD",
 						balance: new Prisma.Decimal(quantity),
 					},
@@ -481,9 +491,9 @@ describe("FIFO 口径镜像（增量 ≡ 重放，BE-01/BE-02 回归）", () => 
 		expect(usage.body.data.usage.cost).toBe("11950.0000");
 
 		const replay = replayCurrencyLedger(
-			await buildEventsFromDb(prisma, user.userId, "USD"),
+			await buildEventsFromDb(prisma, user.defaultOrganizationId, "USD"),
 		);
 		// 批次创建时间与 ID 均会把 b 排在前面，来源首录时间相同应按来源 ID 选 a。
-		await assertMirror(prisma, user.userId, "USD", replay);
+		await assertMirror(prisma, user.defaultOrganizationId, "USD", replay);
 	});
 });

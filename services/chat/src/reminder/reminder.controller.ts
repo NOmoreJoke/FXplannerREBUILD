@@ -12,7 +12,7 @@ import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
-import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { OrganizationContextGuard } from "../authorization/guards/organization-context.guard";
 import { PermissionGuard } from "../authorization/guards/permission.guard";
 import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
@@ -71,7 +71,7 @@ export class ReminderController {
 		description: "尚未完成首次设置（ONBOARDING_NOT_COMPLETED）",
 		type: ReminderErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.read")
 	async list(
 		@CurrentUser() user: User,
@@ -86,7 +86,7 @@ export class ReminderController {
 	@ApiOperation({
 		summary: "单条已读（幂等，成员级）",
 		description:
-			"将**当前成员**的一条提醒标记为已读：已读态写入成员级 ReminderRead(reminderId, userId)，不写入共享的 Reminder.readAt（一名成员标已读不影响同组织其他成员的未读态）。目标提醒按当前组织作用域校验：不存在或跨组织一律 404 REMINDER_NOT_FOUND（不泄露存在性）；未受邀或已被移除（DISABLED）的成员由守卫统一返回 404。重复调用幂等返回既有 readAt。",
+			"将**当前成员**的一条提醒标记为已读：已读态只写入成员级 ReminderRead(reminderId, userId)（提醒行本身不再承载任何共享已读态，一名成员标已读不影响同组织其他成员的未读态）。目标提醒按当前组织作用域校验：不存在或跨组织一律 404 REMINDER_NOT_FOUND（不泄露存在性）；未受邀或已被移除（DISABLED）的成员由守卫统一返回 404。重复调用幂等返回既有 readAt。",
 	})
 	@ApiOkResponse({
 		description: "标记成功，响应体为 { success, data, message } 包装",
@@ -102,7 +102,7 @@ export class ReminderController {
 		description: "提醒不存在或不属于当前组织（REMINDER_NOT_FOUND）",
 		type: ReminderErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.read")
 	async markRead(
 		@CurrentActor() actor: ActorContext,
@@ -117,7 +117,7 @@ export class ReminderController {
 	@ApiOperation({
 		summary: "全部已读（幂等，成员级）",
 		description:
-			"将当前组织作用域内、**当前成员尚未读过**的提醒全部标记为已读：只写当前成员自己的 ReminderRead（事务内批量插入、并发去重），不修改任何共享 Reminder.readAt。返回本次新增的成员级已读行数；重复调用 updatedCount = 0，天然幂等。",
+			"将当前组织作用域内、**当前成员尚未读过**的提醒全部标记为已读：只写当前成员自己的 ReminderRead（事务内批量插入、并发去重），不修改任何共享读态。返回本次新增的成员级已读行数；重复调用 updatedCount = 0，天然幂等。",
 	})
 	@ApiOkResponse({
 		description: "标记成功，响应体为 { success, data, message } 包装",
@@ -129,7 +129,7 @@ export class ReminderController {
 			},
 		},
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.read")
 	async markAllRead(@CurrentActor() actor: ActorContext) {
 		const data = await this.reminderService.markAllRead(actor);

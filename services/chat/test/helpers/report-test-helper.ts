@@ -13,6 +13,7 @@
  * 无孤儿残留（UsageLotAllocation 无 FK，但只挂在测试用户的 UsageRecord 链上）。
  */
 import { Prisma } from "@prisma/client";
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
 import type { PrismaService } from "../../src/prisma/prisma.service";
 
 /** 默认锚定时间（断言不依赖真实时钟，与 plan-test-helper 显式日期先例一致） */
@@ -20,20 +21,41 @@ export const SEED_ACQUIRED_AT = new Date("2026-01-01T00:00:00.000Z");
 export const SEED_USED_AT = new Date("2026-01-02T00:00:00.000Z");
 export const SEED_CORRECTED_AT = new Date("2026-02-01T00:00:00.000Z");
 
-/** 确保 userSettings 存在（baseCurrency 成本列依赖） */
+async function resolveOrgId(
+	prisma: PrismaService,
+	userId: string,
+	organizationId?: string,
+): Promise<string> {
+	const resolved =
+		organizationId ?? (await resolveDefaultOrganizationId(prisma, userId));
+	if (!resolved) {
+		throw new Error(`report-test-helper(${userId}): 未找到默认组织`);
+	}
+	return resolved;
+}
+
+/** 确保个人展示设置与组织本位币设置存在（baseCurrency 成本列依赖） */
 export async function ensureSettings(
 	prisma: PrismaService,
 	userId: string,
 	baseCurrency = "CNY",
+	organizationId?: string,
 ): Promise<void> {
 	await prisma.userSettings.upsert({
 		where: { userId },
+		update: { locale: "zh-CN", region: "CN" },
+		create: { userId, locale: "zh-CN", region: "CN" },
+	});
+	const orgId = await resolveOrgId(prisma, userId, organizationId);
+	await prisma.organizationSettings.upsert({
+		where: { organizationId: orgId },
 		update: { baseCurrency },
-		create: { userId, baseCurrency, locale: "zh-CN", region: "CN" },
+		create: { organizationId: orgId, baseCurrency },
 	});
 }
 
 export interface SeedLotOptions {
+	organizationId?: string;
 	sourceType: "INITIAL" | "PURCHASE";
 	quantity: string;
 	/** 批次总成本对应的本金部分（INITIAL/PURCHASE 均必填，成本口径唯一来源） */
@@ -64,6 +86,11 @@ export async function seedCostLot(
 	currencyCode: string,
 	options: SeedLotOptions,
 ): Promise<SeededLot> {
+	const organizationId = await resolveOrgId(
+		prisma,
+		userId,
+		options.organizationId,
+	);
 	const acquiredAt = options.acquiredAt ?? SEED_ACQUIRED_AT;
 	const totalCostDecimal = new Prisma.Decimal(options.principal).add(
 		options.fee ?? 0,
@@ -73,7 +100,8 @@ export async function seedCostLot(
 	if (options.sourceType === "INITIAL") {
 		const holding = await prisma.initialHolding.create({
 			data: {
-				userId,
+				organizationId,
+				createdById: userId,
 				currencyCode,
 				amount: options.quantity,
 				// INITIAL 成本口径 = 记账起点汇率 × 数量；测试只关心 totalCost，
@@ -88,7 +116,7 @@ export async function seedCostLot(
 		});
 		const lot = await prisma.costLot.create({
 			data: {
-				userId,
+				organizationId,
 				currencyCode,
 				sourceType: "INITIAL",
 				sourceId: holding.id,
@@ -109,7 +137,8 @@ export async function seedCostLot(
 
 	const transaction = await prisma.transaction.create({
 		data: {
-			userId,
+			organizationId,
+			createdById: userId,
 			currencyCode,
 			quantity: options.quantity,
 			principalAmount: options.principal,
@@ -124,7 +153,7 @@ export async function seedCostLot(
 	});
 	const lot = await prisma.costLot.create({
 		data: {
-			userId,
+			organizationId,
 			currencyCode,
 			sourceType: "PURCHASE",
 			sourceId: transaction.id,
@@ -144,6 +173,7 @@ export async function seedCostLot(
 }
 
 export interface SeedUsageOptions {
+	organizationId?: string;
 	planId: string;
 	currencyCode: string;
 	amount: string;
@@ -158,10 +188,16 @@ export async function seedUsage(
 	userId: string,
 	options: SeedUsageOptions,
 ): Promise<string> {
+	const organizationId = await resolveOrgId(
+		prisma,
+		userId,
+		options.organizationId,
+	);
 	const usedAt = options.usedAt ?? SEED_USED_AT;
 	const usage = await prisma.usageRecord.create({
 		data: {
-			userId,
+			organizationId,
+			createdById: userId,
 			planId: options.planId,
 			currencyCode: options.currencyCode,
 			amount: options.amount,
@@ -190,10 +226,13 @@ export async function seedCorrection(
 	targetType: "USAGE" | "TRANSACTION",
 	targetId: string,
 	createdAt: Date = SEED_CORRECTED_AT,
+	organizationId?: string,
 ): Promise<void> {
+	const orgId = await resolveOrgId(prisma, userId, organizationId);
 	await prisma.correction.create({
 		data: {
-			userId,
+			organizationId: orgId,
+			actorUserId: userId,
 			targetType,
 			targetId,
 			reason: "测试更正",

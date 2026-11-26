@@ -143,15 +143,13 @@ const TENANT_SQL_TABLE_RE = new RegExp(
 const ORG_ID_FILTER_SQL_RE =
 	/(?:\bWHERE\b|\bON\b|\bUSING\b|\bHAVING\b)[\s\S]*\b(?:\w+\.)?"?organization_id"?\s*(?:=|<>|!=|IS\b|IN\b|ANY\b)|(?:\bWHERE\b|\bON\b|\bUSING\b|\bHAVING\b)[\s\S]*=\s*ANY\s*\([^)]*\borganization_id\b/i;
 
-const TRANSITIONAL_COMPAT_HELPERS = new Set([
-	"compatReadWhere",
-	"planReservationWhere",
+/**
+ * W30（MIG-D/E/F）：兼容窗口（缺组织头猜默认组织、读侧回落 organization_id IS NULL
+ * 存量行）已彻底关闭。以下助手**产出纯组织作用域**（`{ organizationId }`），
+ * 不再是「过渡兼容」信号，因此调用它们**不得**再被当作兼容回落报错。
+ */
+const PURE_ORG_SCOPE_HELPERS = new Set([
 	"organizationLedgerScope",
-]);
-
-const TRANSITIONAL_COMPAT_TYPES = new Set([
-	"OrganizationLedgerScope",
-	"PlanReservationWhere",
 ]);
 
 const PRISMA_CLIENT_NAMES = new Set(["prisma", "tx", "db", "client"]);
@@ -702,13 +700,14 @@ function analyzeExpression(
 				? callee.getText()
 				: "";
 
-		if (TRANSITIONAL_COMPAT_HELPERS.has(calleeName)) {
+		if (PURE_ORG_SCOPE_HELPERS.has(calleeName)) {
+			// 纯组织作用域助手：不再是过渡兼容回落，按「已带 organizationId」放行
 			return {
 				hasId: false,
 				hasOrganizationId: true,
-				hasNullOrganizationId: true,
-				hasUserId: true,
-				usesTransitionalCompat: true,
+				hasNullOrganizationId: false,
+				hasUserId: false,
+				usesTransitionalCompat: false,
 				unresolvable: false,
 			};
 		}
@@ -743,16 +742,6 @@ function analyzeExpression(
 		const decl = findLocalDeclaration(name, unwrapped);
 		if (!decl) return emptyWhereAnalysis(true);
 
-		if (decl.typeText && TRANSITIONAL_COMPAT_TYPES.has(decl.typeText.trim())) {
-			return {
-				hasId: false,
-				hasOrganizationId: true,
-				hasNullOrganizationId: true,
-				hasUserId: true,
-				usesTransitionalCompat: true,
-				unresolvable: false,
-			};
-		}
 		if (decl.isMutableOrMutated || !decl.initializer) {
 			return emptyWhereAnalysis(true);
 		}
@@ -1259,7 +1248,7 @@ function inspectSourceFile(
 					line,
 					column,
 					rule: "RULE_B_USER_ONLY_OR_COMPAT",
-					message: `共享账本模型 ${modelName}.${methodName}() 使用了过渡期 compat/userId 回落，必须标注有效 // @org-scope-exempt: W30 MIG-D/F 待清理`,
+					message: `共享账本模型 ${modelName}.${methodName}() 使用了已废弃的兼容期回落（organization_id IS NULL / userId 维度）；W30 MIG-D/F 后组织作用域唯一，禁止再使用`,
 				});
 				continue;
 			}

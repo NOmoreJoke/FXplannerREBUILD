@@ -46,7 +46,7 @@ export class AccountListItemDto {
 export class AccountListDto {
 	@ApiProperty({
 		description:
-			"本位币（成本币种，取组织本位币（兼容窗口回落创建者默认设置））；新用户无设置行时为 null（前端成本列退化为纯金额）",
+			"本位币（成本币种，取组织本位币（organization_settings.base_currency））；组织尚未建账时为 null（前端成本列退化为纯金额）",
 		example: "CNY",
 		type: String,
 		nullable: true,
@@ -64,7 +64,7 @@ export class AccountListDto {
 export class AccountDetailDto extends AccountListItemDto {
 	@ApiProperty({
 		description:
-			"本位币（成本币种，取组织本位币（兼容窗口回落创建者默认设置））；新用户无设置行时为 null",
+			"本位币（成本币种，取组织本位币（organization_settings.base_currency））；组织尚未建账时为 null",
 		example: "CNY",
 		type: String,
 		nullable: true,
@@ -151,7 +151,7 @@ export class AccountLedgerItemDto {
 export class AccountLedgerDto {
 	@ApiProperty({
 		description:
-			"本位币（成本列币种，取组织本位币（兼容窗口回落创建者默认设置））；无设置行时为 null",
+			"本位币（成本列币种，取组织本位币（organization_settings.base_currency））；组织尚未建账时为 null",
 		example: "CNY",
 		type: String,
 		nullable: true,

@@ -1,5 +1,4 @@
 import { HttpException } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuditService } from "../audit/audit.service";
 import type { ActorContext } from "../authorization/authorization.types";
@@ -37,7 +36,6 @@ const DEFAULT_ACTOR: ActorContext = {
 	membershipId: "mem-1",
 	role: "OWNER",
 	authMethod: "USER",
-	isDefaultOrganization: true,
 };
 
 function createPrismaMock() {
@@ -66,14 +64,10 @@ function createPrismaMock() {
 			status: "ACTIVE",
 		}),
 	};
-	// 默认组织解析 resolveDefaultOrganizationId / resolveDefaultOrganizationCreatorUserId
-	// 走原生 SQL（评审 R2-I03 / I-2）：u1 创建的最早组织 = org-default
+	// 默认组织解析 resolveDefaultOrganizationId 走原生 SQL：u1 创建的最早组织 = org-default
 	const $queryRaw = vi.fn(async (strings: TemplateStringsArray) => {
 		const sql = strings.join(" ");
 		if (sql.includes("FROM accounts")) return [];
-		if (sql.includes('m.user_id AS "userId"')) {
-			return [{ userId: "u1" }];
-		}
 		return [{ organizationId: "org-default" }];
 	});
 	const $executeRaw = vi.fn().mockResolvedValue(1);
@@ -239,12 +233,11 @@ describe("OnboardingService", () => {
 	}
 
 	describe("getStatus（按当前组织的偏好判定完成态；评审 I-10）", () => {
-		/** u1 的默认组织；无 OrganizationSettings，兼容回落到 u1 的个人设置 */
+		/** u1 的默认组织；无 OrganizationSettings → 未建账 */
 		const DEFAULT_SCOPE = { userId: "u1", organizationId: "org-default" };
-		const onboardedRow = {
+		/** 组织已建账时的偏好行（W30（MIG-F）：组织偏好唯一真相） */
+		const orgSettingsRow = {
 			baseCurrency: "HKD",
-			locale: "zh-CN",
-			region: "CN",
 			prepPreference: "balanced",
 			reminderEnabled: false,
 			ledgerStartedAt: T0,
@@ -262,29 +255,10 @@ describe("OnboardingService", () => {
 			expect(status.currentTermsVersion).toBe(CURRENT_TERMS_VERSION);
 		});
 
-		it("已完成（兼容回落到默认组织所有者的个人设置）：返回 settings 视图，completed=true", async () => {
-			prisma.userSettings.findUnique.mockResolvedValue(onboardedRow);
-			prisma.termsConsent.count.mockResolvedValue(2);
-
-			const status = await service.getStatus(DEFAULT_SCOPE);
-
-			expect(status.completed).toBe(true);
-			expect(status.requiredConsentsMet).toBe(true);
-			expect(status.settings).toEqual({
-				baseCurrency: "HKD",
-				locale: "zh-CN",
-				region: "CN",
-				prepPreference: "balanced",
-				reminderEnabled: false,
-				ledgerStartedAt: T0,
-			});
-		});
-
 		it("受邀成员（无个人设置行）在已建账的默认组织里：completed=true，不读成员本人的设置", async () => {
-			// 组织所有者 u1 已建账；成员 member 没有自己的 UserSettings
-			prisma.userSettings.findUnique.mockImplementation((args: { where: { userId: string } }) =>
-				Promise.resolve(args.where.userId === "u1" ? onboardedRow : null),
-			);
+			// 组织已建账（OrganizationSettings 有行）；成员 member 没有自己的 UserSettings
+			prisma.organizationSettings.findUnique.mockResolvedValue(orgSettingsRow);
+			prisma.userSettings.findUnique.mockResolvedValue(null);
 			prisma.termsConsent.count.mockResolvedValue(0);
 
 			const status = await service.getStatus({ userId: "member", organizationId: "org-default" });
@@ -311,9 +285,9 @@ describe("OnboardingService", () => {
 		});
 
 		it("已建账用户切到其新建的（未建账）组织：completed=false——不回落创建者的个人设置", async () => {
-			prisma.userSettings.findUnique.mockResolvedValue(onboardedRow);
+			prisma.userSettings.findUnique.mockResolvedValue({ locale: "zh-CN", region: "CN" });
 			// u1 的默认组织是 org-default（见 createPrismaMock 的 $queryRaw）；
-			// 当前请求的组织 org-new 不是默认组织 → 不回落
+			// 当前请求的组织 org-new 没有 OrganizationSettings → 未建账
 			prisma.termsConsent.count.mockResolvedValue(2);
 
 			const status = await service.getStatus({ userId: "u1", organizationId: "org-new" });
@@ -419,17 +393,13 @@ describe("OnboardingService", () => {
 			expect(prisma.organizationSettings.create).not.toHaveBeenCalled();
 		});
 
-		it("多组织独立建账：本人已有 Org A UserSettings 时为新建 Org B complete 不被 409 阻塞，且不覆盖 Org A baseCurrency", async () => {
+		it("多组织独立建账：本人已有 Org A UserSettings 时为新建 Org B complete 不被 409 阻塞，且个人行只写 locale / region", async () => {
 			prisma.termsConsent.count.mockResolvedValue(2);
 			prisma.organizationSettings.findUnique.mockResolvedValue(null);
-			// Org B 不是默认组织，即使 u1 名下已有 Org A 的 UserSettings(HKD)
+			// 即使 u1 名下已有 Org A 的个人展示行，Org B 建账也不被阻塞
 			prisma.userSettings.findUnique.mockResolvedValue({
-				baseCurrency: "HKD",
 				locale: "zh-CN",
 				region: "CN",
-				prepPreference: "balanced",
-				reminderEnabled: true,
-				ledgerStartedAt: T0,
 			});
 			prisma.membership.findUnique.mockResolvedValue({
 				organizationId: "org-b",
@@ -441,7 +411,6 @@ describe("OnboardingService", () => {
 				{
 					...DEFAULT_ACTOR,
 					organizationId: "org-b",
-					isDefaultOrganization: false,
 				},
 				{ ...validWizard, baseCurrency: "USD", region: "HK", locale: "en" },
 				"req-org-b",
@@ -457,9 +426,15 @@ describe("OnboardingService", () => {
 					ledgerStartedAt: utc8DayStart(T0),
 				},
 			});
-			const [upsertArg] = prisma.userSettings.upsert.mock.calls[0];
-			expect(upsertArg.create.baseCurrency).toBe("");
-			expect(upsertArg.create.ledgerStartedAt).toBeNull();
+			const [upsertArg] = prisma.userSettings.upsert.mock.calls[0] as unknown as [
+				{ create: Record<string, unknown>; update: Record<string, unknown> },
+			];
+			// 个人展示行只写 locale / region：组织域字段（W30（MIG-F））不再落个人行
+			expect(upsertArg.create).toEqual({
+				userId: "u1",
+				locale: "en",
+				region: "HK",
+			});
 			expect(upsertArg.update).toEqual({ locale: "en", region: "HK" });
 			expect("baseCurrency" in upsertArg.update).toBe(false);
 			expect("ledgerStartedAt" in upsertArg.update).toBe(false);
@@ -476,7 +451,7 @@ describe("OnboardingService", () => {
 			);
 		});
 
-		it("非默认组织先建账（无 UserSettings 行）→ 仅写占位 baseCurrency=\"\"，绝不把默认组织标为已建账", async () => {
+		it("新组织先建账（无 UserSettings 行）→ 个人行只建 locale / region，绝不把组织标为已建账", async () => {
 			prisma.termsConsent.count.mockResolvedValue(2);
 			prisma.organizationSettings.findUnique.mockResolvedValue(null);
 			prisma.userSettings.findUnique.mockResolvedValue(null);
@@ -490,15 +465,22 @@ describe("OnboardingService", () => {
 				{
 					...DEFAULT_ACTOR,
 					organizationId: "org-b",
-					isDefaultOrganization: false,
 				},
 				{ ...validWizard, baseCurrency: "USD" },
 			);
 
-			const [upsertArg] = prisma.userSettings.upsert.mock.calls[0];
-			expect(upsertArg.create.baseCurrency).toBe("");
-			expect(upsertArg.create.ledgerStartedAt).toBeNull();
+			const [upsertArg] = prisma.userSettings.upsert.mock.calls[0] as unknown as [
+				{ create: Record<string, unknown>; update: Record<string, unknown> },
+			];
+			expect(upsertArg.create).toEqual({
+				userId: "u1",
+				locale: "zh-CN",
+				region: "CN",
+			});
 			expect(upsertArg.update).toEqual({ locale: "zh-CN", region: "CN" });
+			// 个人行不含任何组织域字段 → 组织建账态只由 OrganizationSettings 决定
+			expect("baseCurrency" in upsertArg.create).toBe(false);
+			expect("ledgerStartedAt" in upsertArg.create).toBe(false);
 		});
 
 		it("锁等期间降权 → 403 PERMISSION_DENIED + recordStandalone DENIED + 事务零写入", async () => {
@@ -665,7 +647,7 @@ describe("OnboardingService", () => {
 			expect(usdLot.totalCost.toFixed(4)).toBe("7260.0000");
 			expect(usdLot.acquiredAt).toEqual(utc8DayStart(T0)); // = ledgerStartedAt
 
-			// Account 按组织批次汇总重算（costLot.aggregate → upsertOrgAccountWithLegacyMerge）
+			// Account 按组织批次汇总重算（costLot.aggregate → upsertOrgAccount）
 			expect(prisma.costLot.aggregate).toHaveBeenCalledWith({
 				_sum: { remainingQty: true },
 				where: {
@@ -1115,98 +1097,6 @@ describe("OnboardingService", () => {
 					requestId: "req-backfill",
 				}),
 			);
-		});
-
-		it("OWNER_LEGACY 组织补录时先固化 OrganizationSettings 并兼容升级 legacy Account", async () => {
-			prisma.organizationSettings.findUnique.mockResolvedValue(null);
-			prisma.userSettings.findUnique.mockResolvedValue({
-				baseCurrency: "CNY",
-				prepPreference: "balanced",
-				reminderEnabled: true,
-				ledgerStartedAt: null,
-			});
-			prisma.initialHolding.findMany.mockResolvedValue([]);
-			prisma.account.findFirst.mockResolvedValue({
-				id: "acc-legacy-eur",
-				balance: new Prisma.Decimal("0"),
-				createdById: null,
-			});
-			rateService.getLatestForBooking.mockResolvedValue({
-				base: "CNY",
-				target: "EUR",
-				rate: "0.79000000",
-				source: "frankfurter",
-				observedAt: T0.toISOString(),
-				validUntil: new Date(T0.getTime() + 5 * 60 * 1000).toISOString(),
-				fresh: true,
-			});
-			prisma.initialHolding.create.mockImplementation(
-				async ({ data }: any) => ({ id: "holding-eur", ...data }),
-			);
-			prisma.costLot.create.mockResolvedValue({});
-			prisma.costLot.aggregate.mockResolvedValue({
-				_sum: { remainingQty: "500" },
-			});
-			prisma.account.upsert.mockResolvedValue({});
-
-			const result = await service.saveInitialHoldings(DEFAULT_ACTOR, backfillDto);
-
-			expect(result.ledgerStartedAt).toEqual(utc8DayStart(T0));
-			expect(prisma.organizationSettings.upsert).toHaveBeenCalledTimes(1);
-			expect(prisma.account.update).toHaveBeenCalledWith({
-				where: { id: "acc-legacy-eur" },
-				data: {
-					organizationId: "org-default",
-					createdById: "u1",
-					balance: new Prisma.Decimal("500"),
-				},
-			});
-		});
-
-		it("I-2 双账户行合并：同时存在组织账户与默认创建者 legacy 账户时删旧并入组织行，零 P2002", async () => {
-			prisma.organizationSettings.findUnique.mockResolvedValue(settingsRow);
-			prisma.initialHolding.findMany.mockResolvedValue([]);
-			prisma.account.findUnique.mockResolvedValue({
-				id: "acc-org-eur",
-				balance: new Prisma.Decimal("300"),
-			});
-			prisma.account.findFirst.mockResolvedValue({
-				id: "acc-legacy-eur",
-				balance: new Prisma.Decimal("50"),
-				createdById: null,
-			});
-			rateService.getLatestForBooking.mockResolvedValue({
-				base: "CNY",
-				target: "EUR",
-				rate: "0.79000000",
-				source: "frankfurter",
-				observedAt: T0.toISOString(),
-				validUntil: new Date(T0.getTime() + 5 * 60 * 1000).toISOString(),
-				fresh: true,
-			});
-			prisma.initialHolding.create.mockImplementation(
-				async ({ data }: any) => ({ id: "holding-eur", ...data }),
-			);
-			prisma.costLot.create.mockResolvedValue({});
-			prisma.costLot.aggregate.mockResolvedValue({
-				_sum: { remainingQty: "850" },
-			});
-
-			await service.saveInitialHoldings({
-				...DEFAULT_ACTOR,
-				userId: "u-admin",
-				role: "ADMIN",
-				isDefaultOrganization: false,
-			}, backfillDto);
-
-			expect(prisma.account.delete).toHaveBeenCalledWith({
-				where: { id: "acc-legacy-eur" },
-			});
-			expect(prisma.account.update).toHaveBeenCalledWith({
-				where: { id: "acc-org-eur" },
-				data: { balance: new Prisma.Decimal("850") },
-			});
-			expect(prisma.account.upsert).not.toHaveBeenCalled();
 		});
 
 		it("并发兜底：InitialHolding 插入撞 P2002 → 409 INITIAL_HOLDING_EXISTS", async () => {

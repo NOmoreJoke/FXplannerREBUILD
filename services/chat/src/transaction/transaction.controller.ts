@@ -26,7 +26,7 @@ import type { Request } from "express";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
-import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { OrganizationContextGuard } from "../authorization/guards/organization-context.guard";
 import { PermissionGuard } from "../authorization/guards/permission.guard";
 import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
@@ -42,7 +42,7 @@ import { OrganizationLockGuard } from "../authorization/guards/organization-lock
 /**
  * 买入交易（transaction-entry，技术方案 §5）：2 个功能入口，全部需登录。
  * create 为一个本地事务（自动建户 + 余额累加 + 落交易记录，任一失败全部回滚）；
- * detail 按 id + userId 联查，不存在或不属于本人一律 404（不泄露存在性）。
+ * detail 按 id + 组织作用域联查，不存在或不属于当前组织一律 404（不泄露存在性）。
  * 互算不设独立预览接口：计算为 money 包纯函数、零 IO，前端本地完成（方案 §5.2）。
  */
 @ApiTags("Transaction")
@@ -58,7 +58,7 @@ export class TransactionController {
 	) {}
 
 	@Post()
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("transaction.create")
 	@ApiOperation({
 		summary: "创建买入记录（事务）",
@@ -106,14 +106,14 @@ export class TransactionController {
 	@ApiOperation({
 		summary: "交易详情",
 		description:
-			"返回单条买入记录（数量/本金/手续费/总成本/汇率等）；手续费未知时 feeAmount=null、totalCost=null、feeKnown=false，前端显示「费用未明确」。仅本人可见：不存在或不属于本人一律 404 TRANSACTION_NOT_FOUND。",
+			"返回单条买入记录（数量/本金/手续费/总成本/汇率等）；手续费未知时 feeAmount=null、totalCost=null、feeKnown=false，前端显示「费用未明确」。仅当前组织可见：不存在或不属于当前组织一律 404 TRANSACTION_NOT_FOUND。",
 	})
 	@ApiOkTransactionResponse()
 	@ApiNotFoundResponse({
-		description: "交易不存在或不属于本人（TRANSACTION_NOT_FOUND）",
+		description: "交易不存在或不属于当前组织（TRANSACTION_NOT_FOUND）",
 		type: TransactionErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("transaction.read")
 	async detail(
 		@CurrentUser() user: User,

@@ -111,3 +111,47 @@ W29（MIG-C）追加口径：`snapshot` 与 `drill` **只写 stdout**，不向�
 - **核对**（`organization-reconcile.ts`）：MIG-F 之后改走**组织维度基础校验**
   （默认组织映射、派生行父子同组织、孤儿行、FIFO 与批次守恒），SQL 中不引用任何
   已删除列，因此 MIG-F 之后依然可以运行基础一致性校验。
+
+## W30 §14.5 性能回归与 `EXPLAIN (ANALYZE, BUFFERS)` 基准（`benchmark-p6.ts`）
+
+验证 8 条核心租户查询（`memberships`、`accounts`、`plans`、`transactions`、
+`usage_records`、`corrections`、`reminders`、`audit_logs`）在 `MIG-E/F` 前后均命中
+`organization_id` 打头索引、0 `Seq Scan`，并实测预热后 ≥100 次迭代的 P50 / P95 延迟。
+
+- **安全红线**：只允许连接本机回环 PostgreSQL 测试库（`localhost` / `127.0.0.1` /
+  `[::1]`，拒绝 `?host=` 覆盖、拒绝 `fxplanner_prod` 与 `NODE_ENV=production`，库名必须以
+  `_test` 结尾且无环境变量旁路——迁移演练用的备份副本库不是基准的目标）；禁止将输出 JSON
+  写入仓库目录内（`--out` 仅限 `/tmp/` 等仓库外路径）。
+- **双阶段兼容**：启动时通过 `information_schema.columns` 与 `pg_indexes` 自动识别
+  `pre-mig-ef` / `post-mig-e` / `post-mig-f`，使用原生 SQL 造数与基准测试，不依赖重新生成
+  Prisma Client。
+- **隔离造数与零残留**：使用独立运行前缀造数（默认 120 组织 × 10 行/表 = 1,200 账本行/表），
+  `ANALYZE` 后采集执行计划与延迟，并在 `finally` 中全量清理且断言前后各表行数完全一致。
+
+```bash
+# 仅输出 JSON 到 stdout
+bun --cwd services/chat prisma/tob-r1-migration/benchmark-p6.ts
+
+# 写入仓库外 JSON 文件（pre-MIG-E/F 基线）
+bun --cwd services/chat prisma/tob-r1-migration/benchmark-p6.ts --out /tmp/w30_perf_pre.json
+
+# MIG-E/F 后复测并与基线对比
+bun --cwd services/chat prisma/tob-r1-migration/benchmark-p6.ts \
+  --out /tmp/w30_perf_results.json \
+  --compare /tmp/w30_perf_pre.json
+```
+
+- 带 `--out` 时 JSON 只写文件（stderr 打印进度与逐查询摘要）；不带 `--out` 时 JSON 输出到 stdout。
+- 退出码：0 = 8 条查询全部命中 `organization_id` 打头索引、0 `Seq Scan`，且清理后各表行数
+  回到运行前；1 = 安全闸门 / 参数 / 输出路径被拒绝、执行出错或任一断言失败（已跑到产出阶段
+  时结果文件仍会写出，供排查）。
+- 默认规模下表很小，优化器在同一查询的 `Index Scan` 与 `Bitmap Index Scan + Sort` 之间可能
+  随物理布局翻转；两者都走 `organization_id` 打头索引，均满足断言。
+
+按需自测（不在 `unit` / `api` / `integration` / `infra` 分组内，同
+`rate-cache-migration/migrate.spec.ts`）：以子进程黑盒验证安全闸门、参数校验与输出路径
+都在连接数据库之前被拒绝，不需要数据库。
+
+```bash
+bun run --cwd services/chat test prisma/tob-r1-migration/benchmark-p6.spec.ts
+```

@@ -16,6 +16,8 @@ import {
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
+	orgBearerFor,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -86,14 +88,14 @@ describe("TransactionController（接口）", () => {
 	function postTx(user: TestUser, body: Record<string, unknown>) {
 		return request(app.getHttpServer())
 			.post("/api/transactions")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(body);
 	}
 
 	function getTx(user: TestUser, id: string) {
 		return request(app.getHttpServer())
 			.get(`/api/transactions/${id}`)
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	beforeAll(async () => {
@@ -176,7 +178,10 @@ describe("TransactionController（接口）", () => {
 		// #2 是 userA 的首笔 USD 买入；M4 无分配 → Σ计划剩余分配 = 0，
 		// 不变式「balance = Σ剩余分配 + 未分配余额」简化为 balance = quantity
 		const accounts = await ctx.prisma.account.findMany({
-			where: { userId: userA.userId, currencyCode: "USD" },
+			where: {
+				organizationId: userA.defaultOrganizationId,
+				currencyCode: "USD",
+			},
 		});
 		expect(accounts).toHaveLength(1);
 		expect(accounts[0].balance.toFixed(4)).toBe("10000.0000");
@@ -186,7 +191,10 @@ describe("TransactionController（接口）", () => {
 		await postTx(userA, simpleBody("USD", "250.25")).expect(201);
 
 		const accounts = await ctx.prisma.account.findMany({
-			where: { userId: userA.userId, currencyCode: "USD" },
+			where: {
+				organizationId: userA.defaultOrganizationId,
+				currencyCode: "USD",
+			},
 		});
 		expect(accounts).toHaveLength(1); // 不新建户
 		expect(accounts[0].balance.toFixed(4)).toBe("10250.2500"); // 10000 + 250.25
@@ -201,7 +209,10 @@ describe("TransactionController（接口）", () => {
 		expect(r2.status).toBe(201);
 
 		const accounts = await ctx.prisma.account.findMany({
-			where: { userId: userC.userId, currencyCode: "EUR" },
+			where: {
+				organizationId: userC.defaultOrganizationId,
+				currencyCode: "EUR",
+			},
 		});
 		expect(accounts).toHaveLength(1); // increment 原子性 + P2002 降级生效
 		expect(accounts[0].balance.toFixed(4)).toBe("300.0000");
@@ -216,7 +227,10 @@ describe("TransactionController（接口）", () => {
 		expect(res.body.message).toContain("重新核对");
 
 		const accounts = await ctx.prisma.account.findMany({
-			where: { userId: userA.userId, currencyCode: "USD" },
+			where: {
+				organizationId: userA.defaultOrganizationId,
+				currencyCode: "USD",
+			},
 		});
 		expect(accounts[0].balance.toFixed(4)).toBe("10250.2500"); // 未被污染
 	});
@@ -234,7 +248,9 @@ describe("TransactionController（接口）", () => {
 		const future = new Date("2027-01-01T00:00:00.000Z");
 		const planJpy = await ctx.prisma.plan.create({
 			data: {
-				userId: userA.userId,
+				// W30（MIG-E）：计划直连组织（organization_id NOT NULL，user_id 列已删）
+				organizationId: userA.defaultOrganizationId,
+				createdById: userA.userId,
 				name: "日元学费计划",
 				targetCurrency: "JPY",
 				targetAmount: "1000000",
@@ -244,7 +260,8 @@ describe("TransactionController（接口）", () => {
 		});
 		const planOfB = await ctx.prisma.plan.create({
 			data: {
-				userId: userB.userId,
+				organizationId: userB.defaultOrganizationId,
+				createdById: userB.userId,
 				name: "他人计划",
 				targetCurrency: "USD",
 				targetAmount: "1000",
@@ -406,7 +423,11 @@ describe("TransactionController（接口）", () => {
 	it("#15 录入成功后 CostLot 行存在：remainingQty/unitCost/totalCost/acquiredAt 与 §3.4 一致", async () => {
 		// txIdA 为 #2 的 doc 05 录入（本金 72480 + 手续费 42 ÷ 数量 10000）
 		const lot = await ctx.prisma.costLot.findFirst({
-			where: { userId: userA.userId, sourceType: "PURCHASE", sourceId: txIdA },
+			where: {
+				organizationId: userA.defaultOrganizationId,
+				sourceType: "PURCHASE",
+				sourceId: txIdA,
+			},
 		});
 		expect(lot).not.toBeNull();
 		expect(lot?.currencyCode).toBe("USD");
@@ -425,13 +446,16 @@ describe("TransactionController（接口）", () => {
 	it("#16 组合级不变式：USD 账户 Σ costLot.remainingQty === balance（10000 + 250.25）", async () => {
 		// 前序用例累计：#2 doc 05（10000）+ #6（250.25）= 10250.25
 		const account = await ctx.prisma.account.findFirst({
-			where: { userId: userA.userId, currencyCode: "USD" },
+			where: {
+				organizationId: userA.defaultOrganizationId,
+				currencyCode: "USD",
+			},
 		});
 		expect(account?.balance.toFixed(4)).toBe("10250.2500");
 
 		const lots = await ctx.prisma.costLot.findMany({
 			where: {
-				userId: userA.userId,
+				organizationId: userA.defaultOrganizationId,
 				currencyCode: "USD",
 				sourceType: "PURCHASE",
 			},
@@ -456,17 +480,26 @@ describe("TransactionController（接口）", () => {
 		// 含第④步的整体回滚：账户、交易、批次三表均无 CAD 残留
 		expect(
 			await ctx.prisma.account.count({
-				where: { userId: userA.userId, currencyCode: "CAD" },
+				where: {
+					organizationId: userA.defaultOrganizationId,
+					currencyCode: "CAD",
+				},
 			}),
 		).toBe(0);
 		expect(
 			await ctx.prisma.transaction.count({
-				where: { userId: userA.userId, currencyCode: "CAD" },
+				where: {
+					organizationId: userA.defaultOrganizationId,
+					currencyCode: "CAD",
+				},
 			}),
 		).toBe(0);
 		expect(
 			await ctx.prisma.costLot.count({
-				where: { userId: userA.userId, currencyCode: "CAD" },
+				where: {
+					organizationId: userA.defaultOrganizationId,
+					currencyCode: "CAD",
+				},
 			}),
 		).toBe(0);
 	});
@@ -529,8 +562,7 @@ describe("ToB R1 W23：Transaction 写接口 Actor 化 + 权限矩阵 + 跨组�
 
 			const res = await request(app.getHttpServer())
 				.post("/api/transactions")
-				.set(bearer(member.accessToken))
-				.set("X-Organization-Id", orgId)
+				.set(orgBearerFor(member, orgId))
 				.set("X-Request-Id", reqId)
 				.send(simpleBody("USD", "100.00"))
 				.expect(403);
@@ -569,16 +601,14 @@ describe("ToB R1 W23：Transaction 写接口 Actor 化 + 权限矩阵 + 跨组�
 
 		const res1 = await request(app.getHttpServer())
 			.post("/api/transactions")
-			.set(bearer(owner.accessToken))
-			.set("X-Organization-Id", orgId)
+			.set(orgBearerFor(owner, orgId))
 			.set("X-Request-Id", req1)
 			.send(simpleBody("USD", "300.00"))
 			.expect(201);
 
 		const res2 = await request(app.getHttpServer())
 			.post("/api/transactions")
-			.set(bearer(finance.accessToken))
-			.set("X-Organization-Id", orgId)
+			.set(orgBearerFor(finance, orgId))
 			.set("X-Request-Id", req2)
 			.send(simpleBody("USD", "200.50"))
 			.expect(201);
@@ -642,7 +672,6 @@ describe("ToB R1 W23：Transaction 写接口 Actor 化 + 权限矩阵 + 跨组�
 		const future = new Date("2030-02-15T00:00:00.000Z");
 		const planInA = await ctx.prisma.plan.create({
 			data: {
-				userId: user.userId,
 				organizationId: orgAId,
 				createdById: user.userId,
 				name: "Org A 专属计划",
@@ -656,8 +685,7 @@ describe("ToB R1 W23：Transaction 写接口 Actor 化 + 权限矩阵 + 跨组�
 
 		const cross = await request(app.getHttpServer())
 			.post("/api/transactions")
-			.set(bearer(user.accessToken))
-			.set("X-Organization-Id", orgBId)
+			.set(orgBearerFor(user, orgBId))
 			.send({ ...simpleBody("USD", "100.00"), planId: planInA.id })
 			.expect(404);
 		expect(cross.body.code).toBe("PLAN_NOT_FOUND");
@@ -679,8 +707,7 @@ describe("ToB R1 W23：Transaction 写接口 Actor 化 + 权限矩阵 + 跨组�
 			() =>
 				request(app.getHttpServer())
 					.post("/api/transactions")
-					.set(bearer(finance.accessToken))
-					.set("X-Organization-Id", orgId)
+					.set(orgBearerFor(finance, orgId))
 					.set("X-Request-Id", reqId)
 					.send(simpleBody("USD", "250.00")),
 			async () => {
@@ -731,8 +758,7 @@ describe("ToB R1 W23：Transaction 写接口 Actor 化 + 权限矩阵 + 跨组�
 
 		await request(app.getHttpServer())
 			.post("/api/transactions")
-			.set(bearer(finance.accessToken))
-			.set("X-Organization-Id", orgId)
+			.set(orgBearerFor(finance, orgId))
 			.send(simpleBody("EUR", "500.00"))
 			.expect(500);
 
@@ -747,61 +773,4 @@ describe("ToB R1 W23：Transaction 写接口 Actor 化 + 权限矩阵 + 跨组�
 		).toBe(0);
 	});
 
-	it("I-2 双账户行防护：受邀 FINANCE 买入合并 Owner 遗留 NULL 账户与既有组织账户（零 P2002 且双方余额一致）", async () => {
-		const { owner, member: finance, orgId } = await setupOrgWithMember(
-			"i2-dual-merge",
-			"FINANCE",
-		);
-		// 构造双行异常前置态：既有组织行(20) + Owner legacy NULL 行(50)
-		await ctx.prisma.account.create({
-			data: {
-				userId: owner.userId,
-				organizationId: orgId,
-				createdById: owner.userId,
-				currencyCode: "USD",
-				balance: "20.0000",
-			},
-		});
-		await ctx.prisma.account.create({
-			data: {
-				userId: owner.userId,
-				organizationId: null,
-				currencyCode: "USD",
-				balance: "50.0000",
-			},
-		});
-
-		await request(app.getHttpServer())
-			.post("/api/transactions")
-			.set(bearer(finance.accessToken))
-			.set("X-Organization-Id", orgId)
-			.send(simpleBody("USD", "30.00"))
-			.expect(201);
-
-		const orgAccounts = await ctx.prisma.account.findMany({
-			where: { organizationId: orgId, currencyCode: "USD" },
-		});
-		expect(orgAccounts).toHaveLength(1);
-		expect(orgAccounts[0].balance.toFixed(4)).toBe("100.0000");
-		expect(
-			await ctx.prisma.account.count({
-				where: { userId: owner.userId, organizationId: null, currencyCode: "USD" },
-			}),
-		).toBe(0);
-
-		const [ownerAccounts, financeAccounts] = await Promise.all([
-			request(app.getHttpServer())
-				.get("/api/accounts/USD")
-				.set(bearer(owner.accessToken))
-				.set("X-Organization-Id", orgId)
-				.expect(200),
-			request(app.getHttpServer())
-				.get("/api/accounts/USD")
-				.set(bearer(finance.accessToken))
-				.set("X-Organization-Id", orgId)
-				.expect(200),
-		]);
-		expect(ownerAccounts.body.data.balance).toBe("100.0000");
-		expect(financeAccounts.body.data.balance).toBe("100.0000");
-	});
 });

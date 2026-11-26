@@ -12,8 +12,11 @@ import { toast } from "sonner";
 import type { AuthResponse, PasswordLoginInput } from "@/lib/api/contract";
 import { authApi } from "@/lib/api/auth";
 import { onboardingApi } from "@/lib/api/onboarding";
+import { organizationsApi } from "@/lib/api/organizations";
+import { queryKeys } from "@/lib/api/query-keys";
 import { ApiError } from "@/lib/api/client";
 import { safeRedirectPath } from "@/lib/auth/safe-redirect-path";
+import { resolvePostLoginTarget } from "@/lib/auth/post-login-target";
 import { beginAuthenticatedSession } from "@/lib/auth/session-reset";
 import { useOtpCountdown } from "@/lib/hooks/use-otp-countdown";
 import { PasswordInput } from "@/components/base";
@@ -81,11 +84,11 @@ export function LoginForm() {
 
 	// 登录成功后的统一收尾：token 只写 cookie（唯一事实来源），并按白名单回跳。
 	// 回跳前自动提交登录页勾选的 consents（失败不阻塞，未建账用户由建账后端
-	// 校验兜底，技术方案 §3.1）；再查 onboarding 状态分流：未建账进向导，
-	// 已建账回首页或登录前正在浏览的页面（状态查询失败不拦截，按已建账回跳）。
+	// 校验兜底，技术方案 §3.1）；再按建账态分流：未建账进向导，已建账回首页或
+	// 登录前正在浏览的页面（列表拉取失败不拦截，按已建账回跳）。
 	const finishLogin = async (result: AuthResponse) => {
 		// 评审 R2-I10：写入新 token 之前重置会话上下文——上一个账号（凭证过期后停在
-		// 登录页）持久化的组织选择不得被继承。否则下面的建账状态查询会带着旧组织头
+		// 登录页）持久化的组织选择不得被继承。否则下面的组织列表查询会带着旧组织头
 		// 发出：新账号不是成员则 404 被吞、未建账的新用户被直接放进 /home 跳过向导；
 		// 恰好也是成员则静默继承上一个账号的组织选择（顺序见 beginAuthenticatedSession）
 		beginAuthenticatedSession({
@@ -101,15 +104,18 @@ export function LoginForm() {
 		const safeTarget = safeRedirectPath(redirect);
 		let target: string;
 		try {
-			const status = await onboardingApi.getStatus();
-			target = status.completed
-				? (safeTarget ?? "/home")
-				: // 未建账先进向导，但把登录前的目标页带过去，建账完成后回跳——
-					// 否则受邀的新用户登录后回不到 /invitations/<token> 继续接受邀请
-					(safeTarget
-						? `/onboarding?redirect=${encodeURIComponent(safeTarget)}`
-						: "/onboarding");
+			// 建账态改判个人域端点 GET /organizations（列表项自带 onboardingCompleted）：
+			// 登录时组织选择已被会话重置清空，GET /onboarding/status 是组织域端点，
+			// W30（MIG-D）起缺组织头一律 400——不得再靠后端回落「唯一默认组织」。
+			// 走既有查询键，顺带把结果留在缓存里供受保护区布局的组织路由分流复用。
+			const organizations = await queryClient.fetchQuery({
+				queryKey: queryKeys.organizations.list(),
+				queryFn: () => organizationsApi.list(),
+				retry: false,
+			});
+			target = resolvePostLoginTarget(organizations, safeTarget);
 		} catch {
+			// 列表拉取失败不阻塞登录：受保护区布局会展示组织路由错误态与重试
 			target = safeTarget ?? "/home";
 		}
 		toast.success("登录成功");

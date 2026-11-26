@@ -94,15 +94,16 @@ test.describe("【组织工作台】切换 / 成员 / 邀请 / 审计", () => {
 	test.beforeAll(async () => {
 		seed = await seedRegisterAndLogin("org-owner");
 		inviteeSeed = await seedRegisterAndLogin("org-invitee");
-		// 两名用户此刻都只有一个组织：不带组织头的建账请求由后端映射到各自唯一的组织
+		// 两名用户此刻都只有一个组织（注册兜底建的个人工作台）：建账请求带该组织头
+		// （W30 MIG-D：组织域端点缺头一律 400，不再回落唯一默认组织）
 		await seedOnboarding(seed.accessToken, "CNY");
 		await seedOnboarding(inviteeSeed.accessToken, "CNY");
 		const ownerOrgs = await listOrganizations(seed.accessToken);
 		ownerOrgName = ownerOrgs[0]?.name ?? "";
 		expect(ownerOrgName.length).toBeGreaterThan(0);
-		// T-ORG-007B 的可见数据造在受邀者名下（评审 R3-I03）：计划写路径尚未组织化
-		// （Goal #3B），落库 organizationId = NULL，只在计划所有者自己的默认组织上下文可见；
-		// 受邀者在所有者组织是非默认上下文，看不到所有者的计划
+		// T-ORG-007B 的可见数据造在受邀者名下：计划按**请求的组织**落库
+		// （W30 MIG-E：organization_id NOT NULL，不再有 organizationId = NULL 的存量行），
+		// 故这条计划属受邀者自己的组织——受邀者在所有者组织看不到它
 		inviteePlanName = `E2E 受邀者计划 ${Date.now()}`;
 		await seedPlanWithAllocation(
 			inviteeSeed.accessToken,
@@ -291,9 +292,9 @@ test.describe("【组织工作台】切换 / 成员 / 邀请 / 审计", () => {
 		logger.log("action", "info", "开始：切换组织后的页面数据刷新");
 		logger.setupPageListeners(page);
 		// 受邀者现有两个**已建账**组织：自己的默认组织（有一条计划）+ 所有者的组织（对受邀者
-		// 而言没有可见计划）。评审 R3-I03：所有者的计划落库 organizationId = NULL（写路径尚未
-		// 组织化），只在所有者自己的默认组织上下文可见，受邀者读不到——可见数据因此造在
-		// 受邀者名下，本用例是「一边有计划、一边为空」的不对称形态。
+		// 而言没有可见计划）。计划按请求的组织落库（W30 MIG-E：organization_id NOT NULL，
+		// 不再有 organizationId = NULL 的存量行），可见数据造在受邀者名下，于是形成
+		// 「一边有计划、一边为空」的不对称形态。
 		// 评审 R2-I07：此前停在无前缀查询的页面上切换组织，页面会永久冻结在旧组织的数据
 		// 且零请求发往新组织——本用例要求不重载页面即完成数据切换
 		const inviteeOrgs = await listOrganizations(inviteeSeed.accessToken);

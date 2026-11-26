@@ -30,6 +30,7 @@ import {
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -181,7 +182,7 @@ describe("OnboardingController（e2e）", () => {
 	it("未确认条款时 complete 应该 400 CONSENT_REQUIRED", async () => {
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(wizard)
 			.expect(400);
 
@@ -191,7 +192,7 @@ describe("OnboardingController（e2e）", () => {
 	it("GET status 初始为未完成", async () => {
 		const res = await request(app.getHttpServer())
 			.get("/api/onboarding/status")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		expect(res.body.data).toMatchObject({
@@ -225,7 +226,7 @@ describe("OnboardingController（e2e）", () => {
 
 		const status = await request(app.getHttpServer())
 			.get("/api/onboarding/status")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		expect(status.body.data.requiredConsentsMet).toBe(true);
 	});
@@ -234,7 +235,7 @@ describe("OnboardingController（e2e）", () => {
 		const before = Date.now();
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ ...wizard, baseCurrency: "HKD" })
 			.expect(201);
 
@@ -252,7 +253,7 @@ describe("OnboardingController（e2e）", () => {
 		// status 已完成
 		const status = await request(app.getHttpServer())
 			.get("/api/onboarding/status")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		expect(status.body.data.completed).toBe(true);
 		expect(status.body.data.settings.baseCurrency).toBe("HKD");
@@ -261,7 +262,7 @@ describe("OnboardingController（e2e）", () => {
 	it("重复 complete 应该 409 ONBOARDING_ALREADY_COMPLETED（不同币种也不得覆盖）", async () => {
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ ...wizard, baseCurrency: "USD" })
 			.expect(409);
 
@@ -270,7 +271,7 @@ describe("OnboardingController（e2e）", () => {
 		// 本位币锁定的落库证据：仍是首次提交的 HKD
 		const status = await request(app.getHttpServer())
 			.get("/api/onboarding/status")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		expect(status.body.data.settings.baseCurrency).toBe("HKD");
 	});
@@ -295,7 +296,7 @@ describe("OnboardingController（e2e）", () => {
 
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(created.accessToken))
+			.set(orgBearer(created))
 			.send({
 				...wizard,
 				initialHoldings: [
@@ -313,7 +314,7 @@ describe("OnboardingController（e2e）", () => {
 
 		// InitialHolding×2：rawRate/rateSource/rateObservedAt 落库
 		const holdings = await ctx.prisma.initialHolding.findMany({
-			where: { userId: created.userId },
+			where: { organizationId: created.defaultOrganizationId },
 			orderBy: { currencyCode: "asc" },
 		});
 		expect(holdings).toHaveLength(2);
@@ -331,7 +332,7 @@ describe("OnboardingController（e2e）", () => {
 
 		// CostLot×2：sourceType=INITIAL、sourceId 指向 InitialHolding、acquiredAt=ledgerStartedAt
 		const lots = await ctx.prisma.costLot.findMany({
-			where: { userId: created.userId },
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(lots).toHaveLength(2);
 		for (const lot of lots) {
@@ -343,7 +344,7 @@ describe("OnboardingController（e2e）", () => {
 
 		// Account 余额按批次 remainingQty 汇总（非成本）
 		const accounts = await ctx.prisma.account.findMany({
-			where: { userId: created.userId },
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		const balanceByCode = new Map(
 			accounts.map((a) => [a.currencyCode, a.balance.toFixed(4)]),
@@ -365,7 +366,7 @@ describe("OnboardingController（e2e）", () => {
 
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(created.accessToken))
+			.set(orgBearer(created))
 			.send({
 				...wizard,
 				initialHoldings: [{ currencyCode: "TWD", amount: "1000" }],
@@ -377,7 +378,7 @@ describe("OnboardingController（e2e）", () => {
 		// 采用夹具新报价（上游 1 CNY = 32.5431 TWD → 取倒数 1 TWD = 0.0307284801 CNY，
 		// 入账 8 位 0.03072848）；rateObservedAt 保留真实日级发布时间
 		const holding = await ctx.prisma.initialHolding.findFirstOrThrow({
-			where: { userId: created.userId },
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(holding.currencyCode).toBe("TWD");
 		expect(holding.rate.toFixed(8)).toBe("0.03072848");
@@ -403,17 +404,19 @@ describe("OnboardingController（e2e）", () => {
 			.send({ age18Confirmed: true, termsConfirmed: true })
 			.expect(201);
 
-		const upstreamStarted = Promise.withResolvers<void>();
-		const upstreamRelease = Promise.withResolvers<void>();
+		let resolveStarted!: () => void;
+		const upstreamStarted = new Promise<void>((r) => (resolveStarted = r));
+		let resolveRelease!: () => void;
+		const upstreamRelease = new Promise<void>((r) => (resolveRelease = r));
 		// 仅首个请求失败。错误重试若发出，默认夹具会成功并暴露错误入账。
 		erApiLatest.mockClear().mockImplementationOnce(async () => {
-			upstreamStarted.resolve();
-			if (timing === "延迟") await upstreamRelease.promise;
+			resolveStarted();
+			if (timing === "延迟") await upstreamRelease;
 			return jsonResponse({ message: "latest unavailable" }, 503);
 		});
 		const response = request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(created.accessToken))
+			.set(orgBearer(created))
 			.send({
 				...wizard,
 				initialHoldings: [{ currencyCode: "TWD", amount: "1000" }],
@@ -421,9 +424,9 @@ describe("OnboardingController（e2e）", () => {
 			.then((res) => res);
 		if (timing === "延迟") {
 			try {
-				await Promise.race([upstreamStarted.promise, response]);
+				await Promise.race([upstreamStarted, response]);
 			} finally {
-				upstreamRelease.resolve();
+				resolveRelease();
 			}
 		}
 		const res = await response;
@@ -433,20 +436,20 @@ describe("OnboardingController（e2e）", () => {
 		expect(rate.latestConfirmedAt).toEqual(stale.latestConfirmedAt);
 
 		// 整单回滚：无设置、无持仓、无批次、无账户
-		const settings = await ctx.prisma.userSettings.findUnique({
-			where: { userId: created.userId },
+		const settings = await ctx.prisma.organizationSettings.findUnique({
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(settings).toBeNull();
 		const holdings = await ctx.prisma.initialHolding.findMany({
-			where: { userId: created.userId },
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(holdings).toHaveLength(0);
 		const lots = await ctx.prisma.costLot.findMany({
-			where: { userId: created.userId },
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(lots).toHaveLength(0);
 		const accounts = await ctx.prisma.account.findMany({
-			where: { userId: created.userId },
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(accounts).toHaveLength(0);
 	});
@@ -465,7 +468,7 @@ describe("OnboardingController（e2e）", () => {
 
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(created.accessToken))
+			.set(orgBearer(created))
 			.send({
 				...wizard,
 				initialHoldings: [
@@ -477,20 +480,20 @@ describe("OnboardingController（e2e）", () => {
 		expect(res.body.code).toBe("RATE_UNAVAILABLE");
 
 		// 零业务写入：设置、持仓、批次、账户全部不存在（事务整体回滚）
-		const settings = await ctx.prisma.userSettings.findUnique({
-			where: { userId: created.userId },
+		const settings = await ctx.prisma.organizationSettings.findUnique({
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(settings).toBeNull();
 		const holdings = await ctx.prisma.initialHolding.count({
-			where: { userId: created.userId },
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(holdings).toBe(0);
 		const lots = await ctx.prisma.costLot.count({
-			where: { userId: created.userId },
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(lots).toBe(0);
 		const accounts = await ctx.prisma.account.count({
-			where: { userId: created.userId },
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(accounts).toBe(0);
 	});
@@ -500,11 +503,11 @@ describe("OnboardingController（e2e）", () => {
 		async (endpoint) => {
 			const created = await createTestUser(app, `onb-write-expiry-${endpoint}`);
 			extraUserIds.push(created.userId);
-			const headers = bearer(created.accessToken);
-			const where = { userId: created.userId };
+			const headers = orgBearer(created);
+			const where = { organizationId: created.defaultOrganizationId };
 			await request(app.getHttpServer())
 				.post("/api/onboarding/consents")
-				.set(headers)
+				.set(bearer(created.accessToken))
 				.send({ age18Confirmed: true, termsConfirmed: true })
 				.expect(201);
 			if (endpoint === "initial-holdings") {
@@ -514,7 +517,7 @@ describe("OnboardingController（e2e）", () => {
 					.send(wizard)
 					.expect(201);
 			}
-			const settingsBefore = await ctx.prisma.userSettings.findUnique({ where });
+			const settingsBefore = await ctx.prisma.organizationSettings.findUnique({ where });
 			expect(settingsBefore !== null).toBe(endpoint === "initial-holdings");
 
 			const now = Date.now();
@@ -535,7 +538,7 @@ describe("OnboardingController（e2e）", () => {
 					params.runInTransaction &&
 					params.model === "InitialHolding" &&
 					params.action === "create" &&
-					params.args.data.userId === where.userId
+					params.args.data.organizationId === where.organizationId
 				) {
 					attemptedHoldings.push(params.args.data.currencyCode);
 				}
@@ -545,7 +548,7 @@ describe("OnboardingController（e2e）", () => {
 					params.runInTransaction &&
 					params.model === "Account" &&
 					params.action === "upsert" &&
-					params.args.create.userId === where.userId &&
+					params.args.create.organizationId === where.organizationId &&
 					params.args.create.currencyCode === "SGD"
 				) {
 					// 第一笔持仓、批次和账户已写入事务，账户写入尚未返回调用方。
@@ -574,7 +577,7 @@ describe("OnboardingController（e2e）", () => {
 
 			expect(crossedWriteBarrier).toBe(true);
 			expect(attemptedHoldings).toEqual(["SGD"]);
-			expect(await ctx.prisma.userSettings.findUnique({ where })).toEqual(settingsBefore);
+			expect(await ctx.prisma.organizationSettings.findUnique({ where })).toEqual(settingsBefore);
 			expect(await ctx.prisma.initialHolding.count({ where })).toBe(0);
 			expect(await ctx.prisma.costLot.count({ where })).toBe(0);
 			expect(await ctx.prisma.account.count({ where })).toBe(0);
@@ -593,7 +596,7 @@ describe("OnboardingController（e2e）", () => {
 
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(created.accessToken))
+			.set(orgBearer(created))
 			.send({
 				...wizard,
 				baseCurrency: "HKD",
@@ -603,7 +606,7 @@ describe("OnboardingController（e2e）", () => {
 		expect(res.body.data.settings.baseCurrency).toBe("HKD");
 
 		const holding = await ctx.prisma.initialHolding.findFirstOrThrow({
-			where: { userId: created.userId },
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(holding.currencyCode).toBe("TWD");
 		// 1 TWD = 0.0307284801 HKD（er-api 夹具取倒数，8 位入账）
@@ -623,7 +626,7 @@ describe("OnboardingController（e2e）", () => {
 
 		await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(created.accessToken))
+			.set(orgBearer(created))
 			.send({
 				...wizard,
 				initialHoldings: [{ currencyCode: "MYR", amount: "1000" }],
@@ -631,7 +634,7 @@ describe("OnboardingController（e2e）", () => {
 			.expect(201);
 
 		const holding = await ctx.prisma.initialHolding.findFirstOrThrow({
-			where: { userId: created.userId },
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(holding.currencyCode).toBe("MYR");
 		// frankfurter 夹具 1 CNY = 0.6102 MYR → 取倒数 1 MYR = 1.6388069485 CNY（8 位展示）
@@ -651,7 +654,7 @@ describe("OnboardingController（e2e）", () => {
 
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(created.accessToken))
+			.set(orgBearer(created))
 			.send({
 				...wizard,
 				initialHoldings: [{ currencyCode: "CNY", amount: "100.00" }],
@@ -659,8 +662,8 @@ describe("OnboardingController（e2e）", () => {
 			.expect(400);
 
 		expect(res.body.code).toBe("INVALID_HOLDINGS");
-		const settings = await ctx.prisma.userSettings.findUnique({
-			where: { userId: created.userId },
+		const settings = await ctx.prisma.organizationSettings.findUnique({
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(settings).toBeNull(); // 整单回滚：settings 与持仓同事务
 	});
@@ -677,7 +680,7 @@ describe("OnboardingController（e2e）", () => {
 
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(created.accessToken))
+			.set(orgBearer(created))
 			.send({
 				...wizard,
 				initialHoldings: [{ currencyCode: "USD", amount: "100000000000" }],
@@ -685,12 +688,12 @@ describe("OnboardingController（e2e）", () => {
 			.expect(400);
 
 		expect(res.body.code).toBe("INVALID_AMOUNT");
-		const settings = await ctx.prisma.userSettings.findUnique({
-			where: { userId: created.userId },
+		const settings = await ctx.prisma.organizationSettings.findUnique({
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(settings).toBeNull();
 		const holdings = await ctx.prisma.initialHolding.findMany({
-			where: { userId: created.userId },
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(holdings).toHaveLength(0);
 	});
@@ -707,7 +710,7 @@ describe("OnboardingController（e2e）", () => {
 
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(created.accessToken))
+			.set(orgBearer(created))
 			.send({
 				...wizard,
 				baseCurrency: "JPY",
@@ -716,8 +719,8 @@ describe("OnboardingController（e2e）", () => {
 			.expect(400);
 
 		expect(res.body.code).toBe("INVALID_AMOUNT");
-		const settings = await ctx.prisma.userSettings.findUnique({
-			where: { userId: created.userId },
+		const settings = await ctx.prisma.organizationSettings.findUnique({
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(settings).toBeNull();
 	});
@@ -728,7 +731,7 @@ describe("OnboardingController（e2e）", () => {
 
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/initial-holdings")
-			.set(bearer(created.accessToken))
+			.set(orgBearer(created))
 			.send({ holdings: [{ currencyCode: "EUR", amount: "100.00" }] })
 			.expect(409);
 
@@ -740,7 +743,7 @@ describe("OnboardingController（e2e）", () => {
 		// user 在本文件 beforeAll 已建账（CNY，无持仓）——首用户直接补录
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/initial-holdings")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ holdings: [{ currencyCode: "EUR", amount: "500.00" }] })
 			.expect(201);
 
@@ -757,8 +760,8 @@ describe("OnboardingController（e2e）", () => {
 		});
 		expect(created[0].rateObservedAt).toBeTruthy();
 
-		const settings = await ctx.prisma.userSettings.findUnique({
-			where: { userId: user.userId },
+		const settings = await ctx.prisma.organizationSettings.findUnique({
+			where: { organizationId: user.defaultOrganizationId },
 		});
 		// baseCurrency 不变（本文件现有用例中该用户建账为 HKD）
 		expect(settings?.baseCurrency).toBe("HKD");
@@ -766,18 +769,18 @@ describe("OnboardingController（e2e）", () => {
 		expect(res.body.data.ledgerStartedAt).toBe(ledgerStartedAt);
 
 		const lot = await ctx.prisma.costLot.findFirst({
-			where: { userId: user.userId, sourceType: "INITIAL" },
+			where: { organizationId: user.defaultOrganizationId, sourceType: "INITIAL" },
 		});
 		expect(lot?.acquiredAt.toISOString()).toBe(ledgerStartedAt);
 		const account = await ctx.prisma.account.findFirst({
-			where: { userId: user.userId, currencyCode: "EUR" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "EUR" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("500.0000");
 
 		// home/state 联动：hasInitialHoldings false→true（§8.2 末行）
 		const home = await request(app.getHttpServer())
 			.get("/api/home/state")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		expect(home.body.data.hasInitialHoldings).toBe(true);
 	});
@@ -786,7 +789,7 @@ describe("OnboardingController（e2e）", () => {
 		// 上一用例已为 user 补录 EUR；本轮 [EUR(已有), CAD(新)] 整单拒绝
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/initial-holdings")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				holdings: [
 					{ currencyCode: "EUR", amount: "100.00" },
@@ -797,11 +800,11 @@ describe("OnboardingController（e2e）", () => {
 
 		expect(res.body.code).toBe("INITIAL_HOLDING_EXISTS");
 		const cadLot = await ctx.prisma.costLot.findFirst({
-			where: { userId: user.userId, currencyCode: "CAD" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "CAD" },
 		});
 		expect(cadLot).toBeNull(); // 无部分成功
 		const cadAccount = await ctx.prisma.account.findFirst({
-			where: { userId: user.userId, currencyCode: "CAD" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "CAD" },
 		});
 		expect(cadAccount).toBeNull();
 	});
@@ -813,7 +816,7 @@ describe("OnboardingController（e2e）", () => {
 		const observedAt = `${day}T00:00:00.000Z`;
 		const created = await createTestUser(app, "onb-history-myr");
 		extraUserIds.push(created.userId);
-		const auth = bearer(created.accessToken);
+		const auth = orgBearer(created);
 		await request(app.getHttpServer())
 			.post("/api/onboarding/consents")
 			.set(auth)
@@ -859,7 +862,10 @@ describe("OnboardingController（e2e）", () => {
 					);
 				},
 			);
-			const where = { userId: created.userId, currencyCode: "MYR" };
+			const where = {
+				organizationId: created.defaultOrganizationId,
+				currencyCode: "MYR",
+			};
 			expect(await ctx.prisma.initialHolding.count({ where })).toBe(0);
 			expect(await ctx.prisma.costLot.count({ where })).toBe(0);
 			expect(await ctx.prisma.account.count({ where })).toBe(0);
@@ -907,7 +913,7 @@ describe("OnboardingController（e2e）", () => {
 		// 非法值（settings 侧枚举外）：拒绝且不落 settings
 		const bad = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(created.accessToken))
+			.set(orgBearer(created))
 			.send({ ...wizard, prepPreference: "aggressive" })
 			.expect(400);
 		// DTO 层 ValidationPipe 拒绝（class-validator 格式，无业务 code）
@@ -915,15 +921,15 @@ describe("OnboardingController（e2e）", () => {
 		expect(JSON.stringify(bad.body.message)).toMatch(
 			/cautious \/ balanced \/ proactive/,
 		);
-		const settingsAfterBad = await ctx.prisma.userSettings.findUnique({
-			where: { userId: created.userId },
+		const settingsAfterBad = await ctx.prisma.organizationSettings.findUnique({
+			where: { organizationId: created.defaultOrganizationId },
 		});
 		expect(settingsAfterBad).toBeNull();
 
 		// 合法值放行且落库为传入值
 		const ok = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(created.accessToken))
+			.set(orgBearer(created))
 			.send({ ...wizard, prepPreference: "cautious" })
 			.expect(201);
 		expect(ok.body.data.settings.prepPreference).toBe("cautious");
@@ -961,7 +967,7 @@ describe("OnboardingController（e2e）", () => {
 			// Org A 建账 + USD 1000
 			await request(app.getHttpServer())
 				.post("/api/onboarding/complete")
-				.set(bearer(multiUser.accessToken))
+				.set(orgBearer(multiUser))
 				.set("X-Organization-Id", orgAId)
 				.send({
 					...wizard,
@@ -973,7 +979,7 @@ describe("OnboardingController（e2e）", () => {
 			// Org B 独立建账 + 同持 USD 500（不因 UserSettings 存在被 409 阻塞，且不覆盖 Org A）
 			const orgBComplete = await request(app.getHttpServer())
 				.post("/api/onboarding/complete")
-				.set(bearer(multiUser.accessToken))
+				.set(orgBearer(multiUser))
 				.set("X-Organization-Id", orgBId)
 				.send({
 					...wizard,
@@ -1039,7 +1045,7 @@ describe("OnboardingController（e2e）", () => {
 
 				const resComplete = await request(app.getHttpServer())
 					.post("/api/onboarding/complete")
-					.set(bearer(member.accessToken))
+					.set(orgBearer(member))
 					.set("X-Organization-Id", orgId)
 					.send(wizard)
 					.expect(403);
@@ -1047,7 +1053,7 @@ describe("OnboardingController（e2e）", () => {
 
 				const resHoldings = await request(app.getHttpServer())
 					.post("/api/onboarding/initial-holdings")
-					.set(bearer(member.accessToken))
+					.set(orgBearer(member))
 					.set("X-Organization-Id", orgId)
 					.send({ holdings: [{ currencyCode: "USD", amount: "100.00" }] })
 					.expect(403);
@@ -1082,7 +1088,7 @@ describe("OnboardingController（e2e）", () => {
 
 			await request(app.getHttpServer())
 				.post("/api/onboarding/complete")
-				.set(bearer(created.accessToken))
+				.set(orgBearer(created))
 				.set("X-Organization-Id", orgId)
 				.send({
 					...wizard,
@@ -1144,7 +1150,7 @@ describe("OnboardingController（e2e）", () => {
 				() =>
 					request(app.getHttpServer())
 						.post("/api/onboarding/complete")
-						.set(bearer(admin.accessToken))
+						.set(orgBearer(admin))
 						.set("X-Organization-Id", orgId)
 						.set("X-Request-Id", reqId)
 						.send(wizard),
@@ -1204,7 +1210,7 @@ describe("OnboardingController（e2e）", () => {
 			// 先为非默认组织 Org B 建账（USD）
 			await request(app.getHttpServer())
 				.post("/api/onboarding/complete")
-				.set(bearer(reverseUser.accessToken))
+				.set(orgBearer(reverseUser))
 				.set("X-Organization-Id", orgBId)
 				.send({ ...wizard, baseCurrency: "USD" })
 				.expect(201);
@@ -1212,7 +1218,7 @@ describe("OnboardingController（e2e）", () => {
 			// 默认组织 Org A 仍必须处于未建账态
 			const statusA = await request(app.getHttpServer())
 				.get("/api/onboarding/status")
-				.set(bearer(reverseUser.accessToken))
+				.set(orgBearer(reverseUser))
 				.set("X-Organization-Id", orgAId)
 				.expect(200);
 			expect(statusA.body.data.completed).toBe(false);
@@ -1220,7 +1226,7 @@ describe("OnboardingController（e2e）", () => {
 			// Org A 使用不同本位币 HKD 独立建账成功
 			const completeA = await request(app.getHttpServer())
 				.post("/api/onboarding/complete")
-				.set(bearer(reverseUser.accessToken))
+				.set(orgBearer(reverseUser))
 				.set("X-Organization-Id", orgAId)
 				.send({ ...wizard, baseCurrency: "HKD" })
 				.expect(201);
@@ -1239,10 +1245,10 @@ describe("OnboardingController（e2e）", () => {
 			]);
 			expect(orgASettings.baseCurrency).toBe("HKD");
 			expect(orgBSettings.baseCurrency).toBe("USD");
-			expect(personal.baseCurrency).toBe("HKD");
+			expect(personal.locale).toBe("zh-CN");
 		});
 
-		it("I-2 回归：Owner 存量 legacy USD(50) → 受邀 FINANCE 买入 USD(30) → Owner 补录初始持仓 USD(20) 201 且单行余额 100.0000 双方视图一致", async () => {
+		it("I-2 回归：Owner 组织 USD(50) → 受邀 FINANCE 买入 USD(30) → Owner 补录初始持仓 USD(20) 201 且单行余额 100.0000 双方视图一致", async () => {
 			await seedRate("CNY", "USD", "7.2000");
 			const owner = await createTestUser(app, "onb-i2-owner");
 			scopedUserIds.push(owner.userId);
@@ -1265,7 +1271,7 @@ describe("OnboardingController（e2e）", () => {
 				.expect(201);
 			await request(app.getHttpServer())
 				.post("/api/onboarding/complete")
-				.set(bearer(owner.accessToken))
+				.set(orgBearer(owner))
 				.set("X-Organization-Id", orgId)
 				.send({ ...wizard, baseCurrency: "CNY" })
 				.expect(201);
@@ -1275,7 +1281,7 @@ describe("OnboardingController（e2e）", () => {
 			// 受邀 FINANCE 买入 USD 30（使用当天时间，不早于 utc8DayStart）
 			await request(app.getHttpServer())
 				.post("/api/transactions")
-				.set(bearer(finance.accessToken))
+				.set(orgBearer(finance))
 				.set("X-Organization-Id", orgId)
 				.send({
 					currencyCode: "USD",
@@ -1289,7 +1295,7 @@ describe("OnboardingController（e2e）", () => {
 			// Owner 再补录 USD 20 初始持仓：必须 201（不得 500 P2002），合并后余额 = 50 + 30 + 20 = 100
 			await request(app.getHttpServer())
 				.post("/api/onboarding/initial-holdings")
-				.set(bearer(owner.accessToken))
+				.set(orgBearer(owner))
 				.set("X-Organization-Id", orgId)
 				.send({ holdings: [{ currencyCode: "USD", amount: "20.00" }] })
 				.expect(201);
@@ -1300,24 +1306,15 @@ describe("OnboardingController（e2e）", () => {
 			expect(orgAccounts).toHaveLength(1);
 			expect(orgAccounts[0].balance.toFixed(4)).toBe("100.0000");
 
-			const legacyRemaining = await ctx.prisma.account.count({
-				where: {
-					userId: owner.userId,
-					organizationId: null,
-					currencyCode: "USD",
-				},
-			});
-			expect(legacyRemaining).toBe(0);
-
 			const [ownerView, memberView] = await Promise.all([
 				request(app.getHttpServer())
 					.get("/api/accounts/USD")
-					.set(bearer(owner.accessToken))
+					.set(orgBearer(owner))
 					.set("X-Organization-Id", orgId)
 					.expect(200),
 				request(app.getHttpServer())
 					.get("/api/accounts/USD")
-					.set(bearer(finance.accessToken))
+					.set(orgBearer(finance))
 					.set("X-Organization-Id", orgId)
 					.expect(200),
 			]);

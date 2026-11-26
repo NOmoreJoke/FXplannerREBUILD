@@ -62,14 +62,18 @@ describe("OrganizationData 生命周期（integration）", () => {
 			.post("/api/auth/login")
 			.send({ email, password: ["Org", "Data", "123"].join("") })
 			.expect(200);
+		const userId: string = created.body.data.user.id;
+		const defaultOrganizationId = await resolveDefaultOrganizationId(env.prisma, userId);
+		if (!defaultOrganizationId) throw new Error("注册兜底未建默认组织");
 		const result: TestUser = {
 			email,
 			password: ["Org", "Data", "123"].join(""),
 			accessToken: login.body.data.accessToken,
-			userId: created.body.data.user.id,
+			userId,
+			defaultOrganizationId,
 		};
 		userIds.push(result.userId);
-		await completeOnboarding(app, result.accessToken);
+		await completeOnboarding(app, result);
 		return result;
 	}
 
@@ -165,7 +169,6 @@ describe("OrganizationData 生命周期（integration）", () => {
 		for (const organizationId of [orgA, orgB]) {
 			await env.prisma.account.create({
 				data: {
-					userId: owner.userId,
 					organizationId,
 					createdById: owner.userId,
 					currencyCode: "USD",
@@ -391,7 +394,6 @@ describe("OrganizationData 生命周期（integration）", () => {
 		await addMember(orgId, admin.userId, "ADMIN");
 		await env.prisma.account.create({
 			data: {
-				userId: owner.userId,
 				organizationId: orgId,
 				createdById: owner.userId,
 				currencyCode: "USD",
@@ -410,7 +412,6 @@ describe("OrganizationData 生命周期（integration）", () => {
 		});
 		await env.prisma.account.create({
 			data: {
-				userId: owner.userId,
 				organizationId: otherOrg.id,
 				createdById: owner.userId,
 				currencyCode: "USD",
@@ -656,7 +657,9 @@ describe("OrganizationData 生命周期（integration）", () => {
 		expect(blocked.body.data.blockingOrganizations).toEqual([
 			{ organizationId: orgId, organizationName: expect.any(String), role: "OWNER" },
 		]);
-		expect(await env.prisma.dataRequest.count({ where: { userId: sole.userId } })).toBe(0);
+		expect(
+			await env.prisma.dataRequest.count({ where: { requesterUserId: sole.userId } }),
+		).toBe(0);
 
 		// 闭环路径：删除该组织（Owner 专属）→ 组织消失 → 最后 Owner 阻塞解除
 		const orgDeletionCredential = await sendAndVerify(
@@ -958,8 +961,86 @@ describe("OrganizationData 生命周期（integration）", () => {
 		// User 已物理删除（账号注销完成）
 		expect(await env.prisma.user.findUnique({ where: { id: member.userId } })).toBeNull();
 		expect(
-			await env.prisma.dataRequest.count({ where: { userId: member.userId } }),
+			await env.prisma.dataRequest.count({ where: { requesterUserId: member.userId } }),
 		).toBe(0);
+	});
+
+	it("回归（W30）：唯一成员的空组织在 PERSONAL DELETION 到期后被一并删除（organization.findUnique 为 null）", async () => {
+		const soleMember = await onboardedUser("orphan-empty-org");
+		const emptyOrg = await env.prisma.organization.create({
+			data: { name: "个人注销待回收空组织" },
+		});
+		await env.prisma.membership.create({
+			data: {
+				organizationId: emptyOrg.id,
+				userId: soleMember.userId,
+				role: "ADMIN",
+				status: "ACTIVE",
+			},
+		});
+		await env.prisma.organizationSettings.create({
+			data: { organizationId: emptyOrg.id, baseCurrency: "USD" },
+		});
+		await env.prisma.organizationInvitation.create({
+			data: {
+				organizationId: emptyOrg.id,
+				email: `orphan-invite-${Date.now()}@example.com`,
+				tokenHash: `orphan-hash-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+				role: "VIEWER",
+				invitedById: soleMember.userId,
+				expiresAt: new Date(Date.now() + 86_400_000),
+			},
+		});
+		await env.prisma.auditLog.create({
+			data: {
+				organizationId: emptyOrg.id,
+				actorUserId: soleMember.userId,
+				actorType: "USER",
+				action: "organization.settings.update",
+				result: "SUCCESS",
+			},
+		});
+		// 让默认个人组织转给另一位 Owner，确保仅有空组织由 soleMember 作为唯一非 Owner 成员持有
+		const successor = await onboardedUser("orphan-empty-successor");
+		const defaultOrgId = await defaultOrgIdOf(soleMember.userId);
+		await env.prisma.membership.updateMany({
+			where: { organizationId: defaultOrgId, userId: soleMember.userId },
+			data: { role: "ADMIN" },
+		});
+		await addMember(defaultOrgId, successor.userId, "OWNER");
+
+		const { challengeId } = await sendAndVerify(
+			app,
+			env.otpChannel,
+			soleMember.accessToken,
+			soleMember.email,
+			"DELETION",
+		);
+		const deletion = await request(app.getHttpServer())
+			.post("/api/data-requests")
+			.set("Authorization", `Bearer ${soleMember.accessToken}`)
+			.send({ type: "DELETION", scope: "PERSONAL", challengeId })
+			.expect(200);
+		await makeRequestDue(
+			env.prisma,
+			deletion.body.data.id as string,
+			new Date(Date.now() - 1000),
+		);
+
+		await request(app.getHttpServer())
+			.get("/api/data-requests/current")
+			.set("Authorization", `Bearer ${soleMember.accessToken}`)
+			.expect(401);
+
+		expect(await env.prisma.user.findUnique({ where: { id: soleMember.userId } })).toBeNull();
+		expect(await env.prisma.organization.findUnique({ where: { id: emptyOrg.id } })).toBeNull();
+		expect(
+			await env.prisma.organizationSettings.count({ where: { organizationId: emptyOrg.id } }),
+		).toBe(0);
+		expect(
+			await env.prisma.organizationInvitation.count({ where: { organizationId: emptyOrg.id } }),
+		).toBe(0);
+		expect(await env.prisma.auditLog.count({ where: { organizationId: emptyOrg.id } })).toBe(0);
 	});
 
 	it("双守卫查询不变量：每个请求至多 1 次 data_requests SELECT（组织端点走合并查询；读时推进仅在到期候选时触发）", async () => {
@@ -991,7 +1072,7 @@ describe("OrganizationData 生命周期（integration）", () => {
 				branches.some(
 					(branch) =>
 						branch.scope === "PERSONAL" &&
-						branch.userId === member.userId &&
+						branch.requesterUserId === member.userId &&
 						branch.type === "DELETION",
 				),
 			).toBe(true);
@@ -1038,7 +1119,7 @@ describe("OrganizationData 生命周期（integration）", () => {
 		// 种入 1 条**未到期**（dueAt > now）的组织级 CLEAR PENDING → 不产生任何清理写
 		const notDue = await env.prisma.dataRequest.create({
 			data: {
-				userId: member.userId,
+				requesterUserId: member.userId,
 				scope: "ORGANIZATION",
 				organizationId: orgId,
 				type: "CLEAR",

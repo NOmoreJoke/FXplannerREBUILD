@@ -165,7 +165,7 @@ describe("AuthController OTP 绑定语义（e2e）", () => {
 	});
 
 	describe("默认组织兜底（ORG-01.2；评审 I-09）", () => {
-		it("全新邮箱验证码首登：同事务获得唯一默认组织（OWNER），业务 GET 不再 400", async () => {
+		it("全新邮箱验证码首登：同事务获得唯一默认组织（OWNER），带组织头的业务 GET 可用", async () => {
 			const EMAIL = `otp-default-org-${Date.now()}@example.com`;
 
 			const res = await otpLogin(EMAIL);
@@ -193,10 +193,13 @@ describe("AuthController OTP 绑定语义（e2e）", () => {
 			});
 			expect(audit?.actorUserId).toBe(userId);
 
-			// 无组织头的业务 GET 回落到唯一默认组织（此前验证码新用户会全线 400）
+			// W30（MIG-D）：组织域端点不再「无头回落唯一默认组织」，业务 GET 必须
+			// 显式带 X-Organization-Id——此处带默认组织 id，验证 OTP 首登用户拿到的
+			// 默认组织确实可用于业务请求（200 而非 400 ORGANIZATION_REQUIRED）。
 			const home = await request(app.getHttpServer())
 				.get("/api/home/state")
 				.set(bearer(res.body.data.accessToken))
+				.set("X-Organization-Id", memberships[0]?.organization.id ?? "")
 				.expect(200);
 			expect(home.body.data.onboardingCompleted).toBe(false);
 			const orgs = await request(app.getHttpServer())

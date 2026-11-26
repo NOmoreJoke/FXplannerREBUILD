@@ -52,9 +52,9 @@ export async function withHistoricalCorrectionQuote(
 				where: { id: user.userId, email: user.email },
 				select: { id: true },
 			});
-			// ToB R1：账本行按组织隔离。造数行与 onboarding 写侧同口径落组织（持仓 / 批次 /
-			// 账户三行一并），取该用户的 OWNER 组织——注册即建的个人工作台（E2E 用户只有它）。
-			// 查不到则不传：保持兼容窗口的 NULL 行，仅默认组织创建者本人在默认组织上下文可见。
+			// W30（MIG-E）：账本行**必属**组织（organization_id NOT NULL），不再有
+			// 「兼容窗口的 NULL 行」。取该用户的 OWNER 组织——注册即建的个人工作台
+			// （E2E 用户只有它）；查不到即失败，不静默写无组织行。
 			const organization = await tx.organization.findFirst({
 				where: {
 					memberships: {
@@ -64,12 +64,17 @@ export async function withHistoricalCorrectionQuote(
 				orderBy: { createdAt: "asc" },
 				select: { id: true },
 			});
+			if (!organization) {
+				throw new Error(
+					`withHistoricalCorrectionQuote：用户 ${user.userId} 名下没有 OWNER 组织，无法造数`,
+				);
+			}
 			// 测试报价是全局记录，放在常用历史窗口以外，避免被当期行情或持仓选中。
 			const confirmedAt = new Date(Date.now() - 20 * 365 * 86_400_000);
 			const observedAt = new Date(confirmedAt.getTime() - 1000);
 			const holding = await seedInitialHolding(tx, {
 				userId: user.userId,
-				...(organization && { organizationId: organization.id }),
+				organizationId: organization.id,
 				currencyCode: "USD",
 				amount: "1000",
 				rate: "7.248",
@@ -108,7 +113,12 @@ export async function withHistoricalCorrectionQuote(
 			},
 			async readAuditStatus() {
 				const entry = await prisma.correction.findFirstOrThrow({
-					where: { userId: user.userId, targetType: "INITIAL_HOLDING", targetId: holdingId },
+					// W30（MIG-E）：corrections 已无 user_id 列——作者改记在 actor_user_id
+					where: {
+						actorUserId: user.userId,
+						targetType: "INITIAL_HOLDING",
+						targetId: holdingId,
+					},
 					orderBy: { createdAt: "desc" },
 					select: { status: true },
 				});

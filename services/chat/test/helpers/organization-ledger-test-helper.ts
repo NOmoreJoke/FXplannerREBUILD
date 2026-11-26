@@ -140,7 +140,6 @@ export async function seedOrgInitialHolding(
 	const amount = new Prisma.Decimal(input.amount);
 	const holding = await prisma.initialHolding.create({
 		data: {
-			userId: input.userId,
 			organizationId: input.organizationId,
 			createdById: input.userId,
 			currencyCode: input.currencyCode,
@@ -155,7 +154,6 @@ export async function seedOrgInitialHolding(
 	});
 	const lot = await prisma.costLot.create({
 		data: {
-			userId: input.userId,
 			organizationId: input.organizationId,
 			currencyCode: input.currencyCode,
 			sourceType: "INITIAL",
@@ -169,7 +167,6 @@ export async function seedOrgInitialHolding(
 	});
 	await prisma.account.create({
 		data: {
-			userId: input.userId,
 			organizationId: input.organizationId,
 			createdById: input.userId,
 			currencyCode: input.currencyCode,
@@ -183,14 +180,17 @@ export async function seedOrgInitialHolding(
 export interface OrgLedgerSnapshot {
 	accounts: Array<{
 		id: string;
-		userId: string;
+		/**
+		 * 创建者（W30/MIG-E 起账本表不再持有 user_id 列，归属人落在
+		 * created_by_id；成员移除后置 NULL，不随用户注销删行）。
+		 */
+		createdById: string | null;
 		organizationId: string;
 		currencyCode: string;
 		balance: string;
 	}>;
 	lots: Array<{
 		id: string;
-		userId: string;
 		organizationId: string;
 		sourceType: string;
 		sourceId: string;
@@ -203,7 +203,6 @@ export interface OrgLedgerSnapshot {
 	}>;
 	usages: Array<{
 		id: string;
-		userId: string;
 		createdById: string | null;
 		organizationId: string;
 		planId: string;
@@ -282,15 +281,14 @@ export async function readOrgLedgerSnapshot(
 	return {
 		accounts: accountRows.map((account) => ({
 			id: account.id,
-			userId: account.userId,
-			organizationId: account.organizationId!,
+			createdById: account.createdById,
+			organizationId: account.organizationId,
 			currencyCode: account.currencyCode,
 			balance: account.balance.toFixed(4),
 		})),
 		lots: lotRows.map((lot) => ({
 			id: lot.id,
-			userId: lot.userId,
-			organizationId: lot.organizationId!,
+			organizationId: lot.organizationId,
 			sourceType: lot.sourceType,
 			sourceId: lot.sourceId,
 			currencyCode: lot.currencyCode,
@@ -302,9 +300,8 @@ export async function readOrgLedgerSnapshot(
 		})),
 		usages: usageRows.map((usage) => ({
 			id: usage.id,
-			userId: usage.userId,
 			createdById: usage.createdById,
-			organizationId: usage.organizationId!,
+			organizationId: usage.organizationId,
 			planId: usage.planId,
 			amount: usage.amount.toFixed(4),
 			usedAt: usage.usedAt.toISOString(),
@@ -364,12 +361,9 @@ export function ledgerShape(snapshot: OrgLedgerSnapshot) {
 async function sweepOrgLedgerRows(
 	prisma: PrismaService,
 	orgId: string,
-	userIds: readonly string[],
 ): Promise<void> {
 	await prisma.$transaction(async (tx) => {
-		const scope = {
-			OR: [{ organizationId: orgId }, { userId: { in: [...userIds] } }],
-		};
+		const scope = { organizationId: orgId };
 		const [usageIds, lotIds, planIds] = await Promise.all([
 			tx.usageRecord.findMany({ where: scope, select: { id: true } }),
 			tx.costLot.findMany({ where: scope, select: { id: true } }),
@@ -394,6 +388,7 @@ async function sweepOrgLedgerRows(
 		const planIdList = planIds.map((row) => row.id);
 		if (planIdList.length > 0) {
 			await tx.planAllocation.deleteMany({ where: { planId: { in: planIdList } } });
+			await tx.planChangeLog.deleteMany({ where: { planId: { in: planIdList } } });
 			await tx.plan.deleteMany({ where: { id: { in: planIdList } } });
 		}
 		await tx.transaction.deleteMany({ where: scope });
@@ -413,7 +408,7 @@ export async function cleanupOrgLedgers(
 	...orgs: OrgLedger[]
 ): Promise<void> {
 	for (const org of orgs) {
-		await sweepOrgLedgerRows(prisma, org.orgId, org.users.map((user) => user.userId));
+		await sweepOrgLedgerRows(prisma, org.orgId);
 	}
 	const seen = new Set<string>();
 	for (const org of orgs) {

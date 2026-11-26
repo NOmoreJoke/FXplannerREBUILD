@@ -29,6 +29,10 @@ export const onboardingApi = {
 	 *
 	 * 创建换汇计划页消费 settings.prepPreference（默认节奏）
 	 * 与 settings.baseCurrency（只读本位币）；取不到时页面静默用默认值。
+	 *
+	 * **组织域端点**：完成态与设置按当前组织判定，后端挂 OrganizationContextGuard。
+	 * W30（MIG-D）起缺 X-Organization-Id 一律 400 ORGANIZATION_REQUIRED（不再回落
+	 * 唯一默认组织）——调用方必须在已选中组织时调用（未选中不得发请求）。
 	 */
 	async getStatus(): Promise<OnboardingStatus> {
 		return apiClient<OnboardingStatus>("/onboarding/status", {
@@ -41,11 +45,15 @@ export const onboardingApi = {
 	 *
 	 * 登录成功后由登录表单自动提交（技术方案 §3.1：失败不阻塞，
 	 * 未建账用户由建账后端校验兜底）；幂等，记版本与时间。
+	 *
+	 * 个人域端点（后端只挂 JwtAuthGuard，不要求组织上下文）：条款确认是**本人**
+	 * 维度的记录，与组织无关——请求不带组织头（skipOrganizationScope）。
 	 */
 	async saveConsents(dto: SaveConsentsReq): Promise<ConsentsResult> {
 		return apiClient<ConsentsResult>("/onboarding/consents", {
 			method: "POST",
 			body: JSON.stringify(dto),
+			skipOrganizationScope: true,
 		});
 	},
 

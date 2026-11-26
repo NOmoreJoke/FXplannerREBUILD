@@ -14,6 +14,10 @@
  */
 
 import { buildApiUrl, localFetch, resolveApiBase } from "./api-url";
+import {
+	createOrganizationIdResolver,
+	isOrganizationScopedPath,
+} from "./org-scope";
 import { TEST_PASSWORD } from "./test-credentials";
 import type { components } from "../../clients/chat-web/lib/api/schema.gen";
 
@@ -115,9 +119,21 @@ const PLAN_EXPECT_USE_DATE = "2030-02-15T00:00:00.000Z";
 const PLAN_START_DATE = "2030-01-01T00:00:00.000Z";
 
 /**
+ * 组织 id 解析（按 token 缓存）：取本人组织列表（个人域端点，不带组织头），
+ * 首位 = 注册兜底建的个人工作台（列表按 membership.joinedAt 升序）。
+ * 口径说明见 helpers/org-scope.ts。
+ */
+const resolveOrganizationId = createOrganizationIdResolver(async (token) =>
+	api<{ id: string }[]>("/api/organizations", { method: "GET", token }),
+);
+
+/**
  * HTTP 请求封装（success 包装校验；报告等模块 seeder 复用；含探针与 429 退避）。
- * headers 用于追加请求头（如组织管理端点必需的 X-Organization-Id——那类端点挂严格守卫，
- * 缺头直接 400，不做单组织回落）。
+ *
+ * 组织域端点（W30 MIG-D：缺 X-Organization-Id 一律 400，不再回落唯一默认组织）：
+ * 自动按 token 解析本人组织并注入 X-Organization-Id——口径与前端一致（前端从
+ * organization-store 取当前选中组织注入）。调用方已显式传该头时不覆盖
+ * （先例：12-account-data 的 handOverOwnership 指向特定组织）。
  */
 export async function api<T>(
 	path: string,
@@ -135,6 +151,13 @@ export async function api<T>(
 	};
 	if (init.token) {
 		headers.Authorization = `Bearer ${init.token}`;
+	}
+	if (
+		init.token &&
+		!headers["X-Organization-Id"] &&
+		isOrganizationScopedPath(path)
+	) {
+		headers["X-Organization-Id"] = await resolveOrganizationId(init.token);
 	}
 	const res = await fetchWithBackoff(path, {
 		method: init.method,
@@ -171,6 +194,11 @@ export async function seedRegisterAndLogin(label: string): Promise<{
 	password: string;
 	accessToken: string;
 	userId: string;
+	/**
+	 * 本人的组织 id（W30 MIG-D：组织域端点必须显式带 X-Organization-Id）。
+	 * 注册兜底建的个人工作台——造数落点与前端「单组织自动选中」一致。
+	 */
+	organizationId: string;
 }> {
 	const email = `e2e-account-${label}-${SEED_RUN_ID}@example.com`;
 	const password = TEST_PASSWORD;
@@ -194,6 +222,7 @@ export async function seedRegisterAndLogin(label: string): Promise<{
 		password,
 		accessToken: data.accessToken,
 		userId: data.user.id,
+		organizationId: await resolveOrganizationId(data.accessToken),
 	};
 }
 

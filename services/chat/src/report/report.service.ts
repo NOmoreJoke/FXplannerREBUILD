@@ -8,8 +8,7 @@ import {
 import { getCurrency } from "@fxplanner-new/money";
 import type { Prisma, CostLot, Plan } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
-import type { ReadScope } from "../authorization/organization-scope";
-import { planReservationWhere } from "../authorization/default-organization";
+import { orgWhere, type ReadScope } from "../authorization/organization-scope";
 import { resolveOrganizationPreferences } from "../organization/organization-preferences";
 import {
 	aggregatePlanUsage,
@@ -57,10 +56,9 @@ const PLAN_ID_PATTERN = /^[a-zA-Z0-9_-]{8,64}$/;
 const PLAN_STATUSES = ["ACTIVE", "COMPLETED", "CANCELLED"] as const;
 
 /**
- * 计划占用对称口径的 where 片段类型（authorization/default-organization.ts）：
- * 在 compatReadWhere 之上补入「默认组织创建者尚未回填 organizationId 的存量计划」。
+ * 计划作用域的 where 片段类型（W30 MIG-D/F 起为纯组织作用域）。
  */
-type PlanReservationWhere = Awaited<ReturnType<typeof planReservationWhere>>;
+type OrganizationScope = ReadScope;
 
 /** 聚合所需的全部关联事实（loadUsageContext 一次载入，内存 join 防 N+1） */
 interface UsageContext {
@@ -121,13 +119,9 @@ export class ReportService {
 	/**
 	 * 报告中心列表（GET /api/reports/plans，§5.1；W18 组织隔离）：全计划成本摘要 + 状态/币种筛选
 	 *
-	 * 计划集合按**计划占用对称口径**（planReservationWhere）读取，而非 compatReadWhere：
-	 * 默认组织创建者尚未回填 organizationId 的存量计划在逻辑上属于该组织，若按
-	 * compatReadWhere 读取，创建者（默认组织上下文能看到自己的 NULL 行）与受邀成员
-	 * （非默认组织上下文看不到行主的 NULL 行）会看到**不同的计划集合**，报告视图
-	 * 逐字段不一致且遗漏 Plan 维度的成本归属（W24 对抗审 N-1 / P-2）。
-	 * 该口径与 AccountService.sumAllocatedByCurrencyForUser、CorrectionService 的
-	 * 计划占用读取同源（authorization/default-organization.ts）。
+	 * 计划集合按**纯组织作用域**（orgWhere）读取：W30（MIG-E/F）后 `organization_id`
+	 * 恒非空、组织账本属于组织，创建者与受邀成员看到**完全相同**的计划集合，
+	 * 报告视图逐字段一致且不遗漏 Plan 维度的成本归属（W24 对抗审 N-1 / P-2）。
 	 */
 	async list(
 		scope: ReadScope,
@@ -135,14 +129,11 @@ export class ReportService {
 	): Promise<ReportPlanListDto> {
 		const status = this.normalizeStatus(query.status);
 		const currencyCode = this.normalizeCurrencyCode(query.currencyCode);
-		const reservationWhere = await planReservationWhere(this.prisma, scope);
-
 		const [baseCurrency, plans] = await Promise.all([
 			this.resolveBaseCurrency(scope),
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.plan.findMany({
 				where: {
-					...reservationWhere,
+					...orgWhere(scope),
 					...(status ? { status } : {}),
 					...(currencyCode ? { targetCurrency: currencyCode } : {}),
 				},
@@ -152,7 +143,7 @@ export class ReportService {
 
 		const context = await this.loadUsageContext(
 			plans.map((plan) => plan.id),
-			reservationWhere,
+			scope,
 		);
 
 		const items = plans.map((plan) =>
@@ -175,10 +166,8 @@ export class ReportService {
 		if (!PLAN_ID_PATTERN.test(planId)) {
 			throw new ReportInvalidParamsException("计划 ID 格式非法");
 		}
-		const reservationWhere = await planReservationWhere(this.prisma, scope);
-		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const plan = await this.prisma.plan.findFirst({
-			where: { id: planId, ...reservationWhere },
+			where: { id: planId, ...orgWhere(scope) },
 		});
 		if (!plan) {
 			// 组织作用域外与不存在均 404（防枚举，对齐 plan 模块）
@@ -186,7 +175,7 @@ export class ReportService {
 		}
 		const [baseCurrency, context] = await Promise.all([
 			this.resolveBaseCurrency(scope),
-			this.loadUsageContext([plan.id], reservationWhere),
+			this.loadUsageContext([plan.id], scope),
 		]);
 
 		const aggregate = this.aggregateForPlan(plan.id, context);
@@ -268,14 +257,14 @@ export class ReportService {
 	 * 来源交易手续费 → 相关更正。方案 §4.2 口径 3：TRANSACTION 更正取
 	 * planId = 该计划的交易（字面口径；分摊来源交易若 planId=null 不参与 updatedAt）。
 	 *
-	 * 作用域（scope）统一由调用方传入的「计划占用对称口径」承担
-	 * （planReservationWhere）：使用记录与关联交易按同一口径读取，使同组织的
-	 * 创建者与受邀成员在**数量 / 成本 / 来源拆分 / 均价 / 更新时间**上逐字段一致
+	 * 作用域（scope）统一由调用方传入的**纯组织作用域**（orgWhere）承担：
+	 * 使用记录与关联交易按同一口径读取，使同组织成员在
+	 * **数量 / 成本 / 来源拆分 / 均价 / 更新时间**上逐字段一致
 	 * （W24 对抗审 N-1 / P-2：遗漏 Plan 维度的成本归属）。
 	 */
 	private async loadUsageContext(
 		planIds: string[],
-		reservationWhere: PlanReservationWhere,
+		scope: OrganizationScope,
 	): Promise<UsageContext> {
 		const empty: UsageContext = {
 			usageRecordsByPlan: new Map(),
@@ -291,13 +280,11 @@ export class ReportService {
 		}
 
 		const [usageRecords, planTransactions] = await Promise.all([
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.usageRecord.findMany({
-				where: { planId: { in: planIds }, ...reservationWhere },
+				where: { planId: { in: planIds }, ...orgWhere(scope) },
 			}),
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.transaction.findMany({
-				where: { planId: { in: planIds }, ...reservationWhere },
+				where: { planId: { in: planIds }, ...orgWhere(scope) },
 				select: { id: true, planId: true },
 			}),
 		]);
@@ -311,7 +298,7 @@ export class ReportService {
 				: Promise.resolve([]),
 			usageIds.length
 				? (
-					// @org-scope-exempt: 已由父集合（reservationWhere 筛选的计划/使用记录）限定租户边界，按关联 ID 批量回查
+					// @org-scope-exempt: 已由父集合（orgWhere(scope) 筛选的计划/使用记录）限定租户边界，按关联 ID 批量回查
 					this.prisma.correction.findMany({
 						where: { targetType: "USAGE", targetId: { in: usageIds } },
 						select: { targetId: true, createdAt: true },
@@ -321,7 +308,7 @@ export class ReportService {
 		]);
 
 		const lotIds = [...new Set(allocations.map((row) => row.lotId))];
-		// @org-scope-exempt: 已由父集合（reservationWhere 筛选的计划/使用分摊）限定租户边界，按 lotIds 批量回查
+		// @org-scope-exempt: 已由父集合（orgWhere(scope) 筛选的计划/使用分摊）限定租户边界，按 lotIds 批量回查
 		const lots = lotIds.length
 			? await this.prisma.costLot.findMany({
 					where: { id: { in: lotIds } },
@@ -340,7 +327,7 @@ export class ReportService {
 		const [feeTransactions, transactionCorrections] = await Promise.all([
 			feeProbeIds.length
 				? (
-					// @org-scope-exempt: 已由父集合（reservationWhere 筛选的计划/批次）限定租户边界，按关联交易 ID 回查手续费
+					// @org-scope-exempt: 已由父集合（orgWhere(scope) 筛选的计划/批次）限定租户边界，按关联交易 ID 回查手续费
 					this.prisma.transaction.findMany({
 						where: { id: { in: feeProbeIds } },
 						select: { id: true, feeAmount: true },
@@ -349,7 +336,7 @@ export class ReportService {
 				: Promise.resolve([]),
 			planTransactionIdList.length
 				? (
-					// @org-scope-exempt: 已由父集合（reservationWhere 筛选的计划关联交易）限定租户边界，按关联交易 ID 回查更正
+					// @org-scope-exempt: 已由父集合（orgWhere(scope) 筛选的计划关联交易）限定租户边界，按关联交易 ID 回查更正
 					this.prisma.correction.findMany({
 						where: {
 							targetType: "TRANSACTION",

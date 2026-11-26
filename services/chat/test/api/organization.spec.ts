@@ -4,9 +4,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	cleanupUser,
 	createTestApp,
+	deleteOrganizationsCascadeLedger,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
 import { TEST_PASSWORD } from "../fixtures/test-credentials";
 import { runBehindAdvisoryLock } from "../helpers/postgres-lock-barrier";
 
@@ -45,9 +47,7 @@ describe("OrganizationController（e2e）", () => {
 	});
 
 	afterAll(async () => {
-		await ctx.prisma.auditLog.deleteMany({
-			where: { organizationId: { in: orgIds } },
-		});
+		await deleteOrganizationsCascadeLedger(ctx.prisma, orgIds);
 		await ctx.prisma.organization.deleteMany({
 			where: { id: { in: orgIds } },
 		});
@@ -69,11 +69,15 @@ describe("OrganizationController（e2e）", () => {
 			.post("/api/auth/login")
 			.send({ email, password: TEST_PASSWORD })
 			.expect(200);
+		const userId: string = login.body.data.user.id;
+		const defaultOrganizationId =
+			(await resolveDefaultOrganizationId(ctx.prisma, userId)) ?? "";
 		const user: TestUser = {
 			email,
 			password: TEST_PASSWORD,
 			accessToken: login.body.data.accessToken,
-			userId: login.body.data.user.id,
+			userId,
+			defaultOrganizationId,
 		};
 		userIds.push(user.userId);
 		return user;
@@ -223,7 +227,7 @@ describe("OrganizationController（e2e）", () => {
 		// 第一个组织先造一笔业务数据
 		await ctx.prisma.account.create({
 			data: {
-				userId: owner.userId,
+				createdById: owner.userId,
 				organizationId: orgIds[0]!,
 				currencyCode: "TST",
 				balance: "100.0000",

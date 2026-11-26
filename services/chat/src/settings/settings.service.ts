@@ -19,10 +19,8 @@ import { can } from "../authorization/permission-policy";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
 import { lockOrganizationForActor } from "../organization/default-organization";
 import {
-	materializeLegacyOrganizationSettings,
 	PERSONAL_DEFAULT_LOCALE,
 	PERSONAL_DEFAULT_REGION,
-	PERSONAL_PLACEHOLDER_BASE_CURRENCY,
 	resolveOrganizationPreferences,
 } from "../organization/organization-preferences";
 import { PrismaService } from "../prisma/prisma.service";
@@ -88,8 +86,9 @@ export class SettingsService {
 	}
 
 	/**
-	 * 更新纯个人展示偏好（幂等）：无 UserSettings 行时以占位 baseCurrency: ""（PERSONAL_PLACEHOLDER_BASE_CURRENCY）
-	 * 创建个人展示行（绝不创建 OrganizationSettings，不影响组织未建账判定）；已有行只更新 region/locale。
+	 * 更新纯个人展示偏好（幂等）：无 UserSettings 行时以默认值创建个人展示行
+	 * （只写 userId / region / locale，绝不创建 OrganizationSettings，
+	 * 不影响组织未建账判定）；已有行只更新 region/locale。
 	 */
 	async updatePersonalSettings(
 		userId: string,
@@ -107,7 +106,6 @@ export class SettingsService {
 			where: { userId },
 			create: {
 				userId,
-				baseCurrency: PERSONAL_PLACEHOLDER_BASE_CURRENCY,
 				region: dto.region ?? DEFAULT_REGION,
 				locale: dto.locale ?? DEFAULT_LOCALE,
 			},
@@ -154,9 +152,10 @@ export class SettingsService {
 	 * - 全空（含 baseCurrency 被剥离后为空）→ 400 SETTINGS_UPDATE_EMPTY；
 	 * - 含 prepPreference / reminderEnabled：先验 can(actor.role, "settings.update")，
 	 *   事务内 lockOrganizationForActor 重读最新角色复验（锁等期间降权 → 回滚事务 + 写 DENIED 独立审计 + 403），
-	 *   固化 OWNER_LEGACY 后更新 OrganizationSettings（默认组织且本人有 UserSettings 时同步兼容列）+ 同事务写审计；
+	 *   更新 OrganizationSettings + 同事务写审计（W30（MIG-F）：组织偏好唯一真相是
+	 *   OrganizationSettings，不再有 OWNER_LEGACY 固化与个人兼容列同步）；
 	 * - 含 region / locale：确认当前组织已建账（兼容未建账 409 契约），对 actor.userId upsert
-	 *   个人展示偏好（无行时以占位 baseCurrency: "" 建行；已有行只更新 region/locale，绝不改 baseCurrency/ledgerStartedAt）。
+	 *   个人展示偏好（无行时只建 userId / region / locale；已有行只更新 region/locale）。
 	 */
 	async updateSettings(
 		actor: ActorContext,
@@ -210,23 +209,12 @@ export class SettingsService {
 				const nextLedgerStartedAt = preferences.ledgerStartedAt;
 
 				if (hasOrgFields) {
-					if (preferences.source === "OWNER_LEGACY") {
-						await materializeLegacyOrganizationSettings(tx, actor.organizationId);
-					}
 					const updatedOrg = await tx.organizationSettings.update({
 						where: { organizationId: actor.organizationId },
 						data: orgData,
 					});
 					nextPrepPreference = updatedOrg.prepPreference;
 					nextReminderEnabled = updatedOrg.reminderEnabled;
-
-					// 默认组织兼容同步：仅更新本人已有 UserSettings 的兼容列（不新建、不改 baseCurrency）
-					if (actor.isDefaultOrganization) {
-						await tx.userSettings.updateMany({
-							where: { userId: actor.userId },
-							data: orgData,
-						});
-					}
 
 					await this.auditService.recordInTx(tx, {
 						organizationId: actor.organizationId,
@@ -257,7 +245,6 @@ export class SettingsService {
 						where: { userId: actor.userId },
 						create: {
 							userId: actor.userId,
-							baseCurrency: PERSONAL_PLACEHOLDER_BASE_CURRENCY,
 							region: dto.region ?? DEFAULT_REGION,
 							locale: dto.locale ?? DEFAULT_LOCALE,
 						},

@@ -85,7 +85,7 @@ export class SettingsViewDto {
 
 	@ApiProperty({
 		description:
-			"本位币（只读，来源 user_settings.base_currency；无任何更新通道，建账时锁定）",
+			"本位币（只读，来源 organization_settings.base_currency；无任何更新通道，建账时锁定）",
 		example: "CNY",
 		type: String,
 	})

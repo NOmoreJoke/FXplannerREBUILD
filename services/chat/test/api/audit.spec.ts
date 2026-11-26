@@ -32,10 +32,10 @@ describe("AuditController（e2e）", () => {
 	const userIds: string[] = [];
 	const orgIds: string[] = [];
 
-	let owner: TestUser;
-	let viewer: TestUser;
-	let operator: TestUser;
-	let outsider: TestUser;
+	let owner: Omit<TestUser, "defaultOrganizationId">;
+	let viewer: Omit<TestUser, "defaultOrganizationId">;
+	let operator: Omit<TestUser, "defaultOrganizationId">;
+	let outsider: Omit<TestUser, "defaultOrganizationId">;
 
 	beforeAll(async () => {
 		ctx = await createTestApp();
@@ -55,7 +55,9 @@ describe("AuditController（e2e）", () => {
 		await app.close();
 	});
 
-	async function registerUser(label: string): Promise<TestUser> {
+	async function registerUser(
+		label: string,
+	): Promise<Omit<TestUser, "defaultOrganizationId">> {
 		const email = `audit-${label}-${Date.now()}-${Math.random()
 			.toString(36)
 			.slice(2, 6)}@example.com`;
@@ -67,7 +69,7 @@ describe("AuditController（e2e）", () => {
 			.post("/api/auth/login")
 			.send({ email, password: TEST_PASSWORD })
 			.expect(200);
-		const user: TestUser = {
+		const user: Omit<TestUser, "defaultOrganizationId"> = {
 			email,
 			password: TEST_PASSWORD,
 			accessToken: login.body.data.accessToken,
@@ -225,6 +227,7 @@ describe("AuditController（e2e）", () => {
 		const denied = await ctx.prisma.auditLog.findFirst({
 			where: {
 				organizationId: orgIds[0]!,
+				actorUserId: viewer.userId,
 				action: "permission.denied.audit.read",
 				result: "DENIED",
 			},

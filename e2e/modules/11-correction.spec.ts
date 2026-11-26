@@ -35,9 +35,15 @@ const API_URL = resolveApiBase(process.env.API_URL, "http://localhost:4001");
 
 type Schemas = components["schemas"];
 
-/** 录入一笔费用未知的买入（feeAmount 缺省 = 未知，doc 05），返回交易 id */
+/**
+ * 录入一笔费用未知的买入（feeAmount 缺省 = 未知，doc 05），返回交易 id
+ *
+ * W30（MIG-D）：/transactions 是组织域端点——缺 X-Organization-Id 一律 400
+ * ORGANIZATION_REQUIRED（不再回落唯一默认组织），故显式带上造数用户的组织。
+ */
 async function seedUnknownFeePurchase(
 	token: string,
+	organizationId: string,
 	currencyCode: string,
 ): Promise<string> {
 	const res = await localFetch(buildApiUrl(API_URL, "/api/transactions"), {
@@ -45,6 +51,7 @@ async function seedUnknownFeePurchase(
 		headers: {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${token}`,
+			"X-Organization-Id": organizationId,
 		},
 		body: JSON.stringify({
 			currencyCode,
@@ -74,7 +81,11 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 
 		const user = await seedRegisterAndLogin(`corr-fee-${Date.now()}`);
 		await seedOnboarding(user.accessToken, "CNY");
-		const transactionId = await seedUnknownFeePurchase(user.accessToken, "HKD");
+		const transactionId = await seedUnknownFeePurchase(
+			user.accessToken,
+			user.organizationId,
+			"HKD",
+		);
 		await injectLoginCookie(page.context(), user.accessToken, BASE_URL);
 
 		// 交易详情 → 更正入口
@@ -142,7 +153,11 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 
 		const user = await seedRegisterAndLogin(`corr-swap-${Date.now()}`);
 		await seedOnboarding(user.accessToken, "CNY");
-		const transactionId = await seedUnknownFeePurchase(user.accessToken, "CAD");
+		const transactionId = await seedUnknownFeePurchase(
+			user.accessToken,
+			user.organizationId,
+			"CAD",
+		);
 		await seedPlanWithAllocation(user.accessToken, "CAD", "1000");
 		await injectLoginCookie(page.context(), user.accessToken, BASE_URL);
 
@@ -203,6 +218,8 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 				headers: {
 					"Content-Type": "application/json",
 					Authorization: `Bearer ${user.accessToken}`,
+					// W30（MIG-D）：建账是组织域端点——缺组织头一律 400 ORGANIZATION_REQUIRED
+					"X-Organization-Id": user.organizationId,
 				},
 				body: JSON.stringify({
 					baseCurrency: "CNY",

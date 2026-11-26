@@ -32,6 +32,7 @@ import {
 } from "../../src/organization/organization-backfill";
 import {
 	reconcileMigration,
+	serializeReconcileResult,
 	type ReconcileResult,
 } from "../../src/organization/organization-reconcile";
 import {
@@ -128,7 +129,8 @@ async function main(): Promise<number> {
 	try {
 		if (mode.kind === "verify") {
 			const result: ReconcileResult = await reconcileMigration(prisma);
-			console.log(JSON.stringify(result, null, 2));
+			// 能力快照里的 Set 展开成数组（直接 stringify 会变成 {}，运维日志易误读）
+			console.log(JSON.stringify(serializeReconcileResult(result), null, 2));
 			if (result.diffs.length > 0) {
 				console.error(`核对发现 ${result.diffs.length} 处差异（目标 0 diffs）`);
 				return 1;

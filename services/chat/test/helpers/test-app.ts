@@ -5,8 +5,10 @@ import {
 } from "@nestjs/testing";
 import { type INestApplication, ValidationPipe } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
+import type { Prisma } from "@prisma/client";
 import request from "supertest";
 import { AppModule } from "../../src/app.module";
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
 import { PrismaService } from "../../src/prisma/prisma.service";
 import { TEST_PASSWORD } from "../fixtures/test-credentials";
 import { listenOnTestLoopback } from "./test-http";
@@ -51,39 +53,140 @@ export interface TestUser {
 	password: string;
 	accessToken: string;
 	userId: string;
+	/**
+	 * 注册时兜底创建的个人默认组织（`bootstrapDefaultOrganization`）。
+	 * W30（MIG-D）起业务端点一律要求显式 `X-Organization-Id`（缺头 400
+	 * ORGANIZATION_REQUIRED），测试请求必须带此头——用 `orgBearer(user)`。
+	 */
+	defaultOrganizationId: string;
 }
 
-/** 注册并登录一个测试用户，返回 token 与 userId（用后需 cleanupUser） */
+/** 注册并登录一个测试用户，返回 token、userId 与其默认组织 id（用后需 cleanupUser） */
 export async function createTestUser(
 	app: INestApplication,
 	label: string,
 ): Promise<TestUser> {
-	const email = `${label}-${Date.now()}@example.com`;
+	const email = `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@example.com`;
 	const password = TEST_PASSWORD;
 
 	await request(app.getHttpServer())
 		.post("/api/auth/register")
 		.send({ email, password, name: label })
 		.expect(201);
-
 	const res = await request(app.getHttpServer())
 		.post("/api/auth/login")
 		.send({ email, password })
 		.expect(200);
 
+	const userId: string = res.body.data.user.id;
+	const defaultOrganizationId = await resolveDefaultOrganizationId(
+		app.get(PrismaService),
+		userId,
+	);
+	if (!defaultOrganizationId) {
+		throw new Error(
+			`createTestUser(${label}): 注册后未解析到默认组织，无法构造组织上下文`,
+		);
+	}
+
 	return {
 		email,
 		password,
 		accessToken: res.body.data.accessToken,
-		userId: res.body.data.user.id,
+		userId,
+		defaultOrganizationId,
 	};
 }
 
 /**
- * 清理测试用户：先清理裸外键关联的 PlanAllocation / UsageLotAllocation 防遗留孤儿行，
- * 再回收「删掉该用户后不再有任何成员」的组织（注册/验证码首登兜底的默认组织及其
- * 审计日志——组织本身不随 User 级联，只有 Membership 级联；评审 I-17 实测本地库
- * 累积 1905 条无成员孤儿 organizations），最后级联删除用户。
+ * 清空某批组织的全部账本子表（ON DELETE RESTRICT 下的显式清理）。
+ *
+ * W30（MIG-E）：账本表已直连 `organizations`（ON DELETE RESTRICT），删组织前
+ * 必须先按「子 → 父」顺序清掉全部引用行，否则外键拒绝。
+ *
+ * 顺序要求：
+ * 1. 派生明细行（usage_lot_allocations / plan_allocations / plan_change_logs /
+ *    plan_installments / reminder_reads / ai_messages）先于其父行；
+ * 2. 账本行（reminders / usage_records / corrections / plans / cost_lots /
+ *    transactions / initial_holdings / accounts）先于 organization_settings；
+ * 3. organization_settings / organization_invitations / data_requests /
+ *    audit_logs 最后（均在组织删除前清）。
+ */
+export async function deleteOrganizationsCascadeLedger(
+	tx: Prisma.TransactionClient,
+	organizationIds: readonly string[],
+): Promise<void> {
+	if (organizationIds.length === 0) return;
+	const orgIds = [...organizationIds];
+
+	// 1. 派生明细行（usage_lot_allocations / plan_allocations 为裸外键，先查父 ID 再删）
+	const [usageRows, planRows] = await Promise.all([
+		tx.usageRecord.findMany({
+			where: { organizationId: { in: orgIds } },
+			select: { id: true },
+		}),
+		tx.plan.findMany({
+			where: { organizationId: { in: orgIds } },
+			select: { id: true },
+		}),
+	]);
+	const usageIds = usageRows.map((row) => row.id);
+	const planIds = planRows.map((row) => row.id);
+	if (usageIds.length > 0) {
+		await tx.usageLotAllocation.deleteMany({
+			where: { usageId: { in: usageIds } },
+		});
+	}
+	if (planIds.length > 0) {
+		await tx.planAllocation.deleteMany({
+			where: { planId: { in: planIds } },
+		});
+	}
+	await tx.planChangeLog.deleteMany({ where: { organizationId: { in: orgIds } } });
+	await tx.planInstallment.deleteMany({
+		where: { plan: { organizationId: { in: orgIds } } },
+	});
+	await tx.reminderRead.deleteMany({
+		where: { reminder: { organizationId: { in: orgIds } } },
+	});
+	await tx.aiMessage.deleteMany({
+		where: { conversation: { organizationId: { in: orgIds } } },
+	});
+
+	// 2. 账本行
+	await tx.reminder.deleteMany({ where: { organizationId: { in: orgIds } } });
+	await tx.usageRecord.deleteMany({ where: { organizationId: { in: orgIds } } });
+	await tx.correction.deleteMany({ where: { organizationId: { in: orgIds } } });
+	await tx.plan.deleteMany({ where: { organizationId: { in: orgIds } } });
+	await tx.costLot.deleteMany({ where: { organizationId: { in: orgIds } } });
+	await tx.transaction.deleteMany({ where: { organizationId: { in: orgIds } } });
+	await tx.initialHolding.deleteMany({ where: { organizationId: { in: orgIds } } });
+	await tx.account.deleteMany({ where: { organizationId: { in: orgIds } } });
+	await tx.aiConversation.deleteMany({
+		where: { organizationId: { in: orgIds } },
+	});
+
+	// 3. 组织附属行
+	await tx.organizationSettings.deleteMany({
+		where: { organizationId: { in: orgIds } },
+	});
+	await tx.organizationInvitation.deleteMany({
+		where: { organizationId: { in: orgIds } },
+	});
+	await tx.dataRequest.deleteMany({
+		where: { organizationId: { in: orgIds } },
+	});
+	// 审计日志无外键，须先于组织显式清理
+	await tx.auditLog.deleteMany({ where: { organizationId: { in: orgIds } } });
+}
+
+/**
+ * 清理测试用户：
+ * 1. 先清掉「删掉该用户后不再有任何成员」的组织及其账本子表
+ *    （MIG-E 起账本表 ON DELETE RESTRICT，必须先清子表再删组织）；
+ * 2. 再级联删除用户（共享组织的账本**不**随用户删除——`created_by_id` /
+ *    `actor_user_id` 置 NULL，`requester_user_id` 置 NULL）。
+ *
  * 仍有其他成员的共享组织保留（由用例自己的 afterAll 显式清理）。
  */
 export async function cleanupUser(
@@ -92,31 +195,6 @@ export async function cleanupUser(
 ): Promise<void> {
 	try {
 		await prisma.$transaction(async (tx) => {
-			const [plans, usages, lots] = await Promise.all([
-				tx.plan.findMany({ where: { userId }, select: { id: true } }),
-				tx.usageRecord.findMany({ where: { userId }, select: { id: true } }),
-				tx.costLot.findMany({ where: { userId }, select: { id: true } }),
-			]);
-			const planIds = plans.map((p) => p.id);
-			const usageIds = usages.map((u) => u.id);
-			const lotIds = lots.map((l) => l.id);
-
-			if (usageIds.length > 0 || lotIds.length > 0) {
-				await tx.usageLotAllocation.deleteMany({
-					where: {
-						OR: [
-							...(usageIds.length > 0 ? [{ usageId: { in: usageIds } }] : []),
-							...(lotIds.length > 0 ? [{ lotId: { in: lotIds } }] : []),
-						],
-					},
-				});
-			}
-			if (planIds.length > 0) {
-				await tx.planAllocation.deleteMany({
-					where: { planId: { in: planIds } },
-				});
-			}
-
 			// 默认组织回收：仅清掉删掉该用户后不再有任何成员的组织
 			const ownMemberships = await tx.membership.findMany({
 				where: { userId },
@@ -134,10 +212,7 @@ export async function cleanupUser(
 				const sharedOrgIds = new Set(otherMembers.map((m) => m.organizationId));
 				const orphanOrgIds = ownOrgIds.filter((id) => !sharedOrgIds.has(id));
 				if (orphanOrgIds.length > 0) {
-					// 审计日志无外键，须先于组织显式清理
-					await tx.auditLog.deleteMany({
-						where: { organizationId: { in: orphanOrgIds } },
-					});
+					await deleteOrganizationsCascadeLedger(tx, orphanOrgIds);
 					await tx.organization.deleteMany({
 						where: { id: { in: orphanOrgIds } },
 					});
@@ -151,9 +226,36 @@ export async function cleanupUser(
 	}
 }
 
-/** Bearer 头快捷方式 */
+/** Bearer 头快捷方式（个人域端点用：/auth/*、/organizations、/data-requests 等） */
 export function bearer(token: string): { Authorization: string } {
 	return { Authorization: `Bearer ${token}` };
+}
+
+/**
+ * 组织域请求头快捷方式：Bearer + `X-Organization-Id`。
+ *
+ * W30（MIG-D）起所有组织业务端点缺组织头一律 400 ORGANIZATION_REQUIRED，
+ * 测试请求必须经此函数带头（勿在各 spec 内复制）。
+ */
+export function orgBearer(user: TestUser): {
+	Authorization: string;
+	"X-Organization-Id": string;
+} {
+	return {
+		Authorization: `Bearer ${user.accessToken}`,
+		"X-Organization-Id": user.defaultOrganizationId,
+	};
+}
+
+/** 组织域请求头（指定非默认组织，用于跨组织越权用例） */
+export function orgBearerFor(
+	user: TestUser,
+	organizationId: string,
+): { Authorization: string; "X-Organization-Id": string } {
+	return {
+		Authorization: `Bearer ${user.accessToken}`,
+		"X-Organization-Id": organizationId,
+	};
 }
 
 /**

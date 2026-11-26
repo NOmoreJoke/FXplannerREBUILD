@@ -21,7 +21,7 @@ import type { User } from "@prisma/client";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
-import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { OrganizationContextGuard } from "../authorization/guards/organization-context.guard";
 import { PermissionGuard } from "../authorization/guards/permission.guard";
 import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
@@ -104,7 +104,7 @@ export class ReportController {
 			"status 不在三值枚举内，或币种不在支持的 15 币种内（INVALID_REPORT_PARAMS）",
 		type: ReportErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("report.read")
 	async listPlans(
 		@CurrentUser() user: User,
@@ -154,7 +154,7 @@ export class ReportController {
 		description: "计划不存在或不属于本人（PLAN_NOT_FOUND）",
 		type: ReportErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("report.read")
 	async getPlanReport(
 		@CurrentUser() user: User,

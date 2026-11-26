@@ -4,7 +4,6 @@ import { AuthModule } from "../auth/auth.module";
 import { AuditModule } from "../audit/audit.module";
 import { OrganizationContextGuard } from "./guards/organization-context.guard";
 import { PermissionGuard } from "./guards/permission.guard";
-import { BusinessOrgScopeGuard } from "./guards/business-org-scope.guard";
 
 /**
  * 授权模块（技术方案 §4.3；Goal #3A W17/W18）。
@@ -15,10 +14,14 @@ import { BusinessOrgScopeGuard } from "./guards/business-org-scope.guard";
  * - 依赖 Prisma/Auth/Audit，禁止引入业务记账模块；
  * - Guard 以显式 @UseGuards 挂载（JwtAuthGuard → OrganizationContextGuard →
  *   PermissionGuard），不做全局守卫（个人端点不受组织上下文约束）。
+ *
+ * W30（MIG-D）：`BusinessOrgScopeGuard`（缺组织头时猜「唯一默认组织」的兼容
+ * 窗口守卫）已删除——所有组织业务端点统一用 `OrganizationContextGuard`，
+ * 缺头一律 400 ORGANIZATION_REQUIRED。
  */
 @Module({
 	imports: [PrismaModule, AuthModule, AuditModule],
-	providers: [OrganizationContextGuard, PermissionGuard, BusinessOrgScopeGuard],
-	exports: [OrganizationContextGuard, PermissionGuard, BusinessOrgScopeGuard],
+	providers: [OrganizationContextGuard, PermissionGuard],
+	exports: [OrganizationContextGuard, PermissionGuard],
 })
 export class AuthorizationModule {}

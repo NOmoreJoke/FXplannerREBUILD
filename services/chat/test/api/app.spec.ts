@@ -41,7 +41,7 @@ describe('AppController（e2e）', () => {
 
 it('测试应用在 IPv4 回环上持续监听同一端口，并在关闭时释放监听', async () => {
   const { app } = await createTestApp();
-  const server = app.getHttpServer<Server>();
+  const server = app.getHttpServer() as Server;
   try {
     const address = server.address();
     expect(address).toEqual({

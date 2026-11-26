@@ -331,9 +331,21 @@ export async function captureMigrationSnapshot(
 	}
 
 	// ── 口径 1：每（归属键, 币种）账户余额合计 ──────────────────────────
+	const legacyFind = <T>(
+		delegate: { findMany(args: never): Promise<unknown[]> },
+		args: Record<string, unknown>,
+	): Promise<T[]> =>
+		(delegate as unknown as { findMany(args: unknown): Promise<T[]> }).findMany(
+			args,
+		);
+
 	const accountRows = legacy
 		? (
-				await db.account.findMany({
+				await legacyFind<{
+					userId: string;
+					currencyCode: string;
+					balance: Prisma.Decimal;
+				}>(db.account, {
 					where: scoped ? { userId: { in: userIds } } : {},
 					select: { userId: true, currencyCode: true, balance: true },
 				})
@@ -390,7 +402,13 @@ export async function captureMigrationSnapshot(
 		status: string;
 	}> = legacy
 		? (
-				await db.plan.findMany({
+				await legacyFind<{
+					id: string;
+					userId: string;
+					organizationId: string | null;
+					targetAmount: Prisma.Decimal;
+					status: string;
+				}>(db.plan, {
 					where: scoped ? { userId: { in: userIds } } : {},
 					select: {
 						id: true,
@@ -475,7 +493,12 @@ export async function captureMigrationSnapshot(
 		.sort((left, right) => left.planId.localeCompare(right.planId));
 
 	// ── 口径 3：交易 / 使用 / 更正 ─────────────────────────────────────
-	const transactionRows = await db.transaction.findMany({
+	const transactionRows = await legacyFind<{
+		id: string;
+		version: number;
+		principalAmount: Prisma.Decimal;
+		feeAmount: Prisma.Decimal | null;
+	}>(db.transaction, {
 		where: legacy
 			? scoped
 				? { userId: { in: userIds } }
@@ -500,7 +523,13 @@ export async function captureMigrationSnapshot(
 		amountSum: decimalToString(transactionAmount),
 	};
 
-	const usageRows = await db.usageRecord.findMany({
+	const usageRows = await legacyFind<{
+		id: string;
+		planId: string;
+		amount: Prisma.Decimal;
+		version: number;
+		organizationId: string | null;
+	}>(db.usageRecord, {
 		where: legacy
 			? scoped
 				? { userId: { in: userIds } }
@@ -530,7 +559,9 @@ export async function captureMigrationSnapshot(
 		amountSum: decimalToString(usageAmount),
 	};
 
-	const correctionCount = await db.correction.count({
+	const correctionCount = await (
+		db.correction as unknown as { count(args: unknown): Promise<number> }
+	).count({
 		where: legacy
 			? scoped
 				? { userId: { in: userIds } }
@@ -561,7 +592,18 @@ export async function captureMigrationSnapshot(
 		totalCost: Prisma.Decimal;
 	}> = legacy
 		? (
-				await db.costLot.findMany({
+				await legacyFind<{
+					id: string;
+					userId: string;
+					organizationId: string | null;
+					currencyCode: string;
+					sourceType: string;
+					sourceId: string;
+					quantity: Prisma.Decimal;
+					remainingQty: Prisma.Decimal;
+					unitCost: Prisma.Decimal;
+					totalCost: Prisma.Decimal;
+				}>(db.costLot, {
 					where: scoped ? { userId: { in: userIds } } : {},
 					select: {
 						id: true,
@@ -803,7 +845,13 @@ export async function captureMigrationSnapshot(
 		}
 	>();
 	if (capabilities.hasUserSettingsLegacyColumns) {
-		const personal = await db.userSettings.findMany({
+		const personal = await legacyFind<{
+			userId: string;
+			baseCurrency: string;
+			prepPreference: string;
+			reminderEnabled: boolean;
+			ledgerStartedAt: Date | null;
+		}>(db.userSettings, {
 			select: {
 				userId: true,
 				baseCurrency: true,

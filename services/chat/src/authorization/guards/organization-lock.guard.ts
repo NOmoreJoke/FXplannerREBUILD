@@ -97,7 +97,7 @@ export interface RequestWithOrganizationLock extends RequestWithActor {
  * - 未挂本守卫的端点：由 PersonalAccountLockGuard 执行其个人域单查
  *   （`data-request/personal-account-lock.guard.ts` 读取路由 `__guards__` 元数据后跳过）。
  *
- * 挂载顺序铁律：**在 OrganizationContextGuard / BusinessOrgScopeGuard 之后、
+ * 挂载顺序铁律：**在 OrganizationContextGuard 之后、
  * PermissionGuard 之前**（先解析 actor.organizationId，再检锁，再检权限）。
  * 严禁放错位置——放前则 actor 尚未解析（无 actor 绕过），放后则权限拒绝会先于
  * 锁判定返回 403，用户看不到组织正在清空 / 删除的真实原因。

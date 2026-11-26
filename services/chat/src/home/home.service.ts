@@ -4,7 +4,7 @@ import type { Account, Plan, PlanAllocation } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { RateService } from "../rate/rate.service";
 import {
-	compatReadWhere,
+	orgWhere,
 	type ReadScope,
 } from "../authorization/organization-scope";
 import { resolveOrganizationPreferences } from "../organization/organization-preferences";
@@ -46,20 +46,17 @@ export class HomeService {
 			initialLotCount,
 		] = await Promise.all([
 			resolveOrganizationPreferences(this.prisma, scope.organizationId),
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.account.findMany({
-				where: compatReadWhere(scope),
+				where: orgWhere(scope),
 				orderBy: { currencyCode: "asc" },
 			}),
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.plan.findMany({
-				where: compatReadWhere(scope),
+				where: orgWhere(scope),
 				orderBy: { createdAt: "desc" },
 			}),
 			this.rateService.getLatestObservedAt(),
-			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.costLot.count({
-				where: { sourceType: "INITIAL", ...compatReadWhere(scope) },
+				where: { sourceType: "INITIAL", ...orgWhere(scope) },
 			}),
 		]);
 
@@ -103,7 +100,6 @@ export class HomeService {
 	 * 仅分组结果返回内存，禁止全表明细拉内存再过滤（契约 §2）。
 	 */
 	async getPortfolio(scope: ReadScope): Promise<PortfolioDto> {
-		const includeLegacy = scope.isDefaultOrganization === true;
 		const [preferences, rows] = await Promise.all([
 			resolveOrganizationPreferences(this.prisma, scope.organizationId),
 			this.prisma.$queryRaw<PortfolioGroupRow[]>`
@@ -112,11 +108,7 @@ export class HomeService {
 					SUM(remaining_qty) AS remaining_qty,
 					SUM(remaining_qty * unit_cost) AS total_cost
 				FROM cost_lots
-				WHERE
-					(organization_id = ${scope.organizationId}
-						OR (organization_id IS NULL
-							AND user_id = ${scope.userId}
-							AND ${includeLegacy}))
+				WHERE organization_id = ${scope.organizationId}
 					AND remaining_qty > 0
 				GROUP BY currency_code
 				ORDER BY currency_code ASC

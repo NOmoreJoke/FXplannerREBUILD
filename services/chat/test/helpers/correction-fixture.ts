@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
 
 /**
  * corrections 接口/集成测试专用造数（AGENTS.md：测试工具进 test/helpers，禁止 spec 间复制）。
@@ -12,6 +13,7 @@ import { Prisma } from "@prisma/client";
 /** seedUsageRecord 入参：FIFO 分摊明细（lotId + 消耗数量；cost = 数量 × 批次 unitCost） */
 export interface SeedUsageInput {
 	userId: string;
+	organizationId?: string;
 	planId: string;
 	currencyCode: string;
 	amount: string;
@@ -32,10 +34,17 @@ export async function seedUsageRecord(
 	prisma: Prisma.TransactionClient,
 	input: SeedUsageInput,
 ): Promise<string> {
+	const organizationId =
+		input.organizationId ??
+		(await resolveDefaultOrganizationId(prisma, input.userId));
+	if (!organizationId) {
+		throw new Error(`seedUsageRecord(${input.userId}): 未找到默认组织`);
+	}
 	const amount = new Prisma.Decimal(input.amount);
 	const usage = await prisma.usageRecord.create({
 		data: {
-			userId: input.userId,
+			organizationId,
+			createdById: input.userId,
 			planId: input.planId,
 			currencyCode: input.currencyCode,
 			amount,
@@ -71,7 +80,7 @@ export async function seedUsageRecord(
 		data: { usedAmount: { increment: amount } },
 	});
 	await prisma.account.updateMany({
-		where: { userId: input.userId, currencyCode: input.currencyCode },
+		where: { organizationId, currencyCode: input.currencyCode },
 		data: { balance: { decrement: amount } },
 	});
 	void totalCost; // 成本聚合由 UsageLotAllocation 行承载（account.ledger 按 usageId 聚合）
@@ -81,6 +90,7 @@ export async function seedUsageRecord(
 /** seedPlanWithAllocationRow 入参 */
 export interface SeedPlanInput {
 	userId: string;
+	organizationId?: string;
 	targetCurrency: string;
 	targetAmount: string;
 	allocatedAmount: string;
@@ -96,9 +106,16 @@ export async function seedPlanWithAllocationRow(
 	prisma: Prisma.TransactionClient,
 	input: SeedPlanInput,
 ): Promise<{ planId: string }> {
+	const organizationId =
+		input.organizationId ??
+		(await resolveDefaultOrganizationId(prisma, input.userId));
+	if (!organizationId) {
+		throw new Error(`seedPlanWithAllocationRow(${input.userId}): 未找到默认组织`);
+	}
 	const plan = await prisma.plan.create({
 		data: {
-			userId: input.userId,
+			organizationId,
+			createdById: input.userId,
 			targetCurrency: input.targetCurrency,
 			targetAmount: new Prisma.Decimal(input.targetAmount),
 			// latestPrepDate 为 NOT NULL：更正测试不读排期，取使用日期前 30 天占位
@@ -120,10 +137,6 @@ export async function seedPlanWithAllocationRow(
 /**
  * 直插初始持仓 + INITIAL 成本批次 + 账户（绕开 onboarding 取价链路）：
  * 报价三元组显式给定（金额更正「沿用原报价」断言依赖确定的原值）。
- *
- * organizationId（ToB R1 租户列，可选）：传入时持仓 / 批次 / 账户三行一并落组织并记
- * createdById，与 onboarding 写侧同口径；不传保持兼容窗口的 NULL 行（仅默认组织
- * 创建者本人在默认组织上下文可见，compatReadWhere）。
  */
 export async function seedInitialHolding(
 	prisma: Prisma.TransactionClient,
@@ -136,17 +149,21 @@ export async function seedInitialHolding(
 		confirmedAt: Date;
 		/** 批次取得时刻（onboarding 写侧口径 = 账本起点日）；缺省 = confirmedAt */
 		acquiredAt?: Date;
-		/** ToB R1 租户列；缺省不写（兼容窗口 NULL 行） */
+		/** ToB R1 租户列；缺省解析 userId 的默认组织 */
 		organizationId?: string;
 	},
 ): Promise<{ holdingId: string }> {
 	const amount = new Prisma.Decimal(input.amount);
-	const organizationId = input.organizationId;
+	const organizationId =
+		input.organizationId ??
+		(await resolveDefaultOrganizationId(prisma, input.userId));
+	if (!organizationId) {
+		throw new Error(`seedInitialHolding(${input.userId}): 未找到默认组织`);
+	}
 	const holding = await prisma.initialHolding.create({
 		data: {
-			userId: input.userId,
 			organizationId,
-			createdById: organizationId === undefined ? undefined : input.userId,
+			createdById: input.userId,
 			currencyCode: input.currencyCode,
 			amount,
 			rate: new Prisma.Decimal(input.rate),
@@ -159,7 +176,6 @@ export async function seedInitialHolding(
 	});
 	await prisma.costLot.create({
 		data: {
-			userId: input.userId,
 			organizationId,
 			currencyCode: input.currencyCode,
 			sourceType: "INITIAL",
@@ -171,30 +187,20 @@ export async function seedInitialHolding(
 			acquiredAt: input.acquiredAt ?? input.confirmedAt,
 		},
 	});
-	// 组织账户唯一约束为 (organizationId, currencyCode)：同组织同币种只保留一行，按组织查找；
-	// NULL 行（唯一约束视 NULL 互不相等）沿用按用户查找
-	const existingAccount = await prisma.account.findFirst({
-		where:
-			organizationId === undefined
-				? { userId: input.userId, currencyCode: input.currencyCode }
-				: { organizationId, currencyCode: input.currencyCode },
-		select: { id: true },
-	});
-	if (existingAccount) {
-		await prisma.account.update({
-			where: { id: existingAccount.id },
-			data: { balance: { increment: amount } },
-		});
-	} else {
-		await prisma.account.create({
-			data: {
-				userId: input.userId,
+	await prisma.account.upsert({
+		where: {
+			organizationId_currencyCode: {
 				organizationId,
-				createdById: organizationId === undefined ? undefined : input.userId,
 				currencyCode: input.currencyCode,
-				balance: amount,
 			},
-		});
-	}
+		},
+		update: { balance: { increment: amount } },
+		create: {
+			organizationId,
+			createdById: input.userId,
+			currencyCode: input.currencyCode,
+			balance: amount,
+		},
+	});
 	return { holdingId: holding.id };
 }

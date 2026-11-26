@@ -3,12 +3,19 @@
  *
  * 背景：MIG-F（Goal #3C W30）会删除一批 legacy 列——
  *   - 业务共享表上的冗余 `user_id`（`accounts` / `transactions` / `initial_holdings` /
- *     `cost_lots` / `plans` / `usage_records` / `corrections` / `reminders` /
- *     `ai_conversations`）；
+ *     `cost_lots` / `plans` / `usage_records` / `corrections` / `reminders`）；
  *   - `user_settings` 的 `base_currency` / `prep_preference` / `reminder_enabled` /
  *     `ledger_started_at`；
  *   - `reminders.read_at`（已读态已由成员级 `reminder_reads` 承载）；
  *   - `data_requests.user_id`（MIG-F 重命名为 `requester_user_id`）。
+ *
+ * **不**在 MIG-F 删除范围内、因此仍保留 `user_id` 列的表：
+ *   - `ai_conversations`：会话**个人所有**（`userId` 是会话所有者，查询口径
+ *     `(userId, organizationId)`），技术方案 §5.2 明确保留；MIG-E 起其
+ *     `organization_id` 为 NOT NULL，MIG-B 的按 user_id 回填在 post-MIG-E 库上
+ *     自然退化为 no-op（WHERE 恒不命中）。
+ *   - `memberships` / `reminder_reads` / `otp_identities` / `terms_consents` /
+ *     `user_settings`：个人归属表，不属共享账本表，全程保留 `user_id`。
  *
  * 一旦这些列被删除，`organization-backfill.ts` 与 `organization-reconcile.ts` 里
  * 依赖它们的 SQL / ORM 读取就会因「列不存在」直接崩溃——迁移工具在 MIG-F 之后
@@ -59,6 +66,21 @@ export const LEGACY_USER_SETTINGS_COLUMNS = [
 	"ledger_started_at",
 ] as const;
 
+/**
+ * 共享账本表集合（MIG-E 起 `organization_id` NOT NULL，MIG-F 起无 `user_id` 列）。
+ */
+export const TENANT_LEDGER_TABLES = [
+	"accounts",
+	"transactions",
+	"initial_holdings",
+	"cost_lots",
+	"plans",
+	"usage_records",
+	"corrections",
+	"reminders",
+	"ai_conversations",
+] as const;
+
 /** 当前数据库的迁移阶段能力快照 */
 export interface MigrationSchemaCapabilities {
 	/** 仍保留 legacy `user_id` 列的表名集合（MIG-F 后为空集） */
@@ -67,6 +89,15 @@ export interface MigrationSchemaCapabilities {
 	hasUserSettingsLegacyColumns: boolean;
 	/** `reminders` 是否仍有 `read_at` 列 */
 	hasReminderReadAtColumn: boolean;
+	/**
+	 * `organization_id` 已是 **NOT NULL** 的表名集合（MIG-E 之后）。
+	 *
+	 * 用途：MIG-E 起列恒非空，「`organization_id IS NULL` 的待回填行」恒为 0，
+	 * 且 Prisma 对必填 `String` 列**拒绝** `organizationId: null` 过滤条件
+	 * （`Argument organizationId must not be null`）。迁移工具据此跳过该统计，
+	 * 而不是构造一个数据库层合法的非法过滤。
+	 */
+	notNullOrganizationIdTables: ReadonlySet<string>;
 	/** 是否已进入 MIG-F（`accounts.user_id` 已删除 = 组织账本表彻底去个人化） */
 	migF: boolean;
 }
@@ -81,9 +112,9 @@ export async function detectMigrationSchemaCapabilities(
 ): Promise<MigrationSchemaCapabilities> {
 	const tables = [...LEGACY_USER_ID_TABLES];
 	const rows = await db.$queryRaw<
-		Array<{ tableName: string; columnName: string }>
+		Array<{ tableName: string; columnName: string; isNullable?: string }>
 	>`
-		SELECT table_name AS "tableName", column_name AS "columnName"
+		SELECT table_name AS "tableName", column_name AS "columnName", is_nullable AS "isNullable"
 		FROM information_schema.columns
 		WHERE table_schema = current_schema()
 			AND (
@@ -93,9 +124,15 @@ export async function detectMigrationSchemaCapabilities(
 					AND column_name = ANY(${[...LEGACY_USER_SETTINGS_COLUMNS]}::text[])
 				)
 				OR (table_name = 'reminders' AND column_name = 'read_at')
+				OR (
+					column_name = 'organization_id'
+					AND is_nullable = 'NO'
+					AND table_name = ANY(${[...TENANT_LEDGER_TABLES]}::text[])
+				)
 			)
 	`;
 	const legacyUserIdTables = new Set<string>();
+	const notNullOrganizationIdTables = new Set<string>();
 	let userSettingsColumnCount = 0;
 	let hasReminderReadAt = false;
 	for (const row of rows) {
@@ -105,14 +142,39 @@ export async function detectMigrationSchemaCapabilities(
 			userSettingsColumnCount += 1;
 		} else if (row.tableName === "reminders" && row.columnName === "read_at") {
 			hasReminderReadAt = true;
+		} else if (
+			row.columnName === "organization_id" &&
+			row.isNullable !== "YES"
+		) {
+			notNullOrganizationIdTables.add(row.tableName);
 		}
 	}
+
 	return {
 		legacyUserIdTables,
 		hasUserSettingsLegacyColumns:
 			userSettingsColumnCount === LEGACY_USER_SETTINGS_COLUMNS.length,
 		hasReminderReadAtColumn: hasReminderReadAt,
+		notNullOrganizationIdTables,
 		migF: !legacyUserIdTables.has("accounts"),
+	};
+}
+
+/**
+ * 能力快照的 JSON 友好投影（`Set` 直接 JSON.stringify 会变成 `{}`，运维看日志时
+ * 会误以为「没有表仍带 user_id」——这里显式展开成数组）。
+ */
+export function serializeCapabilities(
+	capabilities: MigrationSchemaCapabilities,
+): Record<string, unknown> {
+	return {
+		legacyUserIdTables: [...capabilities.legacyUserIdTables].sort(),
+		hasUserSettingsLegacyColumns: capabilities.hasUserSettingsLegacyColumns,
+		hasReminderReadAtColumn: capabilities.hasReminderReadAtColumn,
+		notNullOrganizationIdTables: [
+			...capabilities.notNullOrganizationIdTables,
+		].sort(),
+		migF: capabilities.migF,
 	};
 }
 

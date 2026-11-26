@@ -2,9 +2,9 @@ import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-	bearer,
 	cleanupUser,
 	createTestApp,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -35,6 +35,13 @@ vi.mock("@nestjs/throttler", async (importOriginal) => {
 });
 
 /**
+ * 组织标签随机后缀：本文件冻结了 Date（`vi.useFakeTimers`），createTestUser 的
+ * 邮箱后缀取 Date.now() 会恒定不变——同一工作日内重复运行会撞邮箱唯一约束 409。
+ * 与 reminder-test-helper 的 `Math.random()` 后缀同款做法。
+ */
+const ORG_LABEL = `lc-org-${Math.random().toString(36).slice(2, 8)}`;
+
+/**
  * 提醒 × 计划生命周期集成测试（reminders 技术方案 §10.3）：真库 + 真实接口链路。
  *
  * 跨模块联动断言（M7 使用录入 / M8 更正未建，按方案用直改 allocation 模拟）：
@@ -60,7 +67,7 @@ describe("提醒 × 计划生命周期（集成）", () => {
 
 	/** 直插计划行（绕过创建接口的排期重建，自由控制 latestPrepDate/排期） */
 	async function seedPlan(
-		userId: string,
+		user: TestUser,
 		options: {
 			targetAmount?: string;
 			allocAmount?: string;
@@ -74,9 +81,10 @@ describe("提醒 × 计划生命周期（集成）", () => {
 		);
 		const plan = await ctx.prisma.plan.create({
 			data: {
-				userId,
+				// W30（MIG-E）：计划直连组织（organization_id NOT NULL），无 user_id 列
+				organizationId: options.organizationId ?? user.defaultOrganizationId,
+				createdById: user.userId,
 				name: null,
-				organizationId: options.organizationId ?? null,
 				targetCurrency: "USD",
 				targetAmount: options.targetAmount ?? "10000",
 				expectUseDate,
@@ -130,7 +138,7 @@ describe("提醒 × 计划生命周期（集成）", () => {
 
 	it("流程 1：建计划→取消→该计划提醒不再返回；行未删", async () => {
 		const user = await setupUser("lc-cancel");
-		const planId = await seedPlan(user.userId);
+		const planId = await seedPlan(user);
 
 		const before = await getReminders(app, user).expect(200);
 		expect(before.body.data.items).toHaveLength(1);
@@ -138,20 +146,20 @@ describe("提醒 × 计划生命周期（集成）", () => {
 
 		await request(app.getHttpServer())
 			.post(`/api/plans/${planId}/cancel`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		const after = await getReminders(app, user).expect(200);
 		expect(after.body.data.items).toHaveLength(0);
 		const rows = await ctx.prisma.reminder.findMany({
-			where: { userId: user.userId },
+			where: { organizationId: user.defaultOrganizationId },
 		});
 		expect(rows).toHaveLength(1); // 行保留不删，重开后按规则自然恢复
 	});
 
 	it("流程 2：使用达标→COMPLETE_READY 出现一次；确认完成后行消失", async () => {
 		const user = await setupUser("lc-complete");
-		const planId = await seedPlan(user.userId, {
+		const planId = await seedPlan(user, {
 			allocAmount: "10000",
 			usedAmount: "10000", // 直改模拟 M7 使用达标（M7 未建）
 		});
@@ -169,7 +177,7 @@ describe("提醒 × 计划生命周期（集成）", () => {
 
 		await request(app.getHttpServer())
 			.post(`/api/plans/${planId}/complete`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		const after = await getReminders(app, user).expect(200);
@@ -178,7 +186,7 @@ describe("提醒 × 计划生命周期（集成）", () => {
 
 	it("流程 3：完成后重开（提高目标）+ 更正回退使用 → 按规则恢复，无补发", async () => {
 		const user = await setupUser("lc-reopen");
-		const planId = await seedPlan(user.userId, {
+		const planId = await seedPlan(user, {
 			allocAmount: "10000",
 			usedAmount: "10000",
 		});
@@ -187,13 +195,13 @@ describe("提醒 × 计划生命周期（集成）", () => {
 		await getReminders(app, user).expect(200);
 		await request(app.getHttpServer())
 			.post(`/api/plans/${planId}/complete`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		// 重开：提高目标（严格完成态 + confirmReopen + startDate=今天使重建排期首批命中今天）
 		await request(app.getHttpServer())
 			.patch(`/api/plans/${planId}`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				newTargetAmount: "12000",
 				confirmReopen: true,
@@ -228,7 +236,7 @@ describe("提醒 × 计划生命周期（集成）", () => {
 		).toEqual(["PREP_DUE"]);
 		expect(corrected.body.data.items[0].matters[0].gapAmount).toBe("2000.0000");
 		const rows = await ctx.prisma.reminder.findMany({
-			where: { userId: user.userId },
+			where: { organizationId: user.defaultOrganizationId },
 		});
 		expect(rows).toHaveLength(1); // 同日合并：始终仅一行，无任何补发
 	});
@@ -238,7 +246,7 @@ describe("提醒 × 计划生命周期（集成）", () => {
 		// 走创建接口：startDate=今天 → 首批=今天；分配 0 → 缺口 10000
 		const created = await request(app.getHttpServer())
 			.post("/api/plans")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				targetCurrency: "USD",
 				targetAmount: "10000",
@@ -261,7 +269,7 @@ describe("提醒 × 计划生命周期（集成）", () => {
 		// 调高分配覆盖缺口 → gap=0 → 排期清空 + PREP_DUE matters 为空 → 行隐藏
 		await request(app.getHttpServer())
 			.patch(`/api/plans/${planId}`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				newAllocAmount: "10000",
 				expectedUpdatedAt: (
@@ -275,7 +283,7 @@ describe("提醒 × 计划生命周期（集成）", () => {
 		// 调回分配 5000 → gap=5000 → 排期重建（earliest=planStartDate=今天）→ 行恢复且为同一行
 		await request(app.getHttpServer())
 			.patch(`/api/plans/${planId}`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				newAllocAmount: "5000",
 				expectedUpdatedAt: (
@@ -290,7 +298,7 @@ describe("提醒 × 计划生命周期（集成）", () => {
 		expect(refilled.body.data.items[0].matters[0].gapAmount).toBe("5000.0000");
 
 		const rows = await ctx.prisma.reminder.findMany({
-			where: { userId: user.userId },
+			where: { organizationId: user.defaultOrganizationId },
 		});
 		expect(rows).toHaveLength(1); // 同一节点日始终仅一行
 		// scheduledFor 恒为业务今天 0 点（UTC+8 口径）
@@ -300,16 +308,17 @@ describe("提醒 × 计划生命周期（集成）", () => {
 	});
 
 	/**
-	 * 流程 5（Goal #3B W25；LEDGER-03 成员级已读）：同一组织内成员的已读态互不影响，
-	 * 且标已读**不写共享的 Reminder.readAt**（行主一读不替他人清除未读）。
+	 * 流程 5（Goal #3B W25；LEDGER-03 成员级已读）：同一组织内成员的已读态互不影响。
+	 * W30（MIG-F）：共享的 `Reminder.readAt` 列已删除——已读态**只**落成员级
+	 * `ReminderRead(reminderId, userId)`，共享行不再承载任何读态。
 	 */
-	it("W25 流程 5：成员级已读——成员 A 标已读不影响成员 B 与行主的未读态；Reminder.readAt 保持 null", async () => {
-		const org = await createOrgLedger(app, ctx.prisma, "lc-org", [
+	it("W25 流程 5：成员级已读——成员 A 标已读不影响成员 B 与行主的未读态；已读态只落成员级 ReminderRead", async () => {
+		const org = await createOrgLedger(app, ctx.prisma, ORG_LABEL, [
 			"VIEWER",
 			"FINANCE",
 		]);
 		orgs.push(org);
-		const planId = await seedPlan(org.owner.userId, {
+		const planId = await seedPlan(org.owner, {
 			organizationId: org.orgId,
 		});
 
@@ -343,7 +352,7 @@ describe("提醒 × 计划生命周期（集成）", () => {
 			.expect(200);
 		expect(ownerAfter.body.data.items[0].readAt).toBeNull();
 
-		// 数据库：只有成员 A 的成员级已读行；共享 Reminder.readAt 未被写入
+		// 数据库：只有成员 A 的成员级已读行（共享提醒行不再承载读态——MIG-F 已删 read_at 列）
 		const reads = await ctx.prisma.reminderRead.findMany({
 			where: { reminderId },
 			select: { userId: true },
@@ -352,7 +361,6 @@ describe("提醒 × 计划生命周期（集成）", () => {
 		const row = await ctx.prisma.reminder.findUniqueOrThrow({
 			where: { id: reminderId },
 		});
-		expect(row.readAt).toBeNull();
 		expect(row.organizationId).toBe(org.orgId); // 新行归属当前组织
 	});
 });
