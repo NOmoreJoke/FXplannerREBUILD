@@ -516,6 +516,7 @@ export class OnboardingService {
 					actor.organizationId,
 				);
 				// 锁内按当前组织（含默认创建者遗留 NULL 行）查重（不做部分成功）；并发兜底由唯一约束承担
+				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const existing = await tx.initialHolding.findMany({
 					where: {
 						currencyCode: { in: codes },

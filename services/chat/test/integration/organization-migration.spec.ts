@@ -4,7 +4,11 @@ import {
 	BackfillAnomalyError,
 	backfillDefaultOrganizations,
 } from "../../src/organization/organization-backfill";
-import { reconcileMigration } from "../../src/organization/organization-reconcile";
+import {
+	reconcileMigration,
+	captureMigrationSnapshot,
+	compareMigrationSnapshots,
+} from "../../src/organization/organization-reconcile";
 import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
 import { cleanupUser } from "../helpers/test-app";
 
@@ -1504,4 +1508,719 @@ describe("MIG-B 默认组织回填与核对", () => {
 			await cleanupUser(db as CleanupDb, dualUserId);
 		}
 	});
+/**
+ * 兼容窗口「混合双写」夹具（技术方案 §12.3；Goal #3C W29）。
+ *
+ * 模拟真实迁移窗口的状态：
+ * - 用户已有应用侧创建的个人工作台（组织 + 首个 OWNER 成员同事务创建 → 默认组织口径成立）；
+ * - 账户 USD 走**应用侧双写路径**（已挂组织），同币种 USD 账户与 EUR 账户走
+ *   **存量个人路径**（未挂组织）——同币种双写会触发 I-2 合并（存量余额并入组织行、
+ *   存量行删除），但**每币种余额合计不变**（20 + 50 = 70），正是口径 1 要证明的事；
+ * - 初始持仓 / 批次 / 计划 / 分配 / 排期 / 变更日志 / 交易 / 使用 / 分摊 / 更正 /
+ *   提醒 / 数据请求均为存量个人行（未挂组织）。
+ *
+ * 所有存量行以**并发写入**（Promise.all）落库，模拟迁移窗口内的并行写压力。
+ */
+interface MixedFixture {
+	userId: string;
+	orgId: string;
+	planId: string;
+	usageId: string;
+	usdLotId: string;
+	eurLotId: string;
+	transactionId: string;
+}
+
+async function seedMixedDualWriteUser(
+	label: string,
+	name: string,
+): Promise<MixedFixture> {
+	const user = await db.user.create({
+		data: {
+			email: `${RUN}-${label}@example.com`,
+			passwordHash: "test-hash",
+			name,
+		},
+	});
+	await db.userSettings.create({
+		data: {
+			userId: user.id,
+			baseCurrency: "CNY",
+			locale: "zh-CN",
+			region: "CN",
+			prepPreference: "balanced",
+			reminderEnabled: true,
+			ledgerStartedAt: T0,
+		},
+	});
+	// 应用侧创建的个人工作台（嵌套写入 → 默认组织判定成立）
+	const org = await db.organization.create({
+		data: {
+			name: `${name}的工作台`,
+			memberships: {
+				create: { userId: user.id, role: "OWNER", status: "ACTIVE" },
+			},
+		},
+	});
+	await db.organizationSettings.create({
+		data: {
+			organizationId: org.id,
+			baseCurrency: "CNY",
+			prepPreference: "balanced",
+			reminderEnabled: true,
+			ledgerStartedAt: T0,
+		},
+	});
+	// 双写路径：已挂组织的同币种账户
+	await db.account.create({
+		data: {
+			userId: user.id,
+			organizationId: org.id,
+			createdById: user.id,
+			currencyCode: "USD",
+			balance: "20.0000",
+		},
+	});
+
+	// ── 存量个人行（未挂组织）：并发写入 ──────────────────────────────
+	const [usdHolding, eurHolding] = await Promise.all([
+		db.initialHolding.create({
+			data: {
+				userId: user.id,
+				currencyCode: "USD",
+				amount: "500.0000",
+				rate: "7.2000000000",
+				rawRate: "7.2000000000",
+				rateSource: "identity",
+				rateObservedAt: T0,
+				cost: "3600.0000",
+				confirmedAt: T0,
+			},
+		}),
+		db.initialHolding.create({
+			data: {
+				userId: user.id,
+				currencyCode: "EUR",
+				amount: "100.0000",
+				rate: "7.9000000000",
+				rawRate: "7.9000000000",
+				rateSource: "identity",
+				rateObservedAt: T0,
+				cost: "790.0000",
+				confirmedAt: T0,
+			},
+		}),
+	]);
+	// 存量账户：USD 与双写组织行同币种（触发 I-2 合并），EUR 独立
+	await Promise.all([
+		db.account.create({
+			data: { userId: user.id, currencyCode: "USD", balance: "50.0000" },
+		}),
+		db.account.create({
+			data: { userId: user.id, currencyCode: "EUR", balance: "200.2500" },
+		}),
+	]);
+	// 成本批次：USD 初始批次（被使用分摊 50 → remaining = 500 − 50 = 450）、
+	// EUR 初始批次（未被动用）
+	const [usdLot, eurLot] = await Promise.all([
+		db.costLot.create({
+			data: {
+				userId: user.id,
+				currencyCode: "USD",
+				sourceType: "INITIAL",
+				sourceId: usdHolding.id,
+				quantity: "500.0000",
+				remainingQty: "450.0000",
+				unitCost: "7.2000000000",
+				totalCost: "3600.0000",
+				acquiredAt: T0,
+			},
+		}),
+		db.costLot.create({
+			data: {
+				userId: user.id,
+				currencyCode: "EUR",
+				sourceType: "INITIAL",
+				sourceId: eurHolding.id,
+				quantity: "100.0000",
+				remainingQty: "100.0000",
+				unitCost: "7.9000000000",
+				totalCost: "790.0000",
+				acquiredAt: T0,
+			},
+		}),
+	]);
+	// 计划 + 分配 + 排期 + 变更日志
+	const plan = await db.plan.create({
+		data: {
+			userId: user.id,
+			targetCurrency: "USD",
+			targetAmount: "300.0000",
+			expectUseDate: new Date("2026-06-01T00:00:00.000Z"),
+			prepLeadDays: 3,
+			latestPrepDate: new Date("2026-05-25T00:00:00.000Z"),
+			status: "ACTIVE",
+		},
+	});
+	await Promise.all([
+		db.planAllocation.create({
+			data: { planId: plan.id, amount: "300.0000", usedAmount: "50.0000" },
+		}),
+		...[1, 2, 3].map((seq) =>
+			db.planInstallment.create({
+				data: {
+					planId: plan.id,
+					seq,
+					scheduledAt: new Date(2026, 2, seq * 10),
+					amount: "100.0000",
+				},
+			}),
+		),
+		db.planChangeLog.create({
+			data: {
+				planId: plan.id,
+				changeType: "ALLOCATION_ADJUSTED",
+				beforeTarget: "300.0000",
+				afterTarget: "300.0000",
+				beforeAlloc: "250.0000",
+				afterAlloc: "300.0000",
+				releasedAmount: "0.0000",
+				beforeSnapshot: { amount: "250.0000" },
+				afterSnapshot: { amount: "300.0000" },
+			},
+		}),
+	]);
+	// 买入交易 + 买入批次（手续费未明确 → 口径 5 的未知费用标记）
+	const txn = await db.transaction.create({
+		data: {
+			userId: user.id,
+			currencyCode: "USD",
+			quantity: "20.0000",
+			principalAmount: "144.0000",
+			feeAmount: null,
+			exchangeRate: "7.2000000000",
+			rateSource: "identity",
+			rateObservedAt: new Date("2026-02-01T00:00:00.000Z"),
+			transactedAt: new Date("2026-02-01T00:00:00.000Z"),
+			planId: plan.id,
+		},
+	});
+	await db.costLot.create({
+		data: {
+			userId: user.id,
+			currencyCode: "USD",
+			sourceType: "PURCHASE",
+			sourceId: txn.id,
+			quantity: "20.0000",
+			remainingQty: "20.0000",
+			unitCost: "7.2000000000",
+			totalCost: "144.0000",
+			acquiredAt: new Date("2026-02-01T00:00:00.000Z"),
+		},
+	});
+	// 使用 + FIFO 分摊（50 全部来自 USD 初始批次 → 批次守恒：500 − 50 = 450）
+	const usage = await db.usageRecord.create({
+		data: {
+			userId: user.id,
+			planId: plan.id,
+			currencyCode: "USD",
+			amount: "50.0000",
+			usedAt: new Date("2026-03-01T00:00:00.000Z"),
+		},
+	});
+	await db.usageLotAllocation.create({
+		data: {
+			usageId: usage.id,
+			lotId: usdLot.id,
+			quantity: "50.0000",
+			cost: "360.0000",
+		},
+	});
+	// 更正 + 提醒（已读 / 未读）+ 个人域数据请求
+	await Promise.all([
+		db.correction.create({
+			data: {
+				userId: user.id,
+				targetType: "TRANSACTION",
+				targetId: txn.id,
+				reason: "混合双写演练",
+				beforeSnapshot: { feeAmount: null },
+				afterSnapshot: { feeAmount: "2.0000" },
+				status: "APPLIED",
+			},
+		}),
+		db.reminder.create({
+			data: {
+				userId: user.id,
+				type: "PLAN_DUE",
+				planId: plan.id,
+				dedupKey: `${RUN}-${label}-due`,
+				scheduledFor: new Date("2026-05-25T00:00:00.000Z"),
+				readAt: new Date("2026-05-26T08:00:00.000Z"),
+			},
+		}),
+		db.reminder.create({
+			data: {
+				userId: user.id,
+				type: "PLAN_PREP",
+				planId: plan.id,
+				dedupKey: `${RUN}-${label}-prep`,
+				scheduledFor: new Date("2026-05-22T00:00:00.000Z"),
+			},
+		}),
+		db.dataRequest.create({
+			data: {
+				userId: user.id,
+				type: "EXPORT",
+				status: "COMPLETED",
+				requestedAt: new Date("2026-03-10T00:00:00.000Z"),
+				dueAt: new Date("2026-03-24T00:00:00.000Z"),
+			},
+		}),
+	]);
+	return {
+		userId: user.id,
+		orgId: org.id,
+		planId: plan.id,
+		usageId: usage.id,
+		usdLotId: usdLot.id,
+		eurLotId: eurLot.id,
+		transactionId: txn.id,
+	};
+}
+
+/**
+ * §12.3 口径 7 的「100% 派生行同组织」直查断言（不依赖快照口径的宽松判定）。
+ * 迁移完成后，派生行的子表 organization_id 必须与其父表**完全相等**（含 NULL 侧）。
+ */
+async function countDerivedOrgMismatch(
+	userId: string,
+): Promise<Record<string, number>> {
+	const [row] = await db.$queryRaw<
+		Array<Record<string, bigint>>
+	>`
+		SELECT
+			(SELECT count(*) FROM usage_records u JOIN plans p ON p.id = u.plan_id
+				WHERE u.user_id = ${userId}
+					AND u.organization_id IS DISTINCT FROM p.organization_id) AS usage_plan,
+			(SELECT count(*) FROM cost_lots l JOIN initial_holdings h
+				ON l.source_type = 'INITIAL' AND h.id = l.source_id
+				WHERE l.user_id = ${userId}
+					AND l.organization_id IS DISTINCT FROM h.organization_id) AS lot_initial,
+			(SELECT count(*) FROM cost_lots l JOIN transactions t
+				ON l.source_type = 'PURCHASE' AND t.id = l.source_id
+				WHERE l.user_id = ${userId}
+					AND l.organization_id IS DISTINCT FROM t.organization_id) AS lot_txn,
+			(SELECT count(*) FROM usage_lot_allocations x
+				JOIN usage_records u ON u.id = x.usage_id
+				JOIN cost_lots l ON l.id = x.lot_id
+				WHERE u.user_id = ${userId}
+					AND u.organization_id IS DISTINCT FROM l.organization_id) AS alloc_parents,
+			(SELECT count(*) FROM plan_change_logs c JOIN plans p ON p.id = c.plan_id
+				WHERE p.user_id = ${userId}
+					AND c.organization_id IS DISTINCT FROM p.organization_id) AS change_log`;
+	return Object.fromEntries(
+		Object.entries(row ?? {}).map(([key, value]) => [key, Number(value)]),
+	);
+}
+
+	test("MIG-C 快照：兼容窗口混合双写状态下 MIG-A → B → C 迁移前后 7 类口径 0 差异", async () => {
+		const mixed = await seedMixedDualWriteUser("migc-mixed", "混合双写演练用户");
+		try {
+			// ── 迁移前快照（§12.3 七类口径） ──────────────────────────
+			const before = await captureMigrationSnapshot(db, {
+				userIds: [mixed.userId],
+			});
+			// 防「空快照恒等」的假通过：七类口径必须都真的采到数据
+			expect(before.ownerKind).toBe("USER");
+			expect(before.scoped).toBe(true);
+			// 口径 1：每币种余额合计（双写组织行 20 + 存量行 50 = 70；EUR 200.25）
+			expect(before.accountBalances.map((row) => row.currencyCode).sort()).toEqual([
+				"EUR",
+				"USD",
+			]);
+			expect(
+				Number(
+					before.accountBalances.find((row) => row.currencyCode === "USD")
+						?.balance,
+				),
+			).toBe(70);
+			// 口径 2：计划目标额 / 分配 / 状态 / 排期批次
+			expect(before.plans).toHaveLength(1);
+			expect(Number(before.plans[0].targetAmount)).toBe(300);
+			expect(Number(before.plans[0].allocationUsedAmount)).toBe(50);
+			expect(before.plans[0].status).toBe("ACTIVE");
+			expect(before.plans[0].installmentCount).toBe(3);
+			expect(Number(before.plans[0].installmentAmountSum)).toBe(300);
+			// 口径 3：交易 / 使用 / 更正的计数
+			expect(before.transactions.count).toBe(1);
+			expect(before.usageRecords.count).toBe(1);
+			expect(before.corrections.count).toBe(1);
+			// 口径 4：批次（3 个：USD 初始 / EUR 初始 / USD 买入）与分摊
+			expect(before.costLots).toHaveLength(3);
+			expect(before.usageLotAllocations.count).toBe(1);
+			expect(Number(before.usageLotAllocations.costSum)).toBe(360);
+			// 口径 5：报告输入与 FIFO 汇总（买入交易手续费未明确 → 未知费用标记 0，
+			// 因为该买入批次未被任何使用分摊消耗）
+			expect(before.report.planInputs).toHaveLength(1);
+			expect(Number(before.report.consumedCost)).toBe(360);
+			// 剩余批次成本 = 450×7.2（USD 初始）+ 100×7.9（EUR 初始）+ 20×7.2（USD 买入）
+			expect(Number(before.report.remainingLotCost)).toBe(3240 + 790 + 144);
+			expect(before.report.unknownFeeFlags).toBe(0);
+			// 口径 6：有效设置（组织设置优先）
+			expect(before.settings).toHaveLength(1);
+			expect(before.settings[0].baseCurrency).toBe("CNY");
+			// 口径 7：派生行关系已采到数据（迁移前为「存量行」：两侧均未挂组织）
+			expect(before.derivedRows.relations.usageRecordPlan.total).toBe(1);
+			expect(before.derivedRows.relations.costLotInitialHolding.total).toBe(2);
+			expect(before.derivedRows.relations.costLotTransaction.total).toBe(1);
+			expect(before.derivedRows.relations.usageLotAllocationUsage.total).toBe(1);
+			expect(before.derivedRows.relations.planChangeLogPlan.total).toBe(1);
+			expect(before.derivedRows.orphans.usageRecords).toBe(0);
+
+			// ── 迁移（MIG-B 回填） ────────────────────────────────────
+			const run = await backfillDefaultOrganizations(db, {
+				userIds: [mixed.userId],
+			});
+			// 默认组织已存在（应用侧创建）→ 不新建组织；设置已存在 → 不重复复制
+			expect(run.organizationsCreated).toBe(0);
+			expect(run.organizationSettingsCreated).toBe(0);
+			// 存量账户回填：USD 同币种双写触发 I-2 合并（1 行并入后删除）+ EUR 直接回填
+			expect(run.rowsBackfilled.accounts).toBe(2);
+			expect(run.rowsBackfilled.plans).toBe(1);
+			expect(run.rowsBackfilled.usageRecords).toBe(1);
+			expect(run.rowsBackfilled.corrections).toBe(1);
+			expect(run.rowsBackfilled.costLots).toBe(3);
+			expect(run.rowsBackfilled.reminders).toBe(2);
+			// 已读提醒 → 成员级已读行
+			expect(run.reminderReadsCreated).toBe(1);
+
+			// ── 迁移后快照 + 比对（目标 0 差异） ─────────────────────
+			const after = await captureMigrationSnapshot(db, {
+				userIds: [mixed.userId],
+			});
+			const comparison = compareMigrationSnapshots(before, after);
+			expect(comparison.diffs).toEqual([]);
+			expect(comparison.checks).toBeGreaterThan(0);
+
+			// 口径 1 的业务事实：同币种双写合并后合计不变（20 + 50 = 70）
+			const mergedAccount = await db.account.findFirst({
+				where: { userId: mixed.userId, currencyCode: "USD" },
+			});
+			expect(mergedAccount?.organizationId).toBe(mixed.orgId);
+			expect(Number(mergedAccount?.balance)).toBe(70);
+			// 存量同币种行已被合并删除（不再残留 NULL 行）
+			expect(
+				await db.account.count({
+					where: {
+						userId: mixed.userId,
+						organizationId: null,
+						currencyCode: "USD",
+					},
+				}),
+			).toBe(0);
+
+			// 口径 7：迁移后 100% 派生行父子同组织（严格判定：NULL 与非 NULL 也算不一致）
+			const mismatches = await countDerivedOrgMismatch(mixed.userId);
+			for (const [relation, count] of Object.entries(mismatches)) {
+				expect(`${relation}=${count}`, `派生行组织不一致：${relation}`).toBe(
+					`${relation}=0`,
+				);
+			}
+			// 快照口径 7 的关系计数与违规数
+			for (const relation of Object.values(after.derivedRows.relations)) {
+				expect(relation.violations).toBe(0);
+			}
+
+			// 迁移后核对仍为 0 差异
+			const reconciled = await reconcileMigration(db, {
+				userIds: [mixed.userId],
+			});
+			expect(reconciled.diffs).toEqual([]);
+		} finally {
+			await cleanupUser(db as CleanupDb, mixed.userId);
+		}
+	});
+
+	test("MIG-C 快照：多组织 + 个人混合数据下 7 类口径逐项核对，孤儿派生行阻断发布", async () => {
+		// 两个用户分处两个组织：个人路径用户（默认组织 A，存量行仍走个人路径）
+		// 与组织路径用户（默认组织 B，行已挂组织）——构成「多组织 + 个人」混合样本
+		const personalUserId = await createUser("migc-multi", "个人路径演练用户");
+		const orgUserId = await createUser("migc-org", "组织路径演练用户");
+		const scope = [personalUserId, orgUserId];
+		try {
+			const orgA = await db.organization.create({
+				data: {
+					name: `MIG-C 组织 A ${RUN}`,
+					memberships: {
+						create: { userId: personalUserId, role: "OWNER", status: "ACTIVE" },
+					},
+				},
+			});
+			const orgB = await db.organization.create({
+				data: {
+					name: `MIG-C 组织 B ${RUN}`,
+					memberships: {
+						create: { userId: orgUserId, role: "OWNER", status: "ACTIVE" },
+					},
+				},
+			});
+			// 个人路径用户：个人设置 + 存量个人行（全部未挂组织）
+			await db.userSettings.create({
+				data: {
+					userId: personalUserId,
+					baseCurrency: "CNY",
+					locale: "zh-CN",
+					region: "CN",
+					prepPreference: "balanced",
+					reminderEnabled: true,
+					ledgerStartedAt: T0,
+				},
+			});
+			await db.account.create({
+				data: {
+					userId: personalUserId,
+					currencyCode: "USD",
+					balance: "10.0000",
+				},
+			});
+			const personalPlan = await db.plan.create({
+				data: {
+					userId: personalUserId,
+					targetCurrency: "USD",
+					targetAmount: "100.0000",
+					expectUseDate: new Date("2026-07-01T00:00:00.000Z"),
+					latestPrepDate: new Date("2026-06-20T00:00:00.000Z"),
+					status: "ACTIVE",
+				},
+			});
+			await db.planAllocation.create({
+				data: {
+					planId: personalPlan.id,
+					amount: "100.0000",
+					usedAmount: "2.0000",
+				},
+			});
+			await db.planInstallment.create({
+				data: {
+					planId: personalPlan.id,
+					seq: 1,
+					scheduledAt: new Date("2026-06-25T00:00:00.000Z"),
+					amount: "100.0000",
+				},
+			});
+			const holding = await db.initialHolding.create({
+				data: {
+					userId: personalUserId,
+					currencyCode: "USD",
+					amount: "10.0000",
+					rate: "7.2000000000",
+					rawRate: "7.2000000000",
+					rateSource: "identity",
+					rateObservedAt: T0,
+					cost: "72.0000",
+					confirmedAt: T0,
+				},
+			});
+			const personalLot = await db.costLot.create({
+				data: {
+					userId: personalUserId,
+					currencyCode: "USD",
+					sourceType: "INITIAL",
+					sourceId: holding.id,
+					quantity: "10.0000",
+					// 被使用分摊 2 → 批次守恒：10 − 2 = 8
+					remainingQty: "8.0000",
+					unitCost: "7.2000000000",
+					totalCost: "72.0000",
+					acquiredAt: T0,
+				},
+			});
+			const personalTxn = await db.transaction.create({
+				data: {
+					userId: personalUserId,
+					currencyCode: "USD",
+					quantity: "5.0000",
+					principalAmount: "36.0000",
+					feeAmount: "1.0000",
+					exchangeRate: "7.2000000000",
+					rateSource: "identity",
+					rateObservedAt: new Date("2026-02-01T00:00:00.000Z"),
+					transactedAt: new Date("2026-02-01T00:00:00.000Z"),
+					planId: personalPlan.id,
+				},
+			});
+			await db.costLot.create({
+				data: {
+					userId: personalUserId,
+					currencyCode: "USD",
+					sourceType: "PURCHASE",
+					sourceId: personalTxn.id,
+					quantity: "5.0000",
+					remainingQty: "5.0000",
+					unitCost: "7.2000000000",
+					totalCost: "36.0000",
+					acquiredAt: new Date("2026-02-01T00:00:00.000Z"),
+				},
+			});
+			const personalUsage = await db.usageRecord.create({
+				data: {
+					userId: personalUserId,
+					planId: personalPlan.id,
+					currencyCode: "USD",
+					amount: "2.0000",
+					usedAt: new Date("2026-03-01T00:00:00.000Z"),
+				},
+			});
+			await db.usageLotAllocation.create({
+				data: {
+					usageId: personalUsage.id,
+					lotId: personalLot.id,
+					quantity: "2.0000",
+					cost: "14.4000",
+				},
+			});
+			// 组织路径用户：行已挂组织 B（双写路径）
+			await db.account.create({
+				data: {
+					userId: orgUserId,
+					organizationId: orgB.id,
+					createdById: orgUserId,
+					currencyCode: "GBP",
+					balance: "77.0000",
+				},
+			});
+			const orgPlan = await db.plan.create({
+				data: {
+					userId: orgUserId,
+					organizationId: orgB.id,
+					createdById: orgUserId,
+					targetCurrency: "GBP",
+					targetAmount: "500.0000",
+					expectUseDate: new Date("2026-08-01T00:00:00.000Z"),
+					latestPrepDate: new Date("2026-07-20T00:00:00.000Z"),
+					status: "ACTIVE",
+				},
+			});
+			await db.planAllocation.create({
+				data: {
+					planId: orgPlan.id,
+					amount: "500.0000",
+					usedAmount: "0.0000",
+				},
+			});
+
+			// ── 口径 1–7 逐项核对（迁移前） ────────────────────────────
+			const before = await captureMigrationSnapshot(db, { userIds: scope });
+			// 口径 1：跨两个组织 + 个人路径的每币种余额合计
+			expect(before.accountBalances.map((row) => row.currencyCode).sort()).toEqual([
+				"GBP",
+				"USD",
+			]);
+			// 口径 2：两个组织各一个计划，分配与排期分别采到
+			expect(before.plans).toHaveLength(2);
+			const personalPlanSnapshot = before.plans.find(
+				(plan) => plan.planId === personalPlan.id,
+			);
+			const orgPlanSnapshot = before.plans.find(
+				(plan) => plan.planId === orgPlan.id,
+			);
+			expect(Number(personalPlanSnapshot?.allocationUsedAmount)).toBe(2);
+			expect(personalPlanSnapshot?.installmentCount).toBe(1);
+			expect(Number(orgPlanSnapshot?.allocationAmount)).toBe(500);
+			expect(orgPlanSnapshot?.installmentCount).toBe(0);
+			// 口径 3
+			expect(before.transactions.count).toBe(1);
+			expect(before.usageRecords.count).toBe(1);
+			expect(before.corrections.count).toBe(0);
+			// 口径 4
+			expect(before.costLots).toHaveLength(2);
+			expect(before.usageLotAllocations.count).toBe(1);
+			expect(Number(before.usageLotAllocations.quantitySum)).toBe(2);
+			expect(Number(before.usageLotAllocations.costSum)).toBe(14.4);
+			// 口径 5：报告输入 + FIFO 汇总（剩余批次成本 = 8×7.2 + 5×7.2）
+			expect(before.report.planInputs).toHaveLength(2);
+			expect(
+				Number(
+					before.report.planInputs.find((row) => row.planId === personalPlan.id)
+						?.usedQuantity,
+				),
+			).toBe(2);
+			expect(Number(before.report.consumedCost)).toBe(14.4);
+			expect(Number(before.report.remainingLotCost)).toBe(57.6 + 36);
+			// 口径 6：有效设置取个人设置（尚无组织设置）
+			expect(before.settings).toHaveLength(2);
+			const personalSetting = before.settings.find(
+				(row) => row.ownerKey === personalUserId,
+			);
+			expect(personalSetting?.baseCurrency).toBe("CNY");
+			expect(personalSetting?.prepPreference).toBe("balanced");
+			// 口径 7：派生行关系已采到数据且无违规、无孤儿
+			expect(before.derivedRows.relations.usageRecordPlan.total).toBe(1);
+			expect(before.derivedRows.relations.costLotInitialHolding.total).toBe(1);
+			expect(before.derivedRows.relations.costLotTransaction.total).toBe(1);
+			expect(before.derivedRows.relations.usageLotAllocationUsage.total).toBe(1);
+			for (const relation of Object.values(before.derivedRows.relations)) {
+				expect(relation.violations).toBe(0);
+			}
+			for (const [table, count] of Object.entries(before.derivedRows.orphans)) {
+				expect(`${table}=${count}`, `孤儿行：${table}`).toBe(`${table}=0`);
+			}
+
+			// ── 迁移：个人路径存量行归入**默认组织 A**，组织 B 的行不动 ──
+			const run = await backfillDefaultOrganizations(db, { userIds: scope });
+			expect(run.organizationsCreated).toBe(0);
+			// 只有个人路径用户有个人设置 → 只为默认组织 A 复制一份组织设置
+			expect(run.organizationSettingsCreated).toBe(1);
+			const migratedAccount = await db.account.findFirst({
+				where: { userId: personalUserId, currencyCode: "USD" },
+			});
+			expect(migratedAccount?.organizationId).toBe(orgA.id);
+			const otherOrgAccount = await db.account.findFirst({
+				where: { userId: orgUserId, currencyCode: "GBP" },
+			});
+			expect(otherOrgAccount?.organizationId).toBe(orgB.id);
+
+			const after = await captureMigrationSnapshot(db, { userIds: scope });
+			const comparison = compareMigrationSnapshots(before, after);
+			expect(comparison.diffs).toEqual([]);
+			// 迁移后：个人设置已复制到默认组织 → 有效设置仍为同一组值
+			expect(
+				after.settings.find((row) => row.ownerKey === personalUserId)
+					?.baseCurrency,
+			).toBe("CNY");
+			expect((await reconcileMigration(db, { userIds: scope })).diffs).toEqual([]);
+
+			// ── 孤儿派生行：阻断发布（§12.2.5） ───────────────────────
+			const orphanUsage = await db.usageRecord.create({
+				data: {
+					userId: personalUserId,
+					planId: `${RUN}-migc-missing-plan`,
+					currencyCode: "USD",
+					amount: "1.0000",
+					usedAt: T0,
+				},
+			});
+			try {
+				await expect(
+					backfillDefaultOrganizations(db, { userIds: scope }),
+				).rejects.toBeInstanceOf(BackfillAnomalyError);
+				const withOrphan = await captureMigrationSnapshot(db, { userIds: scope });
+				// 口径 7 的「0 孤儿行」是发布闸门：孤儿必须被快照如实报出
+				expect(
+					withOrphan.derivedRows.orphans.usageRecords,
+				).toBeGreaterThanOrEqual(1);
+				const blocked = await reconcileMigration(db, { userIds: scope });
+				expect(blocked.diffs.map((diff) => diff.scope)).toContain(
+					"usage_record.orphan_plan",
+				);
+			} finally {
+				await db.usageRecord.delete({ where: { id: orphanUsage.id } });
+			}
+		} finally {
+			await cleanupUser(db as CleanupDb, personalUserId);
+			await cleanupUser(db as CleanupDb, orgUserId);
+		}
+	});
+
 });

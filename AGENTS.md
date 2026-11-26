@@ -97,7 +97,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │     └─ playwright-report/         # HTML 报告
 │
 ├─ infra/compose/                   # Docker Compose + Dockerfile
-├─ scripts/                         # 工程脚本（init / test / worktree / check-structure / lint-observe）+ __tests__/（bun test：工具链与跨包一致性对照）
+├─ scripts/                         # 工程脚本（init / test / worktree / check-structure / check-org-scope / lint-observe）+ __tests__/（bun test：工具链与跨包一致性对照）
 ├─ changes/                         # ⛔ 变更文档唯一位置（需求/方案/验收），按功能名称分目录
 │  ├─ tob-agent-workspace/          # ToB 组织工作台与 Agent 需求和技术方案
 │  └─ realtime-rate/                # MVP-F0 汇率回补与缓存迁移实施底稿（Goal #1 任务 B/C 执行口径）
@@ -171,7 +171,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | 汇率缓存迁移完成记录与行归属 DDL | `services/chat/prisma/migrations/20261120090000_rate_cache_migration_receipt/` |
 | 汇率回源方向标记 DDL | `services/chat/prisma/migrations/20261120091000_rate_cache_canonical_write/` |
 | 验证与防回归规范 | `docs/VERIFY.md`（验证分级、属性/差分测试、Diff 触发检查）、`docs/FEATURE-MAP.md`（用户视角功能地图） |
-| 确定性静态护栏 | `eslint.config.mjs`（架构边界/禁定时器/禁新裸写 useEffect/money 零 IO）、`scripts/check-structure.ts`（目录与契约头守卫） |
+| 确定性静态护栏 | `eslint.config.mjs`（架构边界/禁定时器/禁新裸写 useEffect/money 零 IO）、`scripts/check-structure.ts`（目录与契约头守卫）、`scripts/check-org-scope.ts`（`check:org-scope`：12 业务模块 `ts-morph` 租户隔离静态守卫） |
 | 前端 / 服务端脱敏规则对照 | `clients/chat-web/lib/dev-log/mask.ts` 与 `packages/dev-log-server/src/mask.ts` 的邀请规则手工同步；`scripts/__tests__/mask-parity.spec.ts` 用同一组向量跑两份实现，改一处必须让对照用例通过 |
 | 迭代路线与工作流手册 | `docs/ITERATION-REFACTOR-ROADMAP-20261119.md`、`docs/VIBE-CODING-PLAYBOOK.md` |
 | 跨会话交接文档   | `docs/handoff/`（夜间批次产出：OVERNIGHT-* / 接力目标提示词：GOAL-* / 状态快照；需求/方案/验收仍归 `changes/`） |

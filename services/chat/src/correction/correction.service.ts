@@ -440,7 +440,9 @@ export class CorrectionService {
 		);
 		const where = { targetType, targetId, ...compatReadWhere(scope) };
 		const [total, rows] = await Promise.all([
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.correction.count({ where }),
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.correction.findMany({
 				where,
 				orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -909,6 +911,7 @@ export class CorrectionService {
 		// 计划按「计划占用」的对称口径读取（planReservationWhere）：使用记录本身已按组织作用域
 		// 校验归属；兼容窗口内默认组织创建者尚未收口的存量计划在逻辑上属于本组织，不应因
 		// 租户列还没回填就被误报成「数据异常」
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const usagePlan = await db.plan.findFirst({
 			where: {
 				id: originalUsage.planId,
@@ -1431,6 +1434,7 @@ export class CorrectionService {
 		evaluation: Evaluation,
 	): Promise<void> {
 		const effective = evaluation.afterTransaction!;
+		// @org-scope-exempt: post-lock 主键更新（applyInTransaction 已持组织账本锁并经 loadTarget+compatReadWhere 校验归属）
 		await tx.transaction.update({
 			where: { id: effective.id },
 			data: {
@@ -1456,6 +1460,7 @@ export class CorrectionService {
 		const effective = evaluation.afterUsage!;
 		const delta = evaluation.usageAllocationDelta!;
 		const usagePlan = evaluation.usagePlan!;
+		// @org-scope-exempt: post-lock 主键更新（applyInTransaction 已持组织账本锁并经 loadTarget+compatReadWhere 校验归属）
 		await tx.usageRecord.update({
 			where: { id: effective.id },
 			data: {
@@ -1537,6 +1542,7 @@ export class CorrectionService {
 		evaluation: Evaluation,
 	): Promise<void> {
 		const effective = evaluation.afterHolding!;
+		// @org-scope-exempt: post-lock 主键更新（applyInTransaction 已持组织账本锁并经 loadTarget+compatReadWhere 校验归属）
 		await tx.initialHolding.update({
 			where: { id: effective.id },
 			data: {
@@ -1569,6 +1575,7 @@ export class CorrectionService {
 		replay: ReplayResult,
 	): Promise<void> {
 		const owner = compatReadWhere(actor);
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const oldLots = await tx.costLot.findMany({
 			where: { currencyCode, ...owner },
 			select: { id: true },
@@ -1588,6 +1595,7 @@ export class CorrectionService {
 				},
 			});
 		}
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		await tx.costLot.deleteMany({ where: { currencyCode, ...owner } });
 
 		const lotIdBySource = new Map<string, string>();
@@ -1716,6 +1724,7 @@ export class CorrectionService {
 	): Promise<LoadedTarget> {
 		const owner = compatReadWhere(scope);
 		if (targetType === "TRANSACTION") {
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			const transaction = await db.transaction.findFirst({
 				where: { id: targetId, ...owner },
 			});
@@ -1723,12 +1732,14 @@ export class CorrectionService {
 			return { type: "TRANSACTION", transaction };
 		}
 		if (targetType === "USAGE") {
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			const usage = await db.usageRecord.findFirst({
 				where: { id: targetId, ...owner },
 			});
 			if (!usage) throw new CorrectionTargetNotFoundException();
 			return { type: "USAGE", usage };
 		}
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const holding = await db.initialHolding.findFirst({
 			where: { id: targetId, ...owner },
 		});
@@ -1824,15 +1835,19 @@ export class CorrectionService {
 		const owner = compatReadWhere(scope);
 		const reservationOwner = await planReservationWhere(db, scope);
 		const [initialHoldings, transactions, usageRecords, plans] = await Promise.all([
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			db.initialHolding.findMany({
 				where: { currencyCode: { in: currencyList }, ...owner },
 			}),
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			db.transaction.findMany({
 				where: { currencyCode: { in: currencyList }, ...owner },
 			}),
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			db.usageRecord.findMany({
 				where: { currencyCode: { in: currencyList }, ...owner },
 			}),
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			db.plan.findMany({
 				where: { targetCurrency: { in: currencyList }, ...reservationOwner },
 				select: {

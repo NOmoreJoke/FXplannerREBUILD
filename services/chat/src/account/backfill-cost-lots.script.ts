@@ -127,6 +127,7 @@ export async function runBackfill(
 	};
 
 	// 1. 全量交易分组（个人工具量级，单次全量查询可接受）
+	// @org-scope-exempt: 一次性历史回填脚本全量读取交易并按 userId+currencyCode 分组
 	const transactions = await prisma.transaction.findMany();
 	const groups = groupTransactions(transactions);
 
@@ -144,6 +145,7 @@ export async function runBackfill(
 			}
 
 			// 组内复检（幂等）：与实时录入第④步/上一轮回填可能交错，已存在的跳过
+			// @org-scope-exempt: 一次性历史回填脚本（按全量交易 userId+currencyCode 分组幂等补建 CostLot）
 			const existing = await tx.costLot.findMany({
 				where: {
 					userId: group.userId,
@@ -195,6 +197,7 @@ export async function runBackfill(
 	result.processedUsers = processedUserIds.size;
 
 	// 5a. 不变式校验（单条聚合 SQL：balance 与 Σ remainingQty 一次 JOIN 检出，§3.5）
+	// @org-scope-exempt: 一次性历史回填脚本不变式全库核对（balance vs Σ remaining_qty）
 	const violations = await prisma.$queryRaw<
 		Array<{
 			user_id: string;
@@ -221,6 +224,7 @@ export async function runBackfill(
 	}));
 
 	// 5b. 重复批次检测（COUNT 返回 BigInt，转 Number；CUID 精度在 Number 安全整数内无虞）
+	// @org-scope-exempt: 一次性历史回填脚本重复批次全库检测
 	const duplicates = await prisma.$queryRaw<
 		Array<{
 			user_id: string;

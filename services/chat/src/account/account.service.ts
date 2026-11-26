@@ -84,6 +84,7 @@ export class AccountService {
 	 */
 	async list(scope: ReadScope): Promise<AccountListDto> {
 		const [accounts, baseCurrency, allocatedByCurrency] = await Promise.all([
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.account.findMany({
 				where: compatReadWhere(scope),
 				orderBy: { currencyCode: "asc" },
@@ -111,10 +112,12 @@ export class AccountService {
 		const currencyCode = this.normalizeCurrency(currencyCodeRaw);
 		const [account, baseCurrency, costLots, allocatedByCurrency] =
 			await Promise.all([
+				// @org-scope-exempt: W30 MIG-D/F 待清理
 				this.prisma.account.findFirst({
 					where: { currencyCode, ...compatReadWhere(scope) },
 				}),
 				this.resolveBaseCurrency(scope),
+				// @org-scope-exempt: W30 MIG-D/F 待清理
 				this.prisma.costLot.findMany({
 					where: { currencyCode, ...compatReadWhere(scope) },
 				}),
@@ -157,6 +160,7 @@ export class AccountService {
 		// 取消计划会在同一事务中更新状态和分配额，读取也必须使用同一快照。
 		const { plans, allocations } = await this.prisma.$transaction(
 			async (tx) => {
+				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const account = await tx.account.findFirst({
 					where: { currencyCode, ...compatReadWhere(scope) },
 					select: { id: true },
@@ -164,6 +168,7 @@ export class AccountService {
 				if (!account) {
 					throw new AccountNotFoundException();
 				}
+				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const plans = await tx.plan.findMany({
 					where: { targetCurrency: currencyCode, ...compatReadWhere(scope) },
 					orderBy: { createdAt: "asc" },
@@ -216,6 +221,7 @@ export class AccountService {
 	): Promise<AccountLedgerDto> {
 		const currencyCode = this.normalizeCurrency(currencyCodeRaw);
 		const [account, baseCurrency] = await Promise.all([
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.account.findFirst({
 				where: { currencyCode, ...compatReadWhere(scope) },
 			}),
@@ -225,12 +231,15 @@ export class AccountService {
 			throw new AccountNotFoundException();
 		}
 		const [transactions, usageRecords, initialHoldings] = await Promise.all([
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.transaction.findMany({
 				where: { currencyCode, ...compatReadWhere(scope) },
 			}),
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.usageRecord.findMany({
 				where: { currencyCode, ...compatReadWhere(scope) },
 			}),
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.initialHolding.findMany({
 				where: { currencyCode, ...compatReadWhere(scope) },
 			}),
@@ -339,6 +348,7 @@ export class AccountService {
 		scope: ReadScope,
 	): Promise<Map<string, Prisma.Decimal>> {
 		const reservationOwner = await planReservationWhere(this.prisma, scope);
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const plans = await this.prisma.plan.findMany({
 			where: reservationOwner,
 			select: { id: true, targetCurrency: true },

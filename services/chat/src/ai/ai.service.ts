@@ -182,7 +182,15 @@ export class AiService {
 		if (this.busyConversations.has(conversationId)) {
 			throw new AiConversationBusyException("会话正在回复中，请稍后再删除");
 		}
-		await this.prisma.aiConversation.delete({ where: { id: conversationId } });
+		const deleted = await this.prisma.aiConversation.deleteMany({
+			where: {
+				id: conversationId,
+				AND: [{ userId: scope.userId }, this.conversationOrgWhere(scope)],
+			},
+		});
+		if (deleted.count === 0) {
+			throw new AiConversationNotFoundException();
+		}
 	}
 
 	/**
@@ -281,10 +289,19 @@ export class AiService {
 			const userMessage = await this.prisma.aiMessage.create({
 				data: { conversationId: conversation.id, role: "user", content },
 			});
-			await this.prisma.aiConversation.update({
-				where: { id: conversation.id },
+			const updated = await this.prisma.aiConversation.updateMany({
+				where: {
+					id: conversation.id,
+					AND: [
+						{ userId: params.scope.userId },
+						this.conversationOrgWhere(params.scope),
+					],
+				},
 				data: { lastMessageAt: userMessage.createdAt },
 			});
+			if (updated.count === 0) {
+				throw new AiConversationNotFoundException();
+			}
 
 			return {
 				conversation,
@@ -317,6 +334,7 @@ export class AiService {
 		conversationId: string,
 		content: string,
 		model: string,
+		scope: ReadScope,
 	): Promise<{
 		id: string;
 		role: string;
@@ -326,10 +344,19 @@ export class AiService {
 	} | null> {
 		try {
 			return await this.prisma.$transaction(async (tx) => {
-				await tx.aiConversation.update({
-					where: { id: conversationId },
+				const updated = await tx.aiConversation.updateMany({
+					where: {
+						id: conversationId,
+						AND: [{ userId: scope.userId }, this.conversationOrgWhere(scope)],
+					},
 					data: { lastMessageAt: new Date() },
 				});
+				if (updated.count === 0) {
+					this.logger.warn(
+						`助手消息落库时会话已消失（conversationId=${conversationId}），按 404 收尾`,
+					);
+					return null;
+				}
 				return tx.aiMessage.create({
 					data: { conversationId, role: "assistant", content, model },
 				});
@@ -337,7 +364,7 @@ export class AiService {
 		} catch (error) {
 			if (
 				error instanceof Prisma.PrismaClientKnownRequestError &&
-				error.code === "P2025"
+				(error.code === "P2025" || error.code === "P2003")
 			) {
 				this.logger.warn(
 					`助手消息落库时会话已消失（conversationId=${conversationId}），按 404 收尾`,

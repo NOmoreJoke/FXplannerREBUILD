@@ -139,6 +139,7 @@ export class ReportService {
 
 		const [baseCurrency, plans] = await Promise.all([
 			this.resolveBaseCurrency(scope),
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.plan.findMany({
 				where: {
 					...reservationWhere,
@@ -175,6 +176,7 @@ export class ReportService {
 			throw new ReportInvalidParamsException("计划 ID 格式非法");
 		}
 		const reservationWhere = await planReservationWhere(this.prisma, scope);
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const plan = await this.prisma.plan.findFirst({
 			where: { id: planId, ...reservationWhere },
 		});
@@ -289,9 +291,11 @@ export class ReportService {
 		}
 
 		const [usageRecords, planTransactions] = await Promise.all([
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.usageRecord.findMany({
 				where: { planId: { in: planIds }, ...reservationWhere },
 			}),
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.transaction.findMany({
 				where: { planId: { in: planIds }, ...reservationWhere },
 				select: { id: true, planId: true },
@@ -306,14 +310,18 @@ export class ReportService {
 					})
 				: Promise.resolve([]),
 			usageIds.length
-				? this.prisma.correction.findMany({
+				? (
+					// @org-scope-exempt: 已由父集合（reservationWhere 筛选的计划/使用记录）限定租户边界，按关联 ID 批量回查
+					this.prisma.correction.findMany({
 						where: { targetType: "USAGE", targetId: { in: usageIds } },
 						select: { targetId: true, createdAt: true },
 					})
+				)
 				: Promise.resolve([]),
 		]);
 
 		const lotIds = [...new Set(allocations.map((row) => row.lotId))];
+		// @org-scope-exempt: 已由父集合（reservationWhere 筛选的计划/使用分摊）限定租户边界，按 lotIds 批量回查
 		const lots = lotIds.length
 			? await this.prisma.costLot.findMany({
 					where: { id: { in: lotIds } },
@@ -331,19 +339,25 @@ export class ReportService {
 		];
 		const [feeTransactions, transactionCorrections] = await Promise.all([
 			feeProbeIds.length
-				? this.prisma.transaction.findMany({
+				? (
+					// @org-scope-exempt: 已由父集合（reservationWhere 筛选的计划/批次）限定租户边界，按关联交易 ID 回查手续费
+					this.prisma.transaction.findMany({
 						where: { id: { in: feeProbeIds } },
 						select: { id: true, feeAmount: true },
 					})
+				)
 				: Promise.resolve([]),
 			planTransactionIdList.length
-				? this.prisma.correction.findMany({
+				? (
+					// @org-scope-exempt: 已由父集合（reservationWhere 筛选的计划关联交易）限定租户边界，按关联交易 ID 回查更正
+					this.prisma.correction.findMany({
 						where: {
 							targetType: "TRANSACTION",
 							targetId: { in: planTransactionIdList },
 						},
 						select: { targetId: true, createdAt: true },
 					})
+				)
 				: Promise.resolve([]),
 		]);
 

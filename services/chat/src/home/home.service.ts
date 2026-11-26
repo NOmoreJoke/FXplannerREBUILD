@@ -46,15 +46,18 @@ export class HomeService {
 			initialLotCount,
 		] = await Promise.all([
 			resolveOrganizationPreferences(this.prisma, scope.organizationId),
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.account.findMany({
 				where: compatReadWhere(scope),
 				orderBy: { currencyCode: "asc" },
 			}),
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.plan.findMany({
 				where: compatReadWhere(scope),
 				orderBy: { createdAt: "desc" },
 			}),
 			this.rateService.getLatestObservedAt(),
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.costLot.count({
 				where: { sourceType: "INITIAL", ...compatReadWhere(scope) },
 			}),

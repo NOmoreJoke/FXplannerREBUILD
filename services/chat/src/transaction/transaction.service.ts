@@ -156,6 +156,7 @@ export class TransactionService {
 				// 关联计划校验：裸外键（无 Prisma relation），按 compatReadWhere(actor) 校验归属与币种
 				let planName: string | null = null;
 				if (dto.planId) {
+					// @org-scope-exempt: W30 MIG-D/F 待清理
 					const plan = await tx.plan.findFirst({
 						where: { id: dto.planId, ...compatReadWhere(actor) },
 						select: {
@@ -243,6 +244,7 @@ export class TransactionService {
 	 * 按 id + compatReadWhere(scope) 联查，不存在或不属于当前组织一律 404（不泄露存在性）。
 	 */
 	async detail(scope: ReadScope, id: string): Promise<TransactionDto> {
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const transaction = await this.prisma.transaction.findFirst({
 			where: { id, ...compatReadWhere(scope) },
 		});
@@ -252,6 +254,7 @@ export class TransactionService {
 		let planName: string | null = null;
 		if (transaction.planId) {
 			// 裸外键：计划可能已被删除，按同组织作用域兜底名称（禁跨组织泄露）
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			const plan = await this.prisma.plan.findFirst({
 				where: { id: transaction.planId, ...compatReadWhere(scope) },
 				select: { name: true },

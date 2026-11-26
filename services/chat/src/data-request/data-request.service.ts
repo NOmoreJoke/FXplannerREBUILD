@@ -1236,11 +1236,17 @@ export class DataRequestService {
 		>,
 		scope: OrganizationLedgerScope,
 	): Promise<ImpactTotalsDto> {
+		// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 		const accounts = await db.account.count({ where: scope });
+		// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 		const transactions = await db.transaction.count({ where: scope });
+		// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 		const initialHoldings = await db.initialHolding.count({ where: scope });
+		// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 		const plans = await db.plan.count({ where: scope });
+		// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 		const usageRecords = await db.usageRecord.count({ where: scope });
+		// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 		const corrections = await db.correction.count({ where: scope });
 		return {
 			accounts,
@@ -1403,6 +1409,7 @@ export class DataRequestService {
 						organization: { select: { name: true } },
 					},
 				}),
+				// @org-scope-exempt: 个人数据导出（DATA-01）按 userId 导出本人全部组织下的个人会话元数据
 				tx.aiConversation.findMany({
 					where: { userId },
 					orderBy: { createdAt: "asc" },
@@ -1491,27 +1498,34 @@ export class DataRequestService {
 				: null;
 		// PlanAllocation/UsageLotAllocation 为裸外键（无 relation）：先查作用域内 plan/usage id 再 in 查询
 		const [ownPlans, ownUsages] = await Promise.all([
+			// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 			tx.plan.findMany({ where: scope, select: { id: true } }),
+			// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 			tx.usageRecord.findMany({ where: scope, select: { id: true } }),
 		]);
 		const planIdFilter = { in: ownPlans.map((p) => p.id) };
 		const usageIdFilter = { in: ownUsages.map((u) => u.id) };
 		const [initialHoldings, transactions, accounts, plans, planAllocations, usageRecords, usageLotAllocations, corrections, dataRequests] =
 			await Promise.all([
+				// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 				tx.initialHolding.findMany({
 					where: scope,
 					orderBy: { confirmedAt: "asc" },
 				}),
+				// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 				tx.transaction.findMany({
 					where: scope,
 					orderBy: { transactedAt: "asc" },
 				}),
+				// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 				tx.account.findMany({ where: scope, orderBy: { currencyCode: "asc" } }),
+				// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 				tx.plan.findMany({ where: scope, orderBy: { createdAt: "asc" } }),
 				tx.planAllocation.findMany({
 					where: { planId: planIdFilter },
 					orderBy: { createdAt: "asc" },
 				}),
+				// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 				tx.usageRecord.findMany({
 					where: scope,
 					orderBy: { usedAt: "asc" },
@@ -1520,6 +1534,7 @@ export class DataRequestService {
 					where: { usageId: usageIdFilter },
 					orderBy: { createdAt: "asc" },
 				}),
+				// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 				tx.correction.findMany({ where: scope, orderBy: { createdAt: "asc" } }),
 				tx.dataRequest.findMany({
 					where: { organizationId, scope: "ORGANIZATION" },

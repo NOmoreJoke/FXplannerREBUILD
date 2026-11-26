@@ -85,6 +85,7 @@ export class ReminderService {
 		//   a. 行主本人未读；b. 落在近 30 天窗口内；c. 当前成员从未读过
 		// 此前直接用行内 reminders.read_at 过滤窗口——行主读过一条 30 天前的提醒后，
 		// 同组织其他成员的这条未读提醒会被 SQL 直接滤掉（评审 I-11）。
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const candidates = await this.prisma.reminder.findMany({
 			where: {
 				AND: [
@@ -146,6 +147,7 @@ export class ReminderService {
 	 * readAt，不改写时刻。
 	 */
 	async markRead(scope: ReadScope, id: string): Promise<ReminderReadResultDto> {
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const row = await this.prisma.reminder.findFirst({
 			where: { id, ...compatReadWhere(scope) },
 			select: { id: true },
@@ -186,6 +188,7 @@ export class ReminderService {
 	 * 再次调用无可插入行 → updatedCount = 0。
 	 */
 	async markAllRead(scope: ReadScope): Promise<ReminderReadAllResultDto> {
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const candidates = await this.prisma.reminder.findMany({
 			where: { ...compatReadWhere(scope) },
 			select: { id: true, userId: true, readAt: true },
@@ -238,6 +241,7 @@ export class ReminderService {
 	 * 同组织任一成员的读取都会为其组织补齐到期提醒。
 	 */
 	private async generateDueReminders(scope: ReadScope): Promise<void> {
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const plans = await this.prisma.plan.findMany({
 			where: { status: "ACTIVE", ...compatReadWhere(scope) },
 		});
@@ -259,6 +263,7 @@ export class ReminderService {
 				where: { planId: { in: planIds } },
 				orderBy: { seq: "asc" },
 			}),
+			// @org-scope-exempt: 已按当前组织作用域筛选 ACTIVE 父计划 planIds，批量查已有提醒防重
 			this.prisma.reminder.findMany({
 				where: { planId: { in: planIds } },
 				select: { planId: true, type: true, scheduledFor: true },
@@ -354,6 +359,7 @@ export class ReminderService {
 		const [plans, allocations] = await Promise.all([
 			// 纵深防御（评审 N-08）：计划查询同样带组织作用域条件，不凭「id 来自已过
 			// 滤的提醒行」推断可见性
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			this.prisma.plan.findMany({
 				where: { id: { in: planIds }, ...compatReadWhere(scope) },
 			}),

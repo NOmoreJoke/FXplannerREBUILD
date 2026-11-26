@@ -418,6 +418,7 @@ export class PlanService {
 		scope: ReadScope,
 		status?: string,
 	): Promise<{ items: PlanListItemDto[] }> {
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const plans = await this.prisma.plan.findMany({
 			where: { ...compatReadWhere(scope), ...(status ? { status } : {}) },
 			orderBy: { updatedAt: "desc" },
@@ -469,6 +470,7 @@ export class PlanService {
 	 * 由服务端按状态与数据计算，前端据此显隐按钮。
 	 */
 	async getDetail(scope: ReadScope, planId: string): Promise<PlanDetailDto> {
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const plan = await this.prisma.plan.findFirst({
 			where: { id: planId, ...compatReadWhere(scope) },
 		});
@@ -486,6 +488,7 @@ export class PlanService {
 		scope: ReadScope,
 		planId: string,
 	): Promise<PlanDetailDto> {
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const plan = await this.prisma.plan.findFirst({
 			where: { id: planId, ...compatReadWhere(scope) },
 		});
@@ -507,6 +510,7 @@ export class PlanService {
 				where: { planId },
 				orderBy: { seq: "asc" },
 			}),
+			// @org-scope-exempt: 已在 getDetail/detailAfterWrite 按当前组织作用域校验父 Plan 归属，按 planId 查关联变更日志
 			this.prisma.planChangeLog.findMany({
 				where: { planId },
 				orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -652,6 +656,7 @@ export class PlanService {
 					throw new PlanNotFoundException();
 				}
 				await this.lockScopedPlanRow(tx, actor, planId);
+				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const current = await tx.plan.findFirst({
 					where: { id: planId, ...compatReadWhere(actor) },
 				});
@@ -668,6 +673,7 @@ export class PlanService {
 				);
 
 				// 条件更新 = 乐观锁检查 + 行写（原子；检查与写入合并为单条语句）
+				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const checkpoint = await tx.plan.updateMany({
 					where: {
 						id: planId,
@@ -710,6 +716,7 @@ export class PlanService {
 				}
 
 				// 落库：计划主行 + 分配行（金额/目标一律以事务内重算结果为准）
+				// @org-scope-exempt: post-lock 主键更新（adjust 已持 lockScopedPlanRow 锁并经 compatReadWhere + updateMany 乐观锁校验）
 				await tx.plan.update({
 					where: { id: planId },
 					data: {
@@ -835,6 +842,7 @@ export class PlanService {
 					throw new PlanNotFoundException();
 				}
 				await this.lockScopedPlanRow(tx, actor, planId);
+				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const current = await tx.plan.findFirst({
 					where: { id: planId, ...compatReadWhere(actor) },
 					select: {
@@ -851,6 +859,7 @@ export class PlanService {
 					assertParentChildSameOrg(current.organizationId, actor.organizationId);
 				}
 
+				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const updated = await tx.plan.updateMany({
 					where: {
 						id: planId,
@@ -869,6 +878,7 @@ export class PlanService {
 				}
 				// 检查点后重读（行锁已持有，本计划不再被并发修改；used 读 allocation 行最新值）
 				const [freshPlan, allocation] = await Promise.all([
+					// @org-scope-exempt: post-lock 主键重读（complete 已持 lockScopedPlanRow 锁并经 compatReadWhere + updateMany 状态校验）
 					tx.plan.findUnique({ where: { id: planId } }),
 					tx.planAllocation.findUnique({ where: { planId } }),
 				]);
@@ -972,6 +982,7 @@ export class PlanService {
 					throw new PlanNotFoundException();
 				}
 				await this.lockScopedPlanRow(tx, actor, planId);
+				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const current = await tx.plan.findFirst({
 					where: { id: planId, ...compatReadWhere(actor) },
 					select: {
@@ -988,6 +999,7 @@ export class PlanService {
 					assertParentChildSameOrg(current.organizationId, actor.organizationId);
 				}
 
+				// @org-scope-exempt: W30 MIG-D/F 待清理
 				const updated = await tx.plan.updateMany({
 					where: {
 						id: planId,
@@ -1005,6 +1017,7 @@ export class PlanService {
 					);
 				}
 				const [freshPlan, allocation] = await Promise.all([
+					// @org-scope-exempt: post-lock 主键重读（cancel 已持 lockScopedPlanRow 锁并经 compatReadWhere + updateMany 状态校验）
 					tx.plan.findUnique({ where: { id: planId } }),
 					tx.planAllocation.findUnique({ where: { planId } }),
 				]);
@@ -1169,6 +1182,7 @@ private async loadAdjustContext(
 }> {
 	const owner = compatReadWhere(scope);
 	const reservationOwner = await planReservationWhere(db, scope);
+	// @org-scope-exempt: W30 MIG-D/F 待清理
 	const plan = await db.plan.findFirst({ where: { id: planId, ...owner } });
 	if (!plan) {
 		throw new PlanNotFoundException();
@@ -1180,10 +1194,12 @@ private async loadAdjustContext(
 		throw new PlanNotFoundException(); // 创建事务保证 1:1，此处防御性兑底
 	}
 	const [accounts, siblingPlans] = await Promise.all([
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		db.account.findMany({
 			where: { currencyCode: plan.targetCurrency, ...owner },
 			select: { balance: true },
 		}),
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		db.plan.findMany({
 			where: {
 				targetCurrency: plan.targetCurrency,
@@ -1661,10 +1677,12 @@ private parseAdjustChange(dto: AdjustPreviewDto): {
 		const owner = compatReadWhere(scope);
 		const reservationOwner = await planReservationWhere(db, scope);
 		const [accounts, plans] = await Promise.all([
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			db.account.findMany({
 				where: { currencyCode, ...owner },
 				select: { balance: true },
 			}),
+			// @org-scope-exempt: W30 MIG-D/F 待清理
 			db.plan.findMany({
 				where: { targetCurrency: currencyCode, ...reservationOwner },
 				select: { id: true },

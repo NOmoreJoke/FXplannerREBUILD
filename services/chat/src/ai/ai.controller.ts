@@ -31,6 +31,7 @@ import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scop
 import { PermissionGuard } from "../authorization/guards/permission.guard";
 import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
+import type { ReadScope } from "../authorization/organization-scope";
 import { AiService } from "./ai.service";
 import { AiAgentService, type StreamReplyParams } from "./ai-agent.service";
 import { listChatModels } from "./ai-models.config";
@@ -64,6 +65,7 @@ const AI_UPSTREAM_FAILED_MESSAGE = "回复生成失败，请稍后重试";
 const AI_CONVERSATION_GONE_MESSAGE = "会话不存在或已被删除";
 
 interface StreamWriteParams {
+	scope: ReadScope;
 	conversationId: string;
 	userMessageId: string;
 	title: string;
@@ -182,6 +184,7 @@ export class AiController {
 			modelKey: dto.modelKey,
 		});
 		await this.streamReply(req, res, {
+			scope: actor,
 			conversationId: prepared.conversation.id,
 			userMessageId: prepared.userMessageId,
 			title: prepared.conversation.title,
@@ -215,6 +218,7 @@ export class AiController {
 			modelKey: dto.modelKey,
 		});
 		await this.streamReply(req, res, {
+			scope: actor,
 			conversationId,
 			userMessageId: prepared.userMessageId,
 			title: prepared.conversation.title,
@@ -331,6 +335,7 @@ export class AiController {
 						params.conversationId,
 						frame.content,
 						params.modelKey,
+						params.scope,
 					);
 					if (!saved) {
 						writeFrame("error", {

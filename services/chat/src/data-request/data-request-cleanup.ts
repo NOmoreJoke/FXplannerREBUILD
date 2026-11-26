@@ -378,6 +378,7 @@ export async function countUserReferences(
 		};
 		counts.push({
 			...reference,
+			// @org-scope-exempt: 个人账号注销前全库外键引用归零断言（countUserReferences 动态遍历 schema 模型）
 			count: await delegate.count({ where: { [reference.field]: userId } }),
 		});
 	}
@@ -554,8 +555,11 @@ async function deletePersonalRows(
 ): Promise<void> {
 	const legacyScope = { userId, organizationId: null };
 	const [plans, usages, lots] = await Promise.all([
+		// @org-scope-exempt: W30 MIG-D/F 待清理（个人注销清理兼容窗口 organizationId=null 存量行）
 		tx.plan.findMany({ where: legacyScope, select: { id: true } }),
+		// @org-scope-exempt: W30 MIG-D/F 待清理（个人注销清理兼容窗口 organizationId=null 存量行）
 		tx.usageRecord.findMany({ where: legacyScope, select: { id: true } }),
+		// @org-scope-exempt: W30 MIG-D/F 待清理（个人注销清理兼容窗口 organizationId=null 存量行）
 		tx.costLot.findMany({ where: legacyScope, select: { id: true } }),
 	]);
 	const planIds = plans.map((plan) => plan.id);
@@ -588,21 +592,31 @@ async function deletePersonalRows(
 		add(
 			stats,
 			"planChangeLogs",
+			// @org-scope-exempt: W30 MIG-D/F 待清理（按已筛选作用域的 parent planIds 清理 PlanChangeLog）
 			(await tx.planChangeLog.deleteMany({ where: { planId: { in: planIds } } }))
 				.count,
 		);
 	}
 	// plans 级联 plan_installments（数据库外键）；其余显式删以统计行数
+	// @org-scope-exempt: W30 MIG-D/F 待清理（个人注销清理兼容窗口 organizationId=null 存量行）
 	add(stats, "plans", (await tx.plan.deleteMany({ where: legacyScope })).count);
+	// @org-scope-exempt: W30 MIG-D/F 待清理（个人注销清理兼容窗口 organizationId=null 存量行）
 	add(stats, "usageRecords", (await tx.usageRecord.deleteMany({ where: legacyScope })).count);
+	// @org-scope-exempt: W30 MIG-D/F 待清理（个人注销清理兼容窗口 organizationId=null 存量行）
 	add(stats, "corrections", (await tx.correction.deleteMany({ where: legacyScope })).count);
+	// @org-scope-exempt: W30 MIG-D/F 待清理（个人注销清理兼容窗口 organizationId=null 存量行）
 	add(stats, "reminders", (await tx.reminder.deleteMany({ where: legacyScope })).count);
 	add(stats, "reminderReads", (await tx.reminderRead.deleteMany({ where: { userId } })).count);
+	// @org-scope-exempt: W30 MIG-D/F 待清理（个人注销清理兼容窗口 organizationId=null 存量行）
 	add(stats, "costLots", (await tx.costLot.deleteMany({ where: legacyScope })).count);
+	// @org-scope-exempt: W30 MIG-D/F 待清理（个人注销清理兼容窗口 organizationId=null 存量行）
 	add(stats, "transactions", (await tx.transaction.deleteMany({ where: legacyScope })).count);
+	// @org-scope-exempt: W30 MIG-D/F 待清理（个人注销清理兼容窗口 organizationId=null 存量行）
 	add(stats, "initialHoldings", (await tx.initialHolding.deleteMany({ where: legacyScope })).count);
+	// @org-scope-exempt: W30 MIG-D/F 待清理（个人注销清理兼容窗口 organizationId=null 存量行）
 	add(stats, "accounts", (await tx.account.deleteMany({ where: legacyScope })).count);
 	// 个人内容：会话级联 ai_messages
+	// @org-scope-exempt: 个人账号注销按 userId 物理清理本人全部 AI 会话
 	add(stats, "aiConversations", (await tx.aiConversation.deleteMany({ where: { userId } })).count);
 	add(
 		stats,
@@ -955,8 +969,11 @@ async function deleteOrganizationLedger(
 	stats: ClearStats,
 ): Promise<void> {
 	const [plans, usages, lots] = await Promise.all([
+		// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 		tx.plan.findMany({ where: scope, select: { id: true } }),
+		// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 		tx.usageRecord.findMany({ where: scope, select: { id: true } }),
+		// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 		tx.costLot.findMany({ where: scope, select: { id: true } }),
 	]);
 	const planIds = plans.map((plan) => plan.id);
@@ -989,17 +1006,26 @@ async function deleteOrganizationLedger(
 		add(
 			stats,
 			"planChangeLogs",
+			// @org-scope-exempt: W30 MIG-D/F 待清理（按已筛选作用域的 parent planIds 清理 PlanChangeLog）
 			(await tx.planChangeLog.deleteMany({ where: { planId: { in: planIds } } }))
 				.count,
 		);
 	}
+	// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 	add(stats, "plans", (await tx.plan.deleteMany({ where: scope })).count);
+	// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 	add(stats, "usageRecords", (await tx.usageRecord.deleteMany({ where: scope })).count);
+	// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 	add(stats, "corrections", (await tx.correction.deleteMany({ where: scope })).count);
+	// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 	add(stats, "reminders", (await tx.reminder.deleteMany({ where: scope })).count);
+	// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 	add(stats, "costLots", (await tx.costLot.deleteMany({ where: scope })).count);
+	// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 	add(stats, "transactions", (await tx.transaction.deleteMany({ where: scope })).count);
+	// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 	add(stats, "initialHoldings", (await tx.initialHolding.deleteMany({ where: scope })).count);
+	// @org-scope-exempt: W30 MIG-D/F 待清理（organizationLedgerScope 含默认组织存量 NULL 行回落）
 	add(stats, "accounts", (await tx.account.deleteMany({ where: scope })).count);
 }
 
@@ -1138,6 +1164,7 @@ export async function executeOrganizationRequest(
 			stats,
 			"legacyAiConversations",
 			(
+				// @org-scope-exempt: W30 MIG-D/F 待清理（组织删除清理默认创建者存量 organizationId=null 会话）
 				await tx.aiConversation.deleteMany({
 					where: { organizationId: null, userId: creatorUserId },
 				})

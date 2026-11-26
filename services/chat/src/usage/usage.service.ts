@@ -356,6 +356,7 @@ export class UsageService {
 					})),
 				});
 				for (const slice of slices) {
+					// @org-scope-exempt: post-lock 主键更新（cost_lots 已在同事务 lockOrgPlanAccount 后按 organizationId/compat 过滤取出）
 					await tx.costLot.update({
 						where: { id: slice.lotId },
 						data: { remainingQty: { decrement: slice.quantity } },
@@ -364,6 +365,7 @@ export class UsageService {
 
 				// 资金面快照（事务内已扣减的最新值，前端一次往返刷新进度区）
 				const [freshPlan, freshAllocation] = await Promise.all([
+					// @org-scope-exempt: post-lock 主键重读（loadPlanContext 已按 lockOrgPlanRow + compatReadWhere 锁定并校验计划归属）
 					tx.plan.findUnique({ where: { id: planId } }),
 					tx.planAllocation.findUnique({ where: { planId } }),
 				]);
@@ -426,12 +428,14 @@ export class UsageService {
 	 * 组织共享账本：同组织任一成员记录的使用都对其他成员可见（createdById 仅标识记录人）。
 	 */
 	async list(scope: ReadScope, planId: string): Promise<UsageListRespDto> {
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const plan = await this.prisma.plan.findFirst({
 			where: { id: planId, ...compatReadWhere(scope) },
 		});
 		if (!plan) {
 			throw new UsagePlanNotFoundException();
 		}
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const records = await this.prisma.usageRecord.findMany({
 			where: { planId, ...compatReadWhere(scope) },
 			orderBy: [{ usedAt: "desc" }, { createdAt: "desc" }],
@@ -479,6 +483,7 @@ export class UsageService {
 		if (!(await lockOrgPlanRow(tx, actor, planId))) {
 			throw new UsagePlanNotFoundException();
 		}
+		// @org-scope-exempt: W30 MIG-D/F 待清理
 		const plan = await tx.plan.findFirst({
 			where: { id: planId, ...compatReadWhere(actor) },
 			select: {
