@@ -13,7 +13,6 @@ import {
 	lockOrganizationMembership,
 } from "./default-organization";
 import { isLastActiveOwner } from "./organization-rules";
-import { materializeLegacyOrganizationSettings } from "./organization-preferences";
 import {
 	InvalidRoleException,
 	LastOwnerRequiredException,
@@ -270,14 +269,6 @@ export class MemberService {
 					throw new InvalidRoleException("仅有效成员可接任所有权");
 				}
 
-				// R2-I03：组织偏好若仍靠「所有者个人设置」兼容回落支撑，会随所有权一起
-				// 失效（新所有者的个人设置不代表本组织）——转移前先固化为本组织自己的设置
-				const settingsMaterialized =
-					await materializeLegacyOrganizationSettings(
-						tx,
-						actor.organizationId,
-					);
-
 				// 先降原 Owner（释放部分唯一索引槽位）：须仍为 ACTIVE OWNER，否则并发已变更
 				const demoted = await tx.membership.updateMany({
 					where: {
@@ -313,7 +304,6 @@ export class MemberService {
 						fromMembershipId: actor.membershipId,
 						toMembershipId: targetMembershipId,
 						toUserId: target.userId,
-						settingsMaterialized,
 					},
 				});
 				return {

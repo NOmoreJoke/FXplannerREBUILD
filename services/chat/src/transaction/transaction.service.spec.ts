@@ -19,7 +19,6 @@ const FINANCE_ACTOR: ActorContext = {
 	membershipId: "mem-fin",
 	role: "FINANCE",
 	authMethod: "USER",
-	isDefaultOrganization: true,
 };
 
 function createAuditMock() {
@@ -39,16 +38,7 @@ function createPrismaMock(overrides: {
 		status: string;
 	} | null;
 	organizationSettings?: Record<string, unknown> | null;
-	ownerUserId?: string | null;
-	ownerDefaultOrgId?: string | null;
-	defaultOrgCreatorUserId?: string | null;
-	ownerUserSettings?: Record<string, unknown> | null;
 	existingOrgAccount?: { id: string; balance: Prisma.Decimal } | null;
-	legacyAccount?: {
-		id: string;
-		balance: Prisma.Decimal;
-		createdById?: string | null;
-	} | null;
 	linkedPlan?: {
 		id: string;
 		organizationId: string | null;
@@ -57,37 +47,12 @@ function createPrismaMock(overrides: {
 	} | null;
 } = {}) {
 	const $executeRaw = vi.fn().mockResolvedValue(1);
-	const $queryRaw = vi.fn(async (strings: TemplateStringsArray) => {
-		const sql = strings.join("?");
-		if (sql.includes('m.user_id AS "userId"')) {
-			const creator =
-				overrides.defaultOrgCreatorUserId === undefined
-					? "u-fin"
-					: overrides.defaultOrgCreatorUserId;
-			return creator ? [{ userId: creator }] : [];
-		}
-		if (sql.includes("FROM memberships")) {
-			if (overrides.defaultOrgCreatorUserId !== undefined) {
-				return overrides.defaultOrgCreatorUserId
-					? [{ organizationId: "org-1" }]
-					: [];
-			}
-			const orgId =
-				overrides.ownerDefaultOrgId === undefined
-					? "org-1"
-					: overrides.ownerDefaultOrgId;
-			return orgId ? [{ organizationId: orgId }] : [];
-		}
-		return [];
-	});
+	const $queryRaw = vi.fn().mockResolvedValue([]);
 	const membership = {
 		findUnique: vi.fn().mockResolvedValue(
 			overrides.lockedMembership === undefined
 				? { organizationId: "org-1", role: "FINANCE", status: "ACTIVE" }
 				: overrides.lockedMembership,
-		),
-		findFirst: vi.fn().mockResolvedValue(
-			overrides.ownerUserId ? { userId: overrides.ownerUserId } : null,
 		),
 	};
 	const organizationSettings = {
@@ -104,17 +69,11 @@ function createPrismaMock(overrides: {
 		),
 		upsert: vi.fn().mockResolvedValue({}),
 	};
-	const userSettings = {
-		findUnique: vi.fn().mockResolvedValue(overrides.ownerUserSettings ?? null),
-	};
 	const plan = {
 		findFirst: vi.fn().mockResolvedValue(overrides.linkedPlan ?? null),
 	};
 	const account = {
 		findUnique: vi.fn().mockResolvedValue(overrides.existingOrgAccount ?? null),
-		findFirst: vi.fn().mockResolvedValue(overrides.legacyAccount ?? null),
-		update: vi.fn().mockResolvedValue({ id: "acc-legacy" }),
-		delete: vi.fn().mockResolvedValue({ id: "acc-legacy" }),
 		upsert: vi.fn().mockResolvedValue({ id: "acc-org" }),
 	};
 	const initialHolding = {
@@ -141,7 +100,6 @@ function createPrismaMock(overrides: {
 		$queryRaw,
 		membership,
 		organizationSettings,
-		userSettings,
 		plan,
 		account,
 		initialHolding,
@@ -164,12 +122,11 @@ const VALID_DTO = {
 };
 
 describe("TransactionService（W23 单元测试）", () => {
-	it("正常创建：先锁组织成员并复验权限，再取组织账本锁（含默认创建者 legacy 锁），写入组织字段与同事务审计", async () => {
+	it("正常创建：先锁组织成员并复验权限，再取组织账本锁，写入组织字段与同事务审计", async () => {
 		const prisma = createPrismaMock({
-			legacyAccount: {
-				id: "acc-legacy-1",
+			existingOrgAccount: {
+				id: "acc-org-usd",
 				balance: new Prisma.Decimal("50"),
-				createdById: null,
 			},
 		});
 		const audit = createAuditMock();
@@ -181,29 +138,35 @@ describe("TransactionService（W23 单元测试）", () => {
 		const result = await service.create(FINANCE_ACTOR, VALID_DTO, "req-tx-1");
 
 		expect(result.id).toBe("tx-created-1");
+		// 组织维度取锁：成员锁 + 组织账本锁（无用户维度 legacy 锁）
 		const lockKeys = prisma.$executeRaw.mock.calls.map((c) => c[1] as string);
 		expect(lockKeys).toEqual([
 			"membership:org-1",
 			"ledger-write:org:org-1:USD",
-			"ledger-write:u-fin:USD",
 		]);
-		expect(prisma.account.update).toHaveBeenCalledWith({
-			where: { id: "acc-legacy-1" },
-			data: {
-				organizationId: "org-1",
-				createdById: "u-fin",
-				balance: new Prisma.Decimal("150"),
-			},
+		// 组织内同币种唯一账户行：余额累加后写回（不再有 legacy 行合并）
+		const upsertCall = prisma.account.upsert.mock.calls[0][0] as {
+			where: unknown;
+			create: { organizationId: string; createdById: string; balance: Prisma.Decimal };
+			update: { balance: Prisma.Decimal };
+		};
+		expect(upsertCall.where).toEqual({
+			organizationId_currencyCode: { organizationId: "org-1", currencyCode: "USD" },
 		});
-		expect(prisma.account.upsert).not.toHaveBeenCalled();
-		expect(prisma.transaction.create).toHaveBeenCalledWith({
-			data: expect.objectContaining({
-				userId: "u-fin",
+		expect(upsertCall.create.organizationId).toBe("org-1");
+		expect(upsertCall.create.createdById).toBe("u-fin");
+		expect(Number(upsertCall.create.balance.toString())).toBe(150);
+		expect(Number(upsertCall.update.balance.toString())).toBe(150);
+		// 交易行只带组织归属与作者，不再写 userId 兼容列
+		const txData = prisma.transaction.create.mock.calls[0][0].data;
+		expect(txData).toEqual(
+			expect.objectContaining({
 				organizationId: "org-1",
 				createdById: "u-fin",
 				currencyCode: "USD",
 			}),
-		});
+		);
+		expect(txData).not.toHaveProperty("userId");
 		expect(prisma.costLot.create).toHaveBeenCalledWith({
 			data: expect.objectContaining({
 				organizationId: "org-1",
@@ -221,41 +184,6 @@ describe("TransactionService（W23 单元测试）", () => {
 				targetId: "tx-created-1",
 				result: "SUCCESS",
 				requestId: "req-tx-1",
-			}),
-		);
-	});
-
-	it("OWNER_LEGACY 兼容回落时自动固化 OrganizationSettings", async () => {
-		const prisma = createPrismaMock({
-			organizationSettings: null,
-			ownerUserId: "u-owner",
-			ownerDefaultOrgId: "org-1",
-			ownerUserSettings: {
-				baseCurrency: "CNY",
-				prepPreference: "cautious",
-				reminderEnabled: false,
-				ledgerStartedAt: null,
-			},
-		});
-		const audit = createAuditMock();
-		const service = new TransactionService(
-			prisma as unknown as PrismaService,
-			audit,
-		);
-
-		await service.create(
-			{ ...FINANCE_ACTOR, isDefaultOrganization: false },
-			VALID_DTO,
-		);
-
-		expect(prisma.organizationSettings.upsert).toHaveBeenCalledWith(
-			expect.objectContaining({
-				where: { organizationId: "org-1" },
-				create: expect.objectContaining({
-					organizationId: "org-1",
-					baseCurrency: "CNY",
-					prepPreference: "cautious",
-				}),
 			}),
 		);
 	});
@@ -339,7 +267,7 @@ describe("TransactionService（W23 单元测试）", () => {
 	});
 
 	it("审计 recordInTx 抛出时异常穿透令事务回滚（N-1）", async () => {
-		const prisma = createPrismaMock({ defaultOrgCreatorUserId: null });
+		const prisma = createPrismaMock();
 		const audit = createAuditMock();
 		audit.recordInTx.mockRejectedValueOnce(new Error("audit down"));
 		let rolledBack = false;
@@ -361,48 +289,5 @@ describe("TransactionService（W23 单元测试）", () => {
 		);
 		expect(rolledBack).toBe(true);
 		expect(audit.recordStandalone).not.toHaveBeenCalled();
-	});
-
-	it("I-2 受邀成员触发默认创建者 legacy 账户与双行合并：不因 isDefaultOrganization=false 漏锁或漏并", async () => {
-		const prisma = createPrismaMock({
-			defaultOrgCreatorUserId: "u-owner",
-			existingOrgAccount: {
-				id: "acc-org-usd",
-				balance: new Prisma.Decimal("40"),
-			},
-			legacyAccount: {
-				id: "acc-legacy-usd",
-				balance: new Prisma.Decimal("50"),
-				createdById: null,
-			},
-		});
-		const audit = createAuditMock();
-		const service = new TransactionService(
-			prisma as unknown as PrismaService,
-			audit,
-		);
-
-		await service.create(
-			{ ...FINANCE_ACTOR, isDefaultOrganization: false },
-			VALID_DTO,
-		);
-
-		const lockKeys = prisma.$executeRaw.mock.calls.map((c) => c[1] as string);
-		expect(lockKeys).toEqual([
-			"membership:org-1",
-			"ledger-write:org:org-1:USD",
-			"ledger-write:u-owner:USD",
-		]);
-		expect(prisma.costLot.updateMany).toHaveBeenCalledWith({
-			where: { userId: "u-owner", organizationId: null, currencyCode: "USD" },
-			data: { organizationId: "org-1" },
-		});
-		expect(prisma.account.delete).toHaveBeenCalledWith({
-			where: { id: "acc-legacy-usd" },
-		});
-		expect(prisma.account.update).toHaveBeenCalledWith({
-			where: { id: "acc-org-usd" },
-			data: { balance: new Prisma.Decimal("190") },
-		});
 	});
 });

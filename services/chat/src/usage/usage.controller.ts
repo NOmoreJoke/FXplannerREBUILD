@@ -28,7 +28,7 @@ import type { Request } from "express";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
-import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { OrganizationContextGuard } from "../authorization/guards/organization-context.guard";
 import { PermissionGuard } from "../authorization/guards/permission.guard";
 import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
@@ -47,7 +47,7 @@ import { OrganizationLockGuard } from "../authorization/guards/organization-lock
  * 资金使用（usage-recording M7 / ToB R1 W24）：2 个功能入口，全部需登录，路由挂在 plans 下。
  * create 为五步事务（§3.1：条件扣分配 → 条件扣余额 → 插记录 → FIFO 分摊 →
  * 写分摊明细），作用于**组织共享账本**：权限点 usage.create（Operator/Viewer 403），
- * 数据范围与 FIFO 池均为当前组织（BusinessOrgScopeGuard → PermissionGuard → actor）；
+ * 数据范围与 FIFO 池均为当前组织（OrganizationContextGuard → PermissionGuard → actor）；
  * 任一失败整体回滚。list 只读（usedAt 倒序 limit 100 兑底）。
  */
 @ApiTags("Usage")
@@ -87,7 +87,7 @@ export class UsageController {
 	}
 
 	@Post(":id/usages")
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("usage.create")
 	@ApiOperation({
 		summary: "记录使用（五步事务：扣分配/扣余额/FIFO 分摊）",
@@ -146,7 +146,7 @@ export class UsageController {
 		description: "计划不存在或不属于当前组织（PLAN_NOT_FOUND，防枚举）",
 		type: UsageErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("usage.read")
 	async list(
 		@CurrentUser() user: User,

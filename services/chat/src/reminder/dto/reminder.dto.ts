@@ -75,7 +75,8 @@ export class ReminderItemDto {
 	scheduledFor!: string;
 
 	@ApiProperty({
-		description: "已读时间（null = 未读）",
+		description:
+			"当前成员的已读时间（成员级 ReminderRead；null = 未读；其他成员读过不影响本成员）",
 		type: String,
 		nullable: true,
 	})

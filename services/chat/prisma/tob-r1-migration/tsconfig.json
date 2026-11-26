@@ -6,6 +6,8 @@
   },
   "include": [
     "backfill.ts",
+    "benchmark-p6.ts",
+    "benchmark-p6.spec.ts",
     "../../src/organization/organization-backfill.ts",
     "../../src/organization/organization-reconcile.ts"
   ]

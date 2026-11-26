@@ -17,7 +17,7 @@ import { computeDerived } from "../plan/plan-calculator";
  *                      尚无 COMPLETE_READY 行                  （08:17；持续满足不逐日重发）
  *
  * 同计划同日合并：dedupKey = "PLAN:{planId}"（不含 type），唯一键
- * [userId, dedupKey, scheduledFor] 保证同计划同日仅一行；R1/R3 同日命中时
+ * [organizationId, dedupKey, scheduledFor] 保证同计划同日仅一行；R1/R3 同日命中时
  * 多个 draft 由 createMany skipDuplicates 兜底丢弃，行内 matters 读时并列展示（§4.5）。
  *
  * 缺口口径复用 plan-calculator.computeDerived（gap = max(0, 还需使用 − 剩余分配)），
@@ -55,7 +55,7 @@ export function addUtc8Days(dayStart: Date, days: number): Date {
 	return new Date(dayStart.getTime() + days * DAY_MS);
 }
 
-/** 同计划合并键（§4.3：不含 type，唯一键 [userId, dedupKey, scheduledFor] 的根基） */
+/** 同计划合并键（§4.3：不含 type，唯一键 [organizationId, dedupKey, scheduledFor] 的根基） */
 export function reminderDedupKey(planId: string): string {
 	return `PLAN:${planId}`;
 }

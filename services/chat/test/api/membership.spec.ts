@@ -1,6 +1,8 @@
 import request from "supertest";
 import type { INestApplication } from "@nestjs/common";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { PrismaService } from "../../src/prisma/prisma.service";
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
 import {
 	bearer,
 	cleanupUser,
@@ -56,18 +58,25 @@ async function registerUser(
 		.post("/api/auth/login")
 		.send({ email, password: TEST_PASSWORD })
 		.expect(200);
+	const userId: string = login.body.data.user.id;
+	const defaultOrganizationId =
+		(await resolveDefaultOrganizationId(app.get(PrismaService), userId)) ?? "";
 	const user: TestUser = {
 		email,
 		password: TEST_PASSWORD,
 		accessToken: login.body.data.accessToken,
-		userId: login.body.data.user.id,
+		userId,
+		defaultOrganizationId,
 	};
 	userIds.push(user.userId);
 	return user;
 }
 
 /** 组织上下文请求头（鉴权 + X-Organization-Id） */
-function hdr(user: TestUser, org: string): Record<string, string> {
+function hdr(
+	user: Pick<TestUser, "accessToken">,
+	org: string,
+): Record<string, string> {
 	return {
 		Authorization: `Bearer ${user.accessToken}`,
 		"X-Organization-Id": org,

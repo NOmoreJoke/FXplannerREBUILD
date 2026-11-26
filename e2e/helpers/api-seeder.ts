@@ -14,6 +14,10 @@
  */
 
 import { buildApiUrl, localFetch, resolveApiBase } from "./api-url";
+import {
+	createOrganizationIdResolver,
+	isOrganizationScopedPath,
+} from "./org-scope";
 import { TEST_PASSWORD } from "./test-credentials";
 import type { components } from "../../clients/chat-web/lib/api/schema.gen";
 
@@ -101,6 +105,8 @@ export interface AccountSeedResult {
 	/** 访问令牌（同时已按登录态说明注入 cookie 使用） */
 	accessToken: string;
 	userId: string;
+	/** 注册兜底创建的默认组织 id */
+	defaultOrganizationId: string;
 	/** 买入记录 id（按录入顺序） */
 	transactionIds: string[];
 }
@@ -115,9 +121,30 @@ const PLAN_EXPECT_USE_DATE = "2030-02-15T00:00:00.000Z";
 const PLAN_START_DATE = "2030-01-01T00:00:00.000Z";
 
 /**
+ * 组织 id 解析（按 token 缓存）：取本人组织列表（个人域端点，不带组织头），
+ * 首位 = 注册兜底建的个人工作台（列表按 membership.joinedAt 升序）。
+ * 口径说明见 helpers/org-scope.ts。
+ */
+const resolveCachedOrganizationId = createOrganizationIdResolver(async (token) =>
+	api<{ id: string }[]>("/api/organizations", { method: "GET", token }),
+);
+
+/** 解析组织头所需的 organizationId：显式传入优先，否则从本人组织列表取首个组织 */
+export async function resolveOrganizationId(
+	token: string,
+	organizationId?: string,
+): Promise<string> {
+	if (organizationId) return organizationId;
+	return resolveCachedOrganizationId(token);
+}
+
+/**
  * HTTP 请求封装（success 包装校验；报告等模块 seeder 复用；含探针与 429 退避）。
- * headers 用于追加请求头（如组织管理端点必需的 X-Organization-Id——那类端点挂严格守卫，
- * 缺头直接 400，不做单组织回落）。
+ *
+ * 组织域端点（W30 MIG-D：缺 X-Organization-Id 一律 400，不再回落唯一默认组织）：
+ * 自动按 token 解析本人组织并注入 X-Organization-Id——口径与前端一致（前端从
+ * organization-store 取当前选中组织注入）。调用方已显式传该头时不覆盖
+ * （先例：12-account-data 的 handOverOwnership 指向特定组织）。
  */
 export async function api<T>(
 	path: string,
@@ -135,6 +162,13 @@ export async function api<T>(
 	};
 	if (init.token) {
 		headers.Authorization = `Bearer ${init.token}`;
+	}
+	if (
+		init.token &&
+		!headers["X-Organization-Id"] &&
+		isOrganizationScopedPath(path)
+	) {
+		headers["X-Organization-Id"] = await resolveOrganizationId(init.token);
 	}
 	const res = await fetchWithBackoff(path, {
 		method: init.method,
@@ -165,12 +199,19 @@ export async function api<T>(
  */
 const SEED_RUN_ID = process.env.E2E_SEED_RUN_ID ?? String(Date.now());
 
-/** 注册并登录测试用户（返回 token 与 userId；用后由后端测试/人工清理或级联复用） */
+/** 注册并登录测试用户（返回 token、userId 与默认组织 id；用后由后端测试/人工清理或级联复用） */
 export async function seedRegisterAndLogin(label: string): Promise<{
 	email: string;
 	password: string;
 	accessToken: string;
 	userId: string;
+	/**
+	 * 本人的组织 id（W30 MIG-D：组织域端点必须显式带 X-Organization-Id）。
+	 * 注册兜底建的个人工作台——造数落点与前端「单组织自动选中」一致。
+	 */
+	organizationId: string;
+	/** 默认组织 id（与 organizationId 同值，供 15-organization / reports-seeder 读取） */
+	defaultOrganizationId: string;
 }> {
 	const email = `e2e-account-${label}-${SEED_RUN_ID}@example.com`;
 	const password = TEST_PASSWORD;
@@ -189,11 +230,14 @@ export async function seedRegisterAndLogin(label: string): Promise<{
 		"/api/auth/login",
 		{ method: "POST", body: { email, password } },
 	);
+	const defaultOrganizationId = await resolveOrganizationId(data.accessToken);
 	return {
 		email,
 		password,
 		accessToken: data.accessToken,
 		userId: data.user.id,
+		organizationId: defaultOrganizationId,
+		defaultOrganizationId,
 	};
 }
 
@@ -201,7 +245,9 @@ export async function seedRegisterAndLogin(label: string): Promise<{
 export async function seedOnboarding(
 	token: string,
 	baseCurrency = "CNY",
+	organizationId?: string,
 ): Promise<void> {
+	const orgId = await resolveOrganizationId(token, organizationId);
 	await api("/api/onboarding/consents", {
 		method: "POST",
 		token,
@@ -211,6 +257,7 @@ export async function seedOnboarding(
 		await api("/api/onboarding/complete", {
 			method: "POST",
 			token,
+			headers: { "X-Organization-Id": orgId },
 			body: {
 				baseCurrency,
 				locale: "zh-CN",
@@ -237,10 +284,13 @@ export async function seedTransaction(
 	token: string,
 	currencyCode: string,
 	amount: string,
+	organizationId?: string,
 ): Promise<string> {
+	const orgId = await resolveOrganizationId(token, organizationId);
 	const data = await api<{ id: string }>("/api/transactions", {
 		method: "POST",
 		token,
+		headers: { "X-Organization-Id": orgId },
 		body: {
 			currencyCode,
 			principalAmount: amount,
@@ -259,10 +309,13 @@ export async function seedPlanWithAllocation(
 	targetCurrency: string,
 	allocatedAmount: string,
 	name?: string,
+	organizationId?: string,
 ): Promise<string> {
+	const orgId = await resolveOrganizationId(token, organizationId);
 	const data = await api<{ id: string }>("/api/plans", {
 		method: "POST",
 		token,
+		headers: { "X-Organization-Id": orgId },
 		body: {
 			name,
 			targetCurrency,
@@ -288,15 +341,26 @@ export async function seedFullyAllocatedPlan(
 	targetCurrency: string,
 	targetAmount = "10000",
 	initialAlloc = "6000",
+	organizationId?: string,
 ): Promise<string> {
-	const planId = await seedPlanWithAllocation(token, targetCurrency, initialAlloc);
+	const orgId = await resolveOrganizationId(token, organizationId);
+	const headers = { "X-Organization-Id": orgId };
+	const planId = await seedPlanWithAllocation(
+		token,
+		targetCurrency,
+		initialAlloc,
+		undefined,
+		orgId,
+	);
 	const detail = await api<{ updatedAt: string }>(`/api/plans/${planId}`, {
 		method: "GET",
 		token,
+		headers,
 	});
 	await api(`/api/plans/${planId}`, {
 		method: "PATCH",
 		token,
+		headers,
 		body: {
 			newAllocAmount: targetAmount,
 			expectedUpdatedAt: detail.updatedAt,
@@ -306,8 +370,17 @@ export async function seedFullyAllocatedPlan(
 }
 
 /** 完成确认（POST /api/plans/:id/complete，无请求体；前置：已使用 = 目标且剩余分配 0） */
-export async function completePlanViaApi(token: string, planId: string) {
-	return api(`/api/plans/${planId}/complete`, { method: "POST", token });
+export async function completePlanViaApi(
+	token: string,
+	planId: string,
+	organizationId?: string,
+) {
+	const orgId = await resolveOrganizationId(token, organizationId);
+	return api(`/api/plans/${planId}/complete`, {
+		method: "POST",
+		token,
+		headers: { "X-Organization-Id": orgId },
+	});
 }
 
 /**
@@ -329,20 +402,28 @@ export async function seedAccountScenario(
 	} = overrides;
 
 	const user = await seedRegisterAndLogin(label);
+	const orgId = user.defaultOrganizationId;
 	if (!skipOnboarding) {
-		await seedOnboarding(user.accessToken, baseCurrency);
+		await seedOnboarding(user.accessToken, baseCurrency, orgId);
 	}
 	const transactionIds = [
-		await seedTransaction(user.accessToken, currencyCode, amountPerTrade),
-		await seedTransaction(user.accessToken, currencyCode, amountPerTrade),
+		await seedTransaction(user.accessToken, currencyCode, amountPerTrade, orgId),
+		await seedTransaction(user.accessToken, currencyCode, amountPerTrade, orgId),
 	];
-	await seedPlanWithAllocation(user.accessToken, currencyCode, allocatedAmount);
+	await seedPlanWithAllocation(
+		user.accessToken,
+		currencyCode,
+		allocatedAmount,
+		undefined,
+		orgId,
+	);
 
 	return {
 		email: user.email,
 		password: user.password,
 		accessToken: user.accessToken,
 		userId: user.userId,
+		defaultOrganizationId: orgId,
 		transactionIds,
 	};
 }
@@ -352,12 +433,15 @@ export async function seedUsage(
 	token: string,
 	planId: string,
 	amount: string,
+	organizationId?: string,
 ): Promise<{ id: string; cost: string }> {
+	const orgId = await resolveOrganizationId(token, organizationId);
 	const { usage } = await api<components["schemas"]["CreateUsageRespDto"]>(
 		`/api/plans/${planId}/usages`,
 		{
 			method: "POST",
 			token,
+			headers: { "X-Organization-Id": orgId },
 			body: { amount, usedAt: nowIso() },
 		},
 	);
@@ -433,11 +517,14 @@ export async function seedPlanDueToday(
 	token: string,
 	targetCurrency = "USD",
 	targetAmount = "10000",
+	organizationId?: string,
 ): Promise<string> {
+	const orgId = await resolveOrganizationId(token, organizationId);
 	const today = bizTodayUtcStart();
 	const data = await api<{ id: string }>("/api/plans", {
 		method: "POST",
 		token,
+		headers: { "X-Organization-Id": orgId },
 		body: {
 			targetCurrency,
 			targetAmount,

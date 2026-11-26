@@ -14,6 +14,7 @@ import {
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -59,7 +60,7 @@ describe("Onboarding 集成：登录 → 设置 → 锁定 → 重复设置被�
 	it("登录后未设置：status.completed=false，settings 表无行", async () => {
 		const res = await request(app.getHttpServer())
 			.get("/api/onboarding/status")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		expect(res.body.data.completed).toBe(false);
@@ -67,6 +68,12 @@ describe("Onboarding 集成：登录 → 设置 → 锁定 → 重复设置被�
 			where: { userId: user.userId },
 		});
 		expect(rows).toHaveLength(0);
+		// W30（MIG-F）：建账真相在 OrganizationSettings——未建账即无该行
+		expect(
+			await ctx.prisma.organizationSettings.count({
+				where: { organizationId: user.defaultOrganizationId },
+			}),
+		).toBe(0);
 	});
 
 	it("完成设置：条款 + complete 事务落库（ledgerStartedAt = 完成时刻）", async () => {
@@ -78,21 +85,27 @@ describe("Onboarding 集成：登录 → 设置 → 锁定 → 重复设置被�
 
 		const done = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(wizard)
 			.expect(201);
 
 		expect(done.body.data.settings.baseCurrency).toBe("CNY");
 
-		// 事务证据：UserSettings 唯一行，ledgerStartedAt = 完成时刻 + 同事务审计
-		const settings = await ctx.prisma.userSettings.findUnique({
+		// 事务证据：OrganizationSettings 唯一行（W30 MIG-F：组织偏好唯一真相），
+		// ledgerStartedAt = 完成时刻 + 同事务审计；个人行只存 locale / region
+		const orgSettings = await ctx.prisma.organizationSettings.findUnique({
+			where: { organizationId: user.defaultOrganizationId },
+		});
+		expect(orgSettings?.baseCurrency).toBe("CNY");
+		expect(orgSettings?.ledgerStartedAt).toBeInstanceOf(Date);
+		expect(done.body.data.ledgerStartedAt).toBe(
+			orgSettings?.ledgerStartedAt?.toISOString(),
+		);
+		const personal = await ctx.prisma.userSettings.findUnique({
 			where: { userId: user.userId },
 		});
-		expect(settings?.baseCurrency).toBe("CNY");
-		expect(settings?.ledgerStartedAt).toBeInstanceOf(Date);
-		expect(done.body.data.ledgerStartedAt).toBe(
-			settings?.ledgerStartedAt?.toISOString(),
-		);
+		expect(personal?.locale).toBe("zh-CN");
+		expect(personal?.region).toBe("CN");
 		const defaultOrgId = (await resolveDefaultOrganizationId(ctx.prisma, user.userId))!;
 		const completeAudit = await ctx.prisma.auditLog.findFirst({
 			where: {
@@ -109,21 +122,21 @@ describe("Onboarding 集成：登录 → 设置 → 锁定 → 重复设置被�
 		// 用不同本位币再次 complete → 409
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ ...wizard, baseCurrency: "USD" })
 			.expect(409);
 		expect(res.body.code).toBe("ONBOARDING_ALREADY_COMPLETED");
 
 		// 落库证据：仍是首次提交的 CNY（不存在任何更新写路径）
-		const settings = await ctx.prisma.userSettings.findUnique({
-			where: { userId: user.userId },
+		const settings = await ctx.prisma.organizationSettings.findUnique({
+			where: { organizationId: user.defaultOrganizationId },
 		});
 		expect(settings?.baseCurrency).toBe("CNY");
 
 		// status 已完成（前端据此跳过向导）
 		const status = await request(app.getHttpServer())
 			.get("/api/onboarding/status")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		expect(status.body.data.completed).toBe(true);
 		expect(status.body.data.settings?.baseCurrency).toBe("CNY");
@@ -210,11 +223,13 @@ describe("Onboarding 集成：登录 → 设置 → 锁定 → 重复设置被�
 				.send({ holdings: [{ currencyCode: "USD", amount: "300.00" }] })
 				.expect(201);
 
-			// Org A 的 UserSettings.baseCurrency 保持 CNY、Org B 为 HKD
+			// W30（MIG-F）：个人行只承载 locale / region，不再有 baseCurrency；
+			// 组织本位币真相在 OrganizationSettings（Org A=CNY、Org B=HKD，见下）
 			const userSettings = await ctx.prisma.userSettings.findUniqueOrThrow({
 				where: { userId: owner.userId },
 			});
-			expect(userSettings.baseCurrency).toBe("CNY");
+			expect(userSettings.locale).toBe("zh-CN");
+			expect(userSettings.region).toBe("CN");
 
 			const [orgASettings, orgBSettings, accA, accB, auditA, auditB] =
 				await Promise.all([

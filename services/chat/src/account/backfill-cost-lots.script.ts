@@ -2,7 +2,8 @@
  * 存量交易成本批次回填（account-module 技术方案 §3.5）：幂等脚本，发布后立即执行一次。
  *
  * 流程（§3.5）：
- * 1. 全量遍历 Transaction，按 (userId, currencyCode) 分组；
+ * 1. 全量遍历 Transaction，按 (organizationId, currencyCode) 分组
+ *    （W30 MIG-E/F：账本行按组织归属，原 (userId, currencyCode) 口径已废）；
  * 2. 每分组一个事务，事务内第一句获取 PostgreSQL advisory **xact** 锁（固定键），
  *    拿不到 → 整个脚本退出并报「另一回填实例运行中」。
  *    ⚠️ 锁实现裁量说明：方案原文为会话级 pg_advisory_lock，但 Prisma 连接池无会话粘滞
@@ -48,9 +49,9 @@ export interface BackfillSkipped {
 	reason: string;
 }
 
-/** 重复批次明细（同 (user, currency, sourceType, sourceId) 多行） */
+/** 重复批次明细（同 (organizationId, currency, sourceType, sourceId) 多行） */
 export interface BackfillDuplicate {
-	userId: string;
+	organizationId: string;
 	currencyCode: string;
 	sourceType: string;
 	sourceId: string;
@@ -59,7 +60,7 @@ export interface BackfillDuplicate {
 
 /** 不变式违规明细：balance ≠ Σ remainingQty（单条聚合 SQL 检出） */
 export interface BackfillInvariantViolation {
-	userId: string;
+	organizationId: string;
 	currencyCode: string;
 	/** Account.balance（toFixed(4)） */
 	balance: string;
@@ -71,8 +72,8 @@ export interface BackfillInvariantViolation {
 export interface BackfillResult {
 	/** advisory 锁是否全程获取成功；false = 另一回填实例运行中，脚本应非零退出 */
 	acquiredLock: boolean;
-	/** 处理的用户数（去重） */
-	processedUsers: number;
+	/** 处理的组织数（去重） */
+	processedOrganizations: number;
 	/** 本次补写的批次数 */
 	createdLots: number;
 	/** 单条构造失败跳过明细（不中断其他条目/分组） */
@@ -84,24 +85,24 @@ export interface BackfillResult {
 }
 
 interface TransactionGroup {
-	userId: string;
+	organizationId: string;
 	currencyCode: string;
 	transactions: Prisma.TransactionGetPayload<Record<string, never>>[];
 }
 
-/** 全量交易按 (userId, currencyCode) 分组 */
+/** 全量交易按 (organizationId, currencyCode) 分组 */
 function groupTransactions(
 	transactions: Prisma.TransactionGetPayload<Record<string, never>>[],
 ): TransactionGroup[] {
 	const groups = new Map<string, TransactionGroup>();
 	for (const transaction of transactions) {
-		const key = `${transaction.userId}|${transaction.currencyCode}`;
+		const key = `${transaction.organizationId}|${transaction.currencyCode}`;
 		const group = groups.get(key);
 		if (group) {
 			group.transactions.push(transaction);
 		} else {
 			groups.set(key, {
-				userId: transaction.userId,
+				organizationId: transaction.organizationId,
 				currencyCode: transaction.currencyCode,
 				transactions: [transaction],
 			});
@@ -119,19 +120,20 @@ export async function runBackfill(
 ): Promise<BackfillResult> {
 	const result: BackfillResult = {
 		acquiredLock: true,
-		processedUsers: 0,
+		processedOrganizations: 0,
 		createdLots: 0,
 		skipped: [],
 		duplicates: [],
 		invariantViolations: [],
 	};
 
-	// 1. 全量交易分组（个人工具量级，单次全量查询可接受）
+	// 1. 全量交易分组（单次全量查询按 organizationId+currencyCode 分组）
+	// @org-scope-exempt: 一次性历史回填脚本全量读取交易并按 organizationId+currencyCode 分组
 	const transactions = await prisma.transaction.findMany();
 	const groups = groupTransactions(transactions);
 
 	// 2~4. 分组事务：xact 锁 → 复检 → buildPurchaseLot → createMany
-	const processedUserIds = new Set<string>();
+	const processedOrganizationIds = new Set<string>();
 	for (const group of groups) {
 		const groupCreated = await prisma.$transaction(async (tx) => {
 			// 事务内第一句：xact 锁（该事务内所有查询绑定同一连接，锁在本事务内有效；
@@ -146,7 +148,7 @@ export async function runBackfill(
 			// 组内复检（幂等）：与实时录入第④步/上一轮回填可能交错，已存在的跳过
 			const existing = await tx.costLot.findMany({
 				where: {
-					userId: group.userId,
+					organizationId: group.organizationId,
 					currencyCode: group.currencyCode,
 					sourceType: "PURCHASE",
 					sourceId: { in: group.transactions.map((t) => t.id) },
@@ -158,7 +160,7 @@ export async function runBackfill(
 			const missing = group.transactions.filter(
 				(transaction) => !existingSourceIds.has(transaction.id),
 			);
-			const lotsToCreate: Prisma.CostLotCreateInput[] = [];
+			const lotsToCreate: Prisma.CostLotUncheckedCreateInput[] = [];
 			for (const transaction of missing) {
 				try {
 					// 与实时录入共用同一构造函数（含 unitCost 容量预校验，§3.4）
@@ -172,13 +174,8 @@ export async function runBackfill(
 				}
 			}
 			if (lotsToCreate.length > 0) {
-				// createMany 不接受关系 connect 语法：CostLotCreateInput 拆出 user connect，
-				// 换成平铺 userId 后转为 CostLotCreateManyInput（字段一一对应，等价写入）
 				await tx.costLot.createMany({
-					data: lotsToCreate.map(({ user: _user, ...rest }) => ({
-						...rest,
-						userId: group.userId,
-					})),
+					data: lotsToCreate,
 				});
 			}
 			return lotsToCreate.length;
@@ -190,54 +187,56 @@ export async function runBackfill(
 			return result;
 		}
 		result.createdLots += groupCreated;
-		processedUserIds.add(group.userId);
+		processedOrganizationIds.add(group.organizationId);
 	}
-	result.processedUsers = processedUserIds.size;
+	result.processedOrganizations = processedOrganizationIds.size;
 
 	// 5a. 不变式校验（单条聚合 SQL：balance 与 Σ remainingQty 一次 JOIN 检出，§3.5）
+	// @org-scope-exempt: 一次性历史回填脚本不变式全库核对（balance vs Σ remaining_qty）
 	const violations = await prisma.$queryRaw<
 		Array<{
-			user_id: string;
+			organization_id: string;
 			currency_code: string;
 			balance: Prisma.Decimal;
 			lot_qty: Prisma.Decimal;
 		}>
 	>`
-		SELECT a.user_id, a.currency_code, a.balance,
+		SELECT a.organization_id, a.currency_code, a.balance,
 			COALESCE(l.sum_qty, 0) AS lot_qty
 		FROM accounts a
 		LEFT JOIN (
-			SELECT user_id, currency_code, SUM(remaining_qty) AS sum_qty
+			SELECT organization_id, currency_code, SUM(remaining_qty) AS sum_qty
 			FROM cost_lots
-			GROUP BY user_id, currency_code
-		) l ON l.user_id = a.user_id AND l.currency_code = a.currency_code
+			GROUP BY organization_id, currency_code
+		) l ON l.organization_id = a.organization_id AND l.currency_code = a.currency_code
 		WHERE a.balance <> COALESCE(l.sum_qty, 0)
 	`;
 	result.invariantViolations = violations.map((row) => ({
-		userId: row.user_id,
+		organizationId: row.organization_id,
 		currencyCode: row.currency_code,
 		balance: row.balance.toFixed(4),
 		lotRemainingQty: row.lot_qty.toFixed(4),
 	}));
 
 	// 5b. 重复批次检测（COUNT 返回 BigInt，转 Number；CUID 精度在 Number 安全整数内无虞）
+	// @org-scope-exempt: 一次性历史回填脚本重复批次全库检测
 	const duplicates = await prisma.$queryRaw<
 		Array<{
-			user_id: string;
+			organization_id: string;
 			currency_code: string;
 			source_type: string;
 			source_id: string;
 			lot_count: bigint;
 		}>
 	>`
-		SELECT user_id, currency_code, source_type, source_id,
+		SELECT organization_id, currency_code, source_type, source_id,
 			COUNT(*)::bigint AS lot_count
 		FROM cost_lots
-		GROUP BY user_id, currency_code, source_type, source_id
+		GROUP BY organization_id, currency_code, source_type, source_id
 		HAVING COUNT(*) > 1
 	`;
 	result.duplicates = duplicates.map((row) => ({
-		userId: row.user_id,
+		organizationId: row.organization_id,
 		currencyCode: row.currency_code,
 		sourceType: row.source_type,
 		sourceId: row.source_id,
@@ -269,7 +268,7 @@ async function main(): Promise<void> {
 		}
 
 		console.log(
-			`[backfill-cost-lots] 处理用户 ${result.processedUsers} 个，补写批次 ${result.createdLots} 条，跳过 ${result.skipped.length} 条，耗时 ${Date.now() - startedAt}ms`,
+			`[backfill-cost-lots] 处理组织 ${result.processedOrganizations} 个，补写批次 ${result.createdLots} 条，跳过 ${result.skipped.length} 条，耗时 ${Date.now() - startedAt}ms`,
 		);
 		for (const skipped of result.skipped) {
 			console.warn(
@@ -285,7 +284,7 @@ async function main(): Promise<void> {
 			);
 			for (const duplicate of result.duplicates) {
 				console.error(
-					`  userId=${duplicate.userId} currencyCode=${duplicate.currencyCode} sourceType=${duplicate.sourceType} sourceId=${duplicate.sourceId} count=${duplicate.count}`,
+					`  organizationId=${duplicate.organizationId} currencyCode=${duplicate.currencyCode} sourceType=${duplicate.sourceType} sourceId=${duplicate.sourceId} count=${duplicate.count}`,
 				);
 			}
 		}
@@ -296,7 +295,7 @@ async function main(): Promise<void> {
 			);
 			for (const violation of result.invariantViolations) {
 				console.error(
-					`  userId=${violation.userId} currencyCode=${violation.currencyCode} balance=${violation.balance} lotRemainingQty=${violation.lotRemainingQty}`,
+					`  organizationId=${violation.organizationId} currencyCode=${violation.currencyCode} balance=${violation.balance} lotRemainingQty=${violation.lotRemainingQty}`,
 				);
 			}
 		}

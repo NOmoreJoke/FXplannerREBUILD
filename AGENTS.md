@@ -74,9 +74,11 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  ├─ prisma/                       # schema + migrations + seed
 │  │  ├─ migrations/               # Prisma 版本化迁移
 │  │  │  ├─ 20261120090000_rate_cache_migration_receipt/ # 汇率缓存迁移完成记录与行归属
-│  │  │  └─ 20261120091000_rate_cache_canonical_write/ # 记录可信的汇率回源写入
+│  │  │  ├─ 20261120091000_rate_cache_canonical_write/ # 记录可信的汇率回源写入
+│  │  │  ├─ 20261126190000_tob_r1_mig_e_tighten_constraints/ # ToB R1 MIG-E：NOT NULL / ON DELETE RESTRICT / 删旧用户唯一索引
+│  │  │  └─ 20261126191000_tob_r1_mig_f_drop_legacy_columns/ # ToB R1 MIG-F：删 8 表旧 user_id、UserSettings 旧账本列、reminders.read_at，重命名 requester_user_id
 │  │  ├─ rate-cache-migration/      # 旧汇率缓存迁移运维 CLI（B2；README 见目录内）
-│  │  └─ tob-r1-migration/          # ToB R1 MIG-B 回填与 §12.3 核对运维 CLI（README 见目录内）
+│  │  └─ tob-r1-migration/          # ToB R1 MIG-B/E/F 回填、核对与 §14.5 P6 基准 CLI（benchmark-p6.ts / README 见目录内）
 │  └─ test/
 │     ├─ api/                       # 接口测试
 │     ├─ integration/               # 集成测试
@@ -97,9 +99,9 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │     └─ playwright-report/         # HTML 报告
 │
 ├─ infra/compose/                   # Docker Compose + Dockerfile
-├─ scripts/                         # 工程脚本（init / test / worktree / check-structure / lint-observe）+ __tests__/（bun test：工具链与跨包一致性对照）
+├─ scripts/                         # 工程脚本（init / test / worktree / check-structure / check-org-scope / lint-observe）+ __tests__/（bun test：工具链与跨包一致性对照）
 ├─ changes/                         # ⛔ 变更文档唯一位置（需求/方案/验收），按功能名称分目录
-│  ├─ tob-agent-workspace/          # ToB 组织工作台与 Agent 需求和技术方案
+│  ├─ tob-agent-workspace/          # ToB 组织工作台与 Agent 需求、技术方案与 R1 验收记录（验收记录.md）
 │  └─ realtime-rate/                # MVP-F0 汇率回补与缓存迁移实施底稿（Goal #1 任务 B/C 执行口径）
 ├─ docs/                            # 长期规范文档
 │  ├─ VERIFY.md                     # 验证驱动、属性/差分测试与 Diff 触发防回归规范
@@ -133,14 +135,14 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | 新 package       | `packages/<名称>/`，必须含 `README.md`：做什么（职责）、不做什么（边界/非目标）、为何独立成包 |
 | 新共享类型       | 后端 DTO 为唯一来源，前端 `bun run generate:api` 从 OpenAPI 生成（禁止手写共享类型） |
 | 跨端共享计算逻辑 | `packages/money/`（仅限纯函数：精度、舍入、币种常量；有 IO 的逻辑禁止进包） |
-| 接口测试         | `services/chat/test/api/<模块名>.spec.ts`（一个 controller 一个文件）     |
+| 接口测试         | `services/chat/test/api/<模块名>.spec.ts`（一个 controller 一个文件；跨租户全矩阵在 `organization-matrix.spec.ts`，409 用例覆盖 16 域 + `2c` 无头拦截 + 列表读隔离 + 组织锁隔离） |
 | 集成测试         | `services/chat/test/integration/<模块组合>.spec.ts`（一个业务流一个文件） |
 | 单元测试         | 与源码同目录`<被测文件>.spec.ts`                                          |
 | E2E 用例         | `e2e/modules/<编号>-<模块>.spec.ts`                                       |
 | ToB 组织工作台与 Agent 规划 | `changes/tob-agent-workspace/` |
 | ToB R1 后端新模块（组织/成员/邀请/设置、权限策略与 Guard、审计） | `services/chat/src/{organization,authorization,audit}/`，在 `app.module.ts` 唯一注册；`authorization/` 仅纯函数与类型（IO 在 Guard/Service 层） |
 | 双域数据请求与双锁守卫 | `services/chat/src/data-request/`：个人域 `/api/data-requests/*`（`DataRequestController`，仅 `JwtAuthGuard`）+ 组织域 `/api/organizations/current/data-requests/*`（`OrganizationDataRequestController`，类级 `@SkipOrganizationLock()`，`JwtAuthGuard → OrganizationContextGuard → OrganizationLockGuard → PermissionGuard`）；`PersonalAccountLockGuard`（全局 `APP_GUARD`，未挂组织锁守卫的路由走个人域单查）/ `OrganizationLockGuard`（**横切守卫，契约与实现分离**：守卫 + `ORGANIZATION_LOCK_RESOLVER` 契约在 `services/chat/src/authorization/guards/organization-lock.guard.ts`，真实判定在 `data-request/organization-lock-resolver.ts`，经全局 `DataRequestModule` 导出后注入——`authorization/` 与 `audit/` 均禁止引入业务记账模块）；双锁白名单装饰器统一在 `services/chat/src/authorization/guards/data-lock.decorators.ts` |
-| 组织锁守卫挂载顺序铁律 | `@UseGuards(OrganizationContextGuard \| BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)`——先解析 `actor.organizationId`、再检锁、最后检权限；放前则无 actor 绕过、放后则 403 先于锁原因返回。**唯一例外**：`PATCH /api/settings` 因按字段分权（`personal` 的 region/locale 放行全部成员 vs `organization` 的 prepPreference/reminderEnabled 需 `settings.update`）未挂类/方法级 `PermissionGuard`，改在 `SettingsService` 持组织锁（`lockOrganizationForActor`）后按字段内联校验角色并写审计（成功同事务 SUCCESS，失败回滚后写 DENIED）——新增按字段分权的端点须照此办理，不得擅自跳过内联校验 |
+| 组织锁守卫挂载顺序铁律 | `@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)`——先解析 `actor.organizationId`、再检锁、最后检权限；**W30（MIG-D）起组织上下文唯一**：`BusinessOrgScopeGuard`（缺头时猜「唯一默认组织」的兼容窗口守卫）已删除，缺 `X-Organization-Id` 一律 400 `ORGANIZATION_REQUIRED`，不再有单组织回落；放前则无 actor 绕过、放后则 403 先于锁原因返回。**唯一例外**：`PATCH /api/settings` 因按字段分权（`personal` 的 region/locale 放行全部成员 vs `organization` 的 prepPreference/reminderEnabled 需 `settings.update`）未挂类/方法级 `PermissionGuard`，改在 `SettingsService` 持组织锁（`lockOrganizationForActor`）后按字段内联校验角色并写审计（成功同事务 SUCCESS，失败回滚后写 DENIED）——新增按字段分权的端点须照此办理，不得擅自跳过内联校验 |
 | 锁查询不变量（每请求至多 1 条 `data_requests` SELECT） | 组织上下文端点由 `OrganizationLockGuard` 发**一条合并查询**（`scope=PERSONAL` 本人注销 ∪ `scope=ORGANIZATION` 当前组织 `CLEAR`/`DELETION`），同时判定两把锁；`PersonalAccountLockGuard` 读到路由 `__guards__` 含 `OrganizationLockGuard` 时直接放行（不再单独查库）；未挂组织锁守卫的路由由个人锁守卫单查个人域。锁判定失败一律 fail-closed（500），白名单端点仅 log warn |
 | 双锁错误码 | `ACCOUNT_PENDING_DELETION`（**本人**账号注销处理中，只锁本人）/ `ORGANIZATION_DATA_LOCKED`（**当前组织**账本清空/删除处理中，只锁当前组织）——两者严格区分，互不误判、互不触发对方语义 |
 | 组织工作台前端页面 | `clients/chat-web/app/(protected)/organization/`（信息/成员/审计）、`clients/chat-web/app/(protected)/invitations/[token]/` |
@@ -162,16 +164,16 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | 默认组织（个人工作台）判定 | `services/chat/src/authorization/default-organization.ts`：用户创建的最早组织；建组织必须嵌套写入（组织与首位成员同事务创建）；回填 / 核对 SQL 的 `defaults` CTE 与之同口径 |
 | 持锁写的操作者资格 | 组织锁内一律经 `lockOrganizationForActor` 重读操作者并以最新角色判定，不得沿用 Guard 放行时的 `actor.role`（等待锁期间可能已被降权 / 移除 / 失去所有权） |
 | 会话上下文重置 | `clients/chat-web/lib/auth/session-reset.ts`：登录 / 注册 / 登出 / 401 的唯一入口；业务代码不单独清组织选择、拒绝集合或聊天运行时态 |
-| 组织 E2E 用例 | `e2e/modules/15-organization.spec.ts`（Goal #3A W21 落盘骨架，人类启服后运行） |
+| 组织 E2E 用例 | `e2e/modules/15-organization.spec.ts`（Goal #3A W21 + Goal #3C W31 全量 32 用例覆盖 R1 GWT-1..18 与 GWT-26..30，人类启服后运行）；`e2e/helpers/org-scope.ts` 负责造数端按路径自动注 `X-Organization-Id` |
 | 建账后的缓存失效 | `invalidateAfterOnboarding`（`lib/api/query-keys.ts`）必须连带失效 `queryKeys.organizations.all`；向导页 / 补录页导航前须 `await refreshOrganizationDetails(queryClient)`（同文件）——首页分流读组织详情缓存的 `onboardingCompleted`（键不带 org 前缀，`invalidateBusinessKey` 覆盖不到），漏掉即建账后在 `/home` ↔ `/onboarding` 间回弹；回读失败时该函数移除组织域查询再放行，不带着旧的「未建账」详情导航 |
 | E2E Node 侧直连后端 | 一律 `localFetch(buildApiUrl(回环地址, …))`（`e2e/helpers/api-url.ts`），回环地址 = `API_URL.replace("localhost", "127.0.0.1")`；禁止取 LAN IP / `os.networkInterfaces()`（TUN 下命中 utun）；按 IP 频控由 `run-e2e-tests.sh` 的 `OTP_IP_MAX_REQUESTS` 放大 |
-| E2E 组织管理端点造数 | `api(path, { headers: { "X-Organization-Id": orgId } })`（`e2e/helpers/api-seeder.ts`）——`/organizations/current/*` 的成员 / 邀请 / 所有权端点挂严格守卫，缺头 400（单组织回落只在业务端点）；所有权转交 = `POST /api/organizations/current/transfer-ownership` |
-| E2E 本地测试库钩子 | 均在**同一函数内**校验回环 PostgreSQL 并拒绝 `?host=` 覆盖，再经 `createRequire` 用后端 Prisma 客户端：`correction-db.ts`（改记账起点须同时改 `OrganizationSettings` 与 `UserSettings`）、`correction-quote-db.ts`、`rate-cache-db.ts`（外呼取价 `RATE_UNAVAILABLE` 时插入已确认 frankfurter 缓存行，`latestConfirmedAt=now` + `canonicalWriteId`，重试后立即按 id 清理；并导出库名闸门 `assertRateCacheTestDatabase`——会写 `exchange_rates` 的钩子共用：显式 `FXPLANNER_E2E_QUOTE_DATABASE` 须等于库名，未注入时库名以 `_local` / `_test` 结尾才放行，脚本从 `services/chat/.env.local` 解析库名注入）；直插账本行须落 `organizationId`（`seedInitialHolding` 可选参数，查不到 OWNER 组织回落兼容窗口 NULL 行） |
+| E2E 组织管理端点造数 | `api(path, { headers: { "X-Organization-Id": orgId } })`（`e2e/helpers/api-seeder.ts`）——`/organizations/current/*` 的成员 / 邀请 / 所有权端点挂严格守卫，缺头 400；所有权转交 = `POST /api/organizations/current/transfer-ownership` |
+| E2E 本地测试库钩子 | 均在**同一函数内**校验回环 PostgreSQL 并拒绝 `?host=` 覆盖，再经 `createRequire` 用后端 Prisma 客户端：`correction-db.ts`（W30 MIG-F 后记账起点只存 `OrganizationSettings`，`UserSettings` 已无该列）、`correction-quote-db.ts`、`organization-db.ts`（组织邀请过期辅助，同含回环+非 `?host=`+`assertRateCacheTestDatabase` 闸门）、`rate-cache-db.ts`（外呼取价 `RATE_UNAVAILABLE` 时插入已确认 frankfurter 缓存行，`latestConfirmedAt=now` + `canonicalWriteId`，重试后立即按 id 清理；并导出库名闸门 `assertRateCacheTestDatabase`——会写 `exchange_rates` 的钩子共用：显式 `FXPLANNER_E2E_QUOTE_DATABASE` 须等于库名，未注入时库名以 `_local` / `_test` 结尾才放行，脚本从 `services/chat/.env.local` 解析库名注入）；直插账本行须落 `organizationId`（W30 MIG-E 起该列 **NOT NULL**，不得再回落兼容窗口 NULL 行） |
 | MVP-F0 汇率回补与缓存迁移底稿 | `changes/realtime-rate/` |
 | 汇率缓存迁移完成记录与行归属 DDL | `services/chat/prisma/migrations/20261120090000_rate_cache_migration_receipt/` |
 | 汇率回源方向标记 DDL | `services/chat/prisma/migrations/20261120091000_rate_cache_canonical_write/` |
 | 验证与防回归规范 | `docs/VERIFY.md`（验证分级、属性/差分测试、Diff 触发检查）、`docs/FEATURE-MAP.md`（用户视角功能地图） |
-| 确定性静态护栏 | `eslint.config.mjs`（架构边界/禁定时器/禁新裸写 useEffect/money 零 IO）、`scripts/check-structure.ts`（目录与契约头守卫） |
+| 确定性静态护栏 | `eslint.config.mjs`（架构边界/禁定时器/禁新裸写 useEffect/money 零 IO）、`scripts/check-structure.ts`（目录与契约头守卫）、`scripts/check-org-scope.ts`（`check:org-scope`：12 业务模块 `ts-morph` 租户隔离静态守卫） |
 | 前端 / 服务端脱敏规则对照 | `clients/chat-web/lib/dev-log/mask.ts` 与 `packages/dev-log-server/src/mask.ts` 的邀请规则手工同步；`scripts/__tests__/mask-parity.spec.ts` 用同一组向量跑两份实现，改一处必须让对照用例通过 |
 | 迭代路线与工作流手册 | `docs/ITERATION-REFACTOR-ROADMAP-20261119.md`、`docs/VIBE-CODING-PLAYBOOK.md` |
 | 跨会话交接文档   | `docs/handoff/`（夜间批次产出：OVERNIGHT-* / 接力目标提示词：GOAL-* / 状态快照；需求/方案/验收仍归 `changes/`） |

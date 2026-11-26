@@ -69,14 +69,17 @@ describe("DataRequestController（e2e）", () => {
 			.post("/api/auth/login")
 			.send({ email, password: ["Data", "Pass", "123"].join("") })
 			.expect(200);
+		const userId = created.body.data.user.id as string;
+		const defaultOrganizationId = await defaultOrgIdOf(userId);
 		const result: TestUser = {
 			email,
 			password: ["Data", "Pass", "123"].join(""),
 			accessToken: login.body.data.accessToken,
-			userId: created.body.data.user.id,
+			userId,
+			defaultOrganizationId,
 		};
 		userIds.push(result.userId);
-		await completeOnboarding(app, result.accessToken);
+		await completeOnboarding(app, result);
 		return result;
 	}
 
@@ -315,7 +318,7 @@ describe("DataRequestController（e2e）", () => {
 		const { sendAndVerify: sv } = await import("../helpers/data-request-helper");
 		// 前置：过期已有导出，让本次 create 走真实创建路径（凭证被唯一绑定）
 		await env.prisma.dataRequest.updateMany({
-			where: { userId: user.userId, type: "EXPORT" },
+			where: { requesterUserId: user.userId, type: "EXPORT" },
 			data: { downloadExpiresAt: new Date(Date.now() - 1000) },
 		});
 		const { challengeId } = await sv(
@@ -413,7 +416,7 @@ describe("DataRequestController（e2e）", () => {
 	it("CLEAR 全流程：impact → verify → 创建 PENDING（dueAt=+7d）", async () => {
 		// 前置：过期已有导出，确认页不再提示可下载
 		await env.prisma.dataRequest.updateMany({
-			where: { userId: user.userId, type: "EXPORT" },
+			where: { requesterUserId: user.userId, type: "EXPORT" },
 			data: { downloadExpiresAt: new Date(Date.now() - 1000) },
 		});
 		const clearOrgId = await defaultOrgIdOf(user.userId);
@@ -643,9 +646,11 @@ describe("DataRequestController（e2e）", () => {
 			.send({ type: "DELETION", challengeId })
 			.expect(200);
 
+		const lockedOrgId = await defaultOrgIdOf(user.userId);
 		const locked = await request(app.getHttpServer())
 			.get("/api/settings")
 			.set("Authorization", `Bearer ${user.accessToken}`)
+			.set("X-Organization-Id", lockedOrgId)
 			.expect(403);
 		expect(locked.body.code).toBe("ACCOUNT_PENDING_DELETION");
 
@@ -786,7 +791,7 @@ describe("DataRequestController（e2e）", () => {
 		const lockOrgId = await defaultOrgIdOf(lockUser.userId);
 		const clearRow = await env.prisma.dataRequest.create({
 			data: {
-				userId: lockUser.userId,
+				requesterUserId: lockUser.userId,
 				scope: "ORGANIZATION",
 				organizationId: lockOrgId,
 				type: "CLEAR",
@@ -854,7 +859,7 @@ describe("DataRequestController（e2e）", () => {
 		);
 		const orgErrSpy = vi
 			.spyOn(env.prisma.dataRequest, "findMany")
-			.mockImplementation((args: unknown) => {
+			.mockImplementation(((args: unknown) => {
 				// 合并查询（where.OR）= OrganizationLockGuard 的双锁查询
 				const where = (args as { where?: { OR?: unknown } })?.where;
 				if (where && where.OR !== undefined) {
@@ -863,7 +868,7 @@ describe("DataRequestController（e2e）", () => {
 					);
 				}
 				return originalFindMany(args as never);
-			});
+			}) as never);
 		try {
 			await request(app.getHttpServer())
 				.get("/api/settings")
@@ -913,7 +918,11 @@ describe("DataRequestController（e2e）", () => {
 			},
 		});
 		// 不替用户选择处置方式：未创建任何请求行，账号未上锁
-		expect(await env.prisma.dataRequest.count({ where: { userId: sole.userId } })).toBe(0);
+		expect(
+			await env.prisma.dataRequest.count({
+				where: { requesterUserId: sole.userId },
+			}),
+		).toBe(0);
 		const untouched = await request(app.getHttpServer())
 			.get("/api/data-requests/current")
 			.set("Authorization", `Bearer ${sole.accessToken}`)
@@ -1013,7 +1022,11 @@ describe("DataRequestController（e2e）", () => {
 		expect(wrongOrgScope.body.code).toBe("SCOPE_TYPE_MISMATCH");
 
 		// 三次拒绝均零副作用
-		expect(await env.prisma.dataRequest.count({ where: { userId: member.userId } })).toBe(0);
+		expect(
+			await env.prisma.dataRequest.count({
+				where: { requesterUserId: member.userId },
+			}),
+		).toBe(0);
 	});
 
 	it("PERSONAL + CLEAR 一律 400 SCOPE_TYPE_MISMATCH：个人域不能清空组织账本", async () => {
@@ -1050,7 +1063,11 @@ describe("DataRequestController（e2e）", () => {
 			.send({ type: "EXPORT", scope: "TEAM", challengeId })
 			.expect(400);
 		expect(bogus.body.message).toEqual(expect.arrayContaining([expect.stringContaining("scope")]));
-		expect(await env.prisma.dataRequest.count({ where: { userId: member.userId } })).toBe(0);
+		expect(
+			await env.prisma.dataRequest.count({
+				where: { requesterUserId: member.userId },
+			}),
+		).toBe(0);
 	});
 
 	it("组织数据请求按角色判权（data.export / data.clear / organization.delete）、同组织进行中请求互斥、审计同事务", async () => {
@@ -1242,7 +1259,11 @@ describe("DataRequestController（e2e）", () => {
 		// 同域幂等：再次申请组织导出返回原请求，不重复生成
 		const again = await submit("ORGANIZATION");
 		expect(again.id).toBe(organization.id);
-		expect(await env.prisma.dataRequest.count({ where: { userId: owner.userId } })).toBe(2);
+		expect(
+			await env.prisma.dataRequest.count({
+				where: { requesterUserId: owner.userId },
+			}),
+		).toBe(2);
 
 		const JSZip = (await import("jszip")).default;
 		const entriesOf = async (url: string, organizationId?: string) =>

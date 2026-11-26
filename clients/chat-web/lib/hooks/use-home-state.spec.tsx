@@ -119,6 +119,7 @@ const dataState: HomeState = {
 	plans: [
 		{
 			id: "cmex5g2h70000abcd",
+			name: null,
 			targetCurrency: "USD",
 			targetAmount: "10000.0000",
 			allocatedAmount: "4000.0000",
@@ -428,6 +429,7 @@ describe("useHomeState - dashboard 派生（home-dashboard 数据层）", () => 
 		plans: [
 			{
 				id: "plan-later",
+				name: null,
 				targetCurrency: "USD",
 				targetAmount: "10000.0000",
 				allocatedAmount: "4000.0000",
@@ -438,6 +440,7 @@ describe("useHomeState - dashboard 派生（home-dashboard 数据层）", () => 
 			},
 			{
 				id: "plan-earlier",
+				name: null,
 				targetCurrency: "CAD",
 				targetAmount: "8000.0000",
 				allocatedAmount: "2000.0000",
@@ -506,6 +509,7 @@ describe("useHomeState - dashboard 派生（home-dashboard 数据层）", () => 
 			plans: [
 				{
 					id: "plan-over",
+					name: null,
 					targetCurrency: "USD",
 					targetAmount: "10000.0000",
 					allocatedAmount: "12000.0000",
@@ -533,6 +537,7 @@ describe("useHomeState - dashboard 派生（home-dashboard 数据层）", () => 
 			plans: [
 				{
 					id: "plan-zero",
+					name: null,
 					targetCurrency: "USD",
 					targetAmount: "0.0000",
 					allocatedAmount: "0.0000",
@@ -646,6 +651,30 @@ describe("useHomeState - dashboard 派生（home-dashboard 数据层）", () => 
 		);
 		expect(result.current.dashboard?.focusPlan?.daysUntilPrepDeadline).toBe(-3);
 		expect(result.current.dashboard?.focusPlan?.isOverdue).toBe(true);
+	});
+
+	it("具名 ACTIVE 计划：focusPlan.name 透传计划名称", async () => {
+		vi.mocked(homeApi.getState).mockResolvedValue({
+			...multiActiveState,
+			plans: [
+				{
+					...multiActiveState.plans[1],
+					id: "plan-named",
+					name: "GWT9 Operator 计划",
+				},
+			],
+		});
+
+		const { result } = renderHook(() => useHomeState(), {
+			wrapper: createWrapper(),
+		});
+
+		await waitFor(() =>
+			expect(result.current.dashboard?.focusPlan?.id).toBe("plan-named"),
+		);
+		expect(result.current.dashboard?.focusPlan?.name).toBe(
+			"GWT9 Operator 计划",
+		);
 	});
 
 	it("dashboard 两个查询 Key 均符合 [domain, action] 约定", async () => {

@@ -16,7 +16,6 @@ const OPERATOR_ACTOR: ActorContext = {
 	membershipId: "mem-op",
 	role: "OPERATOR",
 	authMethod: "USER",
-	isDefaultOrganization: false,
 };
 
 const EXPECT_USE_DATE = "2030-02-15T00:00:00.000Z";
@@ -47,7 +46,6 @@ function createPrismaMock(overrides: {
 		overrides.planRow === undefined
 			? {
 					id: "plan-1",
-					userId: "u-owner",
 					organizationId: "org-1",
 					createdById: "u-owner",
 					name: "USD 计划",
@@ -189,11 +187,14 @@ describe("PlanService（W23 单元测试）", () => {
 		expect(lockKeys).toEqual(["membership:org-1", "ledger-write:org:org-1:USD"]);
 		expect(prisma.plan.create).toHaveBeenCalledWith({
 			data: expect.objectContaining({
-				userId: "u-op",
 				organizationId: "org-1",
 				createdById: "u-op",
 				targetCurrency: "USD",
 			}),
+		});
+		// W30（MIG-E）：共享账本表已无 userId 列——计划只按 organizationId 归属
+		expect(prisma.plan.create).not.toHaveBeenCalledWith({
+			data: expect.objectContaining({ userId: expect.anything() }),
 		});
 		expect(audit.recordInTx).toHaveBeenCalledWith(
 			prisma,
@@ -346,89 +347,7 @@ describe("PlanService（W23 单元测试）", () => {
 		);
 	});
 
-	it("N-8 收口 legacy (organizationId: null) Plan 时在 adjust / complete / cancel 同步写入 createdById", async () => {
-		const legacyPlan = {
-			id: "plan-legacy",
-			userId: "u-owner",
-			organizationId: null,
-			createdById: null,
-			name: "存量计划",
-			pacePreference: "balanced",
-			targetCurrency: "USD",
-			targetAmount: new Prisma.Decimal("200"),
-			expectUseDate: new Date(EXPECT_USE_DATE),
-			prepLeadDays: 3,
-			latestPrepDate: new Date("2030-02-12T00:00:00.000Z"),
-			planStartDate: new Date(START_DATE),
-			status: "ACTIVE",
-			createdAt: new Date("2026-10-01T00:00:00.000Z"),
-			updatedAt: new Date("2026-10-01T00:00:00.000Z"),
-		};
-		const ownerActor: ActorContext = {
-			...OPERATOR_ACTOR,
-			userId: "u-owner",
-			role: "OWNER",
-			isDefaultOrganization: true,
-		};
-
-		const prismaAdj = createPrismaMock({
-			planRow: legacyPlan,
-			lockedMembership: { organizationId: "org-1", role: "OWNER", status: "ACTIVE" },
-		});
-		const svcAdj = new PlanService(prismaAdj as unknown as PrismaService, createAuditMock());
-		await svcAdj.adjust(ownerActor, "plan-legacy", {
-			newTargetAmount: "300",
-			expectedUpdatedAt: "2026-10-01T00:00:00.000Z",
-		});
-		expect(prismaAdj.plan.updateMany).toHaveBeenCalledWith(
-			expect.objectContaining({
-				data: expect.objectContaining({
-					organizationId: "org-1",
-					createdById: "u-owner",
-				}),
-			}),
-		);
-
-		const prismaCmp = createPrismaMock({
-			planRow: legacyPlan,
-			allocationRow: {
-				id: "alloc-1",
-				planId: "plan-legacy",
-				amount: new Prisma.Decimal("200"),
-				usedAmount: new Prisma.Decimal("200"),
-			},
-			lockedMembership: { organizationId: "org-1", role: "OWNER", status: "ACTIVE" },
-		});
-		const svcCmp = new PlanService(prismaCmp as unknown as PrismaService, createAuditMock());
-		await svcCmp.complete(ownerActor, "plan-legacy");
-		expect(prismaCmp.plan.updateMany).toHaveBeenCalledWith(
-			expect.objectContaining({
-				data: expect.objectContaining({
-					status: "COMPLETED",
-					organizationId: "org-1",
-					createdById: "u-owner",
-				}),
-			}),
-		);
-
-		const prismaCnc = createPrismaMock({
-			planRow: legacyPlan,
-			lockedMembership: { organizationId: "org-1", role: "OWNER", status: "ACTIVE" },
-		});
-		const svcCnc = new PlanService(prismaCnc as unknown as PrismaService, createAuditMock());
-		await svcCnc.cancel(ownerActor, "plan-legacy");
-		expect(prismaCnc.plan.updateMany).toHaveBeenCalledWith(
-			expect.objectContaining({
-				data: expect.objectContaining({
-					status: "CANCELLED",
-					organizationId: "org-1",
-					createdById: "u-owner",
-				}),
-			}),
-		);
-	});
-
-	it("R2-I1 受邀成员 computeCaps / loadAdjustContext 计入默认组织创建者 legacy 计划占用", async () => {
+	it("R2-I1 受邀成员 computeCaps / loadAdjustContext 按当前组织计入同币种其他计划占用（组织共享账本）", async () => {
 		const prisma = createPrismaMock({
 			accountRows: [{ balance: new Prisma.Decimal("100") }],
 			allocationRow: {
@@ -438,11 +357,9 @@ describe("PlanService（W23 单元测试）", () => {
 				usedAmount: new Prisma.Decimal("0"),
 			},
 		});
-		prisma.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) => {
+		(prisma.$queryRaw as ReturnType<typeof vi.fn>).mockImplementation(
+			async (strings: TemplateStringsArray) => {
 			const sql = strings.join("?");
-			if (sql.includes('m.user_id AS "userId"')) {
-				return [{ userId: "u-owner" }];
-			}
 			if (sql.includes("FROM memberships")) {
 				return [{ organizationId: "org-1" }];
 			}
@@ -451,11 +368,11 @@ describe("PlanService（W23 单元测试）", () => {
 			}
 			return [];
 		});
-		prisma.plan.findMany.mockResolvedValue([{ id: "plan-legacy-owner" }]);
+		prisma.plan.findMany.mockResolvedValue([{ id: "plan-org-other" }]);
 		prisma.planAllocation.findMany.mockResolvedValue([
 			{
-				id: "alloc-legacy",
-				planId: "plan-legacy-owner",
+				id: "alloc-org-other",
+				planId: "plan-org-other",
 				amount: new Prisma.Decimal("80"),
 				usedAmount: new Prisma.Decimal("0"),
 			},
@@ -477,15 +394,17 @@ describe("PlanService（W23 单元测试）", () => {
 			allocatableBalance: "20.0000",
 			maxAllocatable: "20.0000",
 		});
+		// W30（MIG-D/F）：读取恒为纯组织作用域——无 legacy 回落分支、无 userId 旁路
 		expect(prisma.plan.findMany).toHaveBeenCalledWith({
 			where: {
 				targetCurrency: "USD",
-				OR: [
-					{ organizationId: "org-1" },
-					{ organizationId: null, userId: "u-owner" },
-				],
+				organizationId: "org-1",
 			},
 			select: { id: true },
+		});
+		expect(prisma.account.findMany).toHaveBeenCalledWith({
+			where: { currencyCode: "USD", organizationId: "org-1" },
+			select: { balance: true },
 		});
 
 		await expect(

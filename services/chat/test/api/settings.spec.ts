@@ -18,6 +18,7 @@ import {
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -79,7 +80,7 @@ describe("SettingsController（e2e）", () => {
 	it("未建账 GET → 409 ONBOARDING_NOT_COMPLETED", async () => {
 		const res = await request(app.getHttpServer())
 			.get("/api/settings")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(409);
 
 		expect(res.body.code).toBe("ONBOARDING_NOT_COMPLETED");
@@ -88,7 +89,7 @@ describe("SettingsController（e2e）", () => {
 	it("未建账 PATCH → 409 ONBOARDING_NOT_COMPLETED", async () => {
 		const res = await request(app.getHttpServer())
 			.patch("/api/settings")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ locale: "en" })
 			.expect(409);
 
@@ -103,13 +104,13 @@ describe("SettingsController（e2e）", () => {
 			.expect(201);
 		await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(wizard)
 			.expect(201);
 
 		const res = await request(app.getHttpServer())
 			.get("/api/settings")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		expect(res.body.success).toBe(true);
@@ -132,7 +133,7 @@ describe("SettingsController（e2e）", () => {
 
 		const res = await request(app.getHttpServer())
 			.patch("/api/settings")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				locale: "en",
 				prepPreference: "cautious",
@@ -159,7 +160,7 @@ describe("SettingsController（e2e）", () => {
 		// GET /settings 同步反映（§8.2 行 11：home/state 不承载偏好字段，以 GET /settings 为准）
 		const get = await request(app.getHttpServer())
 			.get("/api/settings")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		expect(get.body.data.locale).toBe("en");
 		expect(get.body.data.prepPreference).toBe("cautious");
@@ -169,7 +170,7 @@ describe("SettingsController（e2e）", () => {
 	it("PATCH 空 body → 400 SETTINGS_UPDATE_EMPTY", async () => {
 		const res = await request(app.getHttpServer())
 			.patch("/api/settings")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({})
 			.expect(400);
 
@@ -179,14 +180,14 @@ describe("SettingsController（e2e）", () => {
 	it("PATCH 只含 baseCurrency → 400（白名单剥离后为空，本位币无更新通道）", async () => {
 		const res = await request(app.getHttpServer())
 			.patch("/api/settings")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ baseCurrency: "USD" })
 			.expect(400);
 
 		expect(res.body.code).toBe("SETTINGS_UPDATE_EMPTY");
 
-		const settings = await ctx.prisma.userSettings.findUnique({
-			where: { userId: user.userId },
+		const settings = await ctx.prisma.organizationSettings.findUnique({
+			where: { organizationId: user.defaultOrganizationId },
 		});
 		expect(settings?.baseCurrency).toBe("CNY");
 	});
@@ -194,7 +195,7 @@ describe("SettingsController（e2e）", () => {
 	it("PATCH 含 baseCurrency+region → 200 但 baseCurrency 不变（剥离语义）", async () => {
 		const res = await request(app.getHttpServer())
 			.patch("/api/settings")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ baseCurrency: "USD", region: "HK" })
 			.expect(200);
 
@@ -205,7 +206,7 @@ describe("SettingsController（e2e）", () => {
 	it("PATCH 枚举非法 → 400", async () => {
 		const res = await request(app.getHttpServer())
 			.patch("/api/settings")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ prepPreference: "aggressive" })
 			.expect(400);
 		// 枚举非法来自全局 ValidationPipe：标准 400 结构（statusCode），非模块错误体
@@ -216,14 +217,14 @@ describe("SettingsController（e2e）", () => {
 		for (const prepPreference of ["cautious", "proactive"] as const) {
 			const res = await request(app.getHttpServer())
 				.patch("/api/settings")
-				.set(bearer(user.accessToken))
+				.set(orgBearer(user))
 				.send({ prepPreference })
 				.expect(200);
 			expect(res.body.data.prepPreference).toBe(prepPreference);
 
 			const get = await request(app.getHttpServer())
 				.get("/api/settings")
-				.set(bearer(user.accessToken))
+				.set(orgBearer(user))
 				.expect(200);
 			expect(get.body.data.prepPreference).toBe(prepPreference);
 		}
@@ -560,7 +561,7 @@ describe("SettingsController（e2e）", () => {
 
 			const txRes = await request(app.getHttpServer())
 				.post("/api/transactions")
-				.set(bearer(fresh.accessToken))
+				.set(orgBearer(fresh))
 				.send({
 					currencyCode: "USD",
 					principalAmount: "700",
@@ -573,7 +574,7 @@ describe("SettingsController（e2e）", () => {
 
 			const planRes = await request(app.getHttpServer())
 				.post("/api/plans")
-				.set(bearer(fresh.accessToken))
+				.set(orgBearer(fresh))
 				.send({
 					name: "未建账计划拦截",
 					targetCurrency: "USD",

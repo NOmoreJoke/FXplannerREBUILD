@@ -10,7 +10,6 @@ import { RequestAuthService } from "../../auth/request-auth.service";
 import { PrismaService } from "../../prisma/prisma.service";
 import { isOrganizationRole } from "../authorization.types";
 import type { ActorContext } from "../authorization.types";
-import { resolveDefaultOrganizationId } from "../default-organization";
 import {
 	OrganizationNotFoundException,
 	OrganizationRequiredException,
@@ -32,7 +31,8 @@ const CUID_PATTERN = /^c[a-z0-9]{24}$/;
  * 1. 经 RequestAuthService 复用 W9 请求级身份（同请求与 JwtAuthGuard 共享
  *    验签与 users 查询结果，不重复验签）；
  * 2. 读取 x-organization-id：缺失 / 非字符串（数组头）/ 格式非法 →
- *    400 ORGANIZATION_REQUIRED（兼容窗口在 W18 单独评估，本守卫不猜测）；
+ *    400 ORGANIZATION_REQUIRED（W30 MIG-D 起**不再**猜测「唯一默认组织」，
+ *    业务端点一律要求显式组织头）；
  * 3. 实时查询 Membership（organizationId+userId 复合唯一）：不存在或
  *    status !== ACTIVE → 统一 404 ORGANIZATION_NOT_FOUND（不泄露存在性，
  *    禁止 403）；角色/禁用变更即时生效（每请求实时查，无角色缓存）；
@@ -81,11 +81,6 @@ export class OrganizationContextGuard implements CanActivate {
 		if (!isOrganizationRole(membership.role)) {
 			throw new PermissionDeniedException("成员角色无效，拒绝访问");
 		}
-		// 默认组织标记（评审 I-08）：兼容窗口的存量回落只在默认组织上下文生效
-		const defaultOrganizationId = await resolveDefaultOrganizationId(
-			this.prisma,
-			auth.user.id,
-		);
 
 		request.actor = {
 			userId: auth.user.id,
@@ -93,7 +88,6 @@ export class OrganizationContextGuard implements CanActivate {
 			membershipId: membership.id,
 			role: membership.role,
 			authMethod: "USER",
-			isDefaultOrganization: defaultOrganizationId === organizationId,
 		};
 		return true;
 	}

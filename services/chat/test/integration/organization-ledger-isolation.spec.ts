@@ -60,12 +60,17 @@ function daysAgo(n: number): Date {
 	return new Date(Date.now() - n * 86_400_000 - 2 * 3_600_000);
 }
 
-/** 批次按来源记录 id 索引：[批次归属人, 单价, 剩余数量] */
+/**
+ * 批次按来源记录 id 索引：[单价, 剩余数量, 所属组织]
+ *
+ * W30（MIG-E）：批次直连 Organization，已删除 user_id 列——「批次归谁」不再由批次
+ * 自己承载，而由来源记录（Transaction.createdById）承担（见 W24-ISO-2 的断言）。
+ */
 function lotsBySource(snapshot: OrgLedgerSnapshot) {
 	return new Map(
 		snapshot.lots.map((lot) => [
 			lot.sourceId,
-			[lot.userId, lot.unitCost, lot.remainingQty, lot.organizationId] as const,
+			[lot.unitCost, lot.remainingQty, lot.organizationId] as const,
 		]),
 	);
 }
@@ -261,7 +266,6 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		expect(ledgerShape(baselineA)).toEqual(ledgerShape(baselineB));
 		expect(baselineA.accounts).toEqual([
 			expect.objectContaining({
-				userId: owner.userId,
 				organizationId: orgA.orgId,
 				currencyCode: "USD",
 				balance: "1300.0000",
@@ -269,7 +273,6 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		]);
 		expect(baselineB.accounts).toEqual([
 			expect.objectContaining({
-				userId: owner.userId,
 				organizationId: orgBId,
 				currencyCode: "USD",
 				balance: "1300.0000",
@@ -278,7 +281,6 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		expect(baselineA.usages).toEqual([
 			expect.objectContaining({
 				organizationId: orgA.orgId,
-				userId: owner.userId,
 				createdById: owner.userId,
 				amount: "1200.0000",
 			}),
@@ -325,7 +327,6 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		).toMatchObject({
 			organizationId: orgA.orgId,
 			actorUserId: owner.userId,
-			userId: owner.userId,
 			status: "APPLIED",
 		});
 		const usagePreviewA = await preview(owner, orgA.orgId, {
@@ -354,9 +355,9 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		const afterA = await readOrgLedgerSnapshot(ctx.prisma, orgA.orgId);
 		const lotsA = lotsBySource(afterA);
 		expect(afterA.accounts[0].balance).toBe("1000.0000");
-		expect(lotsA.get(loopA.purchaseIds[0])).toEqual([owner.userId, "7.82000000", "0.0000", orgA.orgId]);
-		expect(lotsA.get(loopA.purchaseIds[1])).toEqual([owner.userId, "8.00000000", "1000.0000", orgA.orgId]);
-		expect(lotsA.get(loopA.holdingId)).toEqual([owner.userId, "7.00000000", "0.0000", orgA.orgId]);
+		expect(lotsA.get(loopA.purchaseIds[0])).toEqual(["7.82000000", "0.0000", orgA.orgId]);
+		expect(lotsA.get(loopA.purchaseIds[1])).toEqual(["8.00000000", "1000.0000", orgA.orgId]);
+		expect(lotsA.get(loopA.holdingId)).toEqual(["7.00000000", "0.0000", orgA.orgId]);
 		expect(afterA.lots).toHaveLength(3);
 		expect(afterA.allocations).toEqual([
 			{ usageId: loopA.usageId, sourceId: loopA.holdingId, quantity: "500.0000", cost: "3500.0000" },
@@ -556,19 +557,16 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 			{ usageId, sourceId: purchaseIds[1], quantity: "200.0000", cost: "1600.0000" },
 		]);
 		expect(lotsAfterUsage.get(purchaseIds[0])).toEqual([
-			finance1.userId,
 			"7.80000000",
 			"0.0000",
 			org.orgId,
 		]);
 		expect(lotsAfterUsage.get(purchaseIds[1])).toEqual([
-			finance1.userId,
 			"8.00000000",
 			"800.0000",
 			org.orgId,
 		]);
 		expect(afterUsage.usages[0]).toMatchObject({
-			userId: finance2.userId,
 			createdById: finance2.userId,
 			organizationId: org.orgId,
 		});
@@ -632,7 +630,6 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		).toMatchObject({
 			organizationId: org.orgId,
 			actorUserId: finance2.userId,
-			userId: finance2.userId,
 		});
 		const supplementLogs = await ctx.prisma.planChangeLog.findMany({
 			where: { planId },
@@ -674,35 +671,36 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		).toMatchObject({
 			organizationId: org.orgId,
 			actorUserId: finance2.userId,
-			userId: finance2.userId,
 		});
-		// 买入记录的创建者不被更正者覆写
+		// 买入记录的创建者不被更正者覆写（W30 MIG-E：创建人落 Transaction.createdById）
 		const correctedTransaction = await ctx.prisma.transaction.findUniqueOrThrow({
 			where: { id: purchaseIds[0] },
 		});
 		expect(correctedTransaction).toMatchObject({
-			userId: finance1.userId,
 			createdById: finance1.userId,
 			organizationId: org.orgId,
 			version: 2,
 		});
 
 		const afterCorrections = await readOrgLedgerSnapshot(ctx.prisma, org.orgId);
-		// 重建后的批次全部归买入人 Finance 1（CostLot.userId = 批次创建者），无一归更正者 Finance 2
+		// 重建后的批次的来源记录全部归买入人 Finance 1（批次无 user_id 列，创建人落在
+		// 来源 Transaction.createdById），无一归更正者 Finance 2
 		expect(afterCorrections.lots).toHaveLength(2);
-		expect(new Set(afterCorrections.lots.map((lot) => lot.userId))).toEqual(
+		const lotSourceOwners = await ctx.prisma.transaction.findMany({
+			where: { id: { in: afterCorrections.lots.map((lot) => lot.sourceId) } },
+			select: { createdById: true },
+		});
+		expect(new Set(lotSourceOwners.map((row) => row.createdById))).toEqual(
 			new Set([finance1.userId]),
 		);
 		expect(afterCorrections.lots.every((lot) => lot.organizationId === org.orgId)).toBe(true);
 		const lotsAfterCorrections = lotsBySource(afterCorrections);
 		expect(lotsAfterCorrections.get(purchaseIds[0])).toEqual([
-			finance1.userId,
 			"7.82000000",
 			"0.0000",
 			org.orgId,
 		]);
 		expect(lotsAfterCorrections.get(purchaseIds[1])).toEqual([
-			finance1.userId,
 			"8.00000000",
 			"500.0000",
 			org.orgId,
@@ -714,7 +712,6 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		expect(afterCorrections.usages[0]).toMatchObject({
 			amount: "1500.0000",
 			version: 2,
-			userId: finance2.userId,
 			createdById: finance2.userId,
 		});
 		expect(afterCorrections.planAllocations).toEqual([
@@ -761,7 +758,7 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		expect(lotRemainingSum.toFixed(4)).toBe(balances[0]);
 		for (const slice of afterCorrections.allocations) {
 			const unitCost = new Prisma.Decimal(
-				lotsAfterCorrections.get(slice.sourceId)![1],
+				lotsAfterCorrections.get(slice.sourceId)![0],
 			);
 			expect(
 				new Prisma.Decimal(slice.quantity).mul(unitCost).toFixed(4),
@@ -823,18 +820,26 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		);
 	}, 60_000);
 
-	it("W24-ISO-3 兼容窗口：创建者存量账本行未收口时，受邀成员记使用与更正仍按完整组织账本进行，余额不被高估", async () => {
+	/**
+	 * W24-ISO-3：受邀成员记使用与更正按**完整组织账本**进行，余额不被高估。
+	 *
+	 * W30（MIG-E）后账本行一律直连组织（organization_id NOT NULL），不再存在
+	 * 「存量 NULL 行待收口」的兼容窗口——本用例改为直接构造「创建者的行已归口到
+	 * 组织」的账本，断言成员记使用与更正时按组织完整 FIFO 池重放、余额不被高估。
+	 */
+	it("W24-ISO-3 组织账本已完整收口：受邀成员记使用与更正仍按完整组织账本进行，余额不被高估", async () => {
 		const org = await createOrgLedger(app, ctx.prisma, "w24-legacy-adopt", ["FINANCE"]);
 		orgs.push(org);
 		const owner = org.owner;
 		const finance = org.members[0];
 		const prisma = ctx.prisma;
 
-		// 组织化之前创建者的个人账本（全部 organization_id IS NULL）：
+		// 创建者的既有账本（已归口到组织）：
 		// 买入 T1 1,000@7.8 → 使用 U1 300（耗 T1 批次 300）→ 计划 P1 分配 1,000 / 已用 300 → 账户 700
 		const legacyTransaction = await prisma.transaction.create({
 			data: {
-				userId: owner.userId,
+				organizationId: org.orgId,
+				createdById: owner.userId,
 				currencyCode: "USD",
 				quantity: "1000",
 				principalAmount: "7800",
@@ -847,7 +852,7 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		});
 		const legacyLot = await prisma.costLot.create({
 			data: {
-				userId: owner.userId,
+				organizationId: org.orgId,
 				currencyCode: "USD",
 				sourceType: "PURCHASE",
 				sourceId: legacyTransaction.id,
@@ -860,7 +865,8 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		});
 		const legacyPlan = await prisma.plan.create({
 			data: {
-				userId: owner.userId,
+				organizationId: org.orgId,
+				createdById: owner.userId,
 				targetCurrency: "USD",
 				targetAmount: "1000",
 				expectUseDate: new Date(PLAN_EXPECT_USE_DATE),
@@ -872,7 +878,8 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		});
 		const legacyUsage = await prisma.usageRecord.create({
 			data: {
-				userId: owner.userId,
+				organizationId: org.orgId,
+				createdById: owner.userId,
 				planId: legacyPlan.id,
 				currencyCode: "USD",
 				amount: "300",
@@ -883,11 +890,15 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 			data: { usageId: legacyUsage.id, lotId: legacyLot.id, quantity: "300", cost: "2340" },
 		});
 		await prisma.account.create({
-			data: { userId: owner.userId, currencyCode: "USD", balance: "700" },
+			data: {
+				organizationId: org.orgId,
+				createdById: owner.userId,
+				currencyCode: "USD",
+				balance: "700",
+			},
 		});
 
-		// Finance 买入 T2 1,000@8：W23 记交易路径会收口创建者的存量买入与账户
-		//（组织账户 = 700 + 1,000 = 1,700），但使用 U1 与计划 P1 仍未收口
+		// Finance 买入 T2 1,000@8：组织账户 = 700 + 1,000 = 1,700
 		const secondPurchaseId = (
 			await postTx(finance, org.orgId, purchaseBody("USD", "1000", "8", daysAgo(1)))
 				.expect(201)
@@ -895,7 +906,7 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		expect(
 			(await prisma.usageRecord.findUniqueOrThrow({ where: { id: legacyUsage.id } }))
 				.organizationId,
-		).toBeNull();
+		).toBe(org.orgId);
 		expect(
 			(
 				await prisma.account.findFirstOrThrow({
@@ -904,8 +915,8 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 			).balance.toFixed(4),
 		).toBe("1700.0000");
 
-		// Finance 建计划并记使用 600：先收口存量使用记录，再从完整的组织 FIFO 池取批次
-		//（存量批次 T1 更早 → 600 全部来自 T1：600×7.8 = 4,680）
+		// Finance 建计划并记使用 600：从完整的组织 FIFO 池取批次
+		//（既有批次 T1 更早 → 600 全部来自 T1：600×7.8 = 4,680）
 		const memberPlanId = (await postPlan(finance, org.orgId, "1000", "800").expect(201))
 			.body.data.id as string;
 		const usage = await postUsage(finance, org.orgId, memberPlanId, {
@@ -918,7 +929,6 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		).toMatchObject({
 			organizationId: org.orgId,
 			createdById: owner.userId,
-			userId: owner.userId,
 		});
 		expect(
 			(
@@ -941,13 +951,11 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		const lotsAfterCorrection = lotsBySource(afterCorrection);
 		expect(afterCorrection.accounts[0].balance).toBe("1100.0000");
 		expect(lotsAfterCorrection.get(legacyTransaction.id)).toEqual([
-			owner.userId, // 存量批次重建后仍归创建者
 			"7.80000000",
 			"100.0000", // 1,000 − U1 300 − 新使用 600
 			org.orgId,
 		]);
 		expect(lotsAfterCorrection.get(secondPurchaseId)).toEqual([
-			finance.userId,
 			"8.02000000",
 			"1000.0000",
 			org.orgId,
@@ -966,7 +974,7 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		);
 		expect(lotRemaining.toFixed(4)).toBe("1100.0000");
 
-		// Finance 更正这笔「原存量」使用（改小到 200）：其计划 P1 尚未收口，按对称口径仍可读取
+		// Finance 更正这笔既有使用（改小到 200）：按组织口径仍可读取
 		const legacyUsagePreview = await preview(finance, org.orgId, {
 			targetType: "USAGE",
 			targetId: legacyUsage.id,
@@ -1001,7 +1009,6 @@ describe("组织账本隔离与共享（ToB R1 W24 集成）", () => {
 		expect(legacyPlanAllocation.usedAmount.toFixed(4)).toBe("200.0000");
 		const finalSnapshot = await readOrgLedgerSnapshot(prisma, org.orgId);
 		expect(lotsBySource(finalSnapshot).get(legacyTransaction.id)).toEqual([
-			owner.userId,
 			"7.80000000",
 			"200.0000",
 			org.orgId,

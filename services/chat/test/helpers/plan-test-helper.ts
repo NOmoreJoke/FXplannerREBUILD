@@ -17,7 +17,8 @@
  */
 import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
-import { bearer, type TestUser } from "./test-app";
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
+import { orgBearer, type TestUser } from "./test-app";
 import type { PrismaService } from "../../src/prisma/prisma.service";
 
 /** 远期用途日（不依赖真实时钟） */
@@ -25,30 +26,53 @@ export const PLAN_EXPECT_USE_DATE = "2030-02-15T00:00:00.000Z";
 /** 显式开始准备日（工作日）——锁定排期首日 */
 export const PLAN_START_DATE = "2030-01-01T00:00:00.000Z";
 
-/** 确保某币种账户存在并写入余额（compat upsert） */
+async function resolveTargetOrg(
+	prisma: PrismaService,
+	userIdOrTarget: string | { organizationId: string; userId?: string },
+): Promise<{ organizationId: string; createdById?: string }> {
+	if (typeof userIdOrTarget === "string") {
+		const organizationId = await resolveDefaultOrganizationId(
+			prisma,
+			userIdOrTarget,
+		);
+		if (!organizationId) {
+			throw new Error(`resolveTargetOrg(${userIdOrTarget}): 未找到默认组织`);
+		}
+		return { organizationId, createdById: userIdOrTarget };
+	}
+	return {
+		organizationId: userIdOrTarget.organizationId,
+		...(userIdOrTarget.userId ? { createdById: userIdOrTarget.userId } : {}),
+	};
+}
+
+/** 确保某币种账户存在并写入余额（按组织+币种 upsert） */
 export async function ensureAccount(
 	prisma: PrismaService,
-	userId: string,
+	userIdOrTarget: string | { organizationId: string; userId?: string },
 	currencyCode: string,
 	balance: string,
 ): Promise<void> {
-	const existing = await prisma.account.findFirst({
-		where: { userId, currencyCode },
-		select: { id: true },
+	const { organizationId, createdById } = await resolveTargetOrg(
+		prisma,
+		userIdOrTarget,
+	);
+	await prisma.account.upsert({
+		where: {
+			organizationId_currencyCode: { organizationId, currencyCode },
+		},
+		update: { balance },
+		create: {
+			organizationId,
+			...(createdById ? { createdById } : {}),
+			currencyCode,
+			balance,
+		},
 	});
-	if (existing) {
-		await prisma.account.update({
-			where: { id: existing.id },
-			data: { balance },
-		});
-	} else {
-		await prisma.account.create({
-			data: { userId, currencyCode, balance },
-		});
-	}
 }
 
 export interface SeedPlanOptions {
+	organizationId?: string;
 	targetCurrency?: string;
 	targetAmount?: string;
 	allocatedAmount?: string;
@@ -62,10 +86,17 @@ export async function seedPlanWithAllocation(
 	userId: string,
 	options: SeedPlanOptions = {},
 ): Promise<string> {
+	const organizationId =
+		options.organizationId ??
+		(await resolveDefaultOrganizationId(prisma, userId));
+	if (!organizationId) {
+		throw new Error(`seedPlanWithAllocation(${userId}): 未找到默认组织`);
+	}
 	const expectUseDate = new Date(PLAN_EXPECT_USE_DATE);
 	const plan = await prisma.plan.create({
 		data: {
-			userId,
+			organizationId,
+			createdById: userId,
 			name: options.name ?? null,
 			targetCurrency: options.targetCurrency ?? "USD",
 			targetAmount: options.targetAmount ?? "10000",
@@ -114,7 +145,7 @@ export async function createPlanViaApi(
 ): Promise<request.Response> {
 	return request(app.getHttpServer())
 		.post("/api/plans")
-		.set(bearer(user.accessToken))
+		.set(orgBearer(user))
 		.send({
 			targetCurrency: "USD",
 			targetAmount: "10000",

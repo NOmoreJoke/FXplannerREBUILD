@@ -14,11 +14,12 @@ import {
 	sumAllocatedByCurrency,
 } from "./account-calculator";
 
-/** 交易行内存形态（calculator 只读 id/userId/currencyCode/quantity/principal/fee/transactedAt） */
+/** 交易行内存形态（calculator 只读 id/organizationId/currencyCode/quantity/principal/fee/transactedAt） */
 function fakeTx(overrides: Partial<TransactionModel> = {}): TransactionModel {
 	return {
 		id: "tx-1",
-		userId: "user-1",
+		organizationId: "org-1",
+		createdById: "user-1",
 		currencyCode: "CAD",
 		quantity: new Prisma.Decimal("10620"),
 		principalAmount: new Prisma.Decimal("10600"),

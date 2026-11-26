@@ -4,10 +4,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { PrismaClient, type Prisma, type PrismaPromise } from "@prisma/client";
 import { resolveDefaultOrganizationId } from "../src/authorization/default-organization";
+import { deleteOrganizationsCascadeLedger } from "./helpers/test-app";
 
 const prisma = new PrismaClient();
 
 let testUserId: string;
+let testOrgId: string;
 let independentOtpUserId: string;
 let independentPasswordUserId: string;
 const otpTarget = `infra-otp-${Date.now()}@example.com`;
@@ -22,6 +24,15 @@ beforeAll(async () => {
 		},
 	});
 	testUserId = user.id;
+	const org = await prisma.organization.create({
+		data: {
+			name: "基础设施测试组织",
+			memberships: {
+				create: { userId: testUserId, role: "OWNER", status: "ACTIVE" },
+			},
+		},
+	});
+	testOrgId = org.id;
 });
 
 afterAll(async () => {
@@ -42,6 +53,9 @@ afterAll(async () => {
 		await prisma.user
 			.delete({ where: { id: independentOtpUserId } })
 			.catch(() => {});
+	}
+	if (testOrgId) {
+		await deleteOrganizationsCascadeLedger(prisma, [testOrgId]);
 	}
 	await prisma.user.delete({ where: { id: testUserId } });
 	await prisma.$disconnect();
@@ -221,21 +235,21 @@ describe("数据库基础设施测试", () => {
 
 		afterAll(async () => {
 			await prisma.correction.deleteMany({
-				where: { userId: testUserId, targetId: m0TargetId },
+				where: { organizationId: testOrgId, targetId: m0TargetId },
 			});
 			await prisma.planAllocation.deleteMany({ where: { planId: m0PlanId } });
 			await prisma.account.deleteMany({
 				where: {
-					userId: testUserId,
+					organizationId: testOrgId,
 					currencyCode: { in: [m0CurrencyA, m0CurrencyB, m0CurrencyC] },
 				},
 			});
 		});
 
-		test("Account userId+currencyCode 唯一冲突", async () => {
+		test("Account organizationId+currencyCode 唯一冲突", async () => {
 			await prisma.account.create({
 				data: {
-					userId: testUserId,
+					organizationId: testOrgId,
 					currencyCode: m0CurrencyA,
 					balance: "100.0000",
 				},
@@ -244,18 +258,18 @@ describe("数据库基础设施测试", () => {
 			await expect(
 				prisma.account.create({
 					data: {
-						userId: testUserId,
+						organizationId: testOrgId,
 						currencyCode: m0CurrencyA,
 						balance: "1.0000",
 					},
 				}),
 			).rejects.toThrow();
 
-			// 同用户不同币种不受影响
+			// 同组织不同币种不受影响
 			await expect(
 				prisma.account.create({
 					data: {
-						userId: testUserId,
+						organizationId: testOrgId,
 						currencyCode: m0CurrencyB,
 					},
 				}),
@@ -263,6 +277,7 @@ describe("数据库基础设施测试", () => {
 		});
 
 		test("PlanAllocation planId 唯一冲突（一计划一条分配汇总）", async () => {
+			await prisma.planAllocation.deleteMany({ where: { planId: m0PlanId } });
 			await prisma.planAllocation.create({
 				data: { planId: m0PlanId, amount: "500.0000", usedAmount: "0.0000" },
 			});
@@ -277,7 +292,7 @@ describe("数据库基础设施测试", () => {
 		test("金额列 Decimal(20,4) 存 4 位小数不丢精度", async () => {
 			const created = await prisma.account.create({
 				data: {
-					userId: testUserId,
+					organizationId: testOrgId,
 					currencyCode: m0CurrencyC,
 					balance: "12345.6789",
 				},
@@ -294,7 +309,7 @@ describe("数据库基础设施测试", () => {
 		test("Correction 可写 status=FAILED 并保留 failReason", async () => {
 			const created = await prisma.correction.create({
 				data: {
-					userId: testUserId,
+					organizationId: testOrgId,
 					targetType: "TRANSACTION",
 					targetId: m0TargetId,
 					reason: "余额不足，回滚",
@@ -336,16 +351,16 @@ describe("数据库基础设施测试", () => {
 				where: { id: { in: migOrgIds } },
 			});
 			await prisma.user.deleteMany({ where: { id: { in: migUserIds } } });
-			// 个人流程锁定测试的清理（内层 afterAll 先于外层 testUserId 清理执行）
+			// 租户列测试清理（内层 afterAll 先于外层 testOrgId 清理执行）
 			await prisma.transaction.deleteMany({
-				where: { userId: testUserId, currencyCode: migCurrency },
+				where: { organizationId: testOrgId, currencyCode: migCurrency },
 			});
 			await prisma.planAllocation.deleteMany({ where: { planId: migPlanId } });
 			await prisma.plan.deleteMany({
-				where: { userId: testUserId, id: migPlanId },
+				where: { organizationId: testOrgId, id: migPlanId },
 			});
 			await prisma.account.deleteMany({
-				where: { userId: testUserId, currencyCode: migCurrency },
+				where: { organizationId: testOrgId, currencyCode: migCurrency },
 			});
 		});
 
@@ -469,11 +484,11 @@ describe("数据库基础设施测试", () => {
 			).rejects.toThrow();
 		});
 
-		test("新增可空租户列不影响既有个人建账/写入流程（NULL 往返）", async () => {
-			// 不带 organizationId/createdById 写入 → 成功且读回 NULL（个人 MVP 路径零破坏）
+		test("MIG-E/F 收紧后：账本表仅以 organizationId 归属，createdById 可空，DataRequest.requesterUserId 可空", async () => {
+			// 带 organizationId 且不带 createdById 写入 → 成功且 createdById 读回 NULL
 			const account = await prisma.account.create({
 				data: {
-					userId: testUserId,
+					organizationId: testOrgId,
 					currencyCode: migCurrency,
 					balance: "77.0000",
 				},
@@ -481,12 +496,12 @@ describe("数据库基础设施测试", () => {
 			const accountRead = await prisma.account.findUnique({
 				where: { id: account.id },
 			});
-			expect(accountRead?.organizationId).toBeNull();
+			expect(accountRead?.organizationId).toBe(testOrgId);
 			expect(accountRead?.createdById).toBeNull();
 
 			const transaction = await prisma.transaction.create({
 				data: {
-					userId: testUserId,
+					organizationId: testOrgId,
 					currencyCode: migCurrency,
 					quantity: "10.0000",
 					principalAmount: "650.0000",
@@ -496,26 +511,26 @@ describe("数据库基础设施测试", () => {
 					transactedAt: new Date(Date.UTC(2024, 0, 2, 12, 0, 0)),
 				},
 			});
-			expect(transaction.organizationId).toBeNull();
+			expect(transaction.organizationId).toBe(testOrgId);
 			expect(transaction.createdById).toBeNull();
 
 			const plan = await prisma.plan.create({
 				data: {
 					id: migPlanId,
-					userId: testUserId,
+					organizationId: testOrgId,
 					targetCurrency: migCurrency,
 					targetAmount: "100.0000",
 					expectUseDate: new Date(Date.UTC(2024, 1, 1)),
 					latestPrepDate: new Date(Date.UTC(2024, 0, 25)),
 				},
 			});
-			expect(plan.organizationId).toBeNull();
+			expect(plan.organizationId).toBe(testOrgId);
 			expect(plan.createdById).toBeNull();
 
-			// DataRequest.scope 默认 PERSONAL；organizationId 可空
+			// DataRequest.scope 默认 PERSONAL；organizationId 可空，使用 requesterUserId
 			const dataRequest = await prisma.dataRequest.create({
 				data: {
-					userId: testUserId,
+					requesterUserId: testUserId,
 					type: "EXPORT",
 					requestedAt: new Date(),
 					dueAt: new Date(Date.now() + 86_400_000),
@@ -523,6 +538,7 @@ describe("数据库基础设施测试", () => {
 			});
 			expect(dataRequest.scope).toBe("PERSONAL");
 			expect(dataRequest.organizationId).toBeNull();
+			expect(dataRequest.requesterUserId).toBe(testUserId);
 			await prisma.dataRequest.delete({ where: { id: dataRequest.id } });
 		});
 	});
@@ -556,7 +572,7 @@ describe("数据库基础设施测试", () => {
 			readStateUserIds.push(owner.id, member.id);
 			const reminder = await prisma.reminder.create({
 				data: {
-					userId: owner.id,
+					organizationId: testOrgId,
 					type: "PLAN_DUE",
 					dedupKey: `rr-${Date.now()}`,
 					scheduledFor: observedAt,
@@ -598,29 +614,18 @@ describe("数据库基础设施测试", () => {
 		});
 	});
 
-	describe("ToB R1 组织维度唯一索引与过渡存量部分唯一索引（W22 提前切出 MIG-E 项）", () => {
+	describe("ToB R1 MIG-E/F 组织维度唯一索引、NOT NULL 约束、User SET NULL 与旧列下线验证", () => {
 		const migCOrgIds: string[] = [];
 		const migCUserIds: string[] = [];
 
 		afterAll(async () => {
-			await prisma.reminder.deleteMany({
-				where: { userId: { in: migCUserIds } },
-			});
-			await prisma.initialHolding.deleteMany({
-				where: { userId: { in: migCUserIds } },
-			});
-			await prisma.account.deleteMany({
-				where: { userId: { in: migCUserIds } },
-			});
-			await prisma.organization.deleteMany({
-				where: { id: { in: migCOrgIds } },
-			});
+			await deleteOrganizationsCascadeLedger(prisma, migCOrgIds);
 			await prisma.user.deleteMany({
 				where: { id: { in: migCUserIds } },
 			});
 		});
 
-		test("Account / InitialHolding / Reminder 按组织唯一（同用户跨组织同币种/同 dedupKey 共存，同组织重复 P2002，legacy NULL 仍受部分唯一索引约束）", async () => {
+		test("Account / InitialHolding / Reminder 按组织唯一，NULL organization_id 被 NOT NULL 拒绝", async () => {
 			const owner = await prisma.user.create({
 				data: {
 					email: `migc-owner-${Date.now()}@example.com`,
@@ -628,32 +633,32 @@ describe("数据库基础设施测试", () => {
 				},
 			});
 			const orgA = await prisma.organization.create({
-				data: { name: "MIG-C Org A" },
+				data: { name: "MIG-E Org A" },
 			});
 			const orgB = await prisma.organization.create({
-				data: { name: "MIG-C Org B" },
+				data: { name: "MIG-E Org B" },
 			});
 			migCUserIds.push(owner.id);
 			migCOrgIds.push(orgA.id, orgB.id);
 
-			// 1. Account: 同用户跨组织同币种共存，同组织重复冲突
+			// 1. Account: 跨组织同币种共存，同组织重复 P2002
 			await prisma.account.create({
-				data: { userId: owner.id, organizationId: orgA.id, currencyCode: "M1C", balance: "10" },
+				data: { createdById: owner.id, organizationId: orgA.id, currencyCode: "M1C", balance: "10" },
 			});
 			await expect(
 				prisma.account.create({
-					data: { userId: owner.id, organizationId: orgB.id, currencyCode: "M1C", balance: "20" },
+					data: { createdById: owner.id, organizationId: orgB.id, currencyCode: "M1C", balance: "20" },
 				}),
 			).resolves.toBeDefined();
 			await expect(
 				prisma.account.create({
-					data: { userId: owner.id, organizationId: orgA.id, currencyCode: "M1C", balance: "30" },
+					data: { createdById: owner.id, organizationId: orgA.id, currencyCode: "M1C", balance: "30" },
 				}),
 			).rejects.toMatchObject({ code: "P2002" });
 
-			// 2. InitialHolding: 同用户跨组织同币种共存，同组织重复 P2002，legacy NULL 部分唯一索引 P2002
+			// 2. InitialHolding: 跨组织同币种共存，同组织重复 P2002
 			const holdingBase = {
-				userId: owner.id,
+				createdById: owner.id,
 				currencyCode: "M1C",
 				amount: "100",
 				rate: "7.0",
@@ -676,20 +681,11 @@ describe("数据库基础设施测试", () => {
 					data: { ...holdingBase, organizationId: orgA.id },
 				}),
 			).rejects.toMatchObject({ code: "P2002" });
-			await prisma.initialHolding.create({
-				data: { ...holdingBase, organizationId: null },
-			});
-			await expect(
-				prisma.initialHolding.create({
-					data: { ...holdingBase, organizationId: null },
-				}),
-			).rejects.toThrow();
 
-			// 3. Reminder: (organizationId, dedupKey, scheduledFor) 唯一 + legacy 部分唯一索引
+			// 3. Reminder: (organizationId, dedupKey, scheduledFor) 唯一
 			const dedupKey = `migc-dedup-${Date.now()}`;
 			await prisma.reminder.create({
 				data: {
-					userId: owner.id,
 					organizationId: orgA.id,
 					type: "PLAN_DUE",
 					dedupKey,
@@ -699,7 +695,6 @@ describe("数据库基础设施测试", () => {
 			await expect(
 				prisma.reminder.create({
 					data: {
-						userId: owner.id,
 						organizationId: orgB.id,
 						type: "PLAN_DUE",
 						dedupKey,
@@ -710,7 +705,6 @@ describe("数据库基础设施测试", () => {
 			await expect(
 				prisma.reminder.create({
 					data: {
-						userId: owner.id,
 						organizationId: orgA.id,
 						type: "PLAN_DUE",
 						dedupKey,
@@ -718,26 +712,199 @@ describe("数据库基础设施测试", () => {
 					},
 				}),
 			).rejects.toMatchObject({ code: "P2002" });
-			await prisma.reminder.create({
+
+			// 4. MIG-E: 底层 NOT NULL 拒绝 organization_id = NULL 写入
+			let nullOrgErr: unknown;
+			try {
+				await prisma.$executeRaw`
+					INSERT INTO accounts (id, organization_id, currency_code, balance, created_at, updated_at)
+					VALUES (${`mige-null-${Date.now()}`}, NULL, 'M1N', 0, now(), now())`;
+			} catch (err) {
+				nullOrgErr = err;
+			}
+			expect(nullOrgErr).toMatchObject({
+				code: "P2010",
+				meta: expect.objectContaining({ code: "23502" }),
+			});
+			// 同列集仅补上 organizationId 即可写入（证明 23502 确因 organization_id NOT NULL）
+			await expect(
+				prisma.account.create({
+					data: { organizationId: orgA.id, currencyCode: "M1N", balance: "0" },
+				}),
+			).resolves.toBeDefined();
+		});
+
+		test("MIG-E/F：删除 User 不级联删除组织账本，并将 createdById / actorUserId / requesterUserId 置为 NULL", async () => {
+			const creator = await prisma.user.create({
 				data: {
-					userId: owner.id,
-					organizationId: null,
-					type: "PLAN_DUE",
-					dedupKey,
-					scheduledFor: observedAt,
+					email: `mige-setnull-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
 				},
 			});
-			await expect(
-				prisma.reminder.create({
-					data: {
-						userId: owner.id,
-						organizationId: null,
-						type: "PLAN_DUE",
-						dedupKey,
-						scheduledFor: observedAt,
-					},
-				}),
-			).rejects.toThrow();
+			const org = await prisma.organization.create({
+				data: { name: "MIG-E SET NULL 保留组织" },
+			});
+			migCOrgIds.push(org.id);
+
+			const account = await prisma.account.create({
+				data: {
+					organizationId: org.id,
+					createdById: creator.id,
+					currencyCode: "MSN",
+					balance: "50.0000",
+				},
+			});
+			const txRow = await prisma.transaction.create({
+				data: {
+					organizationId: org.id,
+					createdById: creator.id,
+					currencyCode: "MSN",
+					quantity: "50.0000",
+					principalAmount: "350.0000",
+					exchangeRate: "7.0000000000",
+					rateSource: "manual",
+					rateObservedAt: observedAt,
+					transactedAt: observedAt,
+				},
+			});
+			const plan = await prisma.plan.create({
+				data: {
+					organizationId: org.id,
+					createdById: creator.id,
+					targetCurrency: "MSN",
+					targetAmount: "100.0000",
+					expectUseDate: new Date(Date.UTC(2024, 1, 1)),
+					latestPrepDate: new Date(Date.UTC(2024, 0, 25)),
+				},
+			});
+			const usage = await prisma.usageRecord.create({
+				data: {
+					organizationId: org.id,
+					createdById: creator.id,
+					planId: plan.id,
+					currencyCode: "MSN",
+					amount: "10.0000",
+					usedAt: observedAt,
+				},
+			});
+			const correction = await prisma.correction.create({
+				data: {
+					organizationId: org.id,
+					actorUserId: creator.id,
+					targetType: "TRANSACTION",
+					targetId: txRow.id,
+					reason: "作者注销前留下的更正",
+					beforeSnapshot: { principalAmount: "350.0000" },
+					afterSnapshot: { principalAmount: "340.0000" },
+				},
+			});
+			const holding = await prisma.initialHolding.create({
+				data: {
+					organizationId: org.id,
+					createdById: creator.id,
+					currencyCode: "MSN",
+					amount: "100.0000",
+					rate: "7.0000000000",
+					rawRate: "7.0000000000",
+					rateSource: "identity",
+					rateObservedAt: observedAt,
+					cost: "700.0000",
+					confirmedAt: observedAt,
+				},
+			});
+			const auditRow = await prisma.auditLog.create({
+				data: {
+					organizationId: org.id,
+					actorType: "USER",
+					actorUserId: creator.id,
+					action: "test.set_null",
+					targetType: "ACCOUNT",
+					targetId: account.id,
+					result: "SUCCESS",
+				},
+			});
+			const orgReq = await prisma.dataRequest.create({
+				data: {
+					organizationId: org.id,
+					requesterUserId: creator.id,
+					scope: "ORGANIZATION",
+					type: "EXPORT",
+					requestedAt: observedAt,
+					dueAt: observedAt,
+				},
+			});
+
+			// 删除创建者：个人关系级联，但组织账本 / 审计 / 组织数据请求保留
+			await prisma.user.delete({ where: { id: creator.id } });
+
+			const survivedAccount = await prisma.account.findUnique({ where: { id: account.id } });
+			const survivedTx = await prisma.transaction.findUnique({ where: { id: txRow.id } });
+			const survivedPlan = await prisma.plan.findUnique({ where: { id: plan.id } });
+			const survivedUsage = await prisma.usageRecord.findUnique({ where: { id: usage.id } });
+			const survivedCorrection = await prisma.correction.findUnique({
+				where: { id: correction.id },
+			});
+			const survivedHolding = await prisma.initialHolding.findUnique({
+				where: { id: holding.id },
+			});
+			const survivedAudit = await prisma.auditLog.findUnique({ where: { id: auditRow.id } });
+			const survivedReq = await prisma.dataRequest.findUnique({ where: { id: orgReq.id } });
+
+			// 账本行全部留存——「用户注销把企业账本删光」在数据库层面不可能发生
+			expect(survivedAccount).not.toBeNull();
+			expect(survivedTx).not.toBeNull();
+			expect(survivedPlan).not.toBeNull();
+			expect(survivedUsage).not.toBeNull();
+			expect(survivedCorrection).not.toBeNull();
+			expect(survivedHolding).not.toBeNull();
+			expect(survivedReq).not.toBeNull();
+			expect(survivedAudit).not.toBeNull();
+
+			// 作者列（ON DELETE SET NULL）：账本表的 created_by_id / actor_user_id
+			expect(survivedAccount?.createdById).toBeNull();
+			expect(survivedTx?.createdById).toBeNull();
+			expect(survivedPlan?.createdById).toBeNull();
+			expect(survivedUsage?.createdById).toBeNull();
+			expect(survivedHolding?.createdById).toBeNull();
+			expect(survivedCorrection?.actorUserId).toBeNull();
+			// 数据请求的 requester_user_id（ON DELETE SET NULL）：请求行保留、发起人置空
+			expect(survivedReq?.requesterUserId).toBeNull();
+			expect(survivedReq?.scope).toBe("ORGANIZATION");
+			expect(survivedReq?.organizationId).toBe(org.id);
+
+			// 租户列与业务事实不变
+			expect(survivedAccount?.organizationId).toBe(org.id);
+			expect(survivedAccount?.balance.toFixed(4)).toBe("50.0000");
+			expect(survivedPlan?.organizationId).toBe(org.id);
+			expect(survivedUsage?.organizationId).toBe(org.id);
+			expect(survivedCorrection?.organizationId).toBe(org.id);
+
+			// audit_logs.actor_user_id **无外键**（审计保留策略独立于用户/组织生命周期，
+			// 见 schema.prisma AuditLog 注释）：用户注销不追溯审计行，操作者快照原样保留
+			expect(survivedAudit?.actorUserId).toBe(creator.id);
+
+			await prisma.dataRequest.delete({ where: { id: orgReq.id } });
+			await prisma.auditLog.delete({ where: { id: auditRow.id } });
+		});
+
+		test("MIG-F：旧 user_id / read_at / user_settings 账本旧列与旧部分唯一索引已彻底下线", async () => {
+			const droppedCols = await prisma.$queryRaw<
+				Array<{ table_name: string; column_name: string }>
+			>`
+				SELECT table_name, column_name
+				FROM information_schema.columns
+				WHERE table_schema = current_schema()
+					AND (
+						(column_name = 'user_id' AND table_name IN (
+							'accounts', 'transactions', 'plans', 'usage_records',
+							'initial_holdings', 'corrections', 'cost_lots', 'reminders', 'data_requests'
+						))
+						OR (table_name = 'reminders' AND column_name = 'read_at')
+						OR (table_name = 'user_settings' AND column_name IN (
+							'base_currency', 'prep_preference', 'reminder_enabled', 'ledger_started_at'
+						))
+					)`;
+			expect(droppedCols).toEqual([]);
 		});
 	});
 
@@ -751,7 +918,7 @@ describe("数据库基础设施测试", () => {
 		const w26OrgIds: string[] = [];
 
 		afterAll(async () => {
-			await prisma.dataRequest.deleteMany({ where: { userId: { in: w26UserIds } } });
+			await prisma.dataRequest.deleteMany({ where: { requesterUserId: { in: w26UserIds } } });
 			await prisma.auditLog.deleteMany({ where: { organizationId: { in: w26OrgIds } } });
 			// 成员关系 / 组织设置随组织级联删除
 			await prisma.organization.deleteMany({ where: { id: { in: w26OrgIds } } });
@@ -785,11 +952,11 @@ describe("数据库基础设施测试", () => {
 		}
 
 		function requestRow(
-			userId: string,
+			requesterUserId: string,
 			type: "EXPORT" | "CLEAR" | "DELETION",
 			extra: Record<string, unknown> = {},
 		) {
-			return { userId, type, requestedAt: W26_T0, dueAt: W26_DUE, ...extra };
+			return { requesterUserId, type, requestedAt: W26_T0, dueAt: W26_DUE, ...extra };
 		}
 
 		test("约束已落库且通过校验（convalidated），定义覆盖 PERSONAL / ORGANIZATION 两个分支", async () => {
@@ -825,7 +992,7 @@ describe("数据库基础设施测试", () => {
 					}),
 				).resolves.toBeDefined();
 			}
-			const rows = await prisma.dataRequest.findMany({ where: { userId } });
+			const rows = await prisma.dataRequest.findMany({ where: { requesterUserId: userId } });
 			expect(rows.map((row) => [row.scope, row.type, row.organizationId === null])).toEqual([
 				["PERSONAL", "EXPORT", true],
 				["PERSONAL", "DELETION", true],
@@ -855,7 +1022,7 @@ describe("数据库基础设施测试", () => {
 				).rejects.toThrow(CHECK_VIOLATION);
 			}
 			// 违约写入零落库
-			expect(await prisma.dataRequest.count({ where: { userId } })).toBe(0);
+			expect(await prisma.dataRequest.count({ where: { requesterUserId: userId } })).toBe(0);
 		});
 
 		test("反向：更新同样受约束——把已挂组织的请求改成 PERSONAL、或把组织域请求的组织置空均被拒绝", async () => {
@@ -1057,156 +1224,187 @@ describe("数据库基础设施测试", () => {
 			}
 			expect(recorded).toEqual(fileStatements);
 
-			// 三类历史用户：已有默认组织 / 尚无默认组织（迁移须补建）/ 无默认组织且无个人设置（不虚构本位币）
-			const withDefault = await createUser("已有默认组织");
-			const defaultOrgId = await createDefaultOrg(withDefault, "W26 既有默认组织");
-			const noDefault = await createUser("迁移补建");
-			await prisma.userSettings.create({
-				data: {
-					userId: noDefault,
-					baseCurrency: "USD",
-					locale: "en",
-					region: "HK",
-					prepPreference: "cautious",
-					reminderEnabled: false,
-					ledgerStartedAt: W26_T0,
-				},
-			});
-			const bare = await createUser("无设置用户");
+			// 在独立临时 schema 演练 MIG-E/F 前的历史库形态（含 data_requests.user_id 与 user_settings 4 列），
+			// 不污染主库 public 结构，跑完即 DROP SCHEMA CASCADE
+			const tempSchema = `w26_replay_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+			await prisma.$executeRawUnsafe(`CREATE SCHEMA "${tempSchema}"`);
+			try {
+				await prisma.$transaction(async (tx) => {
+					await tx.$executeRawUnsafe(`SET LOCAL search_path TO "${tempSchema}"`);
+					for (const ddl of [
+						`CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT, name TEXT)`,
+						`CREATE TABLE organizations (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('UTC', now()), updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('UTC', now()))`,
+						`CREATE TABLE memberships (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL, joined_at TIMESTAMPTZ NOT NULL DEFAULT timezone('UTC', now()), created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('UTC', now()), updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('UTC', now()), UNIQUE (organization_id, user_id))`,
+						`CREATE TABLE user_settings (id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE, base_currency TEXT, prep_preference TEXT NOT NULL, reminder_enabled BOOLEAN NOT NULL, ledger_started_at TIMESTAMPTZ)`,
+						`CREATE TABLE organization_settings (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL UNIQUE, base_currency TEXT NOT NULL, prep_preference TEXT NOT NULL, reminder_enabled BOOLEAN NOT NULL, ledger_started_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL)`,
+						`CREATE TABLE data_requests (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, organization_id TEXT, scope TEXT NOT NULL DEFAULT 'PERSONAL', type TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', requested_at TIMESTAMPTZ NOT NULL, due_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('UTC', now()), updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('UTC', now()))`,
+					]) {
+						await tx.$executeRawUnsafe(ddl);
+					}
 
-			const migratedOrgId = `cdrmig${createHash("md5").update(noDefault).digest("hex").slice(0, 19)}`;
-			const bareOrgId = `cdrmig${createHash("md5").update(bare).digest("hex").slice(0, 19)}`;
-			w26OrgIds.push(migratedOrgId, bareOrgId);
+					const withDefault = "u-with-default";
+					const defaultOrgId = "org-with-default";
+					const noDefault = "u-no-default";
+					const bare = "u-bare";
+					const migratedOrgId = `cdrmig${createHash("md5").update(noDefault).digest("hex").slice(0, 19)}`;
+					const bareOrgId = `cdrmig${createHash("md5").update(bare).digest("hex").slice(0, 19)}`;
 
-			const legacyBefore = await prisma.$transaction(async (tx) => {
-				// 迁移在同一事务里「先规范化、后加约束」，约束因此可随本事务临时移除；
-				// 事务无论提交还是回滚，约束都会由第 ⑦ 步或回滚恢复（静态字面量 DDL）
-				await tx.$executeRawUnsafe(
-					'ALTER TABLE "data_requests" DROP CONSTRAINT "data_requests_scope_type_org_check"',
-				);
+					await tx.$executeRaw`
+						INSERT INTO users (id, email, name) VALUES
+							(${withDefault}, 'with@example.com', '已有默认组织'),
+							(${noDefault}, 'nodefault@example.com', '迁移补建'),
+							(${bare}, 'bare@example.com', NULL)`;
+					await tx.$executeRaw`
+						INSERT INTO organizations (id, name, created_at, updated_at)
+						VALUES (${defaultOrgId}, 'W26 既有默认组织', ${W26_T0}, ${W26_T0})`;
+					await tx.$executeRaw`
+						INSERT INTO memberships (id, organization_id, user_id, role, status, joined_at, created_at, updated_at)
+						VALUES ('m-default', ${defaultOrgId}, ${withDefault}, 'OWNER', 'ACTIVE', ${W26_T0}, ${W26_T0}, ${W26_T0})`;
+					await tx.$executeRaw`
+						INSERT INTO user_settings (id, user_id, base_currency, prep_preference, reminder_enabled, ledger_started_at)
+						VALUES ('us-nodefault', ${noDefault}, 'USD', 'cautious', false, ${W26_T0})`;
 
-				// 还原 W26 之前的库形态（违约行此刻可写）
-				const legacy = [
-					requestRow(withDefault, "CLEAR", { status: "PENDING" }),
-					// 两种漂移形态：未挂组织却标了 ORGANIZATION 的导出；已挂组织却标了 PERSONAL 的导出
-					requestRow(withDefault, "EXPORT", { scope: "ORGANIZATION", status: "COMPLETED" }),
-					requestRow(withDefault, "EXPORT", { scope: "PERSONAL", organizationId: defaultOrgId }),
-					requestRow(noDefault, "CLEAR", { status: "PENDING" }),
-					requestRow(noDefault, "CLEAR", { status: "COMPLETED" }),
-					requestRow(noDefault, "CLEAR", { status: "CANCELLED" }),
-					requestRow(bare, "CLEAR", { status: "COMPLETED" }),
-				];
-				const created: Array<{ id: string; updatedAt: Date; createdAt: Date }> = [];
-				for (const data of legacy) {
-					created.push(await tx.dataRequest.create({ data, select: { id: true, createdAt: true, updatedAt: true } }));
-				}
+					const legacySeed = [
+						{ id: "dr-1", userId: withDefault, organizationId: null, scope: "PERSONAL", type: "CLEAR", status: "PENDING" },
+						{ id: "dr-2", userId: withDefault, organizationId: null, scope: "ORGANIZATION", type: "EXPORT", status: "COMPLETED" },
+						{ id: "dr-3", userId: withDefault, organizationId: defaultOrgId, scope: "PERSONAL", type: "EXPORT", status: "PENDING" },
+						{ id: "dr-4", userId: noDefault, organizationId: null, scope: "PERSONAL", type: "CLEAR", status: "PENDING" },
+						{ id: "dr-5", userId: noDefault, organizationId: null, scope: "PERSONAL", type: "CLEAR", status: "COMPLETED" },
+						{ id: "dr-6", userId: noDefault, organizationId: null, scope: "PERSONAL", type: "CLEAR", status: "CANCELLED" },
+						{ id: "dr-7", userId: bare, organizationId: null, scope: "PERSONAL", type: "CLEAR", status: "COMPLETED" },
+					];
+					for (const item of legacySeed) {
+						await tx.$executeRaw`
+							INSERT INTO data_requests (id, user_id, organization_id, scope, type, status, requested_at, due_at)
+							VALUES (${item.id}, ${item.userId}, ${item.organizationId}, ${item.scope}, ${item.type}, ${item.status}, ${W26_T0}, ${W26_DUE})`;
+					}
+					const beforeRows = await tx.$queryRaw<
+						Array<{ id: string; createdAt: Date; updatedAt: Date }>
+					>`
+						SELECT id, created_at AS "createdAt", updated_at AS "updatedAt"
+						FROM data_requests ORDER BY id`;
 
-				for (const step of steps) {
-					await step(tx);
-				}
+					for (const step of steps) {
+						await step(tx);
+					}
 
-				// ── 迁移后断言 ──
-				const rows = await tx.dataRequest.findMany({
-					where: { userId: { in: [withDefault, noDefault, bare] } },
-				});
-				expect(rows).toHaveLength(legacy.length);
-				// 全部满足 CHECK 形态
-				for (const row of rows) {
-					const valid =
-						(row.scope === "PERSONAL" && row.organizationId === null && ["EXPORT", "DELETION"].includes(row.type)) ||
-						(row.scope === "ORGANIZATION" && row.organizationId !== null);
-					expect(valid, `${row.userId} ${row.type} ${row.scope}`).toBe(true);
-				}
-				// 时间戳一律不改（§12.2.6）；状态机字段不动——PENDING 锁原样保留
-				for (const before of created) {
-					const after = rows.find((row) => row.id === before.id)!;
-					expect([after.createdAt, after.updatedAt, after.requestedAt, after.dueAt]).toEqual([
-						before.createdAt,
-						before.updatedAt,
-						W26_T0,
-						W26_DUE,
-					]);
-				}
-				const byKey = new Map(
-					rows.map((row) => [`${row.userId}|${row.type}|${row.status}`, row]),
-				);
-				// 已有默认组织：历史 CLEAR 挂到默认组织，状态仍为 PENDING
-				expect(byKey.get(`${withDefault}|CLEAR|PENDING`)).toMatchObject({
-					scope: "ORGANIZATION",
-					organizationId: defaultOrgId,
-				});
-				// 漂移纠正：未挂组织 → PERSONAL；已挂组织 → ORGANIZATION（组织不变）
-				expect(byKey.get(`${withDefault}|EXPORT|COMPLETED`)).toMatchObject({
-					scope: "PERSONAL",
-					organizationId: null,
-				});
-				expect(byKey.get(`${withDefault}|EXPORT|PENDING`)).toMatchObject({
-					scope: "ORGANIZATION",
-					organizationId: defaultOrgId,
-				});
-				// 尚无默认组织：三条历史 CLEAR 挂到迁移补建的组织
-				for (const status of ["PENDING", "COMPLETED", "CANCELLED"]) {
-					expect(byKey.get(`${noDefault}|CLEAR|${status}`)).toMatchObject({
+					const rows = await tx.$queryRaw<
+						Array<{
+							id: string;
+							userId: string;
+							organizationId: string | null;
+							scope: string;
+							type: string;
+							status: string;
+							requestedAt: Date;
+							dueAt: Date;
+							createdAt: Date;
+							updatedAt: Date;
+						}>
+					>`
+						SELECT id, user_id AS "userId", organization_id AS "organizationId",
+							scope, type, status, requested_at AS "requestedAt", due_at AS "dueAt",
+							created_at AS "createdAt", updated_at AS "updatedAt"
+						FROM data_requests ORDER BY id`;
+					expect(rows).toHaveLength(legacySeed.length);
+					for (const row of rows) {
+						const valid =
+							(row.scope === "PERSONAL" && row.organizationId === null && ["EXPORT", "DELETION"].includes(row.type)) ||
+							(row.scope === "ORGANIZATION" && row.organizationId !== null);
+						expect(valid, `${row.userId} ${row.type} ${row.scope}`).toBe(true);
+					}
+					for (const before of beforeRows) {
+						const after = rows.find((row) => row.id === before.id)!;
+						expect([after.createdAt, after.updatedAt, after.requestedAt, after.dueAt]).toEqual([
+							before.createdAt,
+							before.updatedAt,
+							W26_T0,
+							W26_DUE,
+						]);
+					}
+					const byKey = new Map(
+						rows.map((row) => [`${row.userId}|${row.type}|${row.status}`, row]),
+					);
+					expect(byKey.get(`${withDefault}|CLEAR|PENDING`)).toMatchObject({
 						scope: "ORGANIZATION",
-						organizationId: migratedOrgId,
-						status,
+						organizationId: defaultOrgId,
 					});
-				}
-				expect(byKey.get(`${bare}|CLEAR|COMPLETED`)).toMatchObject({
-					scope: "ORGANIZATION",
-					organizationId: bareOrgId,
-				});
+					expect(byKey.get(`${withDefault}|EXPORT|COMPLETED`)).toMatchObject({
+						scope: "PERSONAL",
+						organizationId: null,
+					});
+					expect(byKey.get(`${withDefault}|EXPORT|PENDING`)).toMatchObject({
+						scope: "ORGANIZATION",
+						organizationId: defaultOrgId,
+					});
+					for (const status of ["PENDING", "COMPLETED", "CANCELLED"]) {
+						expect(byKey.get(`${noDefault}|CLEAR|${status}`)).toMatchObject({
+							scope: "ORGANIZATION",
+							organizationId: migratedOrgId,
+							status,
+						});
+					}
+					expect(byKey.get(`${bare}|CLEAR|COMPLETED`)).toMatchObject({
+						scope: "ORGANIZATION",
+						organizationId: bareOrgId,
+					});
 
-				// 补建的组织 = 默认组织识别口径（创建者 = 首个成员且成员关系与组织同事务创建）
-				expect(await resolveDefaultOrganizationId(tx, noDefault)).toBe(migratedOrgId);
-				expect(await resolveDefaultOrganizationId(tx, bare)).toBe(bareOrgId);
-				const membership = await tx.membership.findUniqueOrThrow({
-					where: { organizationId_userId: { organizationId: migratedOrgId, userId: noDefault } },
-				});
-				const organization = await tx.organization.findUniqueOrThrow({ where: { id: migratedOrgId } });
-				expect(membership).toMatchObject({ role: "OWNER", status: "ACTIVE" });
-				expect(membership.createdAt).toEqual(organization.createdAt);
-				expect(membership.joinedAt).toEqual(organization.createdAt);
-				expect(organization.name).toBe("迁移补建的工作台");
-				// 组织设置按个人设置复制；无个人设置的用户不虚构本位币
-				expect(
-					await tx.organizationSettings.findUnique({ where: { organizationId: migratedOrgId } }),
-				).toMatchObject({
-					baseCurrency: "USD",
-					prepPreference: "cautious",
-					reminderEnabled: false,
-					ledgerStartedAt: W26_T0,
-				});
-				expect(
-					await tx.organizationSettings.findUnique({ where: { organizationId: bareOrgId } }),
-				).toBeNull();
-				expect(
-					await tx.membership.count({ where: { organizationId: bareOrgId, userId: bare, role: "OWNER" } }),
-				).toBe(1);
+					expect(await resolveDefaultOrganizationId(tx, noDefault)).toBe(migratedOrgId);
+					expect(await resolveDefaultOrganizationId(tx, bare)).toBe(bareOrgId);
+					const [orgRow] = await tx.$queryRaw<
+						Array<{ name: string; createdAt: Date }>
+					>`SELECT name, created_at AS "createdAt" FROM organizations WHERE id = ${migratedOrgId}`;
+					const [membershipRow] = await tx.$queryRaw<
+						Array<{ role: string; status: string; createdAt: Date; joinedAt: Date }>
+					>`
+						SELECT role, status, created_at AS "createdAt", joined_at AS "joinedAt"
+						FROM memberships WHERE organization_id = ${migratedOrgId} AND user_id = ${noDefault}`;
+					expect(membershipRow).toMatchObject({ role: "OWNER", status: "ACTIVE" });
+					expect(membershipRow?.createdAt).toEqual(orgRow?.createdAt);
+					expect(membershipRow?.joinedAt).toEqual(orgRow?.createdAt);
+					expect(orgRow?.name).toBe("迁移补建的工作台");
 
-				// 幂等：规范化语句（①–⑥）重跑零变化——不重复建组、不改写任何行
-				const snapshot = JSON.stringify(rows.map((row) => [row.id, row.scope, row.organizationId]));
-				for (const step of steps.slice(0, 6)) await step(tx);
-				expect(
-					JSON.stringify(
-						(await tx.dataRequest.findMany({ where: { userId: { in: [withDefault, noDefault, bare] } } })).map(
-							(row) => [row.id, row.scope, row.organizationId],
-						),
-					),
-				).toBe(snapshot);
-				expect(await tx.organization.count({ where: { id: { in: [migratedOrgId, bareOrgId] } } })).toBe(2);
-				expect(await tx.membership.count({ where: { organizationId: migratedOrgId } })).toBe(1);
-				return created;
-			}, { timeout: 60_000 });
-			expect(legacyBefore).toHaveLength(7);
+					const [orgSettings] = await tx.$queryRaw<
+						Array<{
+							baseCurrency: string;
+							prepPreference: string;
+							reminderEnabled: boolean;
+							ledgerStartedAt: Date | null;
+						}>
+					>`
+						SELECT base_currency AS "baseCurrency", prep_preference AS "prepPreference",
+							reminder_enabled AS "reminderEnabled", ledger_started_at AS "ledgerStartedAt"
+						FROM organization_settings WHERE organization_id = ${migratedOrgId}`;
+					expect(orgSettings).toMatchObject({
+						baseCurrency: "USD",
+						prepPreference: "cautious",
+						reminderEnabled: false,
+						ledgerStartedAt: W26_T0,
+					});
+					const bareSettings = await tx.$queryRaw<Array<{ id: string }>>`
+						SELECT id FROM organization_settings WHERE organization_id = ${bareOrgId}`;
+					expect(bareSettings).toHaveLength(0);
 
-			// 事务提交后：约束已由第 ⑦ 步恢复并拒绝违约写入
-			const constraint = await prisma.$queryRaw<Array<{ convalidated: boolean }>>`
-				SELECT convalidated FROM pg_constraint WHERE conname = ${CHECK_NAME}`;
-			expect(constraint).toEqual([{ convalidated: true }]);
-			await expect(
-				prisma.dataRequest.create({ data: requestRow(bare, "CLEAR") }),
-			).rejects.toThrow(CHECK_VIOLATION);
+					// 幂等重跑 ①–⑥
+					const snapshot = JSON.stringify(rows.map((row) => [row.id, row.scope, row.organizationId]));
+					for (const step of steps.slice(0, 6)) await step(tx);
+					const afterRerun = await tx.$queryRaw<
+						Array<{ id: string; scope: string; organizationId: string | null }>
+					>`SELECT id, scope, organization_id AS "organizationId" FROM data_requests ORDER BY id`;
+					expect(
+						JSON.stringify(afterRerun.map((row) => [row.id, row.scope, row.organizationId])),
+					).toBe(snapshot);
+
+					// ⑦ 步加上的约束在临时 schema 内已生效并拒绝违约写入
+					await expect(
+						tx.$executeRaw`
+							INSERT INTO data_requests (id, user_id, organization_id, scope, type, status, requested_at, due_at)
+							VALUES ('dr-invalid', ${bare}, NULL, 'PERSONAL', 'CLEAR', 'PENDING', ${W26_T0}, ${W26_DUE})`,
+					).rejects.toThrow(CHECK_VIOLATION);
+				}, { timeout: 60_000 });
+			} finally {
+				await prisma.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${tempSchema}" CASCADE`);
+			}
 		});
 	});
 });

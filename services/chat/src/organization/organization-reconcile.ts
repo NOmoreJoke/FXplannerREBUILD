@@ -26,9 +26,37 @@
  *
  * 复用方式：integration 测试直接调用；CLI verify 子命令见
  * prisma/tob-r1-migration/backfill.ts（0 diffs 退出 0，否则退出 1）。
+ *
+ * MIG-C 快照（Goal #3C W29）：本文件同时提供 `captureMigrationSnapshot` /
+ * `compareMigrationSnapshots`——按 §12.3 七类口径采集迁移前/后快照并逐项比对，
+ * 供 `MIG-A → B → C` 演练取证（CLI `snapshot` / `drill` 子命令）。
+ *
+ * MIG-F 前瞻（Goal #3C W30）：MIG-F 删除 legacy 列后，本文件的核对逻辑改走
+ * `reconcileMigratedSchema`（组织维度基础校验）——**不引用任何已删除列**，因此
+ * MIG-F 之后依然可以运行基础一致性校验而不因「列不存在」崩溃。
  */
 
 import type { Prisma } from "@prisma/client";
+import {
+	detectMigrationSchemaCapabilities,
+	type MigrationSchemaCapabilities,
+	serializeCapabilities,
+} from "./migration-schema-capabilities";
+
+/**
+ * MIG-C 快照（§12.3 七类口径）实现位于同目录
+ * `organization-migration-snapshot.ts`（单一职责：采集/比对，与核对逻辑解耦）；
+ * 此处转出公共 API，调用方只需依赖核对模块即可。
+ */
+export {
+	captureMigrationSnapshot,
+	compareMigrationSnapshots,
+	type MigrationSnapshot,
+	type MigrationSnapshotComparison,
+	type MigrationSnapshotDiff,
+	type MigrationSnapshotDb,
+	type MigrationSnapshotOwnerKind,
+} from "./organization-migration-snapshot";
 
 /** 单条核对差异（scope 描述差异位置；left = 期望值 0，right = 实际差异计数） */
 export interface ReconcileDiff {
@@ -44,6 +72,28 @@ export interface ReconcileResult {
 	diffs: ReconcileDiff[];
 	/** 是否为分片核对（true = 未评估无法归属到用户的孤儿检查） */
 	sharded: boolean;
+	/** 本次核对所处的库阶段能力（MIG-F 前瞻：MIG-F 后走「组织维度基础校验」分支） */
+	capabilities?: MigrationSchemaCapabilities;
+}
+
+/**
+ * 核对结果的 JSON 友好投影：能力快照里的 `Set` 展开成数组（`Set` 直接
+ * JSON.stringify 会变成 `{}`，运维看日志会误读）。
+ */
+export function serializeReconcileResult(result: ReconcileResult): {
+	checks: number;
+	diffs: ReconcileDiff[];
+	sharded: boolean;
+	capabilities: Record<string, unknown> | null;
+} {
+	return {
+		checks: result.checks,
+		diffs: result.diffs,
+		sharded: result.sharded,
+		capabilities: result.capabilities
+			? serializeCapabilities(result.capabilities)
+			: null,
+	};
 }
 
 type QueryRunner = Prisma.TransactionClient["$queryRaw"];
@@ -72,6 +122,8 @@ interface IntegrityCounts {
 	lot_orphan_source: bigint;
 	fifo: bigint;
 	batch: bigint;
+	/** 变更日志 ↔ 父计划同组织（MIG-F 分支专用，对抗审 R1-N2） */
+	change_log_plan?: bigint;
 }
 
 /**
@@ -82,6 +134,13 @@ export async function reconcileMigration(
 	db: { $queryRaw: QueryRunner },
 	options: { userIds?: string[] } = {},
 ): Promise<ReconcileResult> {
+	// MIG-F 前瞻：先探测库阶段。legacy 列（accounts.user_id / user_settings.base_currency /
+	// reminders.read_at）被删除后，下面依赖它们的 SQL 会直接因「列不存在」崩溃——
+	// 此时改走组织维度的「基础一致性校验」分支（reconcileMigratedSchema）。
+	const capabilities = await detectMigrationSchemaCapabilities(db);
+	if (capabilities.migF) {
+		return reconcileMigratedSchema(db, options, capabilities);
+	}
 	const diffs: ReconcileDiff[] = [];
 	let checks = 0;
 	const sharded = options.userIds !== undefined;
@@ -390,5 +449,182 @@ export async function reconcileMigration(
 	);
 	expectZero("dual_rows.reminders", dualRows?.dualReminderRows ?? 0n);
 
-	return { checks, diffs, sharded };
+	return { checks, diffs, sharded, capabilities };
+}
+
+// ─────────────────────── MIG-F 之后的组织维度基础校验 ───────────────────────
+
+/**
+ * MIG-F 之后的「基础一致性校验」（Goal #3C W30 前瞻）。
+ *
+ * MIG-F 删除了业务共享表上的冗余 `user_id`、`user_settings` 的 legacy 设置列与
+ * `reminders.read_at`——这些列是「行 → 用户」归属链路的载体。列没了，
+ * 「每行是否等于其用户的默认组织」这条恒等式就无法再按用户维度表达，
+ * 但**组织维度的不变量与迁移无关、也不依赖被删除的列**，因此仍然必须可核对：
+ *
+ * 1. 每个用户都有默认组织（用户 → 默认组织的解析不依赖业务表列）；
+ * 2. 派生行父子同组织（UsageRecord↔Plan、CostLot↔InitialHolding/Transaction、
+ *    UsageLotAllocation↔UsageRecord/CostLot、PlanChangeLog↔Plan）；
+ * 3. 孤儿派生行（父缺失）为 0；
+ * 4. FIFO 消耗守恒与批次守恒（纯数量口径，不含租户列）。
+ *
+ * 分片口径随之改变：MIG-F 前按 `user_id` 限定，MIG-F 后行只带
+ * `organization_id`，故按「分片用户的默认组织集合」限定。
+ *
+ * 全部 SQL 为静态语句 + 绑定参数，且**不引用任何 MIG-F 已删除的列**。
+ */
+async function reconcileMigratedSchema(
+	db: { $queryRaw: QueryRunner },
+	options: { userIds?: string[] },
+	capabilities: MigrationSchemaCapabilities,
+): Promise<ReconcileResult> {
+	const diffs: ReconcileDiff[] = [];
+	let checks = 0;
+	const sharded = options.userIds !== undefined;
+	const ids = options.userIds ?? [];
+
+	function expectZero(scope: string, count: bigint | number): void {
+		checks += 1;
+		if (Number(count) !== 0) {
+			diffs.push({ scope, left: 0, right: Number(count) });
+		}
+	}
+
+	// 1. 默认组织映射完整性（users / memberships 不受 MIG-F 影响）
+	const [missingDefault] = await db.$queryRaw<Array<{ n: bigint }>>`
+		WITH first_members AS (
+			SELECT DISTINCT ON (m.organization_id)
+				m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
+			FROM memberships m
+			ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+		),
+		defaults AS (
+			SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+			FROM first_members f
+			JOIN organizations o ON o.id = f.organization_id
+			WHERE f.created_at = o.created_at
+			ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
+		)
+		SELECT count(*) AS n FROM users u
+		LEFT JOIN defaults d ON d.user_id = u.id
+		WHERE d.user_id IS NULL
+			AND (NOT ${sharded} OR u.id = ANY(${ids}::text[]))`;
+	expectZero("default_org.missing", missingDefault?.n ?? 0n);
+
+	// 2. 组织维度不变量：父子同组织 + 孤儿 + FIFO / 批次守恒
+	//    （scope_orgs = 分片用户的默认组织集合；全库模式不限定）
+	const [integrity] = await db.$queryRaw<Array<IntegrityCounts>>`
+		WITH first_members AS (
+			SELECT DISTINCT ON (m.organization_id)
+				m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
+			FROM memberships m
+			ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+		),
+		defaults AS (
+			SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+			FROM first_members f
+			JOIN organizations o ON o.id = f.organization_id
+			WHERE f.created_at = o.created_at
+			ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
+		),
+		scope_orgs AS (
+			SELECT DISTINCT d.organization_id FROM defaults d
+			WHERE (NOT ${sharded} OR d.user_id = ANY(${ids}::text[]))
+		)
+		SELECT
+			(SELECT count(*) FROM usage_records u JOIN plans p ON p.id = u.plan_id
+				WHERE u.organization_id IS DISTINCT FROM p.organization_id
+					AND (NOT ${sharded} OR u.organization_id IN (
+						SELECT organization_id FROM scope_orgs))) AS usage_plan,
+			(SELECT count(*) FROM cost_lots l
+				JOIN initial_holdings h ON l.source_type = 'INITIAL' AND h.id = l.source_id
+				WHERE l.organization_id IS DISTINCT FROM h.organization_id
+					AND (NOT ${sharded} OR l.organization_id IN (
+						SELECT organization_id FROM scope_orgs)))
+			+ (SELECT count(*) FROM cost_lots l
+				JOIN transactions t ON l.source_type = 'PURCHASE' AND t.id = l.source_id
+				WHERE l.organization_id IS DISTINCT FROM t.organization_id
+					AND (NOT ${sharded} OR l.organization_id IN (
+						SELECT organization_id FROM scope_orgs))) AS lot_source,
+			(SELECT count(*) FROM usage_lot_allocations x
+				JOIN usage_records u ON u.id = x.usage_id
+				JOIN cost_lots l ON l.id = x.lot_id
+				WHERE u.organization_id IS DISTINCT FROM l.organization_id
+					AND (NOT ${sharded} OR u.organization_id IN (
+						SELECT organization_id FROM scope_orgs))) AS ula_parents,
+			(SELECT count(*) FROM usage_records u
+				LEFT JOIN plans p ON p.id = u.plan_id
+				WHERE p.id IS NULL
+					AND (NOT ${sharded} OR u.organization_id IN (
+						SELECT organization_id FROM scope_orgs))) AS usage_orphan_plan,
+			(SELECT count(*) FROM cost_lots l
+				WHERE ((l.source_type = 'INITIAL' AND NOT EXISTS (
+							SELECT 1 FROM initial_holdings h WHERE h.id = l.source_id))
+					OR (l.source_type = 'PURCHASE' AND NOT EXISTS (
+							SELECT 1 FROM transactions t WHERE t.id = l.source_id)))
+					AND (NOT ${sharded} OR l.organization_id IN (
+						SELECT organization_id FROM scope_orgs))) AS lot_orphan_source,
+			(SELECT count(*) FROM usage_records u
+				WHERE u.amount <> COALESCE((
+						SELECT SUM(x.quantity) FROM usage_lot_allocations x
+						WHERE x.usage_id = u.id), 0)
+					AND (NOT ${sharded} OR u.organization_id IN (
+						SELECT organization_id FROM scope_orgs))) AS fifo,
+			(SELECT count(*) FROM cost_lots l
+				WHERE l.quantity - COALESCE((
+						SELECT SUM(x.quantity) FROM usage_lot_allocations x
+						WHERE x.lot_id = l.id), 0) <> l.remaining_qty
+					AND (NOT ${sharded} OR l.organization_id IN (
+						SELECT organization_id FROM scope_orgs))) AS batch,
+			-- 变更日志与其父计划同组织（对抗审 R1-N2：MIG-F 分支此前漏掉该派生关系）
+			(SELECT count(*) FROM plan_change_logs c JOIN plans p ON p.id = c.plan_id
+				WHERE c.organization_id IS DISTINCT FROM p.organization_id
+					AND (NOT ${sharded} OR c.organization_id IN (
+						SELECT organization_id FROM scope_orgs))) AS change_log_plan`;
+	expectZero("usage_record.plan_org_consistency", integrity?.usage_plan ?? 0n);
+	expectZero("cost_lot.source_org_consistency", integrity?.lot_source ?? 0n);
+	expectZero(
+		"usage_lot_allocation.parent_org_consistency",
+		integrity?.ula_parents ?? 0n,
+	);
+	expectZero("usage_record.orphan_plan", integrity?.usage_orphan_plan ?? 0n);
+	expectZero("cost_lot.orphan_source", integrity?.lot_orphan_source ?? 0n);
+	expectZero("fifo_conservation.usage_allocations", integrity?.fifo ?? 0n);
+	expectZero("batch_conservation.cost_lots", integrity?.batch ?? 0n);
+	// 变更日志 ↔ 父计划同组织（对抗审 R1-N2）
+	expectZero(
+		"plan_change_log.plan_org_consistency",
+		integrity?.change_log_plan ?? 0n,
+	);
+
+	// 3. 孤儿派生行（父缺失）：无法归属到组织，全库模式评估
+	if (!sharded) {
+		const [orphans] = await db.$queryRaw<
+			Array<{
+				plan_allocations: bigint;
+				usage_lot_allocations: bigint;
+				plan_change_logs: bigint;
+				plan_installments: bigint;
+			}>
+		>`
+			SELECT
+				(SELECT count(*) FROM plan_allocations a
+					LEFT JOIN plans p ON p.id = a.plan_id
+					WHERE p.id IS NULL) AS plan_allocations,
+				(SELECT count(*) FROM usage_lot_allocations x
+					LEFT JOIN usage_records u ON u.id = x.usage_id
+					LEFT JOIN cost_lots l ON l.id = x.lot_id
+					WHERE u.id IS NULL OR l.id IS NULL) AS usage_lot_allocations,
+				(SELECT count(*) FROM plan_change_logs c
+					LEFT JOIN plans p ON p.id = c.plan_id
+					WHERE p.id IS NULL) AS plan_change_logs,
+				(SELECT count(*) FROM plan_installments i
+					LEFT JOIN plans p ON p.id = i.plan_id
+					WHERE p.id IS NULL) AS plan_installments`;
+		for (const [table, count] of Object.entries(orphans ?? {})) {
+			expectZero(`derived_rows.orphans.${table}`, count);
+		}
+	}
+
+	return { checks, diffs, sharded, capabilities };
 }

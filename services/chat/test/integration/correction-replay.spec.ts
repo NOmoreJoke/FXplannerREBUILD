@@ -13,10 +13,10 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import request, { type Response } from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-	bearer,
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -51,12 +51,15 @@ function daysAgo(n: number): Date {
 }
 
 /** 账户不变式：balance = Σ lot remainingQty；使用成本不变式：Σ分摊 = Σ批次分摊成本 */
-async function assertInvariants(prisma: TestContext["prisma"], userId: string) {
-	const accounts = await prisma.account.findMany({ where: { userId } });
+async function assertInvariants(
+	prisma: TestContext["prisma"],
+	organizationId: string,
+) {
+	const accounts = await prisma.account.findMany({ where: { organizationId } });
 	for (const account of accounts) {
 		const aggregated = await prisma.costLot.aggregate({
 			_sum: { remainingQty: true },
-			where: { userId, currencyCode: account.currencyCode },
+			where: { organizationId, currencyCode: account.currencyCode },
 		});
 		expect(
 			(aggregated._sum.remainingQty ?? new Prisma.Decimal(0)).eq(
@@ -64,7 +67,7 @@ async function assertInvariants(prisma: TestContext["prisma"], userId: string) {
 			),
 		).toBe(true);
 	}
-	const usages = await prisma.usageRecord.findMany({ where: { userId } });
+	const usages = await prisma.usageRecord.findMany({ where: { organizationId } });
 	for (const usage of usages) {
 		const allocations = await prisma.usageLotAllocation.findMany({
 			where: { usageId: usage.id },
@@ -99,7 +102,7 @@ async function assertInvariants(prisma: TestContext["prisma"], userId: string) {
 describe("更正重放一致性（集成）", () => {
 	let ctx: TestContext;
 	let app: INestApplication;
-	const userIds: string[] = [];
+	const users: TestUser[] = [];
 
 	beforeAll(async () => {
 		ctx = await createTestApp();
@@ -108,22 +111,22 @@ describe("更正重放一致性（集成）", () => {
 
 	afterAll(async () => {
 		try {
-			for (const userId of userIds.splice(0).reverse()) {
+			for (const user of users.splice(0).reverse()) {
 				const plans = await ctx.prisma.plan.findMany({
-					where: { userId },
+					where: { organizationId: user.defaultOrganizationId },
 					select: { id: true },
 				});
 				await ctx.prisma.planAllocation.deleteMany({
 					where: { planId: { in: plans.map((plan) => plan.id) } },
 				});
 				const usages = await ctx.prisma.usageRecord.findMany({
-					where: { userId },
+					where: { organizationId: user.defaultOrganizationId },
 					select: { id: true },
 				});
 				await ctx.prisma.usageLotAllocation.deleteMany({
 					where: { usageId: { in: usages.map((usage) => usage.id) } },
 				});
-				await cleanupUser(ctx.prisma, userId);
+				await cleanupUser(ctx.prisma, user.userId);
 			}
 		} finally {
 			await app?.close();
@@ -132,7 +135,7 @@ describe("更正重放一致性（集成）", () => {
 
 	async function newUser(label: string): Promise<TestUser> {
 		const user = await createTestUser(app, label);
-		userIds.push(user.userId);
+		users.push(user);
 		// BE-03：经 API 造交易需已建账，否则写入口 409 ONBOARDING_NOT_COMPLETED
 		await ensureOnboarded(ctx.prisma, user.userId);
 		return user;
@@ -161,7 +164,7 @@ describe("更正重放一致性（集成）", () => {
 		for (const spec of specs) {
 			const res = await request(app.getHttpServer())
 				.post("/api/transactions")
-				.set(bearer(user.accessToken))
+				.set(orgBearer(user))
 				.send({
 					currencyCode: "USD",
 					principalAmount: spec.principal,
@@ -181,7 +184,10 @@ describe("更正重放一致性（集成）", () => {
 			allocatedAmount,
 		});
 		const lots = await ctx.prisma.costLot.findMany({
-			where: { userId: user.userId, currencyCode: "USD" },
+			where: {
+				organizationId: user.defaultOrganizationId,
+				currencyCode: "USD",
+			},
 			orderBy: { acquiredAt: "asc" },
 		});
 		// FIFO 分摊：初始 1,000 + 买入 780 → 使用 1,200（初始 420 + 买入一 780）
@@ -209,7 +215,7 @@ describe("更正重放一致性（集成）", () => {
 		const firstTradeDate = daysAgo(2); // 改到第二笔（t-3）之后、使用（t-1）之前
 		const before = await request(app.getHttpServer())
 			.post("/api/corrections/preview")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				targetType: "TRANSACTION",
 				targetId: tradeIds[0],
@@ -222,7 +228,7 @@ describe("更正重放一致性（集成）", () => {
 
 		await request(app.getHttpServer())
 			.post("/api/corrections")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				targetType: "TRANSACTION",
 				targetId: tradeIds[0],
@@ -235,7 +241,10 @@ describe("更正重放一致性（集成）", () => {
 		// 批次重建：3 行（1 INITIAL + 2 PURCHASE），remainingQty 与重放期望一致
 		// FIFO 新顺序：初始 1,000 → 买入二 1,000 → 使用 1,200（初始 1,000 + 买入二 200）→ 买入一整批未耗
 		const lots = await ctx.prisma.costLot.findMany({
-			where: { userId: user.userId, currencyCode: "USD" },
+			where: {
+				organizationId: user.defaultOrganizationId,
+				currencyCode: "USD",
+			},
 		});
 		expect(lots).toHaveLength(3);
 		const bySource = new Map(lots.map((lot) => [lot.sourceId, lot]));
@@ -273,7 +282,7 @@ describe("更正重放一致性（集成）", () => {
 		expect(usage.amount.toFixed(4)).toBe("1200.0000");
 		expect(usage.version).toBe(1);
 
-		await assertInvariants(ctx.prisma, user.userId);
+		await assertInvariants(ctx.prisma, user.defaultOrganizationId);
 	});
 
 	it("#2 USAGE 改大补分配全链路（MVP-F0-3）：记录 v2 / 分配补入 + PlanChangeLog / 批次重建 / 两不变式", async () => {
@@ -286,7 +295,7 @@ describe("更正重放一致性（集成）", () => {
 		// 使用 1,200 → 2,000（diff 800 > 剩余分配 0 → 补分配 800；分配 1,200+800=2,000）
 		const preview = await request(app.getHttpServer())
 			.post("/api/corrections/preview")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				targetType: "USAGE",
 				targetId: usageId,
@@ -301,7 +310,7 @@ describe("更正重放一致性（集成）", () => {
 
 		await request(app.getHttpServer())
 			.post("/api/corrections")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				targetType: "USAGE",
 				targetId: usageId,
@@ -336,7 +345,10 @@ describe("更正重放一致性（集成）", () => {
 		expect(allocations).toHaveLength(2);
 		// 两不变式：balance = Σ剩余分配 + 未分配；重建分摊 = 理论成本（初始 1,000@7.248 + 买入一 1,000@7.8 = 15,048）
 		const account = await ctx.prisma.account.findFirstOrThrow({
-			where: { userId: user.userId, currencyCode: "USD" },
+			where: {
+				organizationId: user.defaultOrganizationId,
+				currencyCode: "USD",
+			},
 		});
 		expect(account.balance.toFixed(4)).toBe("1000.0000");
 		const totalAllocCost = (
@@ -349,7 +361,10 @@ describe("更正重放一致性（集成）", () => {
 		const user = await newUser("corr-it-audit-rollback");
 		const { planId, usageId } = await seedFullLedger(user);
 		const prisma = ctx.prisma;
-		const accountKey = { userId: user.userId, currencyCode: "USD" };
+		const accountKey = {
+			organizationId: user.defaultOrganizationId,
+			currencyCode: "USD",
+		};
 		async function readLedger() {
 			return Promise.all([
 				prisma.usageRecord.findUniqueOrThrow({ where: { id: usageId } }),
@@ -389,7 +404,7 @@ describe("更正重放一致性（集成）", () => {
 				reason: "补分配写日志后模拟中断",
 				changes: { amount: "2000" },
 			};
-			const auth = bearer(user.accessToken);
+			const auth = orgBearer(user);
 			const preview = await request(app.getHttpServer())
 				.post("/api/corrections/preview")
 				.set(auth)
@@ -424,7 +439,7 @@ describe("更正重放一致性（集成）", () => {
 		};
 		await request(app.getHttpServer())
 			.post("/api/corrections")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(payload)
 			.expect(201);
 		const snapshotAfterFirst = {
@@ -432,18 +447,24 @@ describe("更正重放一致性（集成）", () => {
 				where: { id: tradeIds[0] },
 			}),
 			lots: await ctx.prisma.costLot.findMany({
-				where: { userId: user.userId, currencyCode: "USD" },
+				where: {
+					organizationId: user.defaultOrganizationId,
+					currencyCode: "USD",
+				},
 				orderBy: { unitCost: "asc" },
 			}),
 			account: await ctx.prisma.account.findFirstOrThrow({
-				where: { userId: user.userId, currencyCode: "USD" },
+				where: {
+					organizationId: user.defaultOrganizationId,
+					currencyCode: "USD",
+				},
 			}),
 		};
 
 		// 二次提交同一 baseVersion：乐观校验拦截（预览后数据已变），不产生第二次更正
 		await request(app.getHttpServer())
 			.post("/api/corrections")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(payload)
 			.expect(409)
 			.expect((errorRes) => {
@@ -455,11 +476,17 @@ describe("更正重放一致性（集成）", () => {
 				where: { id: tradeIds[0] },
 			}),
 			lots: await ctx.prisma.costLot.findMany({
-				where: { userId: user.userId, currencyCode: "USD" },
+				where: {
+					organizationId: user.defaultOrganizationId,
+					currencyCode: "USD",
+				},
 				orderBy: { unitCost: "asc" },
 			}),
 			account: await ctx.prisma.account.findFirstOrThrow({
-				where: { userId: user.userId, currencyCode: "USD" },
+				where: {
+					organizationId: user.defaultOrganizationId,
+					currencyCode: "USD",
+				},
 			}),
 		};
 		expect(snapshotAfterSecond.transaction).toEqual(
@@ -468,7 +495,7 @@ describe("更正重放一致性（集成）", () => {
 		expect(snapshotAfterSecond.lots).toEqual(snapshotAfterFirst.lots);
 		expect(snapshotAfterSecond.account).toEqual(snapshotAfterFirst.account);
 		expect(snapshotAfterFirst.transaction.version).toBe(2);
-		await assertInvariants(ctx.prisma, user.userId);
+		await assertInvariants(ctx.prisma, user.defaultOrganizationId);
 	});
 
 	it("#4 跨用户隔离：用户 B 对用户 A 记录的 preview/apply/list 全 404", async () => {
@@ -489,7 +516,7 @@ describe("更正重放一致性（集成）", () => {
 		]) {
 			await request(app.getHttpServer())
 				[path.method](path.url)
-				.set(bearer(stranger.accessToken))
+				.set(orgBearer(stranger))
 				.send({
 					targetType: "TRANSACTION",
 					targetId: tradeIds[0],
@@ -503,7 +530,7 @@ describe("更正重放一致性（集成）", () => {
 		}
 		await request(app.getHttpServer())
 			.get(`/api/corrections?targetType=TRANSACTION&targetId=${tradeIds[0]}`)
-			.set(bearer(stranger.accessToken))
+			.set(orgBearer(stranger))
 			.expect(404);
 	});
 
@@ -512,7 +539,7 @@ describe("更正重放一致性（集成）", () => {
 		const { tradeIds } = await seedFullLedger(user);
 		const correctionPromise = request(app.getHttpServer())
 			.post("/api/corrections")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				targetType: "TRANSACTION",
 				targetId: tradeIds[0],
@@ -522,7 +549,7 @@ describe("更正重放一致性（集成）", () => {
 			});
 		const purchasePromise = request(app.getHttpServer())
 			.post("/api/transactions")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				currencyCode: "USD",
 				principalAmount: "7000",
@@ -540,9 +567,12 @@ describe("更正重放一致性（集成）", () => {
 		expect(purchaseRes.status).toBe(201);
 
 		// 若更正因「买入已先落库但版本无关」成功，最终状态必须满足不变式
-		await assertInvariants(ctx.prisma, user.userId);
+		await assertInvariants(ctx.prisma, user.defaultOrganizationId);
 		const balance = await ctx.prisma.account.findFirstOrThrow({
-			where: { userId: user.userId, currencyCode: "USD" },
+			where: {
+				organizationId: user.defaultOrganizationId,
+				currencyCode: "USD",
+			},
 		});
 		// 终态余额 = 初始 1,000 + 三笔买入 3,000 − 使用 1,200（与批次 Σremaining 严格一致）
 		expect(balance.balance.toFixed(4)).toBe("2800.0000");
@@ -559,7 +589,7 @@ describe("更正重放一致性（集成）", () => {
 		// 同日买入 1,000（UI 口径）
 		const tx = await request(app.getHttpServer())
 			.post("/api/transactions")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				currencyCode: "USD",
 				principalAmount: "1000",
@@ -572,7 +602,7 @@ describe("更正重放一致性（集成）", () => {
 		// 计划分配 500（真实创建路径）
 		const plan = await request(app.getHttpServer())
 			.post("/api/plans")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				targetCurrency: "USD",
 				targetAmount: "10000",
@@ -587,20 +617,20 @@ describe("更正重放一致性（集成）", () => {
 		// UI 按日期提交 UTC 0 点。当天 11:00Z 的买入应参与分摊。
 		await request(app.getHttpServer())
 			.post(`/api/plans/${plan.body.data.id}/usages`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ amount: "500", usedAt: todayMidnightUtc })
 			.expect(201);
 
 		// 存储口径：usedAt 原样保留提交时刻（未被截断）
 		const usage = await ctx.prisma.usageRecord.findFirstOrThrow({
-			where: { userId: user.userId },
+			where: { organizationId: user.defaultOrganizationId },
 		});
 		expect(usage.usedAt.toISOString()).toBe(todayMidnightUtc);
 
 		// fee 补录预览触发重放，同一业务日内买入先于使用。
 		const preview = await request(app.getHttpServer())
 			.post("/api/corrections/preview")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				targetType: "TRANSACTION",
 				targetId: tx.body.data.id,
@@ -611,7 +641,7 @@ describe("更正重放一致性（集成）", () => {
 			.expect(200);
 		expect(preview.body.data.blockers).toHaveLength(0);
 
-		await assertInvariants(ctx.prisma, user.userId);
+		await assertInvariants(ctx.prisma, user.defaultOrganizationId);
 	});
 
 	it("#7 CLOSEOUT-01：同日按 10:00Z、09:00Z 逆序补录，两计划的成本与来源在更正后保持首录分摊", async () => {
@@ -619,7 +649,7 @@ describe("更正重放一致性（集成）", () => {
 		const useDay = daysAgo(2).toISOString().slice(0, 10);
 		const laterDay = daysAgo(1).toISOString().slice(0, 10);
 		const api = request(app.getHttpServer());
-		const headers = bearer(user.accessToken);
+		const headers = orgBearer(user);
 		const tradeIds: string[] = [];
 		for (const [day, hour, rate, principal] of [
 			[useDay, "07", "5", "500"],
@@ -640,7 +670,12 @@ describe("更正重放一致性（集成）", () => {
 			tradeIds.push(trade.body.data.id);
 		}
 
-		const usages = [];
+		const usages: Array<{
+			planId: string;
+			usageId: string;
+			tradeId: string;
+			cost: string;
+		}> = [];
 		for (const [hour, cost, tradeId] of [
 			["10", "500.0000", tradeIds[0]],
 			["09", "700.0000", tradeIds[1]],
@@ -668,7 +703,7 @@ describe("更正重放一致性（集成）", () => {
 
 		async function assertOriginalAllocations() {
 			const lots = await ctx.prisma.costLot.findMany({
-				where: { userId: user.userId },
+				where: { organizationId: user.defaultOrganizationId },
 			});
 			const sources = new Map(lots.map((lot) => [lot.id, lot.sourceId]));
 			for (const { planId, usageId, tradeId, cost } of usages) {
@@ -713,7 +748,7 @@ describe("更正重放一致性（集成）", () => {
 			.expect(201);
 		expect(applied.body.data).toMatchObject({ status: "APPLIED", targetVersion: 2 });
 		await assertOriginalAllocations();
-		await assertInvariants(ctx.prisma, user.userId);
+		await assertInvariants(ctx.prisma, user.defaultOrganizationId);
 	});
 
 	// 真实账户行锁固定竞争。旧写序会先占住分配，再阻塞于账户 UPDATE。
@@ -731,7 +766,7 @@ describe("更正重放一致性（集成）", () => {
 			reason: "并发锁序回归：使用金额改小",
 			changes: { amount: "800" },
 		};
-		const auth = bearer(user.accessToken);
+		const auth = orgBearer(user);
 		const preview = () => request(app.getHttpServer())
 			.post("/api/corrections/preview")
 			.set(auth)
@@ -751,7 +786,7 @@ describe("更正重放一致性（集成）", () => {
 			await locks.$transaction(async (holder) => {
 				const [{ pid: holderPid }] = await holder.$queryRaw<Array<{ pid: number }>>`
 					SELECT pg_backend_pid() AS pid FROM accounts
-					WHERE user_id = ${user.userId} AND currency_code = 'USD'
+					WHERE organization_id = ${user.defaultOrganizationId} AND currency_code = 'USD'
 					FOR UPDATE`;
 
 				const blockedBy = (pids: number[]) =>
@@ -762,7 +797,7 @@ describe("更正重放一致性（集成）", () => {
 
 				usageRequest = request(app.getHttpServer())
 					.post(`/api/plans/${planId}/usages`)
-					.set(bearer(user.accessToken))
+					.set(orgBearer(user))
 					.send({
 						amount: "300",
 						usedAt: daysAgo(0).toISOString(),
@@ -813,14 +848,18 @@ describe("更正重放一致性（集成）", () => {
 			status: 409,
 			body: { code: "CORRECTION_TARGET_CHANGED" },
 		});
-		expect(await ctx.prisma.correction.count({ where: { userId: user.userId } })).toBe(0);
+		expect(
+			await ctx.prisma.correction.count({
+				where: { organizationId: user.defaultOrganizationId },
+			}),
+		).toBe(0);
 		const refreshed = await preview();
 		expect(refreshed.body.data.expectedUsageImpact).not.toBe(initial.body.data.expectedUsageImpact);
 		await confirm(refreshed.body.data.expectedUsageImpact).expect(201);
 
 		// 确定性终态（与串行顺序无关）
 		const usages = await ctx.prisma.usageRecord.findMany({
-			where: { userId: user.userId },
+			where: { organizationId: user.defaultOrganizationId },
 			orderBy: { amount: "asc" },
 		});
 		expect(usages.map((usage) => usage.amount.toFixed(4))).toEqual([
@@ -836,12 +875,15 @@ describe("更正重放一致性（集成）", () => {
 		expect(allocation.usedAmount.toFixed(4)).toBe("1100.0000");
 		expect(allocation.amount.toFixed(4)).toBe("1100.0000");
 		const account = await ctx.prisma.account.findFirstOrThrow({
-			where: { userId: user.userId, currencyCode: "USD" },
+			where: {
+				organizationId: user.defaultOrganizationId,
+				currencyCode: "USD",
+			},
 		});
 		expect(account.balance.toFixed(4)).toBe("1900.0000");
-		await assertInvariants(ctx.prisma, user.userId);
+		await assertInvariants(ctx.prisma, user.defaultOrganizationId);
 		const corrections = await ctx.prisma.correction.findMany({
-			where: { userId: user.userId, targetType: "USAGE" },
+			where: { organizationId: user.defaultOrganizationId, targetType: "USAGE" },
 		});
 		expect(corrections).toHaveLength(1);
 		expect(corrections[0]).toMatchObject({ targetId: usageId, status: "APPLIED" });
@@ -863,18 +905,18 @@ describe("更正重放一致性（集成）", () => {
 		};
 		const preview = () => request(app.getHttpServer())
 			.post("/api/corrections/preview")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(payload)
 			.expect(200);
 		const confirm = (expectedUsageImpact: string) => request(app.getHttpServer())
 			.post("/api/corrections")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ ...payload, expectedUsageImpact });
 		const initial = await preview();
 		const correctionPromise = confirm(initial.body.data.expectedUsageImpact);
 		const usageCreatePromise = request(app.getHttpServer())
 			.post(`/api/plans/${planId}/usages`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				amount: "300",
 				usedAt: daysAgo(0).toISOString(),
@@ -888,7 +930,11 @@ describe("更正重放一致性（集成）", () => {
 		expect(usageRes.status).toBe(201);
 		if (correctionRes.status === 409) {
 			expect(correctionRes.body.code).toBe("CORRECTION_TARGET_CHANGED");
-			expect(await ctx.prisma.correction.count({ where: { userId: user.userId } })).toBe(0);
+			expect(
+			await ctx.prisma.correction.count({
+				where: { organizationId: user.defaultOrganizationId },
+			}),
+		).toBe(0);
 			const refreshed = await preview();
 			expect(refreshed.body.data.expectedUsageImpact).not.toBe(initial.body.data.expectedUsageImpact);
 			await confirm(refreshed.body.data.expectedUsageImpact).expect(201);
@@ -898,7 +944,7 @@ describe("更正重放一致性（集成）", () => {
 
 		// 确定性终态（与串行顺序无关）
 		const usages = await ctx.prisma.usageRecord.findMany({
-			where: { userId: user.userId },
+			where: { organizationId: user.defaultOrganizationId },
 			orderBy: { amount: "asc" },
 		});
 		expect(usages.map((usage) => usage.amount.toFixed(4))).toEqual([
@@ -914,12 +960,15 @@ describe("更正重放一致性（集成）", () => {
 		expect(allocation.usedAmount.toFixed(4)).toBe("1100.0000");
 		expect(allocation.amount.toFixed(4)).toBe("1100.0000");
 		const account = await ctx.prisma.account.findFirstOrThrow({
-			where: { userId: user.userId, currencyCode: "USD" },
+			where: {
+				organizationId: user.defaultOrganizationId,
+				currencyCode: "USD",
+			},
 		});
 		expect(account.balance.toFixed(4)).toBe("1900.0000");
-		await assertInvariants(ctx.prisma, user.userId);
+		await assertInvariants(ctx.prisma, user.defaultOrganizationId);
 		const corrections = await ctx.prisma.correction.findMany({
-			where: { userId: user.userId, targetType: "USAGE" },
+			where: { organizationId: user.defaultOrganizationId, targetType: "USAGE" },
 		});
 		expect(corrections).toHaveLength(1);
 		expect(corrections[0]).toMatchObject({ targetId: usageId, status: "APPLIED" });
@@ -1044,6 +1093,6 @@ describe("W24 并发更正同一目标（组织锁串行化 + 锁内 baseVersion
 				})
 			).balance.toFixed(4),
 		).toBe("1000.0000");
-		await assertInvariants(ctx.prisma, finance1.userId);
+		await assertInvariants(ctx.prisma, org.orgId);
 	}, 30_000);
 });

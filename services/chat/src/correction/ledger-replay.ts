@@ -44,13 +44,6 @@ export interface LedgerEvent {
 	principalAmount?: Prisma.Decimal;
 	/** PURCHASE：手续费（null = 未知，按 0 计入成本并保留「费用未完整」标注） */
 	feeAmount?: Prisma.Decimal | null;
-	/**
-	 * 流入事件（INITIAL / PURCHASE）的批次归属用户：来源记录的创建者
-	 * （Transaction / InitialHolding 的 createdById，存量行回退 userId）。
-	 * 组织账本由成员共享，批次不随更正者易主——重放原样带到 ReplayLot.ownerUserId，
-	 * 重建 CostLot 时作为兼容列 user_id 落库；USAGE 事件不需要。
-	 */
-	ownerUserId?: string;
 }
 
 /** 历史时点缺口（V3 校验输入；doc 14 例 11：过去某笔使用发生时同币种资金不足） */
@@ -65,8 +58,6 @@ export interface ReplayViolation {
 export interface ReplayLot {
 	sourceType: "INITIAL" | "PURCHASE";
 	sourceId: string;
-	/** 批次归属用户（= 来源事件的 ownerUserId，原样透传；缺省表示调用方未提供） */
-	ownerUserId?: string;
 	quantity: Prisma.Decimal;
 	remainingQty: Prisma.Decimal;
 	unitCost: Prisma.Decimal;
@@ -167,7 +158,6 @@ export function replayCurrencyLedger(events: LedgerEvent[]): ReplayResult {
 			lots.push({
 				sourceType: isInitial ? "INITIAL" : "PURCHASE",
 				sourceId: event.id,
-				ownerUserId: event.ownerUserId,
 				quantity: event.quantity,
 				remainingQty: event.quantity,
 				unitCost,

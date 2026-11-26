@@ -10,7 +10,7 @@ import type { Transaction as TransactionModel } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import {
 	lockOrgLedgerAccounts,
-	upsertOrgAccountWithLegacyMerge,
+	upsertOrgAccount,
 } from "../prisma/ledger-write-lock";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
 import {
@@ -24,15 +24,12 @@ import type {
 } from "../authorization/authorization.types";
 import {
 	assertParentChildSameOrg,
-	compatReadWhere,
+	orgWhere,
 	type ReadScope,
 } from "../authorization/organization-scope";
 import { can } from "../authorization/permission-policy";
 import { lockOrganizationForActor } from "../organization/default-organization";
-import {
-	materializeLegacyOrganizationSettings,
-	resolveOrganizationPreferences,
-} from "../organization/organization-preferences";
+import { resolveOrganizationPreferences } from "../organization/organization-preferences";
 import {
 	assertUnitCostInRange,
 	buildPurchaseLot,
@@ -101,12 +98,11 @@ export class TransactionService {
 	 * 参数解析与自洽校验（事务外，失败不进事务）→ unitCost 容量预校验（事务外，§3.4）→
 	 * 交互式事务——
 	 * ① lockOrganizationForActor 重读最新角色并复验 transaction.create（锁等降权 → 403 + DENIED 审计）
-	 * ② resolveOrganizationPreferences 解析组织建账态（409）与记账起点；OWNER_LEGACY 先固化，
-	 *    再校验 assertTransactedAtInRange
-	 * ③ lockOrgLedgerAccounts 锁定组织账本账户（兼容默认组织创建者 legacy 行）
-	 * ④ planId 非空时按 compatReadWhere(actor) 校验计划归属（404）/同组织一致/币种一致（400）
-	 * ⑤ 经 upsertOrgAccountWithLegacyMerge 收口默认创建者 legacy 行（如有）并累加余额
-	 * ⑥ 插入 Transaction（userId + organizationId + createdById）与 CostLot（带 organizationId）
+	 * ② resolveOrganizationPreferences 解析组织建账态（409）与记账起点
+	 * ③ lockOrgLedgerAccounts 锁定组织账本账户（组织维度，无用户维度 legacy 锁）
+	 * ④ planId 非空时按 orgWhere(actor) 校验计划归属（404）/同组织一致/币种一致（400）
+	 * ⑤ 经 upsertOrgAccount 收口组织账户行并累加余额
+	 * ⑥ 插入 Transaction（organizationId + createdById）与 CostLot（带 organizationId）
 	 * ⑦ 同事务写入 transaction.create 审计日志（审计失败整单回滚）。
 	 */
 	async create(
@@ -138,9 +134,6 @@ export class TransactionService {
 						"尚未完成首次设置，请先前往 /onboarding 完成建账后再录入交易",
 					);
 				}
-				if (preferences.source === "OWNER_LEGACY") {
-					await materializeLegacyOrganizationSettings(tx, actor.organizationId);
-				}
 				assertTransactedAtInRange(
 					params.transactedAt,
 					new Date(),
@@ -153,11 +146,11 @@ export class TransactionService {
 					[params.currencyCode],
 				);
 
-				// 关联计划校验：裸外键（无 Prisma relation），按 compatReadWhere(actor) 校验归属与币种
+				// 关联计划校验：裸外键（无 Prisma relation），按 orgWhere(actor) 校验归属与币种
 				let planName: string | null = null;
 				if (dto.planId) {
 					const plan = await tx.plan.findFirst({
-						where: { id: dto.planId, ...compatReadWhere(actor) },
+						where: { id: dto.planId, ...orgWhere(actor) },
 						select: {
 							id: true,
 							organizationId: true,
@@ -168,18 +161,15 @@ export class TransactionService {
 					if (!plan) {
 						throw new PlanNotFoundException();
 					}
-					if (plan.organizationId !== null) {
-						assertParentChildSameOrg(plan.organizationId, actor.organizationId);
-					}
+					assertParentChildSameOrg(plan.organizationId, actor.organizationId);
 					if (plan.targetCurrency !== params.currencyCode) {
 						throw new PlanCurrencyMismatchException();
 					}
 					planName = plan.name;
 				}
 
-				// 账户建户、默认创建者 legacy 行收口与余额累加（I-2：无论由 Owner 还是受邀成员触发，
-				// 一并合并/升级默认组织创建者的 legacy 行，消除双行分裂与 P2002）
-				await upsertOrgAccountWithLegacyMerge({
+				// 账户建户与余额累加（组织内同币种恒有且仅有一行账户；新币种由操作者建户）
+				await upsertOrgAccount({
 					tx,
 					organizationId: actor.organizationId,
 					currencyCode: params.currencyCode,
@@ -191,7 +181,6 @@ export class TransactionService {
 				// 落交易记录：提交的汇率一律视为实际成交数据（doc 14）
 				const transaction = await tx.transaction.create({
 					data: {
-						userId: actor.userId,
 						organizationId: actor.organizationId,
 						createdById: actor.userId,
 						currencyCode: params.currencyCode,
@@ -240,11 +229,11 @@ export class TransactionService {
 
 	/**
 	 * 交易详情（GET /transactions/:id，方案 §5.2）：
-	 * 按 id + compatReadWhere(scope) 联查，不存在或不属于当前组织一律 404（不泄露存在性）。
+	 * 按 id + orgWhere(scope) 联查，不存在或不属于当前组织一律 404（不泄露存在性）。
 	 */
 	async detail(scope: ReadScope, id: string): Promise<TransactionDto> {
 		const transaction = await this.prisma.transaction.findFirst({
-			where: { id, ...compatReadWhere(scope) },
+			where: { id, ...orgWhere(scope) },
 		});
 		if (!transaction) {
 			throw new TransactionNotFoundException();
@@ -253,7 +242,7 @@ export class TransactionService {
 		if (transaction.planId) {
 			// 裸外键：计划可能已被删除，按同组织作用域兜底名称（禁跨组织泄露）
 			const plan = await this.prisma.plan.findFirst({
-				where: { id: transaction.planId, ...compatReadWhere(scope) },
+				where: { id: transaction.planId, ...orgWhere(scope) },
 				select: { name: true },
 			});
 			planName = plan?.name ?? null;

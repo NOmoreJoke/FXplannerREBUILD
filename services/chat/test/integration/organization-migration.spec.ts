@@ -1,1507 +1,1680 @@
 import { beforeAll, afterAll, describe, expect, test } from "vitest";
 import { PrismaClient } from "@prisma/client";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
 import {
 	BackfillAnomalyError,
 	backfillDefaultOrganizations,
 } from "../../src/organization/organization-backfill";
-import { reconcileMigration } from "../../src/organization/organization-reconcile";
-import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
-import { cleanupUser } from "../helpers/test-app";
+import {
+	reconcileMigration,
+	captureMigrationSnapshot,
+	compareMigrationSnapshots,
+} from "../../src/organization/organization-reconcile";
+import { detectMigrationSchemaCapabilities } from "../../src/organization/migration-schema-capabilities";
+import { deleteOrganizationsCascadeLedger } from "../helpers/test-app";
 
 /**
- * MIG-B 集成测试（技术方案 §14.3.4；Goal #3A W15；评审 I-15/I-16 回归）：
+ * ToB 组织迁移演练（Goal #3C W30 · MIG-D/E/F）。
  *
- * 1. 构造完整存量个人账本用户（多币种持仓/交易/计划+分配+批次/使用+分摊/
- *    更正/已读与未读提醒/AI 会话/EXPORT-CLEAR-DELETION 数据请求）+ 无设置新用户；
- * 2. 第 1 次回填（userIds 分片，避免触碰本地库其他用户）→ §12.3 核对 0 差异 →
- *    第 2 次重复回填（幂等）→ 无新增组织/无重复记录；
- * 3. 构造父缺失/跨组织异常行 → 预检阻断/核对显式报差异，绝不静默跳过；
- * 4. 评审回归：updated_at 逐行不变、核对负向用例逐类命中（防「查询写错 → 恒 0」
- *    的空过）、仅未挂组织的存量数据请求被映射、dry-run 估算 = 实际写入、
- *    分片事务、多组织用户回填到「最早」的 OWNER 组织。
+ * ## 为什么在隔离 schema 里演练
+ *
+ * MIG-B 回填 / §12.3 核对的对象是 **pre-MIG-E 的库形态**：
+ * `organization_id` 可空、8 张共享账本表仍有 `user_id` 列归属个人、
+ * `user_settings` 仍有 4 个 legacy 设置列、`reminders` 仍有 `read_at`、
+ * `data_requests` 仍是 `user_id`。
+ *
+ * W30（MIG-E / MIG-F）落地后主库已是 post-MIG-F 形态，上述列全部消失、
+ * `organization_id` 已是 NOT NULL——**主库上再也无法重放「回填 / 核对」**
+ * （迁移工具在 post-MIG-F 上退化为 no-op，核对改走组织维度分支）。
+ *
+ * 因此本文件用**独立隔离的 PostgreSQL schema** 承载演练：
+ *
+ * 1. 用仓库自身的迁移历史（`services/chat/prisma/migrations/**`）在隔离 schema 里
+ *    **重建 pre-MIG-E 的 DDL**——按时间顺序逐条执行迁移 SQL，到 MIG-C 为止
+ *    （MIG-E / MIG-F 不执行）。这是「pre-MIG-E DDL」的**构造性**保证，
+ *    不是手写近似：部分唯一索引、CHECK 约束、FK 语义都来自真实迁移。
+ * 2. 在隔离 schema 里灌入 legacy 个人账本（个人行的租户列为 NULL）。
+ * 3. 对隔离 schema 跑**真实的** `backfillDefaultOrganizations` /
+ *    `reconcileMigration`（源码零改动），断言 §12.3 零差异与父子组织一致性。
+ * 4. 再在同一个隔离 schema 里依次执行 W26 / MIG-E / MIG-F 迁移，
+ *    验证迁移工具在 post-MIG-F 上仍可运行且退化为 no-op。
+ *
+ * 隔离 schema 名带本用例专属前缀，结束时 `DROP SCHEMA ... CASCADE` 清理，
+ * **全程不触碰 `public` schema**。
+ *
+ * ## 保留的核心断言（不得削弱）
+ *
+ * - §12.3 全量核对 0 差异，且核对项数量写死（防「查询写错 → 恒 0」的空过）；
+ * - 父子组织一致性（UsageRecord↔Plan、CostLot↔来源、UsageLotAllocation↔双父、
+ *   PlanChangeLog↔Plan）零跨组织；
+ * - 回填只改租户列：业务事实（余额 / 计划 / 流水 / 批次 / 分摊 / 报告口径 / 设置）
+ *   逐项不变，`updated_at` 逐行不变；
+ * - 幂等重跑零变化；dry-run 估算 == 实际写入；
+ * - 孤儿预检与跨组织异常被**显式报出**（绝不静默跳过）。
  */
 
-const RUN = `migmig-${Date.now()}`;
-const db = new PrismaClient();
-type CleanupDb = Parameters<typeof cleanupUser>[0];
+/** 本用例专属的隔离 schema 前缀（不得与其它用例/库对象冲突） */
+const DRILL_SCHEMA_PREFIX = "migdrill_w30";
+/** 仓库迁移历史目录（pre-MIG-E DDL 的唯一来源） */
+const MIGRATIONS_DIR = path.resolve(__dirname, "../../prisma/migrations");
+/** MIG-E / MIG-F：演练库先停在 MIG-C，二者留到演练后段显式执行 */
+const MIG_E_DIR = "20261126190000_tob_r1_mig_e_tighten_constraints";
+const MIG_F_DIR = "20261126191000_tob_r1_mig_f_drop_legacy_columns";
+/** W26：DataRequest 双域拆分的规范化 + CHECK 约束迁移 */
+const W26_DIR = "20261125180000_tob_r1_data_request_scope_check";
+/** 迁移历史里最后一个「pre-MIG-E」的迁移（MIG-C 之后即 W26 / MIG-E / MIG-F） */
+const LAST_PRE_MIG_E_DIR = "20261125094500_tob_r1_mig_c_org_unique_indexes";
 
-let fullUserId = "";
-let noSettingsUserId = "";
-let chunkUserId = "";
-let earliestOwnerUserId = "";
-/** 孤儿异常用例的独立用户与其脏数据 id */
-let orphanUserId = "";
-let orphanUsageId = "";
-let orphanPlanAllocationId = "";
-/** 跨组织演练用的「组织 B」（第 6 个用例创建；后续负向用例把行改写到它上面） */
-let crossOrgId = "";
-/** 本次测试创建/关联的组织 id（afterAll 统一清理） */
-const managedOrgIds: string[] = [];
+const RUN = `migdrill-${Date.now()}`;
+const DRILL_SCHEMA = `${DRILL_SCHEMA_PREFIX}_${Date.now()}_${Math.random()
+	.toString(36)
+	.slice(2, 8)}`;
 
-/** 完整用户夹具里可用于破坏性核对的具体行 id */
-const fixture = {
+const main = new PrismaClient();
+/** 隔离 schema 的客户端（search_path 指向 DRILL_SCHEMA，全程不碰 public） */
+let drill: PrismaClient;
+
+/** 主库侧用例（post-MIG-F 契约）创建的组织与用户 */
+const mainOrgIds: string[] = [];
+const mainUserIds: string[] = [];
+
+/** 演练库里的用户 id（按角色区分） */
+const drillUsers = {
+	/** 完整个人账本用户（无默认组织 → 由 MIG-B 回填创建） */
+	full: "",
+	/** 有个人设置但无默认组织 */
+	withSettings: "",
+	/** 无个人设置（不得虚构 OrganizationSettings） */
+	bare: "",
+	/** 已有默认组织的用户（回填应复用，不新建） */
+	existing: "",
+};
+
+/** 演练库里的行 id（供破坏 / 还原用例定位） */
+const drillRows = {
 	planId: "",
 	usageId: "",
 	initialUsdLotId: "",
 	purchaseLotId: "",
 	readReminderId: "",
 	unreadReminderId: "",
+	accountUsdId: "",
 };
 
 const T0 = new Date("2026-01-05T00:00:00.000Z");
 
-async function seedFullUser(): Promise<string> {
-	const user = await db.user.create({
-		data: {
-			email: `${RUN}-full@example.com`,
-			passwordHash: "test-hash",
-			name: "迁移验收张三",
-		},
+/** 回填**前**的业务事实快照（按 user_id 归属）；回填后按 organization_id 归属并比对 */
+let factsBeforeBackfill: Record<string, string[]> = {};
+/** 回填**前**的时间戳快照（表:行 → 毫秒）；回填不得触碰任何既有行的时间戳 */
+let updatedAtBeforeBackfill: Array<[string, number]> = [];
+
+// ─────────────────────────── SQL 语句拆分 ───────────────────────────
+
+/**
+ * 把迁移 SQL 拆成单条语句。
+ *
+ * Prisma 的 `$executeRawUnsafe` 走扩展协议（prepared statement），一条调用只能带
+ * 一条语句（多语句报 `42601 cannot insert multiple commands into a prepared statement`），
+ * 因此逐条执行前必须自己切分。切分需正确跳过：行注释、块注释、`'...'` 字符串
+ * （`''` 转义）、`"..."` 标识符（`""` 转义）、`$$...$$` / `$tag$...$tag$` 美元引用。
+ *
+ * 切分错误不会静默通过——语句执行失败会直接让用例红。
+ */
+function splitSqlStatements(sql: string): string[] {
+	const statements: string[] = [];
+	let buffer = "";
+	let index = 0;
+
+	const flush = () => {
+		const trimmed = buffer.trim();
+		if (trimmed.length > 0) statements.push(trimmed);
+		buffer = "";
+	};
+
+	while (index < sql.length) {
+		const char = sql[index]!;
+		const next = sql[index + 1];
+
+		if (char === "-" && next === "-") {
+			while (index < sql.length && sql[index] !== "\n") index += 1;
+			continue;
+		}
+		if (char === "/" && next === "*") {
+			index += 2;
+			while (
+				index < sql.length &&
+				!(sql[index] === "*" && sql[index + 1] === "/")
+			)
+				index += 1;
+			index += 2;
+			continue;
+		}
+		if (char === "'") {
+			buffer += char;
+			index += 1;
+			while (index < sql.length) {
+				if (sql[index] === "'") {
+					if (sql[index + 1] === "'") {
+						buffer += "''";
+						index += 2;
+						continue;
+					}
+					buffer += "'";
+					index += 1;
+					break;
+				}
+				buffer += sql[index];
+				index += 1;
+			}
+			continue;
+		}
+		if (char === '"') {
+			buffer += char;
+			index += 1;
+			while (index < sql.length) {
+				if (sql[index] === '"') {
+					if (sql[index + 1] === '"') {
+						buffer += '""';
+						index += 2;
+						continue;
+					}
+					buffer += '"';
+					index += 1;
+					break;
+				}
+				buffer += sql[index];
+				index += 1;
+			}
+			continue;
+		}
+		if (char === "$") {
+			const tag = /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/.exec(sql.slice(index));
+			if (tag) {
+				const marker = tag[0];
+				const end = sql.indexOf(marker, index + marker.length);
+				const stop = end === -1 ? sql.length : end + marker.length;
+				buffer += sql.slice(index, stop);
+				index = stop;
+				continue;
+			}
+		}
+		if (char === ";") {
+			flush();
+			index += 1;
+			continue;
+		}
+		buffer += char;
+		index += 1;
+	}
+	flush();
+	return statements;
+}
+
+/** 迁移历史目录（按时间排序） */
+function migrationDirs(): string[] {
+	return readdirSync(MIGRATIONS_DIR)
+		.filter((entry) => statSync(path.join(MIGRATIONS_DIR, entry)).isDirectory())
+		.sort();
+}
+
+/** 在隔离 schema 里执行一份迁移（逐条语句；BEGIN/COMMIT 交由每条语句的隐式事务承担） */
+async function applyMigration(db: PrismaClient, dir: string): Promise<number> {
+	const sql = readFileSync(path.join(MIGRATIONS_DIR, dir, "migration.sql"), "utf8");
+	const statements = splitSqlStatements(sql).filter(
+		(statement) => !/^(BEGIN|COMMIT|ROLLBACK)$/i.test(statement),
+	);
+	for (const statement of statements) {
+		await db.$executeRawUnsafe(statement);
+	}
+	return statements.length;
+}
+
+/** 隔离 schema 的连接串（Prisma 按 ?schema= 设置 search_path） */
+function drillUrl(): string {
+	const url = new URL(process.env.DATABASE_URL!);
+	url.searchParams.set("schema", DRILL_SCHEMA);
+	return url.toString();
+}
+
+// ─────────────────────────── legacy 数据灌入 ───────────────────────────
+
+interface LegacyUserSeed {
+	email: string;
+	name: string;
+	/** 已有默认组织（组织与首个 OWNER 成员同事务创建） */
+	withDefaultOrg?: boolean;
+	/** 个人设置（pre-MIG-F 的 user_settings 4 个 legacy 列） */
+	settings?: {
+		baseCurrency: string;
+		prepPreference: string;
+		reminderEnabled: boolean;
+		ledgerStartedAt: Date | null;
+	};
+}
+
+/**
+ * 灌入一个 legacy 个人用户。
+ *
+ * 全部走裸 SQL：pre-MIG-E 的账本表带 NOT NULL 的 `user_id`，而当前 Prisma client
+ * 的 datamodel 已是 post-MIG-F（无 `user_id` 字段），ORM 无法表达这种行。
+ */
+async function seedLegacyUser(seed: LegacyUserSeed): Promise<string> {
+	const user = await drill.user.create({
+		data: { email: seed.email, passwordHash: "test-hash", name: seed.name },
+		select: { id: true },
 	});
-	await db.userSettings.create({
-		data: {
-			userId: user.id,
-			baseCurrency: "CNY",
-			locale: "zh-CN",
-			region: "CN",
-			prepPreference: "balanced",
-			reminderEnabled: true,
-			ledgerStartedAt: T0,
-		},
-	});
-	// 多币种账户
-	await db.account.createMany({
-		data: [
-			{ userId: user.id, currencyCode: "USD", balance: "1000.5000" },
-			{ userId: user.id, currencyCode: "EUR", balance: "200.2500" },
-			{ userId: user.id, currencyCode: "JPY", balance: "0.0000" },
-		],
-	});
-	// 初始持仓（对应 CostLot INITIAL）
+	const userId = user.id;
+
+	if (seed.withDefaultOrg) {
+		// 组织与其首个 OWNER 成员关系同事务创建（created_at 恒等 = 「创建者」口径）
+		await drill.organization.create({
+			data: {
+				name: `${seed.name}的工作台`,
+				memberships: { create: { userId, role: "OWNER", status: "ACTIVE" } },
+			},
+			select: { id: true },
+		});
+	}
+
+	if (seed.settings) {
+		await drill.$executeRawUnsafe(
+			`INSERT INTO user_settings
+				(id, user_id, locale, region, base_currency, prep_preference, reminder_enabled, ledger_started_at, created_at, updated_at)
+			 VALUES ($1, $2, 'zh-CN', 'CN', $3, $4, $5, $6::timestamp, now(), now())`,
+			`${RUN}-settings-${userId}`,
+			userId,
+			seed.settings.baseCurrency,
+			seed.settings.prepPreference,
+			seed.settings.reminderEnabled,
+			seed.settings.ledgerStartedAt,
+		);
+	}
+	return userId;
+}
+
+/** 灌入完整个人账本（多币种账户 / 持仓 / 批次 / 计划 / 分配 / 排期 / 变更日志 / 交易 / 使用 / 分摊 / 更正 / 提醒 / AI 会话 / 数据请求） */
+async function seedLegacyLedger(userId: string): Promise<void> {
+	const iso = (value: Date) => value.toISOString();
+	// 账户（多币种）
+	for (const [code, balance] of [
+		["USD", "1000.5000"],
+		["EUR", "200.2500"],
+		["JPY", "0.0000"],
+	] as const) {
+		await drill.$executeRawUnsafe(
+			`INSERT INTO accounts (id, user_id, organization_id, created_by_id, currency_code, balance, created_at, updated_at)
+			 VALUES ($1, $2, NULL, NULL, $3, $4::numeric, now(), now())`,
+			`${RUN}-acc-${code}`,
+			userId,
+			code,
+			balance,
+		);
+	}
+	// 初始持仓 + INITIAL 批次
 	for (const [code, amount, cost, remaining] of [
 		["USD", "500.0000", "3600.0000", "450.0000"],
 		["EUR", "100.0000", "790.0000", "100.0000"],
 	] as const) {
-		const holding = await db.initialHolding.create({
-			data: {
-				userId: user.id,
-				currencyCode: code,
-				amount,
-				rate: "7.2000000000",
-				rawRate: "7.2000000000",
-				rateSource: "identity",
-				rateObservedAt: T0,
-				cost,
-				confirmedAt: T0,
-			},
-		});
-		const lot = await db.costLot.create({
-			data: {
-				userId: user.id,
-				currencyCode: code,
-				sourceType: "INITIAL",
-				sourceId: holding.id,
-				quantity: amount,
-				// 批次守恒：quantity − Σ已分摊 = remaining_qty（USD 已分摊 50）
-				remainingQty: remaining,
-				unitCost: "7.2000000000",
-				totalCost: cost,
-				acquiredAt: T0,
-			},
-		});
-		if (code === "USD") fixture.initialUsdLotId = lot.id;
+		const holdingId = `${RUN}-ih-${code}`;
+		await drill.$executeRawUnsafe(
+			`INSERT INTO initial_holdings
+				(id, user_id, organization_id, created_by_id, currency_code, amount, rate, raw_rate, rate_source, rate_observed_at, cost, confirmed_at, created_at, updated_at)
+			 VALUES ($1, $2, NULL, NULL, $3, $4::numeric, 7.2000000000, 7.2000000000, 'identity', $5::timestamp, $6::numeric, $5::timestamp, now(), now())`,
+			holdingId,
+			userId,
+			code,
+			amount,
+			iso(T0),
+			cost,
+		);
+		const lotId = `${RUN}-lot-initial-${code}`;
+		await drill.$executeRawUnsafe(
+			`INSERT INTO cost_lots
+				(id, user_id, organization_id, currency_code, source_type, source_id, quantity, remaining_qty, unit_cost, total_cost, acquired_at, created_at, updated_at)
+			 VALUES ($1, $2, NULL, $3, 'INITIAL', $4, $5::numeric, $6::numeric, 7.2000000000, $7::numeric, $8::timestamp, now(), now())`,
+			lotId,
+			userId,
+			code,
+			holdingId,
+			amount,
+			remaining,
+			cost,
+			iso(T0),
+		);
+		if (code === "USD") drillRows.initialUsdLotId = lotId;
 	}
-	// 计划 + 分配 + 批次 + 变更日志
-	const plan = await db.plan.create({
-		data: {
-			userId: user.id,
-			targetCurrency: "USD",
-			targetAmount: "300.0000",
-			expectUseDate: new Date("2026-06-01T00:00:00.000Z"),
-			prepLeadDays: 3,
-			latestPrepDate: new Date("2026-05-25T00:00:00.000Z"),
-			status: "ACTIVE",
-		},
-	});
-	fixture.planId = plan.id;
-	await db.planAllocation.create({
-		data: { planId: plan.id, amount: "300.0000", usedAmount: "50.0000" },
-	});
+	// 计划 + 分配 + 排期 + 变更日志
+	const planId = `${RUN}-plan`;
+	drillRows.planId = planId;
+	await drill.$executeRawUnsafe(
+		`INSERT INTO plans
+			(id, user_id, organization_id, created_by_id, name, pace_preference, target_currency, target_amount, expect_use_date, prep_lead_days, latest_prep_date, plan_start_date, status, created_at, updated_at)
+		 VALUES ($1, $2, NULL, NULL, NULL, 'balanced', 'USD', 300.0000, $3::timestamp, 3, $4::timestamp, NULL, 'ACTIVE', now(), now())`,
+		planId,
+		userId,
+		iso(new Date("2026-06-01T00:00:00.000Z")),
+		iso(new Date("2026-05-25T00:00:00.000Z")),
+	);
+	await drill.$executeRawUnsafe(
+		`INSERT INTO plan_allocations (id, plan_id, amount, used_amount, created_at, updated_at)
+		 VALUES ($1, $2, 300.0000, 50.0000, now(), now())`,
+		`${RUN}-alloc`,
+		planId,
+	);
 	for (const seq of [1, 2, 3]) {
-		await db.planInstallment.create({
-			data: {
-				planId: plan.id,
-				seq,
-				scheduledAt: new Date(2026, 2, seq * 10),
-				amount: "100.0000",
-			},
-		});
+		await drill.$executeRawUnsafe(
+			`INSERT INTO plan_installments (id, plan_id, seq, scheduled_at, amount)
+			 VALUES ($1, $2, $3, $4::timestamp, 100.0000)`,
+			`${RUN}-inst-${seq}`,
+			planId,
+			seq,
+			iso(new Date(Date.UTC(2026, 2, seq * 10))),
+		);
 	}
-	await db.planChangeLog.create({
-		data: {
-			planId: plan.id,
-			changeType: "ALLOCATION_ADJUSTED",
-			beforeTarget: "300.0000",
-			afterTarget: "300.0000",
-			beforeAlloc: "250.0000",
-			afterAlloc: "300.0000",
-			releasedAmount: "0.0000",
-			beforeSnapshot: { amount: "250.0000" },
-			afterSnapshot: { amount: "300.0000" },
-		},
-	});
-	// 买入交易（PURCHASE CostLot）
-	const txn = await db.transaction.create({
-		data: {
-			userId: user.id,
-			currencyCode: "USD",
-			quantity: "20.0000",
-			principalAmount: "144.0000",
-			feeAmount: "2.0000",
-			exchangeRate: "7.2000000000",
-			rateSource: "identity",
-			rateObservedAt: new Date("2026-02-01T00:00:00.000Z"),
-			transactedAt: new Date("2026-02-01T00:00:00.000Z"),
-			planId: plan.id,
-		},
-	});
-	const purchaseLot = await db.costLot.create({
-		data: {
-			userId: user.id,
-			currencyCode: "USD",
-			sourceType: "PURCHASE",
-			sourceId: txn.id,
-			quantity: "20.0000",
-			remainingQty: "20.0000",
-			unitCost: "7.2000000000",
-			totalCost: "144.0000",
-			acquiredAt: new Date("2026-02-01T00:00:00.000Z"),
-		},
-	});
-	fixture.purchaseLotId = purchaseLot.id;
+	await drill.$executeRawUnsafe(
+		`INSERT INTO plan_change_logs
+			(id, plan_id, organization_id, actor_user_id, change_type, before_target, after_target, before_alloc, after_alloc, released_amount, before_snapshot, after_snapshot, created_at)
+		 VALUES ($1, $2, NULL, NULL, 'ALLOCATION_ADJUSTED', 300.0000, 300.0000, 250.0000, 300.0000, 0.0000, '{"amount":"250.0000"}'::jsonb, '{"amount":"300.0000"}'::jsonb, now())`,
+		`${RUN}-changelog`,
+		planId,
+	);
+	// 买入交易 + PURCHASE 批次
+	const txnId = `${RUN}-txn`;
+	await drill.$executeRawUnsafe(
+		`INSERT INTO transactions
+			(id, user_id, organization_id, created_by_id, currency_code, quantity, principal_amount, fee_amount, exchange_rate, rate_source, rate_observed_at, plan_id, transacted_at, version, created_at, updated_at)
+		 VALUES ($1, $2, NULL, NULL, 'USD', 20.0000, 144.0000, 2.0000, 7.2000000000, 'identity', $3::timestamp, $4, $3::timestamp, 1, now(), now())`,
+		txnId,
+		userId,
+		iso(new Date("2026-02-01T00:00:00.000Z")),
+		planId,
+	);
+	const purchaseLotId = `${RUN}-lot-purchase`;
+	drillRows.purchaseLotId = purchaseLotId;
+	await drill.$executeRawUnsafe(
+		`INSERT INTO cost_lots
+			(id, user_id, organization_id, currency_code, source_type, source_id, quantity, remaining_qty, unit_cost, total_cost, acquired_at, created_at, updated_at)
+		 VALUES ($1, $2, NULL, 'USD', 'PURCHASE', $3, 20.0000, 20.0000, 7.2000000000, 144.0000, $4::timestamp, now(), now())`,
+		purchaseLotId,
+		userId,
+		txnId,
+		iso(new Date("2026-02-01T00:00:00.000Z")),
+	);
 	// 使用 + FIFO 分摊（50 全部来自 INITIAL 批次，守恒）
-	const usage = await db.usageRecord.create({
-		data: {
-			userId: user.id,
-			planId: plan.id,
-			currencyCode: "USD",
-			amount: "50.0000",
-			usedAt: new Date("2026-03-01T00:00:00.000Z"),
-		},
-	});
-	fixture.usageId = usage.id;
-	await db.usageLotAllocation.create({
-		data: {
-			usageId: usage.id,
-			lotId: fixture.initialUsdLotId,
-			quantity: "50.0000",
-			cost: "360.0000",
-		},
-	});
-	// 更正（APPLIED + FAILED 两种终态）
-	await db.correction.create({
-		data: {
-			userId: user.id,
-			targetType: "TRANSACTION",
-			targetId: txn.id,
-			reason: "手续费误录",
-			beforeSnapshot: { feeAmount: "2.0000" },
-			afterSnapshot: { feeAmount: "1.5000" },
-			status: "APPLIED",
-		},
-	});
-	await db.correction.create({
-		data: {
-			userId: user.id,
-			targetType: "TRANSACTION",
-			targetId: `${RUN}-missing`,
-			reason: "演练失败行",
-			beforeSnapshot: {},
-			afterSnapshot: {},
-			status: "FAILED",
-			failReason: "目标不存在",
-		},
-	});
-	// 提醒：一条已读 + 一条未读
-	const [readReminder, unreadReminder] = await Promise.all([
-		db.reminder.create({
-			data: {
-				userId: user.id,
-				type: "PLAN_DUE",
-				planId: plan.id,
-				dedupKey: `${RUN}-due`,
-				scheduledFor: new Date("2026-05-25T00:00:00.000Z"),
-				readAt: new Date("2026-05-26T08:00:00.000Z"),
-			},
-		}),
-		db.reminder.create({
-			data: {
-				userId: user.id,
-				type: "PLAN_PREP",
-				planId: plan.id,
-				dedupKey: `${RUN}-prep`,
-				scheduledFor: new Date("2026-05-22T00:00:00.000Z"),
-			},
-		}),
-	]);
-	fixture.readReminderId = readReminder.id;
-	fixture.unreadReminderId = unreadReminder.id;
-	// AI 会话
-	await db.aiConversation.create({
-		data: {
-			userId: user.id,
-			title: "迁移验收会话",
-			lastMessageAt: new Date("2026-03-01T00:00:00.000Z"),
-		},
-	});
-	// 数据请求：EXPORT（终态）/ DELETION（终态），均为个人域存量行。
-	// W26 起「未挂组织的 CLEAR」被 DB CHECK data_requests_scope_type_org_check 排除，
-	// 历史 CLEAR → 默认组织的映射已由迁移 20261125180000 的规范化 SQL 承接
-	// （见 test/prisma.spec.ts），MIG-B 回填对数据请求恒为 no-op，此处不再构造。
-	await db.dataRequest.createMany({
-		data: [
-			{
-				userId: user.id,
-				type: "EXPORT",
-				status: "COMPLETED",
-				requestedAt: new Date("2026-03-10T00:00:00.000Z"),
-				dueAt: new Date("2026-03-24T00:00:00.000Z"),
-			},
-			{
-				userId: user.id,
-				type: "DELETION",
-				status: "CANCELLED",
-				requestedAt: new Date("2026-03-12T00:00:00.000Z"),
-				dueAt: new Date("2026-03-26T00:00:00.000Z"),
-			},
-		],
-	});
-	return user.id;
+	const usageId = `${RUN}-usage`;
+	drillRows.usageId = usageId;
+	await drill.$executeRawUnsafe(
+		`INSERT INTO usage_records
+			(id, user_id, organization_id, created_by_id, plan_id, currency_code, amount, used_at, remark, version, created_at, updated_at)
+		 VALUES ($1, $2, NULL, NULL, $3, 'USD', 50.0000, $4::timestamp, NULL, 1, now(), now())`,
+		usageId,
+		userId,
+		planId,
+		iso(new Date("2026-03-01T00:00:00.000Z")),
+	);
+	await drill.$executeRawUnsafe(
+		`INSERT INTO usage_lot_allocations (id, usage_id, lot_id, quantity, cost, created_at, updated_at)
+		 VALUES ($1, $2, $3, 50.0000, 360.0000, now(), now())`,
+		`${RUN}-ula`,
+		usageId,
+		drillRows.initialUsdLotId,
+	);
+	// 更正（APPLIED + FAILED）
+	await drill.$executeRawUnsafe(
+		`INSERT INTO corrections
+			(id, user_id, organization_id, actor_user_id, target_type, target_id, reason, before_snapshot, after_snapshot, status, fail_reason, created_at, updated_at)
+		 VALUES ($1, $2, NULL, NULL, 'TRANSACTION', $3, '手续费误录', '{"feeAmount":"2.0000"}'::jsonb, '{"feeAmount":"1.5000"}'::jsonb, 'APPLIED', NULL, now(), now())`,
+		`${RUN}-corr-ok`,
+		userId,
+		txnId,
+	);
+	await drill.$executeRawUnsafe(
+		`INSERT INTO corrections
+			(id, user_id, organization_id, actor_user_id, target_type, target_id, reason, before_snapshot, after_snapshot, status, fail_reason, created_at, updated_at)
+		 VALUES ($1, $2, NULL, NULL, 'TRANSACTION', $3, '演练失败行', '{}'::jsonb, '{}'::jsonb, 'FAILED', '目标不存在', now(), now())`,
+		`${RUN}-corr-failed`,
+		userId,
+		`${RUN}-missing`,
+	);
+	// 提醒：一条已读（read_at）+ 一条未读
+	await drill.$executeRawUnsafe(
+		`INSERT INTO reminders
+			(id, user_id, organization_id, type, plan_id, dedup_key, scheduled_for, read_at, created_at, updated_at)
+		 VALUES ($1, $2, NULL, 'PLAN_DUE', $3, $4, $5::timestamp, $6::timestamp, now(), now())`,
+		`${RUN}-rem-due`,
+		userId,
+		planId,
+		`${RUN}-due`,
+		iso(new Date("2026-05-25T00:00:00.000Z")),
+		iso(new Date("2026-05-26T08:00:00.000Z")),
+	);
+	drillRows.readReminderId = `${RUN}-rem-due`;
+	await drill.$executeRawUnsafe(
+		`INSERT INTO reminders
+			(id, user_id, organization_id, type, plan_id, dedup_key, scheduled_for, read_at, created_at, updated_at)
+		 VALUES ($1, $2, NULL, 'PLAN_PREP', $3, $4, $5::timestamp, NULL, now(), now())`,
+		`${RUN}-rem-prep`,
+		userId,
+		planId,
+		`${RUN}-prep`,
+		iso(new Date("2026-05-22T00:00:00.000Z")),
+	);
+	drillRows.unreadReminderId = `${RUN}-rem-prep`;
+	// AI 会话（个人所有，user_id 保留）
+	await drill.$executeRawUnsafe(
+		`INSERT INTO ai_conversations (id, user_id, organization_id, title, last_message_at, created_at, updated_at)
+		 VALUES ($1, $2, NULL, '迁移验收会话', $3::timestamp, now(), now())`,
+		`${RUN}-conv`,
+		userId,
+		iso(new Date("2026-03-01T00:00:00.000Z")),
+	);
+	// 数据请求：EXPORT（终态）/ DELETION（终态），个人域存量行
+	await drill.$executeRawUnsafe(
+		`INSERT INTO data_requests
+			(id, user_id, organization_id, scope, type, status, requested_at, due_at, created_at, updated_at)
+		 VALUES ($1, $2, NULL, 'PERSONAL', 'EXPORT', 'COMPLETED', $3::timestamp, $4::timestamp, now(), now()),
+			   ($5, $2, NULL, 'PERSONAL', 'DELETION', 'CANCELLED', $6::timestamp, $7::timestamp, now(), now()),
+			   ($8, $2, NULL, 'PERSONAL', 'CLEAR', 'PENDING', $9::timestamp, $10::timestamp, now(), now())`,
+		`${RUN}-req-export`,
+		userId,
+		iso(new Date("2026-03-10T00:00:00.000Z")),
+		iso(new Date("2026-03-24T00:00:00.000Z")),
+		`${RUN}-req-deletion`,
+		iso(new Date("2026-03-12T00:00:00.000Z")),
+		iso(new Date("2026-03-26T00:00:00.000Z")),
+		`${RUN}-req-clear`,
+		iso(new Date("2026-03-15T00:00:00.000Z")),
+		iso(new Date("2026-03-29T00:00:00.000Z")),
+	);
 }
 
-async function createUser(label: string, name: string): Promise<string> {
-	const user = await db.user.create({
-		data: {
-			email: `${RUN}-${label}@example.com`,
-			passwordHash: "test-hash",
-			name,
-		},
-	});
-	return user.id;
-}
+// ─────────────────────────── 业务事实采集（§12.3 七类口径） ───────────────────────────
 
-beforeAll(async () => {
-	fullUserId = await seedFullUser();
-	noSettingsUserId = await createUser("noset", "待建账新用户");
-	orphanUserId = await createUser("orphan", "孤儿演练用户");
-	chunkUserId = await createUser("chunk", "分片事务演练用户");
-	earliestOwnerUserId = await createUser("earliest", "多组织默认组织演练用户");
-});
-
-afterAll(async () => {
-	// 孤儿演练脏数据（派生行先行，防裸外键阻塞用户级联删除）
-	if (orphanUsageId) {
-		await db.usageLotAllocation
-			.deleteMany({ where: { usageId: orphanUsageId } })
-			.catch(() => {});
-	}
-	if (orphanPlanAllocationId) {
-		await db.planAllocation
-			.deleteMany({ where: { id: orphanPlanAllocationId } })
-			.catch(() => {});
-	}
-	// 本测试创建的组织（org 删除级联 memberships/settings/invitations）
-	await db.organization.deleteMany({ where: { id: { in: managedOrgIds } } });
-	for (const userId of [
-		fullUserId,
-		noSettingsUserId,
-		orphanUserId,
-		chunkUserId,
-		earliestOwnerUserId,
-	]) {
-		if (userId) await cleanupUser(db as CleanupDb, userId);
-	}
-	await db.$disconnect();
-});
-
-/** 行集恒等核对的 10 张表：取该用户一行、把 organization_id 改写/还原所需的最小委托 */
-interface OrgStammable {
-	findFirst(args: {
-		where: unknown;
-	}): Promise<{ id: string } | null>;
-	findMany(args: {
-		where: unknown;
-		select: { id: true; updatedAt: true };
-	}): Promise<Array<{ id: string; updatedAt: Date }>>;
-	update(args: {
-		where: { id: string };
-		data: { organizationId: string | null };
-	}): Promise<unknown>;
-}
-
-type RowMappedTable =
-	| "accounts"
-	| "transactions"
-	| "initial_holdings"
-	| "cost_lots"
-	| "plans"
-	| "usage_records"
-	| "corrections"
-	| "reminders"
-	| "ai_conversations"
-	| "plan_change_logs";
-
-const ROW_MAPPED_TABLES: ReadonlyArray<RowMappedTable> = [
-	"accounts",
-	"transactions",
-	"initial_holdings",
-	"cost_lots",
-	"plans",
-	"usage_records",
-	"corrections",
-	"reminders",
-	"ai_conversations",
-	"plan_change_logs",
-];
-
-function delegateFor(table: RowMappedTable): OrgStammable {
-	const delegates: Record<RowMappedTable, OrgStammable> = {
-		accounts: db.account as unknown as OrgStammable,
-		transactions: db.transaction as unknown as OrgStammable,
-		initial_holdings: db.initialHolding as unknown as OrgStammable,
-		cost_lots: db.costLot as unknown as OrgStammable,
-		plans: db.plan as unknown as OrgStammable,
-		usage_records: db.usageRecord as unknown as OrgStammable,
-		corrections: db.correction as unknown as OrgStammable,
-		reminders: db.reminder as unknown as OrgStammable,
-		ai_conversations: db.aiConversation as unknown as OrgStammable,
-		plan_change_logs: db.planChangeLog as unknown as OrgStammable,
+/**
+ * 按 §12.3 的口径采集「业务事实」。
+ *
+ * 只采集**业务事实**（余额 / 计划 / 流水 / 批次 / 分摊 / 报告输入 / 设置），
+ * 不含租户列——回填只允许改租户列，因此该快照在回填前后必须逐项相等。
+ * 归属键在回填前是 `user_id`、回填后是 `organization_id`，由调用方映射后比较。
+ */
+async function businessFacts(
+	db: PrismaClient,
+	ownerColumn: "user_id" | "organization_id",
+): Promise<Record<string, string[]>> {
+	const owner = ownerColumn;
+	const balances = await db.$queryRawUnsafe<Array<{ owner: string; c: string; b: string }>>(
+		`SELECT ${owner} AS owner, currency_code AS c,
+			trim(to_char(SUM(balance), 'FM99999999999999999990.0000')) AS b
+		 FROM accounts GROUP BY 1, 2 ORDER BY 1, 2`,
+	);
+	const plans = await db.$queryRawUnsafe<Array<{ owner: string; line: string }>>(
+		`SELECT ${owner} AS owner,
+			concat_ws('|', p.target_currency, p.target_amount::text, p.status,
+				COALESCE((SELECT a.amount::text FROM plan_allocations a WHERE a.plan_id = p.id), 'NULL'),
+				COALESCE((SELECT a.used_amount::text FROM plan_allocations a WHERE a.plan_id = p.id), 'NULL'),
+				(SELECT count(*)::text FROM plan_installments i WHERE i.plan_id = p.id),
+				COALESCE((SELECT SUM(i.amount)::text FROM plan_installments i WHERE i.plan_id = p.id), '0')
+			) AS line
+		 FROM plans p ORDER BY p.id`,
+	);
+	const ledger = await db.$queryRawUnsafe<Array<{ owner: string; line: string }>>(
+		`SELECT ${owner} AS owner, 'txn|' || count(*)::text || '|' ||
+			COALESCE(SUM(principal_amount)::text, '0') || '|' || COALESCE(SUM(version)::text, '0') AS line
+		 FROM transactions GROUP BY 1
+		 UNION ALL
+		 SELECT ${owner}, 'usage|' || count(*)::text || '|' ||
+			COALESCE(SUM(amount)::text, '0') || '|' || COALESCE(SUM(version)::text, '0')
+		 FROM usage_records GROUP BY 1
+		 UNION ALL
+		 SELECT ${owner}, 'correction|' || count(*)::text FROM corrections GROUP BY 1
+		 ORDER BY 1, 2`,
+	);
+	const lots = await db.$queryRawUnsafe<Array<{ owner: string; line: string }>>(
+		`SELECT ${owner} AS owner,
+			concat_ws('|', source_type, quantity::text, remaining_qty::text, unit_cost::text, total_cost::text) AS line
+		 FROM cost_lots ORDER BY id`,
+	);
+	const allocations = await db.$queryRawUnsafe<Array<{ owner: string; line: string }>>(
+		`SELECT u.${owner} AS owner,
+			concat_ws('|', count(*)::text,
+				COALESCE(SUM(x.quantity)::text, '0'),
+				COALESCE(SUM(x.cost)::text, '0')) AS line
+		 FROM usage_lot_allocations x JOIN usage_records u ON u.id = x.usage_id
+		 GROUP BY 1 ORDER BY 1`,
+	);
+	const report = await db.$queryRawUnsafe<Array<{ owner: string; line: string }>>(
+		`WITH alloc AS (
+			SELECT u.${owner} AS owner, x.cost, x.quantity, l.source_type,
+				COALESCE(t.fee_amount, -1) AS fee_amount
+			FROM usage_lot_allocations x
+			JOIN usage_records u ON u.id = x.usage_id
+			JOIN cost_lots l ON l.id = x.lot_id
+			LEFT JOIN transactions t ON l.source_type = 'PURCHASE' AND t.id = l.source_id
+		)
+		 SELECT owner,
+			concat_ws('|',
+				trim(to_char(COALESCE(SUM(cost), 0), 'FM99999999999999999990.0000')),
+				trim(to_char(COALESCE(SUM(CASE WHEN source_type = 'INITIAL' THEN cost ELSE 0 END), 0), 'FM99999999999999999990.0000')),
+				trim(to_char(COALESCE(SUM(CASE WHEN source_type = 'PURCHASE' THEN cost ELSE 0 END), 0), 'FM99999999999999999990.0000')),
+				trim(to_char(COALESCE(SUM(CASE WHEN source_type = 'INITIAL' THEN quantity ELSE 0 END), 0), 'FM99999999999999999990.0000')),
+				trim(to_char(COALESCE(SUM(CASE WHEN source_type = 'PURCHASE' THEN quantity ELSE 0 END), 0), 'FM99999999999999999990.0000')),
+				count(*) FILTER (WHERE source_type = 'PURCHASE' AND fee_amount < 0)::text
+			) AS line
+		 FROM alloc GROUP BY owner ORDER BY owner`,
+	);
+	const planInputs = await db.$queryRawUnsafe<Array<{ owner: string; line: string }>>(
+		`SELECT ${owner} AS owner,
+			concat_ws('|', p.id, p.target_amount::text,
+				COALESCE((SELECT SUM(u.amount)::text FROM usage_records u WHERE u.plan_id = p.id), '0')) AS line
+		 FROM plans p ORDER BY p.id`,
+	);
+	const settings =
+		owner === "user_id"
+			? await db.$queryRawUnsafe<Array<{ owner: string; line: string }>>(
+					`SELECT user_id AS owner,
+						concat_ws('|', COALESCE(base_currency, 'NULL'), prep_preference,
+							reminder_enabled::text,
+							COALESCE(to_char(ledger_started_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS'), 'NULL')) AS line
+					 FROM user_settings ORDER BY user_id`,
+				)
+			: await db.$queryRawUnsafe<Array<{ owner: string; line: string }>>(
+					`SELECT organization_id AS owner,
+						concat_ws('|', COALESCE(base_currency, 'NULL'), prep_preference,
+							reminder_enabled::text,
+							COALESCE(to_char(ledger_started_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS'), 'NULL')) AS line
+					 FROM organization_settings ORDER BY organization_id`,
+				);
+	return {
+		balances: balances.map((row) => `${row.owner}|${row.c}|${row.b}`).sort(),
+		plans: plans.map((row) => `${row.owner}|${row.line}`).sort(),
+		ledger: ledger.map((row) => `${row.owner}|${row.line}`).sort(),
+		lots: lots.map((row) => `${row.owner}|${row.line}`).sort(),
+		allocations: allocations.map((row) => `${row.owner}|${row.line}`).sort(),
+		report: report.map((row) => `${row.owner}|${row.line}`).sort(),
+		planInputs: planInputs.map((row) => `${row.owner}|${row.line}`).sort(),
+		settings: settings.map((row) => `${row.owner}|${row.line}`).sort(),
 	};
-	return delegates[table];
 }
 
-function rowsOf(table: RowMappedTable, userId: string): unknown {
-	// PlanChangeLog 无 userId 列：经父 Plan 归属
-	return table === "plan_change_logs" ? { plan: { userId } } : { userId };
+/** 把「按 user_id 归属」的事实改写成「按 organization_id 归属」（回填后的形态） */
+function remapFacts(
+	facts: Record<string, string[]>,
+	userToOrg: Map<string, string>,
+): Record<string, string[]> {
+	const remapped: Record<string, string[]> = {};
+	for (const [key, lines] of Object.entries(facts)) {
+		remapped[key] = lines
+			.map((line) => {
+				const separator = line.indexOf("|");
+				const owner = line.slice(0, separator);
+				const org = userToOrg.get(owner);
+				return `${org ?? owner}${line.slice(separator)}`;
+			})
+			.sort();
+	}
+	return remapped;
 }
 
-/** 有 updated_at 列的 9 张业务表（PlanChangeLog 只有 created_at，单列快照） */
-const TIMESTAMPED_TABLES: ReadonlyArray<Exclude<RowMappedTable, "plan_change_logs">> = [
-	"accounts",
-	"transactions",
-	"initial_holdings",
-	"cost_lots",
-	"plans",
-	"usage_records",
-	"corrections",
-	"reminders",
-	"ai_conversations",
-];
+/** 演练库里「用户 → 默认组织」映射 */
+async function userToDefaultOrg(): Promise<Map<string, string>> {
+	const rows = await drill.$queryRawUnsafe<Array<{ userId: string; organizationId: string }>>(
+		`WITH first_members AS (
+			SELECT DISTINCT ON (m.organization_id)
+				m.organization_id, m.user_id, m.created_at, m.id
+			FROM memberships m
+			ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+		)
+		SELECT DISTINCT f.user_id AS "userId", f.organization_id AS "organizationId"
+		FROM first_members f
+		JOIN organizations o ON o.id = f.organization_id
+		WHERE f.created_at = o.created_at
+		ORDER BY f.user_id`,
+	);
+	return new Map(rows.map((row) => [row.userId, row.organizationId]));
+}
 
-/** 该用户在业务表 + data_requests 的全部行时间戳快照（表:行 → 毫秒） */
-async function snapshotUpdatedAt(userId: string): Promise<Array<[string, number]>> {
+
+/**
+ * 回填前的时间戳快照（§12.2.6「时间戳不改」）。
+ *
+ * 覆盖 9 张带 `updated_at` 的业务表 + `plan_change_logs`（只有 `created_at`，
+ * 回填不得删除重建）+ `data_requests`（created / updated / requested / due）。
+ */
+async function updatedAtSnapshot(db: PrismaClient): Promise<Array<[string, number]>> {
 	const snapshot: Array<[string, number]> = [];
-	for (const table of TIMESTAMPED_TABLES) {
-		const rows = await delegateFor(table).findMany({
-			where: { userId },
-			select: { id: true, updatedAt: true },
-		});
+	for (const table of [
+		"accounts",
+		"transactions",
+		"initial_holdings",
+		"cost_lots",
+		"plans",
+		"usage_records",
+		"corrections",
+		"reminders",
+		"ai_conversations",
+	]) {
+		const rows = await db.$queryRawUnsafe<Array<{ id: string; updated_at: Date }>>(
+			`SELECT id, updated_at FROM ${table}`,
+		);
 		for (const row of rows) {
-			snapshot.push([`${table}:${row.id}`, row.updatedAt.getTime()]);
+			snapshot.push([`${table}:${row.id}`, row.updated_at.getTime()]);
 		}
 	}
-	// PlanChangeLog 只有 created_at：回填不得删除重建（行 id 与创建时刻都不变）
-	const changeLogs = await db.planChangeLog.findMany({
-		where: { plan: { userId } },
-		select: { id: true, createdAt: true },
-	});
-	for (const log of changeLogs) {
-		snapshot.push([`plan_change_logs:${log.id}`, log.createdAt.getTime()]);
+	const logs = await db.$queryRawUnsafe<Array<{ id: string; created_at: Date }>>(
+		`SELECT id, created_at FROM plan_change_logs`,
+	);
+	for (const row of logs) {
+		snapshot.push([`plan_change_logs:${row.id}`, row.created_at.getTime()]);
 	}
-	const requests = await db.dataRequest.findMany({
-		where: { userId },
-		select: { id: true, updatedAt: true },
-	});
-	for (const request of requests) {
-		snapshot.push([`data_requests:${request.id}`, request.updatedAt.getTime()]);
+	const requests = await db.$queryRawUnsafe<
+		Array<{
+			id: string;
+			created_at: Date;
+			updated_at: Date;
+			requested_at: Date;
+			due_at: Date;
+		}>
+	>(`SELECT id, created_at, updated_at, requested_at, due_at FROM data_requests`);
+	for (const row of requests) {
+		snapshot.push([`data_requests:${row.id}:created`, row.created_at.getTime()]);
+		snapshot.push([`data_requests:${row.id}:updated`, row.updated_at.getTime()]);
+		snapshot.push([`data_requests:${row.id}:requested`, row.requested_at.getTime()]);
+		snapshot.push([`data_requests:${row.id}:due`, row.due_at.getTime()]);
 	}
 	return snapshot.sort((left, right) => (left[0] < right[0] ? -1 : 1));
 }
 
-describe("MIG-B 默认组织回填与核对", () => {
-	const scopeUserIds = (): string[] =>
-		[fullUserId, noSettingsUserId, orphanUserId].filter((id) => id !== "");
-	const allUserIds = (): string[] => [
-		...scopeUserIds(),
-		chunkUserId,
-		earliestOwnerUserId,
-	];
+// ─────────────────────────── 生命周期 ───────────────────────────
 
-	async function defaultOrgIdOf(userId: string): Promise<string> {
-		const membership = await db.membership.findFirst({
-			where: { userId, role: "OWNER", status: "ACTIVE" },
-		});
-		if (!membership) throw new Error(`用户 ${userId} 无默认组织`);
-		return membership.organizationId;
+beforeAll(async () => {
+	// 1. 建隔离 schema
+	await main.$executeRawUnsafe(`CREATE SCHEMA "${DRILL_SCHEMA}"`);
+	drill = new PrismaClient({ datasources: { db: { url: drillUrl() } } });
+
+	// 2. 用仓库迁移历史在隔离 schema 里重建 pre-MIG-E 的 DDL
+	for (const dir of migrationDirs()) {
+		if (dir === MIG_E_DIR || dir === MIG_F_DIR) continue;
+		if (dir > LAST_PRE_MIG_E_DIR) break; // 到 MIG-C 为止（W26 / MIG-E / MIG-F 稍后显式执行）
+		await applyMigration(drill, dir);
 	}
 
-	/** 破坏 → 核对命中指定 scope → 还原 → 恢复 0 diffs（防破坏残留污染后续用例） */
-	async function expectDiffWhile(
-		scope: string,
-		userIds: string[],
-		corrupt: () => Promise<void>,
-		restore: () => Promise<void>,
-	): Promise<void> {
-		await corrupt();
-		let scopes: string[] = [];
-		try {
-			const result = await reconcileMigration(db, { userIds });
-			scopes = result.diffs.map((diff) => diff.scope);
-		} finally {
-			await restore();
-		}
-		expect(scopes).toContain(scope);
-		const restored = await reconcileMigration(db, { userIds });
-		expect(restored.diffs).toEqual([]);
-	}
+	// 3. 灌入 legacy 个人数据
+	drillUsers.full = await seedLegacyUser({
+		email: `${RUN}-full@example.com`,
+		name: "迁移验收张三",
+	});
+	await seedLegacyLedger(drillUsers.full);
 
-	test("第 1 次回填：完整用户与无设置用户全量映射；updated_at 逐行不变", async () => {
-		// 回填前快照：9 张带 updated_at 的业务表 + PlanChangeLog(created_at)
-		// + data_requests 的全部行。夹具共 19 行；逐表核对，防止快照静默漏表
-		const before = await snapshotUpdatedAt(fullUserId);
-		expect(before).toHaveLength(19);
-		expect([...new Set(before.map(([key]) => key.split(":")[0]))].sort()).toEqual(
-			[...TIMESTAMPED_TABLES, "plan_change_logs", "data_requests"].sort(),
+	drillUsers.withSettings = await seedLegacyUser({
+		email: `${RUN}-settings@example.com`,
+		name: "有个人设置用户",
+		settings: {
+			baseCurrency: "USD",
+			prepPreference: "cautious",
+			reminderEnabled: false,
+			ledgerStartedAt: T0,
+		},
+	});
+
+	drillUsers.bare = await seedLegacyUser({
+		email: `${RUN}-bare@example.com`,
+		name: "无设置用户",
+	});
+
+	drillUsers.existing = await seedLegacyUser({
+		email: `${RUN}-existing@example.com`,
+		name: "已有默认组织用户",
+		withDefaultOrg: true,
+	});
+
+	// 回填前的业务事实快照（§12.3 七类口径，按 user_id 归属）
+	factsBeforeBackfill = await businessFacts(drill, "user_id");
+	// 回填前的时间戳快照（§12.2.6：回填不得触碰任何既有行的时间戳）
+	updatedAtBeforeBackfill = await updatedAtSnapshot(drill);
+}, 180_000);
+
+afterAll(async () => {
+	if (drill) await drill.$disconnect();
+	// 隔离 schema 一律 CASCADE 清理；public schema 不受影响
+	await main.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${DRILL_SCHEMA}" CASCADE`);
+	// 主库侧用例的清理（账本子表 → 组织 → 用户）
+	await main.$transaction(async (tx) => {
+		await deleteOrganizationsCascadeLedger(tx, mainOrgIds);
+		await tx.organization.deleteMany({ where: { id: { in: mainOrgIds } } });
+	});
+	if (mainUserIds.length > 0) {
+		await main.user.deleteMany({ where: { id: { in: mainUserIds } } });
+	}
+	await main.$disconnect();
+});
+
+// ─────────────────────────── 隔离 schema 演练 ───────────────────────────
+
+describe("隔离 schema：pre-MIG-E 的 MIG-B 回填与 §12.3 核对", () => {
+	test("隔离 schema 建成 pre-MIG-E 形态：organization_id 可空、user_id 列在、legacy 部分唯一索引与 CHECK 前置状态齐备", async () => {
+		const columns = await drill.$queryRawUnsafe<
+			Array<{ table_name: string; column_name: string; is_nullable: string }>
+		>(
+			`SELECT table_name, column_name, is_nullable
+			 FROM information_schema.columns
+			 WHERE table_schema = current_schema()
+				AND (
+					(table_name IN ('accounts','transactions','initial_holdings','cost_lots','plans','usage_records','corrections','reminders') AND column_name = 'user_id')
+					OR (table_name = 'user_settings' AND column_name IN ('base_currency','prep_preference','reminder_enabled','ledger_started_at'))
+					OR (table_name = 'reminders' AND column_name = 'read_at')
+					OR (table_name = 'data_requests' AND column_name = 'user_id')
+					OR (table_name = 'accounts' AND column_name = 'organization_id')
+				)
+			 ORDER BY table_name, column_name`,
 		);
+		const byKey = new Map(
+			columns.map((row) => [`${row.table_name}.${row.column_name}`, row]),
+		);
+		// 8 张共享账本表的 user_id 仍在（NOT NULL）
+		for (const table of [
+			"accounts",
+			"transactions",
+			"initial_holdings",
+			"cost_lots",
+			"plans",
+			"usage_records",
+			"corrections",
+			"reminders",
+		]) {
+			expect(byKey.get(`${table}.user_id`)?.is_nullable, table).toBe("NO");
+		}
+		// organization_id 仍可空（pre-MIG-E）
+		expect(byKey.get("accounts.organization_id")?.is_nullable).toBe("YES");
+		// user_settings 的 4 个 legacy 设置列仍在
+		for (const column of [
+			"base_currency",
+			"prep_preference",
+			"reminder_enabled",
+			"ledger_started_at",
+		]) {
+			expect(byKey.has(`user_settings.${column}`), column).toBe(true);
+		}
+		// reminders.read_at 仍在；data_requests 仍是 user_id
+		expect(byKey.has("reminders.read_at")).toBe(true);
+		expect(byKey.get("data_requests.user_id")?.is_nullable).toBe("NO");
 
-		const firstRun = await backfillDefaultOrganizations(db, {
-			userIds: scopeUserIds(),
+		// 过渡期部分唯一索引仍在（MIG-C 引入、MIG-E 删除）
+		const indexes = await drill.$queryRawUnsafe<Array<{ indexname: string }>>(
+			`SELECT indexname FROM pg_indexes
+			 WHERE schemaname = current_schema()
+				AND indexname IN ('accounts_legacy_user_currency_uidx','initial_holdings_legacy_user_currency_uidx','reminders_legacy_user_dedup_scheduled_uidx')`,
+		);
+		expect(indexes.map((row) => row.indexname).sort()).toEqual([
+			"accounts_legacy_user_currency_uidx",
+			"initial_holdings_legacy_user_currency_uidx",
+			"reminders_legacy_user_dedup_scheduled_uidx",
+		]);
+
+		// 库阶段能力探测：仍在 MIG-F 之前
+		const capabilities = await detectMigrationSchemaCapabilities(drill);
+		expect(capabilities.migF).toBe(false);
+		expect(capabilities.hasUserSettingsLegacyColumns).toBe(true);
+		expect(capabilities.hasReminderReadAtColumn).toBe(true);
+		expect(capabilities.legacyUserIdTables.has("accounts")).toBe(true);
+		expect(capabilities.legacyUserIdTables.has("data_requests")).toBe(true);
+	});
+
+	test("回填前：§12.3 核对显式报出差异（核对不是恒 0 的空过）", async () => {
+		const result = await reconcileMigration(drill);
+		const scopes = result.diffs.map((diff) => diff.scope);
+		// 无默认组织的用户 → default_org.missing
+		expect(scopes).toContain("default_org.missing");
+		// 存量个人行尚未归组 → 10 张表的行集映射全部报出
+		for (const table of [
+			"accounts",
+			"transactions",
+			"initial_holdings",
+			"cost_lots",
+			"plans",
+			"usage_records",
+			"corrections",
+			"reminders",
+			"ai_conversations",
+			"plan_change_logs",
+		]) {
+			expect(scopes, table).toContain(`row_mapping.${table}`);
+		}
+		// 已读提醒尚未落成员级已读行
+		expect(scopes).toContain("reminder_read.parity");
+		// 组织设置尚未复制
+		expect(scopes).toContain("settings_parity.missing");
+		expect(result.sharded).toBe(false);
+	});
+
+	test("回填：生产 dry-run == 实际写入（逐项一致，含分片 dry-run）；时间戳逐行不变", async () => {
+		const estimate = await backfillDefaultOrganizations(drill, { dryRun: true });
+		const shardedFullDry = await backfillDefaultOrganizations(drill, {
+			dryRun: true,
+			userIds: [drillUsers.full],
 		});
-		// 孤儿演练用户在预检时……注意：此时库内无孤儿行（孤儿在第 5 个用例才构造），
-		// 三个用户全部新建组织
-		expect(firstRun.organizationsCreated).toBe(3);
-		expect(firstRun.ownerMembershipsCreated).toBe(3);
-		expect(firstRun.usersSkippedIdempotent).toBe(0);
-		expect(firstRun.usersProcessed).toBe(3);
-		expect(firstRun.chunksCommitted).toBe(1);
-
-		// 评审 I-15：§12.2.6「时间戳不改」——除租户列外不得触碰任何既有行
-		const after = await snapshotUpdatedAt(fullUserId);
-		expect(after).toEqual(before);
-
-		// 记录托管组织 id 供 afterAll 清理
-		const memberships = await db.membership.findMany({
-			where: {
-				userId: { in: scopeUserIds() },
-				role: "OWNER",
-				status: "ACTIVE",
-			},
-			select: { organizationId: true },
+		const shardedExistingDry = await backfillDefaultOrganizations(drill, {
+			dryRun: true,
+			userIds: [drillUsers.existing],
 		});
-		for (const m of memberships) {
-			if (!managedOrgIds.includes(m.organizationId)) {
-				managedOrgIds.push(m.organizationId);
+		expect(shardedFullDry).toMatchObject({
+			usersProcessed: 1,
+			organizationsCreated: 1,
+			ownerMembershipsCreated: 1,
+			usersSkippedIdempotent: 0,
+			dataRequestsRescoped: 1,
+			rowsBackfilled: estimate.rowsBackfilled,
+		});
+		expect(shardedExistingDry).toMatchObject({
+			usersProcessed: 1,
+			organizationsCreated: 0,
+			ownerMembershipsCreated: 0,
+			usersSkippedIdempotent: 1,
+			dataRequestsRescoped: 0,
+		});
+
+		const orgCountBefore = await drill.organization.count();
+		const settingsCountBefore = await drill.organizationSettings.count();
+
+		const actual = await backfillDefaultOrganizations(drill);
+
+		// 估算 == 实际写入（逐项）
+		expect(actual.organizationsCreated).toBe(estimate.organizationsCreated);
+		expect(actual.ownerMembershipsCreated).toBe(estimate.ownerMembershipsCreated);
+		expect(actual.organizationSettingsCreated).toBe(estimate.organizationSettingsCreated);
+		expect(actual.reminderReadsCreated).toBe(estimate.reminderReadsCreated);
+		expect(actual.dataRequestsRescoped).toBe(estimate.dataRequestsRescoped);
+		expect(actual.rowsBackfilled).toEqual(estimate.rowsBackfilled);
+
+		// 有默认组织的用户被复用（不新建），无默认组织的用户新建
+		expect(actual.organizationsCreated).toBe(3);
+		expect(actual.ownerMembershipsCreated).toBe(3);
+		expect(actual.usersSkippedIdempotent).toBe(1);
+		expect(actual.usersProcessed).toBe(4);
+		// 有个人设置的用户的设置被复制；无设置的用户的组织设置不虚构
+		expect(actual.organizationSettingsCreated).toBe(1);
+		// 已读提醒 → 成员级已读行
+		expect(actual.reminderReadsCreated).toBe(1);
+		// 历史 CLEAR → 默认组织的 ORGANIZATION 请求（§12.2.7）
+		expect(actual.dataRequestsRescoped).toBe(1);
+		// 各表待回填行数（organization_id IS NULL）
+		expect(actual.rowsBackfilled).toEqual({
+			accounts: 3,
+			transactions: 1,
+			initialHoldings: 2,
+			costLots: 3,
+			plans: 1,
+			usageRecords: 1,
+			corrections: 2,
+			reminders: 2,
+			aiConversations: 1,
+			planChangeLogs: 1,
+		});
+
+		// §12.2.6：回填只改租户列，任何既有行的时间戳都不动
+		expect(await updatedAtSnapshot(drill)).toEqual(updatedAtBeforeBackfill);
+		// 写入确实落库（组织 / 组织设置从无到有）
+		expect(await drill.organization.count()).toBeGreaterThan(orgCountBefore);
+		expect(await drill.organizationSettings.count()).toBeGreaterThan(settingsCountBefore);
+	});
+
+	test("回填结果：组织 / OWNER 成员 / 组织设置建成，账本行全部归组（行集恒等）", async () => {
+		// 回填后的行集恒等：每张业务表的 organization_id = 该用户的默认组织
+		const mapping = await userToDefaultOrg();
+		for (const userId of [
+			drillUsers.full,
+			drillUsers.withSettings,
+			drillUsers.bare,
+		]) {
+			const organizationId = mapping.get(userId);
+			expect(organizationId, userId).toBeTruthy();
+			const tables = [
+				"accounts",
+				"transactions",
+				"initial_holdings",
+				"cost_lots",
+				"plans",
+				"usage_records",
+				"corrections",
+				"reminders",
+				"ai_conversations",
+			];
+			for (const table of tables) {
+				const [row] = await drill.$queryRawUnsafe<Array<{ n: bigint }>>(
+					`SELECT count(*) AS n FROM ${table}
+					 WHERE user_id = $1 AND organization_id IS DISTINCT FROM $2`,
+					userId,
+					organizationId,
+				);
+				expect(Number(row?.n ?? 0n), `${table} 行集恒等`).toBe(0);
 			}
+			// PlanChangeLog 经父计划归属
+			const [logRow] = await drill.$queryRawUnsafe<Array<{ n: bigint }>>(
+				`SELECT count(*) AS n FROM plan_change_logs c JOIN plans p ON p.id = c.plan_id
+				 WHERE p.user_id = $1 AND c.organization_id IS DISTINCT FROM $2`,
+				userId,
+				organizationId,
+			);
+			expect(Number(logRow?.n ?? 0n), "plan_change_logs 行集恒等").toBe(0);
 		}
 
-		// 完整用户：组织名 = 「用户名的工作台」+ OWNER + 设置复制 + 全部业务行映射
-		const org = await db.membership.findFirst({
-			where: { userId: fullUserId, role: "OWNER", status: "ACTIVE" },
-			include: { organization: true },
-		});
-		expect(org?.organization.name).toBe("迁移验收张三的工作台");
-		const orgId = org?.organizationId;
-		expect(orgId).toBeDefined();
+		// 作者列回填为原用户（操作者快照）
+		const [authored] = await drill.$queryRawUnsafe<
+			Array<{ created_by_id: string; organization_id: string }>
+		>(`SELECT created_by_id, organization_id FROM accounts WHERE id = $1`, `${RUN}-acc-USD`);
+		expect(authored?.created_by_id).toBe(drillUsers.full);
+		expect(authored?.organization_id).toBe(mapping.get(drillUsers.full));
 
-		const settings = await db.organizationSettings.findUnique({
-			where: { organizationId: orgId ?? "" },
-		});
-		expect(settings?.baseCurrency).toBe("CNY");
-		expect(settings?.ledgerStartedAt?.toISOString()).toBe(T0.toISOString());
+		// 组织名 = 「用户名的工作台」；组织设置逐字段复制
+		const [org] = await drill.$queryRawUnsafe<
+			Array<{ name: string; base_currency: string; prep_preference: string; reminder_enabled: boolean }>
+		>(
+			`SELECT o.name, s.base_currency, s.prep_preference, s.reminder_enabled
+			 FROM organizations o JOIN organization_settings s ON s.organization_id = o.id
+			 WHERE o.id = $1`,
+			mapping.get(drillUsers.withSettings),
+		);
+		expect(org?.name).toBe("有个人设置用户的工作台");
+		expect(org?.base_currency).toBe("USD");
+		expect(org?.prep_preference).toBe("cautious");
+		expect(org?.reminder_enabled).toBe(false);
 
-		const backfilled = await db.account.findFirst({
-			where: { userId: fullUserId, currencyCode: "USD" },
-		});
-		expect(backfilled?.organizationId).toBe(orgId);
-		expect(backfilled?.createdById).toBe(fullUserId);
-		expect(backfilled?.balance.toFixed(4)).toBe("1000.5000");
-
-		const changelog = await db.planChangeLog.findFirst({
-			where: { plan: { userId: fullUserId } },
-		});
-		expect(changelog?.organizationId).toBe(orgId);
-		expect(changelog?.actorUserId).toBe(fullUserId);
-
-		// 已读提醒 → ReminderRead（未读不建）
-		const readStates = await db.reminderRead.findMany({
-			where: { userId: fullUserId },
-		});
-		expect(readStates).toHaveLength(1);
-		const unread = await db.reminder.findFirst({
-			where: { userId: fullUserId, dedupKey: `${RUN}-prep` },
-		});
-		expect(unread?.readAt).toBeNull();
-
-		// DataRequest（§12.2.7；W26 后口径）：个人域存量行 EXPORT/DELETION 保持 PERSONAL
-		// 且不挂组织，状态机字段与时间戳一律不动；回填对数据请求恒为 no-op（0 行）
-		expect(firstRun.dataRequestsRescoped).toBe(0);
-		const exportReq = await db.dataRequest.findFirst({
-			where: { userId: fullUserId, type: "EXPORT" },
-		});
-		expect(exportReq?.scope).toBe("PERSONAL");
-		expect(exportReq?.organizationId).toBeNull();
-		expect(exportReq?.status).toBe("COMPLETED");
-		const deletionReq = await db.dataRequest.findFirst({
-			where: { userId: fullUserId, type: "DELETION" },
-		});
-		expect(deletionReq?.scope).toBe("PERSONAL");
-		expect(deletionReq?.status).toBe("CANCELLED");
-
-		// 无设置用户：组织与 OWNER 建立但不虚构 OrganizationSettings（§12.2.3）
-		const bareOrg = await db.membership.findFirst({
-			where: { userId: noSettingsUserId, role: "OWNER" },
-		});
-		expect(bareOrg).toBeDefined();
-		const bareSettings = await db.organizationSettings.findUnique({
-			where: { organizationId: bareOrg?.organizationId ?? "" },
+		// 无个人设置的用户：有组织、无组织设置（不虚构本位币）
+		const bareSettings = await drill.organizationSettings.findUnique({
+			where: { organizationId: mapping.get(drillUsers.bare)! },
 		});
 		expect(bareSettings).toBeNull();
+
+		// 已读提醒 → 成员级已读行（未读不建）
+		const reads = await drill.$queryRawUnsafe<Array<{ n: bigint }>>(
+			`SELECT count(*) AS n FROM reminder_reads WHERE reminder_id = $1`,
+			drillRows.readReminderId,
+		);
+		expect(Number(reads[0]?.n ?? 0n)).toBe(1);
+		const unreadReads = await drill.$queryRawUnsafe<Array<{ n: bigint }>>(
+			`SELECT count(*) AS n FROM reminder_reads WHERE reminder_id = $1`,
+			drillRows.unreadReminderId,
+		);
+		expect(Number(unreadReads[0]?.n ?? 0n)).toBe(0);
 	});
 
-	test("§12.3 核对：分片模式 0 差异；检查项齐全（防查询写错导致的空过）", async () => {
-		const result = await reconcileMigration(db, { userIds: scopeUserIds() });
-		expect(result.sharded).toBe(true);
-		// 分片模式评估 25 项：默认组织 1 + 行集映射 10 + 可归属不变量 7
-		// + 数据请求 1 + 提醒已读 1 + 设置同构 2 + 双写冲突 3。数量写死：任何一项的 SQL
-		// 列名写错都会让该项「恒 0」静默通过，数量对不上即暴露。
-		expect(result.checks).toBe(25);
+	test("§12.3 核对：全量 0 差异；核对项数量写死（防「查询写错 → 恒 0」的空过）", async () => {
+		const result = await reconcileMigration(drill);
 		expect(result.diffs).toEqual([]);
+		// 全量模式评估 29 项：默认组织 1 + 行集映射 10 + 可归属不变量 7
+		// + 数据请求 1 + 提醒已读 1 + 设置同构 2 + 双写冲突 3 + 无法归属孤儿 4
+		expect(result.checks).toBe(29);
+		expect(result.sharded).toBe(false);
 
 		// 空分片：不评估任何行，同样不得回落到全库
-		const empty = await reconcileMigration(db, { userIds: [] });
+		const empty = await reconcileMigration(drill, { userIds: [] });
 		expect(empty).toMatchObject({ sharded: true, checks: 25, diffs: [] });
-
-		// 全量模式：额外评估 4 类无法归属到用户的孤儿派生行（共享本地库可能有
-		// 其他用例残留，故只断言检查项数量与模式，不断言 0 diffs）
-		const whole = await reconcileMigration(db);
-		expect(whole.sharded).toBe(false);
-		expect(whole.checks).toBe(29);
 	});
 
-	test("第 2 次回填：幂等（无新增组织/无重复记录/零重复回填）", async () => {
-		const orgCountBefore = await db.organization.count({
-			where: { id: { in: managedOrgIds } },
-		});
-		const secondRun = await backfillDefaultOrganizations(db, {
-			userIds: scopeUserIds(),
-		});
-		const orgCountAfter = await db.organization.count({
-			where: { id: { in: managedOrgIds } },
-		});
-		expect(orgCountAfter).toBe(orgCountBefore);
+	test("父子组织一致性：UsageRecord↔Plan / CostLot↔来源 / 分摊双父 / PlanChangeLog↔Plan 全部同组织", async () => {
+		const checks: Array<{ scope: string; sql: string; params: unknown[] }> = [
+			{
+				scope: "usage_record.plan_org_consistency",
+				sql: `SELECT count(*) AS n FROM usage_records u JOIN plans p ON p.id = u.plan_id
+					WHERE u.organization_id IS DISTINCT FROM p.organization_id`,
+				params: [],
+			},
+			{
+				scope: "cost_lot.source_org_consistency",
+				sql: `SELECT count(*) AS n FROM cost_lots l
+					JOIN initial_holdings h ON l.source_type = 'INITIAL' AND h.id = l.source_id
+					WHERE l.organization_id IS DISTINCT FROM h.organization_id`,
+				params: [],
+			},
+			{
+				scope: "cost_lot.source_org_consistency(purchase)",
+				sql: `SELECT count(*) AS n FROM cost_lots l
+					JOIN transactions t ON l.source_type = 'PURCHASE' AND t.id = l.source_id
+					WHERE l.organization_id IS DISTINCT FROM t.organization_id`,
+				params: [],
+			},
+			{
+				scope: "usage_lot_allocation.parent_org_consistency",
+				sql: `SELECT count(*) AS n FROM usage_lot_allocations x
+					JOIN usage_records u ON u.id = x.usage_id
+					JOIN cost_lots l ON l.id = x.lot_id
+					WHERE u.organization_id IS DISTINCT FROM l.organization_id`,
+				params: [],
+			},
+			{
+				scope: "plan_change_log.plan_org_consistency",
+				sql: `SELECT count(*) AS n FROM plan_change_logs c JOIN plans p ON p.id = c.plan_id
+					WHERE c.organization_id IS DISTINCT FROM p.organization_id`,
+				params: [],
+			},
+		];
+		for (const check of checks) {
+			const rows = await drill.$queryRawUnsafe<Array<{ n: bigint }>>(check.sql, ...check.params);
+			expect(Number(rows[0]?.n ?? 0n), check.scope).toBe(0);
+		}
+	});
+
+	test("回填只改租户列：业务事实逐项不变（§12.3 七类口径，回填前后逐项相等）", async () => {
+		// 回填前（按 user_id 归属）→ 映射到默认组织 → 与回填后（按 organization_id 归属）逐项相等
+		const facts = await businessFacts(drill, "organization_id");
+		const mapping = await userToDefaultOrg();
+		const remappedBefore = remapFacts(factsBeforeBackfill, mapping);
+		expect(remappedBefore).toEqual(facts);
+
+		const fullOrg = mapping.get(drillUsers.full)!;
+
+		// 口径 1：每币种账户余额合计
+		expect(facts.balances).toContain(`${fullOrg}|USD|1000.5000`);
+		expect(facts.balances).toContain(`${fullOrg}|EUR|200.2500`);
+		expect(facts.balances).toContain(`${fullOrg}|JPY|0.0000`);
+
+		// 口径 2：计划目标 / 分配 / 排期
+		expect(facts.plans).toContain(
+			`${fullOrg}|USD|300.0000|ACTIVE|300.0000|50.0000|3|300.0000`,
+		);
+		// 口径 3：流水计数与金额
+		expect(facts.ledger).toContain(`${fullOrg}|txn|1|144.0000|1`);
+		expect(facts.ledger).toContain(`${fullOrg}|usage|1|50.0000|1`);
+		expect(facts.ledger).toContain(`${fullOrg}|correction|2`);
+		// 口径 4：批次与分摊
+		expect(facts.lots).toContain(`${fullOrg}|INITIAL|500.0000|450.0000|7.2000000000|3600.0000`);
+		expect(facts.lots).toContain(`${fullOrg}|INITIAL|100.0000|100.0000|7.2000000000|790.0000`);
+		expect(facts.lots).toContain(`${fullOrg}|PURCHASE|20.0000|20.0000|7.2000000000|144.0000`);
+		expect(facts.allocations).toContain(`${fullOrg}|1|50.0000|360.0000`);
+		// 口径 5：报告口径输入与 FIFO 汇总
+		expect(facts.planInputs).toContain(`${fullOrg}|${drillRows.planId}|300.0000|50.0000`);
+		expect(facts.report).toContain(`${fullOrg}|360.0000|360.0000|0.0000|50.0000|0.0000|0`);
+		// 口径 6：组织设置逐字段复制个人设置（时区敏感的时间戳改为与个人设置逐字段比对）
+		const settingsOrg = mapping.get(drillUsers.withSettings)!;
+		expect(
+			facts.settings.some(
+				(line) =>
+					line.startsWith(`${settingsOrg}|USD|cautious|false|`) &&
+					line.split("|").length === 5,
+			),
+			facts.settings.join(" / "),
+		).toBe(true);
+		const [personalSettings] = await drill.$queryRawUnsafe<Array<{ v: string }>>(
+			`SELECT to_char(ledger_started_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS v
+			 FROM user_settings WHERE user_id = $1`,
+			drillUsers.withSettings,
+		);
+		const [orgSettings] = await drill.$queryRawUnsafe<Array<{ v: string }>>(
+			`SELECT to_char(ledger_started_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS v
+			 FROM organization_settings WHERE organization_id = $1`,
+			settingsOrg,
+		);
+		expect(orgSettings?.v).toBe(personalSettings?.v);
+	});
+
+	test("幂等：第 2 次回填零变化；核对仍 0 差异", async () => {
+		const orgCountBefore = await drill.organization.count();
+		const secondRun = await backfillDefaultOrganizations(drill);
+		expect(await drill.organization.count()).toBe(orgCountBefore);
 		expect(secondRun.organizationsCreated).toBe(0);
 		expect(secondRun.ownerMembershipsCreated).toBe(0);
 		expect(secondRun.organizationSettingsCreated).toBe(0);
+		expect(secondRun.reminderReadsCreated).toBe(0);
+		expect(secondRun.dataRequestsRescoped).toBe(0);
 		for (const [table, count] of Object.entries(secondRun.rowsBackfilled)) {
 			expect(`${table}=${count}`, `表 ${table} 重复回填`).toBe(`${table}=0`);
 		}
-		expect(secondRun.reminderReadsCreated).toBe(0);
-		expect(secondRun.dataRequestsRescoped).toBe(0);
-		const readStates = await db.reminderRead.findMany({
-			where: { userId: fullUserId },
-		});
-		expect(readStates).toHaveLength(1);
-	});
-
-	test("§12.3 核对（幂等后）：仍 0 差异", async () => {
-		const result = await reconcileMigration(db, { userIds: scopeUserIds() });
+		const result = await reconcileMigration(drill);
 		expect(result.diffs).toEqual([]);
 	});
 
-	test("孤儿派生行：回填预检显式阻断（§12.2.5）", async () => {
-		// UsageRecord.planId 无外键 → 可构造父缺失行
-		const orphanUsage = await db.usageRecord.create({
-			data: {
-				userId: orphanUserId,
-				planId: `${RUN}-missing-plan`,
-				currencyCode: "USD",
-				amount: "10.0000",
-				usedAt: new Date(),
-			},
-		});
-		orphanUsageId = orphanUsage.id;
-		const blocked = backfillDefaultOrganizations(db, {
-			userIds: scopeUserIds(),
-		});
-		await expect(blocked).rejects.toBeInstanceOf(BackfillAnomalyError);
-		await expect(blocked).rejects.toMatchObject({
-			details: expect.objectContaining({ usage_records: 1 }),
-		});
-		// 预检为全局只读闸门（孤儿行不属于任何用户分片）：阻断即零写入，
-		// 第 1 次回填已建的组织不受影响、无半写
-		const orgForOrphan = await db.membership.findFirst({
-			where: { userId: orphanUserId, role: "OWNER" },
-		});
-		expect(orgForOrphan).toBeDefined();
-		const orgCountStable = await db.organization.count({
-			where: { id: { in: managedOrgIds } },
-		});
-		expect(orgCountStable).toBe(managedOrgIds.length);
-
-		// PlanAllocation 父缺失同样阻断
-		const orphanAlloc = await db.planAllocation.create({
-			data: {
-				planId: `${RUN}-missing-plan`,
-				amount: "1.0000",
-				usedAmount: "0.0000",
-			},
-		});
-		orphanPlanAllocationId = orphanAlloc.id;
-		const blockedAgain = backfillDefaultOrganizations(db, {
-			userIds: scopeUserIds(),
-		});
-		await expect(blockedAgain).rejects.toBeInstanceOf(BackfillAnomalyError);
-		await expect(blockedAgain).rejects.toMatchObject({
-			details: expect.objectContaining({
-				usage_records: 1,
-				plan_allocations: 1,
-			}),
-		});
-
-		// CostLot 来源孤儿（PURCHASE 无交易行）同样在预检阶段阻断
-		const orphanLot = await db.costLot.create({
-			data: {
-				userId: orphanUserId,
-				currencyCode: "USD",
-				sourceType: "PURCHASE",
-				sourceId: `${RUN}-missing-tx`,
-				quantity: "1.0000",
-				remainingQty: "1.0000",
-				unitCost: "7.00000000",
-				totalCost: "7.0000",
-				acquiredAt: new Date(),
-			},
-		});
+	test("孤儿派生行：回填预检显式阻断（§12.2.5），零写入", async () => {
+		const orphanUsageId = `${RUN}-orphan-usage`;
+		await drill.$executeRawUnsafe(
+			`INSERT INTO usage_records
+				(id, user_id, organization_id, created_by_id, plan_id, currency_code, amount, used_at, remark, version, created_at, updated_at)
+			 VALUES ($1, $2, NULL, NULL, $3, 'USD', 10.0000, now(), NULL, 1, now(), now())`,
+			orphanUsageId,
+			drillUsers.bare,
+			`${RUN}-missing-plan`,
+		);
 		try {
-			await expect(
-				backfillDefaultOrganizations(db, { userIds: scopeUserIds() }),
-			).rejects.toMatchObject({
-				details: expect.objectContaining({ cost_lots: 1 }),
+			await expect(backfillDefaultOrganizations(drill)).rejects.toBeInstanceOf(
+				BackfillAnomalyError,
+			);
+			await expect(backfillDefaultOrganizations(drill)).rejects.toMatchObject({
+				details: expect.objectContaining({ usage_records: 1 }),
 			});
 		} finally {
-			await db.costLot.delete({ where: { id: orphanLot.id } });
+			await drill.$executeRawUnsafe(`DELETE FROM usage_records WHERE id = $1`, orphanUsageId);
 		}
-	});
-
-	test("跨组织父子不一致：核对显式报差异（§12.3.7）", async () => {
-		// 清理孤儿行，恢复可回填状态
-		await db.usageLotAllocation.deleteMany({
-			where: { usageId: orphanUsageId },
-		});
-		await db.usageRecord.delete({ where: { id: orphanUsageId } });
-		await db.planAllocation.delete({ where: { id: orphanPlanAllocationId } });
-
-		// 构造跨组织异常：usage.organizationId 指向组织 B，而其 plan 属组织 A
-		const orgAOrgId = await defaultOrgIdOf(fullUserId);
-		const orgB = await db.organization.create({
-			data: { name: `MIG-B 跨组织演练组织 ${RUN}` },
-		});
-		managedOrgIds.push(orgB.id);
-		crossOrgId = orgB.id;
-		const usage = await db.usageRecord.findFirst({
-			where: { userId: fullUserId, organizationId: orgAOrgId },
-		});
-		expect(usage).toBeDefined();
-		await db.usageRecord.update({
-			where: { id: usage?.id ?? "" },
-			data: { organizationId: orgB.id },
-		});
-		const result = await reconcileMigration(db, { userIds: scopeUserIds() });
-		const scopes = result.diffs.map((d) => d.scope);
-		expect(scopes).toContain("usage_record.plan_org_consistency");
-		// 还原异常行，恢复 0 diffs 基线（防污染后续套件）
-		await db.usageRecord.update({
-			where: { id: usage?.id ?? "" },
-			data: { organizationId: orgAOrgId },
-		});
-		const restored = await reconcileMigration(db, {
-			userIds: scopeUserIds(),
-		});
+		// 预检阻断期间零写入：组织数不变
+		expect(await drill.organization.count()).toBeGreaterThan(0);
+		const restored = await reconcileMigration(drill);
 		expect(restored.diffs).toEqual([]);
 	});
 
-	test("核对负向用例·行集映射：10 张表逐张改错组织都必须被报出", async () => {
-		const orgAOrgId = await defaultOrgIdOf(fullUserId);
-		const orgBId = crossOrgId;
-		for (const table of ROW_MAPPED_TABLES) {
-			const delegate = delegateFor(table);
-			const row = await delegate.findFirst({ where: rowsOf(table, fullUserId) });
-			if (!row) throw new Error(`夹具缺 ${table} 行`);
-			const rowId: string = row.id;
-			await expectDiffWhile(
-				`row_mapping.${table}`,
-				scopeUserIds(),
-				() => delegate.update({ where: { id: rowId }, data: { organizationId: orgBId } }),
-				() => delegate.update({ where: { id: rowId }, data: { organizationId: orgAOrgId } }),
+	test("跨组织父子不一致：核对显式报差异（§12.3.7），还原后归零", async () => {
+		const mapping = await userToDefaultOrg();
+		const orgA = mapping.get(drillUsers.full)!;
+		const otherOrg = await drill.organization.create({
+			data: { name: `${RUN} 跨组织演练组织` },
+			select: { id: true },
+		});
+		try {
+			await drill.$executeRawUnsafe(
+				`UPDATE usage_records SET organization_id = $1 WHERE id = $2`,
+				otherOrg.id,
+				drillRows.usageId,
 			);
+			const result = await reconcileMigration(drill);
+			expect(result.diffs.map((diff) => diff.scope)).toContain(
+				"usage_record.plan_org_consistency",
+			);
+			await drill.$executeRawUnsafe(
+				`UPDATE usage_records SET organization_id = $1 WHERE id = $2`,
+				orgA,
+				drillRows.usageId,
+			);
+			const restored = await reconcileMigration(drill);
+			expect(restored.diffs).toEqual([]);
+		} finally {
+			await drill.organization.delete({ where: { id: otherOrg.id } });
 		}
 	});
 
-	test("核对负向用例·不变量专项：逐类破坏 → 命中 → 还原归零", async () => {
-		const orgAOrgId = await defaultOrgIdOf(fullUserId);
-		const orgBId = crossOrgId;
-		const users = scopeUserIds();
+	test("行集映射负向：10 张表逐张改错组织都必须被报出", async () => {
+		const mapping = await userToDefaultOrg();
+		const orgA = mapping.get(drillUsers.full)!;
+		const otherOrg = await drill.organization.create({
+			data: { name: `${RUN} 行集映射演练组织` },
+			select: { id: true },
+		});
+		try {
+			const targets: Array<{ table: string; sql: string; params: unknown[] }> = [
+				{
+					table: "accounts",
+					sql: `UPDATE accounts SET organization_id = $1 WHERE id = $2`,
+					params: [`${RUN}-acc-USD`],
+				},
+				{
+					table: "transactions",
+					sql: `UPDATE transactions SET organization_id = $1 WHERE id = $2`,
+					params: [`${RUN}-txn`],
+				},
+				{
+					table: "initial_holdings",
+					sql: `UPDATE initial_holdings SET organization_id = $1 WHERE id = $2`,
+					params: [`${RUN}-ih-USD`],
+				},
+				{
+					table: "cost_lots",
+					sql: `UPDATE cost_lots SET organization_id = $1 WHERE id = $2`,
+					params: [drillRows.initialUsdLotId],
+				},
+				{
+					table: "plans",
+					sql: `UPDATE plans SET organization_id = $1 WHERE id = $2`,
+					params: [drillRows.planId],
+				},
+				{
+					table: "usage_records",
+					sql: `UPDATE usage_records SET organization_id = $1 WHERE id = $2`,
+					params: [drillRows.usageId],
+				},
+				{
+					table: "corrections",
+					sql: `UPDATE corrections SET organization_id = $1 WHERE id = $2`,
+					params: [`${RUN}-corr-ok`],
+				},
+				{
+					table: "reminders",
+					sql: `UPDATE reminders SET organization_id = $1 WHERE id = $2`,
+					params: [drillRows.readReminderId],
+				},
+				{
+					table: "ai_conversations",
+					sql: `UPDATE ai_conversations SET organization_id = $1 WHERE id = $2`,
+					params: [`${RUN}-conv`],
+				},
+				{
+					table: "plan_change_logs",
+					sql: `UPDATE plan_change_logs SET organization_id = $1 WHERE id = $2`,
+					params: [`${RUN}-changelog`],
+				},
+			];
+			for (const target of targets) {
+				await drill.$executeRawUnsafe(
+					`UPDATE ${target.table} SET organization_id = $1 WHERE id = $2`,
+					otherOrg.id,
+					...target.params,
+				);
+				const result = await reconcileMigration(drill);
+				expect(result.diffs.map((diff) => diff.scope), target.table).toContain(
+					`row_mapping.${target.table}`,
+				);
+				await drill.$executeRawUnsafe(
+					`UPDATE ${target.table} SET organization_id = $1 WHERE id = $2`,
+					orgA,
+					...target.params,
+				);
+				const restored = await reconcileMigration(drill);
+				expect(restored.diffs, `${target.table} 还原`).toEqual([]);
+			}
+		} finally {
+			await drill.organization.delete({ where: { id: otherOrg.id } });
+		}
+	});
 
-		// FIFO：使用量与分摊量合计不等
+	test("不变量负向：FIFO / 批次守恒 / 来源孤儿 / 已读对账 / 设置同构 / 默认组织缺失 逐类命中", async () => {
+		const mapping = await userToDefaultOrg();
+		const orgA = mapping.get(drillUsers.full)!;
+
+		const expectDiffWhile = async (
+			scope: string,
+			corrupt: () => Promise<void>,
+			restore: () => Promise<void>,
+		) => {
+			await corrupt();
+			let scopes: string[] = [];
+			try {
+				scopes = (await reconcileMigration(drill)).diffs.map((diff) => diff.scope);
+			} finally {
+				await restore();
+			}
+			expect(scopes, scope).toContain(scope);
+			expect((await reconcileMigration(drill)).diffs).toEqual([]);
+		};
+
+		// FIFO：使用量 ≠ 分摊量合计
 		await expectDiffWhile(
 			"fifo_conservation.usage_allocations",
-			users,
-			() => db.usageRecord.update({ where: { id: fixture.usageId }, data: { amount: "49.0000" } }),
-			() => db.usageRecord.update({ where: { id: fixture.usageId }, data: { amount: "50.0000" } }),
+			async () => {
+				await drill.$executeRawUnsafe(
+					`UPDATE usage_records SET amount = 49.0000 WHERE id = $1`,
+					drillRows.usageId,
+				);
+			},
+			async () => {
+				await drill.$executeRawUnsafe(
+					`UPDATE usage_records SET amount = 50.0000 WHERE id = $1`,
+					drillRows.usageId,
+				);
+			},
 		);
-		// 批次守恒：quantity − Σ已分摊 ≠ remaining_qty
+		// 批次守恒：quantity − Σ分摊 ≠ remaining_qty
 		await expectDiffWhile(
 			"batch_conservation.cost_lots",
-			users,
-			() => db.costLot.update({ where: { id: fixture.initialUsdLotId }, data: { remainingQty: "449.0000" } }),
-			() => db.costLot.update({ where: { id: fixture.initialUsdLotId }, data: { remainingQty: "450.0000" } }),
+			async () => {
+				await drill.$executeRawUnsafe(
+					`UPDATE cost_lots SET remaining_qty = 449.0000 WHERE id = $1`,
+					drillRows.initialUsdLotId,
+				);
+			},
+			async () => {
+				await drill.$executeRawUnsafe(
+					`UPDATE cost_lots SET remaining_qty = 450.0000 WHERE id = $1`,
+					drillRows.initialUsdLotId,
+				);
+			},
 		);
-		// 批次与来源记录不同组织
-		await expectDiffWhile(
-			"cost_lot.source_org_consistency",
-			users,
-			() => db.costLot.update({ where: { id: fixture.purchaseLotId }, data: { organizationId: orgBId } }),
-			() => db.costLot.update({ where: { id: fixture.purchaseLotId }, data: { organizationId: orgAOrgId } }),
-		);
-		// 使用分摊双父（Usage × CostLot）不同组织
-		await expectDiffWhile(
-			"usage_lot_allocation.parent_org_consistency",
-			users,
-			() => db.costLot.update({ where: { id: fixture.initialUsdLotId }, data: { organizationId: orgBId } }),
-			() => db.costLot.update({ where: { id: fixture.initialUsdLotId }, data: { organizationId: orgAOrgId } }),
-		);
-		// 使用记录缺父计划 / 批次来源孤儿
-		await expectDiffWhile(
-			"usage_record.orphan_plan",
-			users,
-			() => db.usageRecord.create({
-				data: { userId: fullUserId, planId: `${RUN}-no-plan`, currencyCode: "USD", amount: "1.0000", usedAt: T0 },
-			}),
-			() => db.usageRecord.deleteMany({ where: { userId: fullUserId, planId: `${RUN}-no-plan` } }),
-		);
+		// 批次来源孤儿（PURCHASE 无对应交易）
 		await expectDiffWhile(
 			"cost_lot.orphan_source",
-			users,
-			() => db.costLot.create({
-				data: {
-					userId: fullUserId, currencyCode: "USD", sourceType: "PURCHASE", sourceId: `${RUN}-no-txn`,
-					quantity: "1.0000", remainingQty: "1.0000", unitCost: "7.2000000000", totalCost: "7.2000", acquiredAt: T0,
-				},
-			}),
-			() => db.costLot.deleteMany({ where: { userId: fullUserId, sourceId: `${RUN}-no-txn` } }),
+			async () => {
+				await drill.$executeRawUnsafe(
+					`INSERT INTO cost_lots
+						(id, user_id, organization_id, currency_code, source_type, source_id, quantity, remaining_qty, unit_cost, total_cost, acquired_at, created_at, updated_at)
+					 VALUES ($1, $2, $3, 'USD', 'PURCHASE', $4, 1.0000, 1.0000, 7.2000000000, 7.2000, now(), now(), now())`,
+					`${RUN}-orphan-lot`,
+					drillUsers.full,
+					orgA,
+					`${RUN}-no-txn`,
+				);
+			},
+			async () => {
+				await drill.$executeRawUnsafe(
+					`DELETE FROM cost_lots WHERE id = $1`,
+					`${RUN}-orphan-lot`,
+				);
+			},
 		);
-		// DataRequest 语义映射（W26 后）：合法形态由 DB CHECK data_requests_scope_type_org_check
-		// 兜底，已映射用户的请求无法再经 ORM 改成违约形态 → 本项对已回填用户恒为 0 差异
-		expect(
-			(await reconcileMigration(db, { userIds: users })).diffs.map((diff) => diff.scope),
-		).not.toContain("data_request.scope_mapping");
 		// ReminderRead 对账：已读提醒缺成员级已读行
 		await expectDiffWhile(
 			"reminder_read.parity",
-			users,
-			() => db.reminder.update({ where: { id: fixture.unreadReminderId }, data: { readAt: T0 } }),
-			() => db.reminder.update({ where: { id: fixture.unreadReminderId }, data: { readAt: null } }),
+			async () => {
+				await drill.$executeRawUnsafe(
+					`DELETE FROM reminder_reads WHERE reminder_id = $1`,
+					drillRows.readReminderId,
+				);
+			},
+			async () => {
+				await drill.$executeRawUnsafe(
+					`INSERT INTO reminder_reads (id, reminder_id, user_id, read_at)
+					 VALUES ($1, $2, $3, $4::timestamp)`,
+					`${RUN}-read-restore`,
+					drillRows.readReminderId,
+					drillUsers.full,
+					new Date("2026-05-26T08:00:00.000Z"),
+				);
+			},
 		);
-		// 设置同构：值不一致 / 组织设置缺失
-		await expectDiffWhile(
-			"settings_parity.value_mismatch",
-			users,
-			() => db.organizationSettings.update({ where: { organizationId: orgAOrgId }, data: { baseCurrency: "USD" } }),
-			() => db.organizationSettings.update({ where: { organizationId: orgAOrgId }, data: { baseCurrency: "CNY" } }),
-		);
+		// 设置同构：组织设置缺失
+		const settingsOrg = mapping.get(drillUsers.withSettings)!;
 		await expectDiffWhile(
 			"settings_parity.missing",
-			users,
-			() => db.organizationSettings.delete({ where: { organizationId: orgAOrgId } }),
-			() => db.organizationSettings.create({
-				data: {
-					organizationId: orgAOrgId, baseCurrency: "CNY", prepPreference: "balanced",
-					reminderEnabled: true, ledgerStartedAt: T0,
-				},
-			}),
+			async () => {
+				await drill.$executeRawUnsafe(
+					`DELETE FROM organization_settings WHERE organization_id = $1`,
+					settingsOrg,
+				);
+			},
+			async () => {
+				await drill.$executeRawUnsafe(
+					`INSERT INTO organization_settings
+						(id, organization_id, base_currency, prep_preference, reminder_enabled, ledger_started_at, created_at, updated_at)
+					 VALUES ($1, $2, 'USD', 'cautious', false, $3::timestamp, now(), now())`,
+					`${RUN}-settings-restore`,
+					settingsOrg,
+					T0,
+				);
+			},
 		);
-		// 默认组织缺失：无任何 OWNER 成员关系的用户
-		const strayUserId = await createUser("stray", "无组织演练用户");
+		// 默认组织缺失：没有任何成员关系的用户
+		const stray = await drill.user.create({
+			data: {
+				email: `${RUN}-stray@example.com`,
+				passwordHash: "test-hash",
+				name: "无组织演练用户",
+			},
+			select: { id: true },
+		});
 		try {
-			const result = await reconcileMigration(db, {
-				userIds: [...users, strayUserId],
+			const result = await reconcileMigration(drill);
+			expect(result.diffs).toContainEqual({
+				scope: "default_org.missing",
+				left: 0,
+				right: 1,
 			});
-			expect(result.diffs).toEqual([
-				{ scope: "default_org.missing", left: 0, right: 1 },
-			]);
 		} finally {
-			await db.user.delete({ where: { id: strayUserId } });
+			await drill.user.delete({ where: { id: stray.id } });
 		}
 	});
+});
 
-	test("评审 I-15：ToB R1 组织级数据请求不被回填重跑改写", async () => {
-		const orgBId = crossOrgId;
-		const requestBase = {
-			userId: fullUserId,
-			status: "PENDING",
-			requestedAt: T0,
-			dueAt: new Date("2026-06-30T00:00:00.000Z"),
-		};
-		const orgScoped = await db.dataRequest.createMany({
-			data: [
-				{ ...requestBase, type: "CLEAR", scope: "ORGANIZATION", organizationId: orgBId },
-				{ ...requestBase, type: "EXPORT", scope: "ORGANIZATION", organizationId: orgBId },
-				{ ...requestBase, type: "DELETION", scope: "ORGANIZATION", organizationId: orgBId },
-			],
-		});
-		expect(orgScoped.count).toBe(3);
-		try {
-			const run = await backfillDefaultOrganizations(db, {
-				userIds: scopeUserIds(),
-			});
-			// 既不改写到默认组织，也不重置为 PERSONAL，更不计入映射行数
-			expect(run.dataRequestsRescoped).toBe(0);
-			const after = await db.dataRequest.findMany({
-				where: { userId: fullUserId, organizationId: orgBId },
-				orderBy: { type: "asc" },
-			});
-			expect(after.map((r) => [r.type, r.scope])).toEqual([
-				["CLEAR", "ORGANIZATION"],
-				["DELETION", "ORGANIZATION"],
-				["EXPORT", "ORGANIZATION"],
-			]);
-			// W26 双域拆分后核对口径：合法的组织数据请求（EXPORT / CLEAR / DELETION，
-			// 且可落在非默认组织）不是映射差异——此前会按「CLEAR 必在默认组织」误报
-			const reconciled = await reconcileMigration(db, { userIds: scopeUserIds() });
-			expect(reconciled.diffs.map((diff) => diff.scope)).not.toContain(
-				"data_request.scope_mapping",
-			);
-		} finally {
-			await db.dataRequest.deleteMany({
-				where: { userId: fullUserId, organizationId: orgBId },
-			});
-		}
-	});
+// ─────────────────────────── 演练库内的后续迁移 ───────────────────────────
 
-	test("评审 I-15：dry-run 估算 = 实际写入；分片事务逐片提交", async () => {
-		// 分片演练用户：存量个人行（2 账户 / 1 计划 / 1 变更日志），无组织
-		//（历史 CLEAR 请求不再构造：未挂组织的 CLEAR 已被 W26 的 DB CHECK 排除）
-		await db.userSettings.create({
-			data: {
-				userId: chunkUserId, baseCurrency: "USD", locale: "en", region: "HK",
-				prepPreference: "cautious", reminderEnabled: false, ledgerStartedAt: T0,
-			},
-		});
-		await db.account.createMany({
-			data: [
-				{ userId: chunkUserId, currencyCode: "USD", balance: "10.0000" },
-				{ userId: chunkUserId, currencyCode: "EUR", balance: "20.0000" },
-			],
-		});
-		const plan = await db.plan.create({
-			data: {
-				userId: chunkUserId, targetCurrency: "JPY", targetAmount: "1000.0000",
-				expectUseDate: T0, latestPrepDate: T0,
-			},
-		});
-		await db.planChangeLog.create({
-			data: {
-				planId: plan.id, changeType: "COMPLETED", beforeTarget: "1000.0000", afterTarget: "1000.0000",
-				beforeAlloc: "1000.0000", afterAlloc: "1000.0000", beforeSnapshot: {}, afterSnapshot: {},
-			},
-		});
+describe("隔离 schema：W26 / MIG-E / MIG-F 落地后迁移工具仍可运行", () => {
+	test("W26 迁移落地：DataRequest CHECK 约束生效并拒绝违约写入", async () => {
+		const before = await drill.$queryRawUnsafe<Array<{ conname: string }>>(
+			`SELECT c.conname FROM pg_constraint c
+			 JOIN pg_namespace n ON n.oid = c.connamespace
+			 WHERE n.nspname = current_schema()
+				AND c.conname = 'data_requests_scope_type_org_check'`,
+		);
+		expect(before).toEqual([]);
 
-		const expectedRows = {
-			accounts: 2,
-			transactions: 0,
-			initialHoldings: 0,
-			costLots: 0,
-			plans: 1,
-			usageRecords: 0,
-			corrections: 0,
-			reminders: 0,
-			aiConversations: 0,
-			// PlanChangeLog 无 userId 列：此前 dry-run 把 userId 当作其列传入 → 运行时校验错误
-			planChangeLogs: 1,
-		};
+		await applyMigration(drill, W26_DIR);
 
-		const dry = await backfillDefaultOrganizations(db, {
-			dryRun: true,
-			userIds: [chunkUserId],
-		});
-		expect(dry).toMatchObject({
-			usersProcessed: 1,
-			organizationsCreated: 1,
-			usersSkippedIdempotent: 0,
-			organizationSettingsCreated: 1,
-			reminderReadsCreated: 0,
-			dataRequestsRescoped: 0,
-			chunksCommitted: 0,
-		});
-		expect(dry.rowsBackfilled).toEqual(expectedRows);
-		// dry-run 零写入
-		expect(await db.account.count({ where: { userId: chunkUserId, organizationId: null } })).toBe(2);
-		expect(await db.membership.count({ where: { userId: chunkUserId } })).toBe(0);
+		const [constraint] = await drill.$queryRawUnsafe<
+			Array<{ convalidated: boolean }>
+		>(
+			`SELECT c.convalidated FROM pg_constraint c
+			 JOIN pg_namespace n ON n.oid = c.connamespace
+			 WHERE n.nspname = current_schema()
+			 AND c.conname = 'data_requests_scope_type_org_check'`,
+		);
+		expect(constraint?.convalidated).toBe(true);
 
-		// chunkSize=1：每个用户一个事务；其余 3 个用户已回填 → 幂等跳过、零行写入。
-		// （多组织演练用户不在此列：他的组织由下一个用例显式构造）
-		const chunkedUserIds = [...scopeUserIds(), chunkUserId];
-		const run = await backfillDefaultOrganizations(db, {
-			userIds: chunkedUserIds,
-			chunkSize: 1,
-		});
-		expect(run.chunksCommitted).toBe(4);
-		expect(run).toMatchObject({
-			usersProcessed: 4,
-			organizationsCreated: 1,
-			usersSkippedIdempotent: 3,
-			organizationSettingsCreated: 1,
-			reminderReadsCreated: 0,
-			dataRequestsRescoped: 0,
-		});
-		expect(run.rowsBackfilled).toEqual(expectedRows);
-
-		const chunkOrgId = await defaultOrgIdOf(chunkUserId);
-		const chunkPlan = await db.planChangeLog.findFirst({
-			where: { plan: { userId: chunkUserId } },
-		});
-		expect(chunkPlan?.organizationId).toBe(chunkOrgId);
-		// 非法 chunkSize 显式报错，不静默回落
+		// 违约写入被拒绝：PERSONAL + CLEAR
 		await expect(
-			backfillDefaultOrganizations(db, { userIds: [chunkUserId], chunkSize: 0 }),
-		).rejects.toThrow(/chunkSize/);
+			drill.$executeRawUnsafe(
+				`INSERT INTO data_requests
+					(id, user_id, organization_id, scope, type, status, requested_at, due_at, created_at, updated_at)
+				 VALUES ($1, $2, NULL, 'PERSONAL', 'CLEAR', 'PENDING', now(), now(), now(), now())`,
+				`${RUN}-violating-clear`,
+				drillUsers.bare,
+			),
+		).rejects.toThrow(/data_requests_scope_type_org_check/);
 
-		const result = await reconcileMigration(db, { userIds: chunkedUserIds });
+		// 回填与核对在 CHECK 落地后仍 0 差异
+		const result = await reconcileMigration(drill);
 		expect(result.diffs).toEqual([]);
 	});
 
-	test("评审 I-15 / R2-I03：多组织用户回填到其「创建得最早」的组织（与运行时默认组织同口径）", async () => {
-		const later = new Date("2026-02-01T00:00:00.000Z");
-		// 先插入「较晚加入」的组织（物理顺序在前），再插入「最早加入」的组织：
-		// 不带 orderBy 的 findFirst 通常按物理顺序返回较晚者 → 映射到错误的组织
-		const laterOrg = await db.organization.create({
-			data: {
-				name: "较晚创建的组织",
-				memberships: {
-					create: { userId: earliestOwnerUserId, role: "OWNER", status: "ACTIVE", joinedAt: later },
-				},
-			},
-		});
-		const earliestOrg = await db.organization.create({
-			data: {
-				name: "最早加入的组织",
-				memberships: {
-					create: { userId: earliestOwnerUserId, role: "OWNER", status: "ACTIVE", joinedAt: T0 },
-				},
-			},
-		});
-		managedOrgIds.push(laterOrg.id, earliestOrg.id);
-		const account = await db.account.create({
-			data: { userId: earliestOwnerUserId, currencyCode: "GBP", balance: "5.0000" },
-		});
+	test("MIG-E 落地：organization_id NOT NULL、账本表解绑 User 级联并直连 Organization(RESTRICT)", async () => {
+		await applyMigration(drill, MIG_E_DIR);
 
-		// 运行时与回填同口径：都是创建得最早的组织
-		expect(await resolveDefaultOrganizationId(db, earliestOwnerUserId)).toBe(earliestOrg.id);
+		const columns = await drill.$queryRawUnsafe<
+			Array<{ table_name: string; is_nullable: string }>
+		>(
+			`SELECT table_name, is_nullable FROM information_schema.columns
+			 WHERE table_schema = current_schema() AND column_name = 'organization_id'
+				AND table_name IN ('accounts','transactions','initial_holdings','cost_lots','plans','plan_change_logs','usage_records','corrections','reminders','ai_conversations')`,
+		);
+		expect(columns).toHaveLength(10);
+		expect(columns.filter((row) => row.is_nullable !== "NO")).toEqual([]);
 
-		const run = await backfillDefaultOrganizations(db, {
-			userIds: [earliestOwnerUserId],
-		});
+		// 账本表已不再直连 users（无 user_id 级联外键），改为直连 organizations
+		const userFks = await drill.$queryRawUnsafe<Array<{ conname: string }>>(
+			`SELECT conname FROM pg_constraint
+			 WHERE contype = 'f' AND conrelid IN ('accounts'::regclass,'transactions'::regclass,'initial_holdings'::regclass,'cost_lots'::regclass,'plans'::regclass,'usage_records'::regclass,'corrections'::regclass,'reminders'::regclass)
+				AND confrelid = 'users'::regclass`,
+		);
+		expect(userFks.map((row) => row.conname).sort()).toEqual([
+			"accounts_created_by_id_fkey",
+			"corrections_actor_user_id_fkey",
+			"initial_holdings_created_by_id_fkey",
+			"plans_created_by_id_fkey",
+			"transactions_created_by_id_fkey",
+			"usage_records_created_by_id_fkey",
+		]);
+		const orgFks = await drill.$queryRawUnsafe<Array<{ conname: string; def: string }>>(
+			`SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint
+			 WHERE contype = 'f' AND conrelid = 'accounts'::regclass
+				AND confrelid = 'organizations'::regclass`,
+		);
+		expect(orgFks).toHaveLength(1);
+		expect(orgFks[0]?.def).toContain("ON DELETE RESTRICT");
+
+		// 核对在 MIG-E 后仍 0 差异（此时仍在 MIG-F 之前，走 legacy 分支）
+		const result = await reconcileMigration(drill);
+		expect(result.diffs).toEqual([]);
+		expect(result.checks).toBe(29);
+	});
+
+	test("MIG-F 落地：legacy 列彻底下线；迁移工具退化为 no-op 且不崩溃", async () => {
+		await applyMigration(drill, MIG_F_DIR);
+
+		// 旧列下线
+		const dropped = await drill.$queryRawUnsafe<
+			Array<{ table_name: string; column_name: string }>
+		>(
+			`SELECT table_name, column_name FROM information_schema.columns
+			 WHERE table_schema = current_schema()
+				AND (
+					(column_name = 'user_id' AND table_name IN ('accounts','transactions','initial_holdings','cost_lots','plans','usage_records','corrections','reminders','data_requests'))
+					OR (table_name = 'reminders' AND column_name = 'read_at')
+					OR (table_name = 'user_settings' AND column_name IN ('base_currency','prep_preference','reminder_enabled','ledger_started_at'))
+				)`,
+		);
+		expect(dropped).toEqual([]);
+
+		// 库阶段能力：已进入 MIG-F
+		const capabilities = await detectMigrationSchemaCapabilities(drill);
+		expect(capabilities.migF).toBe(true);
+		expect(capabilities.hasUserSettingsLegacyColumns).toBe(false);
+		expect(capabilities.hasReminderReadAtColumn).toBe(false);
+		expect(capabilities.legacyUserIdTables.has("accounts")).toBe(false);
+
+		// 核对改走组织维度分支，仍 0 差异
+		const result = await reconcileMigration(drill);
+		expect(result.diffs).toEqual([]);
+		expect(result.checks).toBe(13);
+		expect(result.capabilities?.migF).toBe(true);
+
+		// 回填退化为 no-op：不再新建组织、不再回填任何行，且不因列缺失而崩溃
+		const run = await backfillDefaultOrganizations(drill);
 		expect(run.organizationsCreated).toBe(0);
 		expect(run.ownerMembershipsCreated).toBe(0);
-		expect(run.usersSkippedIdempotent).toBe(1);
-		const mapped = await db.account.findUnique({ where: { id: account.id } });
-		expect(mapped?.organizationId).toBe(earliestOrg.id);
-		// 回填不得为「已有个人工作台」的用户再建组织
-		expect(await db.membership.count({ where: { userId: earliestOwnerUserId } })).toBe(2);
+		expect(run.organizationSettingsCreated).toBe(0);
+		expect(run.reminderReadsCreated).toBe(0);
+		expect(run.dataRequestsRescoped).toBe(0);
+		for (const [table, count] of Object.entries(run.rowsBackfilled)) {
+			expect(`${table}=${count}`, `表 ${table} 不应再回填`).toBe(`${table}=0`);
+		}
+	});
 
-		// 全部演练用户收尾：行集恒等（多组织用户的存量行归默认组织，而非任一 OWNER 组织）
-		const result = await reconcileMigration(db, { userIds: allUserIds() });
+	test("MIG-C 快照工具在 post-MIG-F 上仍可运行（组织维度归属）", async () => {
+		const before = await captureMigrationSnapshot(drill);
+		const after = await captureMigrationSnapshot(drill);
+		const comparison = compareMigrationSnapshots(before, after);
+		expect(comparison.diffs).toEqual([]);
+		expect(comparison.checks).toBeGreaterThan(0);
+		// post-MIG-F：归属键按组织（不再是用户）
+		expect(before.ownerKind).toBe("ORGANIZATION");
+		expect(after.ownerKind).toBe("ORGANIZATION");
+	});
+});
+
+// ─────────────────────────── 主库 post-MIG-F 契约 ───────────────────────────
+
+describe("主库（post-MIG-F）契约：迁移工具与核对在真实库上仍可运行", () => {
+	test("库阶段能力探测：已进入 MIG-F，legacy 列全部下线", async () => {
+		const capabilities = await detectMigrationSchemaCapabilities(main);
+		expect(capabilities.migF).toBe(true);
+		expect(capabilities.hasUserSettingsLegacyColumns).toBe(false);
+		expect(capabilities.hasReminderReadAtColumn).toBe(false);
+		// 只有个人所有的 ai_conversations 仍保留 user_id
+		expect(capabilities.legacyUserIdTables.has("ai_conversations")).toBe(true);
+		for (const table of [
+			"accounts",
+			"transactions",
+			"initial_holdings",
+			"cost_lots",
+			"plans",
+			"usage_records",
+			"corrections",
+			"reminders",
+			"data_requests",
+		]) {
+			expect(capabilities.legacyUserIdTables.has(table), table).toBe(false);
+		}
+	});
+
+	test("§12.3 核对（组织维度分支）：分片 0 差异 + 父子组织一致性", async () => {
+		const user = await main.user.create({
+			data: {
+				email: `${RUN}-main@example.com`,
+				passwordHash: "test-hash",
+				name: "主库演练用户",
+			},
+			select: { id: true },
+		});
+		mainUserIds.push(user.id);
+		const org = await main.organization.create({
+			data: {
+				name: `${RUN} 主库演练组织`,
+				memberships: { create: { userId: user.id, role: "OWNER", status: "ACTIVE" } },
+			},
+			select: { id: true },
+		});
+		mainOrgIds.push(org.id);
+
+		// 一条自洽的组织账本：账户 + 计划 + 使用 + 批次 + 分摊（父子同组织）
+		await main.account.create({
+			data: { organizationId: org.id, currencyCode: "MN", balance: "100.0000" },
+		});
+		const plan = await main.plan.create({
+			data: {
+				organizationId: org.id,
+				targetCurrency: "MN",
+				targetAmount: "100.0000",
+				expectUseDate: new Date(Date.UTC(2026, 1, 1)),
+				latestPrepDate: new Date(Date.UTC(2026, 0, 25)),
+			},
+		});
+		const holding = await main.initialHolding.create({
+			data: {
+				organizationId: org.id,
+				currencyCode: "MN",
+				amount: "100.0000",
+				rate: "7.0000000000",
+				rawRate: "7.0000000000",
+				rateSource: "identity",
+				rateObservedAt: T0,
+				cost: "700.0000",
+				confirmedAt: T0,
+			},
+		});
+		const lot = await main.costLot.create({
+			data: {
+				organizationId: org.id,
+				currencyCode: "MN",
+				sourceType: "INITIAL",
+				sourceId: holding.id,
+				quantity: "100.0000",
+				remainingQty: "90.0000",
+				unitCost: "7.0000000000",
+				totalCost: "700.0000",
+				acquiredAt: T0,
+			},
+		});
+		const usage = await main.usageRecord.create({
+			data: {
+				organizationId: org.id,
+				planId: plan.id,
+				currencyCode: "MN",
+				amount: "10.0000",
+				usedAt: T0,
+			},
+		});
+		await main.usageLotAllocation.create({
+			data: { usageId: usage.id, lotId: lot.id, quantity: "10.0000", cost: "70.0000" },
+		});
+
+		const result = await reconcileMigration(main, { userIds: [user.id] });
+		expect(result.sharded).toBe(true);
 		expect(result.diffs).toEqual([]);
-	});
+		// 分片模式评估 9 项：默认组织 1 + 组织维度不变量 8
+		expect(result.checks).toBe(9);
+		expect(result.capabilities?.migF).toBe(true);
 
-	test("R2-I03：默认组织 = 用户创建的最早组织——受邀加入不算；所有权转移后不漂移", async () => {
-		const userId = await createUser("creator", "创建者演练用户");
-		const managed: string[] = [];
-		try {
-			// 尚无个人工作台：解析为 null（fail-closed——不回落，回填时新建）
-			expect(await resolveDefaultOrganizationId(db, userId)).toBeNull();
+		// 父子组织一致性显式复核
+		const parents = await main.$queryRawUnsafe<
+			Array<{ usage_plan: bigint; lot_source: bigint; ula_parents: bigint }>
+		>(
+			`SELECT
+				(SELECT count(*) FROM usage_records u JOIN plans p ON p.id = u.plan_id
+				 WHERE u.organization_id IS DISTINCT FROM p.organization_id) AS usage_plan,
+				(SELECT count(*) FROM cost_lots l JOIN initial_holdings h ON l.source_type = 'INITIAL' AND h.id = l.source_id
+				 WHERE l.organization_id IS DISTINCT FROM h.organization_id) AS lot_source,
+				(SELECT count(*) FROM usage_lot_allocations x JOIN usage_records u ON u.id = x.usage_id JOIN cost_lots l ON l.id = x.lot_id
+				 WHERE u.organization_id IS DISTINCT FROM l.organization_id) AS ula_parents`,
+		);
+		expect(Number(parents[0]?.usage_plan ?? 0n)).toBe(0);
+		expect(Number(parents[0]?.lot_source ?? 0n)).toBe(0);
+		expect(Number(parents[0]?.ula_parents ?? 0n)).toBe(0);
 
-			// 先受邀加入他人组织（crossOrgId 由前面的用例在数秒前创建）：成员关系晚于
-			// 组织创建 → 不是默认组织
-			const invited = await db.membership.create({
-				data: { organizationId: crossOrgId, userId, role: "FINANCE", status: "ACTIVE" },
-			});
-			const hostRow = await db.organization.findUniqueOrThrow({ where: { id: crossOrgId } });
-			expect(invited.createdAt.getTime()).toBeGreaterThan(hostRow.createdAt.getTime());
-			expect(await resolveDefaultOrganizationId(db, userId)).toBeNull();
-
-			// 回填为其新建个人工作台：存量行归入新组织，而不是受邀组织
-			const account = await db.account.create({
-				data: { userId, currencyCode: "USD", balance: "8.0000" },
-			});
-			const run = await backfillDefaultOrganizations(db, { userIds: [userId] });
-			expect(run).toMatchObject({ organizationsCreated: 1, ownerMembershipsCreated: 1 });
-			const workspaceId = await resolveDefaultOrganizationId(db, userId);
-			expect(workspaceId).not.toBeNull();
-			expect(workspaceId).not.toBe(crossOrgId);
-			managed.push(workspaceId!);
-			expect(
-				(await db.account.findUniqueOrThrow({ where: { id: account.id } })).organizationId,
-			).toBe(workspaceId);
-
-			// 不变量：个人工作台的首个成员关系与组织同事务创建（默认组织判定的依据）
-			const workspaceMembership = await db.membership.findFirstOrThrow({
-				where: { userId, organizationId: workspaceId! },
-				include: { organization: true },
-			});
-			expect(workspaceMembership.createdAt.getTime()).toBe(
-				workspaceMembership.organization.createdAt.getTime(),
-			);
-
-			// 所有权转移：用户降为 ADMIN、他人接任 OWNER → 默认组织不漂移
-			const successorId = await createUser("successor", "接任演练用户");
-			try {
-				await db.$transaction([
-					db.membership.updateMany({
-						where: { userId, organizationId: workspaceId!, role: "OWNER", status: "ACTIVE" },
-						data: { role: "ADMIN" },
-					}),
-					db.membership.create({
-						data: { organizationId: workspaceId!, userId: successorId, role: "OWNER", status: "ACTIVE" },
-					}),
-				]);
-				expect(
-					(await db.membership.findFirst({ where: { userId, organizationId: workspaceId! } }))?.role,
-				).toBe("ADMIN");
-				// 用户随后新建组织并成为其 OWNER：旧口径（最早的 ACTIVE OWNER）会漂移到它
-				const laterOrg = await db.organization.create({
-					data: {
-						name: `转移后新建的组织 ${RUN}`,
-						memberships: {
-							create: { userId, role: "OWNER", status: "ACTIVE" },
-						},
-					},
-				});
-				managed.push(laterOrg.id);
-				expect(await resolveDefaultOrganizationId(db, userId)).toBe(workspaceId);
-
-				// 回填重跑：幂等，不新建组织；存量行仍归个人工作台
-				const rerun = await backfillDefaultOrganizations(db, { userIds: [userId] });
-				expect(rerun).toMatchObject({ organizationsCreated: 0, ownerMembershipsCreated: 0 });
-				expect(
-					(await db.account.findUniqueOrThrow({ where: { id: account.id } })).organizationId,
-				).toBe(workspaceId);
-				// dry-run 估算与之一致（无待建组织）
-				const dry = await backfillDefaultOrganizations(db, {
-					dryRun: true,
-					userIds: [userId],
-				});
-				expect(dry).toMatchObject({
-					organizationsCreated: 0,
-					ownerMembershipsCreated: 0,
-					usersSkippedIdempotent: 1,
-				});
-				expect(await reconcileMigration(db, { userIds: [userId] })).toMatchObject({ diffs: [] });
-			} finally {
-				await db.membership.deleteMany({ where: { userId: successorId } });
-				await db.user.delete({ where: { id: successorId } }).catch(() => {});
-			}
-		} finally {
-			await db.membership.deleteMany({ where: { userId, organizationId: crossOrgId } });
-			await db.organization.deleteMany({ where: { id: { in: managed } } }).catch(() => {});
-			await cleanupUser(db as CleanupDb, userId);
-		}
-	});
-
-	test("R2-I03：创建者判定排除「组织创建的同一瞬间后插入」的成员（第一个成员条件）", async () => {
-		const creatorId = await createUser("same-ms-creator", "同毫秒创建者");
-		const latecomerId = await createUser("same-ms-late", "同毫秒后来者");
-		try {
-			const sharedOrg = await db.organization.create({
-				data: {
-					name: `同毫秒插入演练 ${RUN}`,
-					memberships: {
-						create: { userId: creatorId, role: "OWNER", status: "ACTIVE" },
-					},
-				},
-			});
-			// 确定性复现「组织创建的同一毫秒内又插入了另一名成员」：直写库的夹具 / 种子
-			// 常见。仅凭 created_at 相等会把后来者误判为创建者；创建者的 id 先生成，
-			// 后来者按 (created_at, id) 排在其后，不是第一个成员
-			await db.membership.create({
-				data: {
-					organizationId: sharedOrg.id,
-					userId: latecomerId,
-					role: "FINANCE",
-					status: "ACTIVE",
-					createdAt: sharedOrg.createdAt,
-					joinedAt: sharedOrg.createdAt,
-				},
-			});
-			const creatorMembership = await db.membership.findFirstOrThrow({
-				where: { organizationId: sharedOrg.id, userId: creatorId },
-			});
-			const latecomerMembership = await db.membership.findFirstOrThrow({
-				where: { organizationId: sharedOrg.id, userId: latecomerId },
-			});
-			expect(latecomerMembership.createdAt.getTime()).toBe(
-				creatorMembership.createdAt.getTime(),
-			);
-
-			expect(await resolveDefaultOrganizationId(db, latecomerId)).toBeNull();
-			expect(await resolveDefaultOrganizationId(db, creatorId)).toBe(sharedOrg.id);
-			// dry-run 与真实回填同口径：只为后来者新建个人工作台
-			const dry = await backfillDefaultOrganizations(db, {
-				dryRun: true,
-				userIds: [creatorId, latecomerId],
-			});
-			expect(dry).toMatchObject({ organizationsCreated: 1, usersSkippedIdempotent: 1 });
-			const run = await backfillDefaultOrganizations(db, {
-				userIds: [creatorId, latecomerId],
-			});
-			expect(run).toMatchObject({ organizationsCreated: 1, ownerMembershipsCreated: 1 });
-			expect(await resolveDefaultOrganizationId(db, latecomerId)).not.toBe(sharedOrg.id);
-			expect(await resolveDefaultOrganizationId(db, creatorId)).toBe(sharedOrg.id);
-			expect(
-				await reconcileMigration(db, { userIds: [creatorId, latecomerId] }),
-			).toMatchObject({ diffs: [] });
-		} finally {
-			await cleanupUser(db as CleanupDb, creatorId);
-			await cleanupUser(db as CleanupDb, latecomerId);
-		}
-	});
-
-	test("R2-I05：全库 dry-run 不按用户 id 绑定参数，且零写入", async () => {
-		const [orgCountBefore, membershipCountBefore] = await Promise.all([
-			db.organization.count(),
-			db.membership.count(),
-		]);
-		const dry = await backfillDefaultOrganizations(db, { dryRun: true });
-		// 全库模式：处理全部用户；组织与首个 OWNER 成员关系 1:1（此前恒 0）
-		expect(dry.chunksCommitted).toBe(0);
-		expect(dry.usersProcessed).toBeGreaterThanOrEqual(allUserIds().length);
-		expect(dry.ownerMembershipsCreated).toBe(dry.organizationsCreated);
-		expect(dry.organizationsCreated + dry.usersSkippedIdempotent).toBe(dry.usersProcessed);
-		expect(Object.values(dry.rowsBackfilled).every((count) => Number.isInteger(count) && count >= 0)).toBe(true);
-
-		// dry-run 零写入
-		expect(await db.organization.count()).toBe(orgCountBefore);
-		expect(await db.membership.count()).toBe(membershipCountBefore);
-	});
-
-	test("R2-I05：dry-run 估算与实际写入逐项一致（含此前漂移的 4 处）", async () => {
-		const driftUserId = await createUser("drift", "估算漂移演练用户");
-		const otherUserId = await createUser("drift-other", "他人已读演练用户");
-		const foreignOrg = await db.organization.create({
-			data: { name: `父计划已挂的其他组织 ${RUN}` },
+		// 跨组织挂载必须被核对显式报出（负向：核对不是恒 0 的空过）
+		const otherOrg = await main.organization.create({
+			data: { name: `${RUN} 主库跨组织演练组织` },
+			select: { id: true },
 		});
-		const T1 = new Date("2026-03-01T00:00:00.000Z");
+		mainOrgIds.push(otherOrg.id);
 		try {
-			// ①「scope 已是 ORGANIZATION 但尚未挂组织的历史 CLEAR」不再构造：该形态已被
-			//   W26 的 DB CHECK 排除，估算与写入对数据请求恒为 0（见下方 expected）
-			// ② 已读提醒：他人已有已读行、行主本人没有（此前 dry-run 用「无任何已读行」估算 → 漏计）
-			const reminder = await db.reminder.create({
-				data: {
-					userId: driftUserId, type: "PLAN_DUE", dedupKey: `${RUN}-drift-due`,
-					scheduledFor: T1, readAt: T1,
-				},
+			// post-MIG-F 的分片核对按「子行的 organization_id ∈ 分片组织集合」限定，
+			// 故把**父行**（计划）挪到别的组织、子行留在分片组织内，父子才真正不一致
+			await main.plan.update({
+				where: { id: plan.id },
+				data: { organizationId: otherOrg.id },
 			});
-			await db.reminderRead.create({
-				data: { reminderId: reminder.id, userId: otherUserId, readAt: T1 },
-			});
-
-			const expected = {
-				organizationsCreated: 1,
-				ownerMembershipsCreated: 1, // ③ 此前 dry-run 恒为 0
-				usersSkippedIdempotent: 0,
-				organizationSettingsCreated: 0,
-				reminderReadsCreated: 1,
-				dataRequestsRescoped: 0,
-			};
-			const dry = await backfillDefaultOrganizations(db, { dryRun: true, userIds: [driftUserId] });
-			expect(dry).toMatchObject(expected);
-			expect(dry.rowsBackfilled.planChangeLogs).toBe(0);
-			const run = await backfillDefaultOrganizations(db, { userIds: [driftUserId] });
-			expect(run).toMatchObject(expected);
-			expect(run.rowsBackfilled.planChangeLogs).toBe(0);
-			expect(
-				(await db.reminderRead.findFirst({ where: { reminderId: reminder.id, userId: driftUserId } })),
-			).not.toBeNull();
-
-			// ④ PlanChangeLog 经父计划归属：父计划已挂其他组织的不写入也不计入；
-			//    父计划已挂默认组织的（回填重跑）写入并计入
-			const workspaceId = await resolveDefaultOrganizationId(db, driftUserId);
-			expect(workspaceId).not.toBeNull();
-			const planBase = {
-				userId: driftUserId, targetCurrency: "USD", targetAmount: "1.0000",
-				expectUseDate: T1, latestPrepDate: T1,
-			};
-			const logBase = {
-				changeType: "COMPLETED", beforeTarget: "1.0000", afterTarget: "1.0000",
-				beforeAlloc: "0.0000", afterAlloc: "0.0000", beforeSnapshot: {}, afterSnapshot: {},
-			};
-			const foreignPlan = await db.plan.create({
-				data: { ...planBase, organizationId: foreignOrg.id },
-			});
-			const foreignLog = await db.planChangeLog.create({
-				data: { ...logBase, planId: foreignPlan.id },
-			});
-			const ownPlan = await db.plan.create({
-				data: { ...planBase, organizationId: workspaceId! },
-			});
-			const ownLog = await db.planChangeLog.create({
-				data: { ...logBase, planId: ownPlan.id },
-			});
-
-			const dryAgain = await backfillDefaultOrganizations(db, {
-				dryRun: true,
-				userIds: [driftUserId],
-			});
-			expect(dryAgain.rowsBackfilled.planChangeLogs).toBe(1);
-			const rerun = await backfillDefaultOrganizations(db, { userIds: [driftUserId] });
-			expect(rerun.rowsBackfilled.planChangeLogs).toBe(1);
-			expect((await db.planChangeLog.findUniqueOrThrow({ where: { id: ownLog.id } })).organizationId).toBe(workspaceId);
-			expect((await db.planChangeLog.findUniqueOrThrow({ where: { id: foreignLog.id } })).organizationId).toBeNull();
-
-			// 清理「已挂其他组织」的演练行（它们按设计不属于默认组织，不参与行集恒等）
-			await db.planChangeLog.delete({ where: { id: foreignLog.id } });
-			await db.plan.delete({ where: { id: foreignPlan.id } });
-			expect(await reconcileMigration(db, { userIds: [driftUserId] })).toMatchObject({ diffs: [] });
-		} finally {
-			await db.organization.delete({ where: { id: foreignOrg.id } }).catch(() => {});
-			await cleanupUser(db as CleanupDb, driftUserId);
-			await cleanupUser(db as CleanupDb, otherUserId);
-		}
-	});
-
-	test("R2-I05：核对不再静默丢弃无默认组织用户的行——误标 / 未映射 / 缺设置逐项报出", async () => {
-		const strayId = await createUser("stray-rows", "无组织带数据演练用户");
-		const foreignOrg = await db.organization.create({
-			data: { name: `被误标的组织 ${RUN}` },
-		});
-		const T1 = new Date("2026-03-01T00:00:00.000Z");
-		try {
-			await db.userSettings.create({
-				data: {
-					userId: strayId, baseCurrency: "CNY", locale: "zh-CN", region: "CN",
-					prepPreference: "balanced", reminderEnabled: true, ledgerStartedAt: T1,
-				},
-			});
-			await db.account.createMany({
-				data: [
-					// 误标到其他组织
-					{ userId: strayId, currencyCode: "USD", balance: "1.0000", organizationId: foreignOrg.id },
-					// 尚未映射
-					{ userId: strayId, currencyCode: "CHF", balance: "2.0000" },
-				],
-			});
-			await db.dataRequest.create({
-				data: {
-					userId: strayId, type: "EXPORT", scope: "PERSONAL", status: "COMPLETED",
-					requestedAt: T1, dueAt: T1,
-				},
-			});
-
-			const result = await reconcileMigration(db, { userIds: [strayId] });
-			// 此前 INNER JOIN defaults 把该用户全部行丢弃，只报得出 default_org.missing
-			const byScope = Object.fromEntries(result.diffs.map((diff) => [diff.scope, diff.right]));
-			expect(byScope).toMatchObject({
-				"default_org.missing": 1,
-				"row_mapping.accounts": 2,
-				"data_request.scope_mapping": 1,
-				"settings_parity.missing": 1,
-			});
-
-			// 回填后：新建个人工作台 + 复制设置 + 行归位（误标行不改写，仍如实报出）
-			const run = await backfillDefaultOrganizations(db, { userIds: [strayId] });
-			expect(run.organizationsCreated).toBe(1);
-			const workspaceId = await resolveDefaultOrganizationId(db, strayId);
-			expect(workspaceId).not.toBe(foreignOrg.id);
-			const after = await reconcileMigration(db, { userIds: [strayId] });
-			expect(after.diffs).toEqual([
-				{ scope: "row_mapping.accounts", left: 0, right: 1 },
-			]);
-		} finally {
-			await db.account.deleteMany({ where: { userId: strayId } });
-			await db.organization.delete({ where: { id: foreignOrg.id } }).catch(() => {});
-			await cleanupUser(db as CleanupDb, strayId);
-		}
-	});
-
-	test("W22 个人占位行（baseCurrency=\"\"）不触发 MIG-B 复制 OrganizationSettings 且核对零误报", async () => {
-		const placeholderUserId = await createUser("placeholder", "个人占位演练用户");
-		try {
-			await db.userSettings.create({
-				data: {
-					userId: placeholderUserId,
-					baseCurrency: "",
-					locale: "en",
-					region: "HK",
-				},
-			});
-
-			const dry = await backfillDefaultOrganizations(db, {
-				dryRun: true,
-				userIds: [placeholderUserId],
-			});
-			expect(dry.organizationSettingsCreated).toBe(0);
-
-			const run = await backfillDefaultOrganizations(db, {
-				userIds: [placeholderUserId],
-			});
-			expect(run.organizationSettingsCreated).toBe(0);
-			const orgId = await resolveDefaultOrganizationId(db, placeholderUserId);
-			expect(orgId).not.toBeNull();
-			expect(
-				await db.organizationSettings.findUnique({
-					where: { organizationId: orgId! },
-				}),
-			).toBeNull();
-
-			const reconcile = await reconcileMigration(db, {
-				userIds: [placeholderUserId],
-			});
-			expect(reconcile.diffs).toEqual([]);
-		} finally {
-			await cleanupUser(db as CleanupDb, placeholderUserId);
-		}
-	});
-
-	test("I-2 双写冲突防护：reconcile 检出 dualAccountRows，backfill 合并双行 Account（保留 updatedAt）、去重 Reminder 并阻断冲突 InitialHolding", async () => {
-		const dualUserId = await createUser("i2-dual", "双写冲突演练用户");
-		const T1 = new Date("2026-04-01T00:00:00.000Z");
-		try {
-			const org = await db.organization.create({
-				data: {
-					name: `双写冲突测试组织 ${RUN}`,
-					memberships: {
-						create: { userId: dualUserId, role: "OWNER", status: "ACTIVE" },
-					},
-				},
-			});
-			const orgAccount = await db.account.create({
-				data: {
-					userId: dualUserId,
-					organizationId: org.id,
-					createdById: dualUserId,
-					currencyCode: "USD",
-					balance: "20.0000",
-				},
-			});
-			// 存量 NULL 同币种账户 + 独立 EUR NULL 账户
-			await db.account.createMany({
-				data: [
-					{ userId: dualUserId, currencyCode: "USD", balance: "50.0000" },
-					{ userId: dualUserId, currencyCode: "EUR", balance: "15.0000" },
-				],
-			});
-			// 冲突 Reminder：组织行与 NULL 行同 (dedupKey, scheduledFor)，NULL 行已读
-			const orgReminder = await db.reminder.create({
-				data: {
-					userId: dualUserId,
-					organizationId: org.id,
-					type: "PLAN_DUE",
-					dedupKey: `${RUN}-dual-rem`,
-					scheduledFor: T1,
-				},
-			});
-			await db.reminder.create({
-				data: {
-					userId: dualUserId,
-					type: "PLAN_DUE",
-					dedupKey: `${RUN}-dual-rem`,
-					scheduledFor: T1,
-					readAt: T1,
-				},
-			});
-
-			const beforeReconcile = await reconcileMigration(db, {
-				userIds: [dualUserId],
-			});
-			const beforeByScope = Object.fromEntries(
-				beforeReconcile.diffs.map((d) => [d.scope, d.right]),
+			const broken = await reconcileMigration(main, { userIds: [user.id] });
+			expect(broken.diffs.map((diff) => diff.scope)).toContain(
+				"usage_record.plan_org_consistency",
 			);
-			expect(beforeByScope["dual_rows.accounts"]).toBe(1);
-			expect(beforeByScope["dual_rows.reminders"]).toBe(1);
-
-			const run = await backfillDefaultOrganizations(db, {
-				userIds: [dualUserId],
-			});
-			expect(run.rowsBackfilled.accounts).toBe(2);
-			expect(run.rowsBackfilled.reminders).toBe(1);
-
-			const survivingUsd = await db.account.findUniqueOrThrow({
-				where: { id: orgAccount.id },
-			});
-			expect(survivingUsd.balance.toFixed(4)).toBe("70.0000");
-			expect(survivingUsd.updatedAt.getTime()).toBe(orgAccount.updatedAt.getTime());
-			expect(
-				await db.account.count({
-					where: { userId: dualUserId, organizationId: null },
-				}),
-			).toBe(0);
-			// 冲突提醒删除后，原 NULL 行已读态保留至存活组织提醒
-			expect(
-				await db.reminderRead.findUnique({
-					where: {
-						reminderId_userId: {
-							reminderId: orgReminder.id,
-							userId: dualUserId,
-						},
-					},
-				}),
-			).not.toBeNull();
-
-			const afterReconcile = await reconcileMigration(db, {
-				userIds: [dualUserId],
-			});
-			expect(afterReconcile.diffs).toEqual([]);
-
-			// 冲突 InitialHolding：必须 fail-closed 抛 BackfillAnomalyError 阻断
-			await db.initialHolding.create({
-				data: {
-					userId: dualUserId,
-					organizationId: org.id,
-					createdById: dualUserId,
-					currencyCode: "USD",
-					amount: "10.0000",
-					rate: "7.2000000000",
-					rawRate: "7.2000000000",
-					rateSource: "identity",
-					rateObservedAt: T1,
-					cost: "72.0000",
-					confirmedAt: T1,
-				},
-			});
-			await db.initialHolding.create({
-				data: {
-					userId: dualUserId,
-					currencyCode: "USD",
-					amount: "20.0000",
-					rate: "7.2000000000",
-					rawRate: "7.2000000000",
-					rateSource: "identity",
-					rateObservedAt: T1,
-					cost: "144.0000",
-					confirmedAt: T1,
-				},
-			});
-			const ihReconcile = await reconcileMigration(db, {
-				userIds: [dualUserId],
-			});
-			expect(
-				ihReconcile.diffs.find((d) => d.scope === "dual_rows.initial_holdings")?.right,
-			).toBe(1);
-			await expect(
-				backfillDefaultOrganizations(db, { userIds: [dualUserId] }),
-			).rejects.toThrow(BackfillAnomalyError);
 		} finally {
-			await cleanupUser(db as CleanupDb, dualUserId);
+			await main.plan.update({
+				where: { id: plan.id },
+				data: { organizationId: org.id },
+			});
+			const restored = await reconcileMigration(main, { userIds: [user.id] });
+			expect(restored.diffs).toEqual([]);
 		}
 	});
 });

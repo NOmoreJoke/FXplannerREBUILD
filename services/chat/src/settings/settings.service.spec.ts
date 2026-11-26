@@ -95,11 +95,10 @@ const orgSettingsRow = {
 	ledgerStartedAt: T0,
 };
 
+/** 个人展示行（W30（MIG-F）：UserSettings 只剩 region / locale，无任何组织域字段） */
 const legacySettingsRow = {
-	baseCurrency: "USD",
-	prepPreference: "cautious",
-	reminderEnabled: false,
-	ledgerStartedAt: T0,
+	region: "CN",
+	locale: "zh-CN",
 };
 
 const OWNER_ACTOR: ActorContext = {
@@ -108,7 +107,6 @@ const OWNER_ACTOR: ActorContext = {
 	membershipId: "mem-1",
 	role: "OWNER",
 	authMethod: "USER",
-	isDefaultOrganization: true,
 };
 
 function errorOf(action: () => Promise<unknown>) {
@@ -186,7 +184,6 @@ describe("SettingsService", () => {
 					u1: {
 						region: "HK",
 						locale: "en",
-						baseCurrency: "JPY",
 					},
 				},
 			});
@@ -201,50 +198,12 @@ describe("SettingsService", () => {
 			});
 		});
 
-		it("兼容回落：默认组织的所有者尚无 OrganizationSettings 时，以其个人设置代表组织偏好", async () => {
-			const { instance } = buildService({
-				ownerUserId: "u1",
-				ownerDefaultOrganizationId: "org-test",
-				userSettingsByUserId: {
-					u1: { ...legacySettingsRow, region: "CN", locale: "zh-CN", user: { email: "user@example.com" } },
-				},
-			});
-
-			const view = await instance.getSettings(SCOPE, IDENTITY);
-
-			expect(view).toEqual({
-				email: "user@example.com",
-				region: "CN",
-				locale: "zh-CN",
-				baseCurrency: "USD",
-				prepPreference: "cautious",
-				reminderEnabled: false,
-				ledgerStartedAt: T0,
-			});
-		});
-
-		it("兼容回落读的是组织所有者的设置：受邀成员在仅所有者建过账的组织里同样可读", async () => {
-			const { instance } = buildService({
-				ownerUserId: "owner",
-				ownerDefaultOrganizationId: "org-test",
-				userSettingsByUserId: { owner: legacySettingsRow },
-			});
-
-			const view = await instance.getSettings(
-				{ userId: "member", organizationId: "org-test" },
-				{ email: null },
-			);
-
-			expect(view.baseCurrency).toBe("USD");
-			expect(view.email).toBeNull();
-		});
-
-		it("非默认组织绝不回落：创建者个人已建账，但其新建组织仍判未建账（评审 I-08）", async () => {
+		it("组织尚无 OrganizationSettings → 409：创建者的个人设置不再代表组织偏好（W30（MIG-F））", async () => {
 			const { instance } = buildService({
 				ownerUserId: "u1",
 				ownerDefaultOrganizationId: "org-default",
 				userSettingsByUserId: {
-					u1: { ...legacySettingsRow, region: "CN", locale: "zh-CN", user: { email: "user@example.com" } },
+					u1: legacySettingsRow,
 				},
 			});
 
@@ -339,7 +298,7 @@ describe("SettingsService", () => {
 				});
 				const { status, body } = await errorOf(() =>
 					instance.updateSettings(
-						{ ...OWNER_ACTOR, role, isDefaultOrganization: false },
+						{ ...OWNER_ACTOR, role },
 						{ region: "HK", prepPreference: "cautious" },
 						IDENTITY,
 						`req-mixed-${role}`,
@@ -390,7 +349,7 @@ describe("SettingsService", () => {
 			});
 
 			const view = await instance.updateSettings(
-				{ ...OWNER_ACTOR, role: "VIEWER", isDefaultOrganization: false },
+				{ ...OWNER_ACTOR, role: "VIEWER" },
 				{ region: "HK", locale: "en" },
 				IDENTITY,
 				"req-viewer-personal",
@@ -407,7 +366,6 @@ describe("SettingsService", () => {
 				where: { userId: "u1" },
 				create: {
 					userId: "u1",
-					baseCurrency: "",
 					region: "HK",
 					locale: "en",
 				},
@@ -418,7 +376,7 @@ describe("SettingsService", () => {
 			expect(auditMock.recordInTx).not.toHaveBeenCalled();
 		});
 
-		it("四字段更新（默认组织）：写 OrganizationSettings + 同步本人 UserSettings 兼容列 + 同事务写审计", async () => {
+		it("四字段更新：写 OrganizationSettings + 本人 UserSettings 只写 locale/region + 同事务写审计", async () => {
 			const view = await service.updateSettings(
 				OWNER_ACTOR,
 				{
@@ -435,11 +393,14 @@ describe("SettingsService", () => {
 				where: { organizationId: "org-test" },
 				data: { prepPreference: "cautious", reminderEnabled: false },
 			});
-			expect(prisma.userSettings.updateMany).toHaveBeenCalledWith({
-				where: { userId: "u1" },
-				data: { prepPreference: "cautious", reminderEnabled: false },
-			});
+			// W30（MIG-F）：个人行已无组织域兼容列，不再同步 updateMany
+			expect(prisma.userSettings.updateMany).not.toHaveBeenCalled();
 			const [upsertArg] = prisma.userSettings.upsert.mock.calls[0];
+			expect(upsertArg.create).toEqual({
+				userId: "u1",
+				region: "HK",
+				locale: "en",
+			});
 			expect(upsertArg.update).toEqual({ region: "HK", locale: "en" });
 			expect("baseCurrency" in upsertArg.update).toBe(false);
 			expect(audit.recordInTx).toHaveBeenCalledWith(
@@ -463,9 +424,9 @@ describe("SettingsService", () => {
 			});
 		});
 
-		it("非默认组织更新组织偏好：不触碰本人 UserSettings 兼容列", async () => {
+		it("更新组织偏好：绝不写本人 UserSettings 的组织域字段（UserSettings 已无兼容列）", async () => {
 			await service.updateSettings(
-				{ ...OWNER_ACTOR, isDefaultOrganization: false },
+				OWNER_ACTOR,
 				{ reminderEnabled: false },
 				IDENTITY,
 			);
@@ -475,28 +436,7 @@ describe("SettingsService", () => {
 				data: { reminderEnabled: false },
 			});
 			expect(prisma.userSettings.updateMany).not.toHaveBeenCalled();
-		});
-
-		it("OWNER_LEGACY 组织更新组织偏好前先固化 OrganizationSettings", async () => {
-			const { instance, mock } = buildService({
-				organizationSettings: null,
-				ownerUserId: "u1",
-				ownerDefaultOrganizationId: "org-test",
-				userSettingsByUserId: { u1: legacySettingsRow },
-			});
-
-			const view = await instance.updateSettings(
-				OWNER_ACTOR,
-				{ prepPreference: "proactive" },
-				IDENTITY,
-			);
-
-			expect(mock.organizationSettings.upsert).toHaveBeenCalledTimes(1);
-			expect(mock.organizationSettings.update).toHaveBeenCalledWith({
-				where: { organizationId: "org-test" },
-				data: { prepPreference: "proactive" },
-			});
-			expect(view.baseCurrency).toBe("USD");
+			expect(prisma.userSettings.upsert).not.toHaveBeenCalled();
 		});
 
 		it("未建账组织 PATCH → 409 ONBOARDING_NOT_COMPLETED", async () => {
@@ -547,7 +487,6 @@ describe("SettingsService", () => {
 				where: { userId: "u1" },
 				create: {
 					userId: "u1",
-					baseCurrency: "",
 					region: "HK",
 					locale: "en",
 				},
@@ -560,19 +499,15 @@ describe("SettingsService", () => {
 			expect(auditMock.recordInTx).not.toHaveBeenCalled();
 		});
 
-		it("个人占位行（baseCurrency=\"\"）不影响组织未建账判定（getSettings 仍 409）", async () => {
+		it("个人展示行不影响组织未建账判定（getSettings 仍 409）", async () => {
 			const { instance } = buildService({
 				organizationSettings: null,
 				ownerUserId: "u1",
 				ownerDefaultOrganizationId: "org-test",
 				userSettingsByUserId: {
 					u1: {
-						baseCurrency: "",
 						region: "HK",
 						locale: "en",
-						prepPreference: "balanced",
-						reminderEnabled: true,
-						ledgerStartedAt: null,
 					},
 				},
 			});

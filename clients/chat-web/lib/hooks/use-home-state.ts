@@ -25,7 +25,7 @@ export const HOME_PORTFOLIO_QUERY_KEY = queryKeys.home.portfolio();
  */
 export interface HomeDashboardFocusPlan {
 	id: string;
-	/** PlanSummary 契约暂未含 name（后端 PlanSummaryDto 亦未返回），当前恒为 null；后端补充字段后自动透传 */
+	/** 透传 PlanSummary.name（未命名时为 null） */
 	name: string | null;
 	targetCurrency: string;
 	targetAmount: string;
@@ -114,8 +114,7 @@ function deriveFocusPlan(plans: PlanSummary[]): HomeDashboardFocusPlan | null {
 
 	return {
 		id: focus.id,
-		// PlanSummary 当前契约未含 name，按可扩展方式读取：后端补充字段后此处自动透传
-		name: (focus as { name?: string | null }).name ?? null,
+		name: focus.name,
 		targetCurrency: focus.targetCurrency,
 		targetAmount: focus.targetAmount,
 		allocatedAmount: focus.allocatedAmount,

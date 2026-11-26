@@ -10,7 +10,6 @@ import {
 	cleanupOrgLedgers,
 	type OrgLedger,
 } from "../../test/helpers/organization-ledger-test-helper";
-import { seedBusinessData } from "../../test/helpers/data-request-helper";
 import type { TestUser } from "../../test/helpers/test-app";
 import { DataRequestService } from "./data-request.service";
 import {
@@ -98,7 +97,7 @@ async function createRequest(input: {
 }): Promise<DueRequest & { rowId: string }> {
 	const row = await db.dataRequest.create({
 		data: {
-			userId: input.userId,
+			requesterUserId: input.userId,
 			scope: input.scope,
 			organizationId:
 				input.scope === "ORGANIZATION" ? input.organizationId ?? null : null,
@@ -112,7 +111,7 @@ async function createRequest(input: {
 	return {
 		id: row.id,
 		rowId: row.id,
-		userId: input.userId,
+		requesterUserId: input.userId,
 		scope: input.scope,
 		organizationId:
 			input.scope === "ORGANIZATION" ? input.organizationId ?? null : null,
@@ -150,7 +149,6 @@ async function seedOrgLedgerRows(
 ): Promise<Record<string, string>> {
 	await db.account.create({
 		data: {
-			userId,
 			organizationId,
 			createdById: userId,
 			currencyCode: "USD",
@@ -159,7 +157,6 @@ async function seedOrgLedgerRows(
 	});
 	const holding = await db.initialHolding.create({
 		data: {
-			userId,
 			organizationId,
 			createdById: userId,
 			currencyCode: "CAD",
@@ -174,7 +171,6 @@ async function seedOrgLedgerRows(
 	});
 	const transaction = await db.transaction.create({
 		data: {
-			userId,
 			organizationId,
 			createdById: userId,
 			currencyCode: "USD",
@@ -189,7 +185,6 @@ async function seedOrgLedgerRows(
 	});
 	const lot = await db.costLot.create({
 		data: {
-			userId,
 			organizationId,
 			currencyCode: "USD",
 			sourceType: "PURCHASE",
@@ -203,7 +198,6 @@ async function seedOrgLedgerRows(
 	});
 	const plan = await db.plan.create({
 		data: {
-			userId,
 			organizationId,
 			createdById: userId,
 			name: "组织计划",
@@ -237,7 +231,6 @@ async function seedOrgLedgerRows(
 	});
 	const usage = await db.usageRecord.create({
 		data: {
-			userId,
 			organizationId,
 			createdById: userId,
 			planId: plan.id,
@@ -251,7 +244,6 @@ async function seedOrgLedgerRows(
 	});
 	const correction = await db.correction.create({
 		data: {
-			userId,
 			organizationId,
 			actorUserId: userId,
 			targetType: "TRANSACTION",
@@ -265,13 +257,11 @@ async function seedOrgLedgerRows(
 	});
 	const reminder = await db.reminder.create({
 		data: {
-			userId,
 			organizationId,
 			type: "PREP",
 			planId: plan.id,
 			dedupKey: `PREP:${plan.id}`,
 			scheduledFor: T0,
-			readAt: T0, // 行主存量已读态：过户后不得被接任者继承
 		},
 		select: { id: true },
 	});
@@ -292,7 +282,7 @@ async function seedOrgLedgerRows(
 	});
 	const request = await db.dataRequest.create({
 		data: {
-			userId,
+			requesterUserId: userId,
 			scope: "ORGANIZATION",
 			organizationId,
 			type: "EXPORT",
@@ -376,43 +366,22 @@ function stripFields(
 }
 
 /**
- * 除 user_id（及显式豁免的列）外整行不变——覆盖 created_by_id / actor_user_id /
- * updated_at 与全部金额列。reminders 的行内 read_at 在过户时按设计清空，单独断言。
+ * 除作者外键列（createdById / actorUserId / requesterUserId，由 ON DELETE SET NULL
+ * 置空）外整行不变——覆盖 updated_at 与全部金额列。
  */
-function expectRowsUnchangedExceptUser(
+function expectRowsUnchangedExceptAuthor(
 	before: Rows,
 	after: Rows,
 	context: string,
 ): void {
 	expect(Object.keys(after).sort(), context).toEqual(Object.keys(before).sort());
+	const authorFields = ["createdById", "actorUserId", "requesterUserId"];
 	for (const table of Object.keys(before) as string[]) {
-		const exempt = table === "reminders" ? ["userId", "readAt"] : ["userId"];
 		expect(
-			stripFields(after[table] ?? [], exempt),
+			stripFields(after[table] ?? [], authorFields),
 			`${context} · ${table}`,
-		).toEqual(stripFields(before[table] ?? [], exempt));
+		).toEqual(stripFields(before[table] ?? [], authorFields));
 	}
-}
-
-/** 各表每一行的 user_id 都等于预期接任者（无 user_id 列的表自然跳过） */
-function expectRowsOwnedBy(
-	rows: Rows,
-	ownerUserId: string,
-	context: string,
-): void {
-	let checked = 0;
-	for (const table of Object.keys(rows) as string[]) {
-		for (const row of rows[table] ?? []) {
-			if ("userId" in row) {
-				expect(row.userId, `${context} · ${table} · ${String(row.id)}`).toBe(
-					ownerUserId,
-				);
-				checked += 1;
-			}
-		}
-	}
-	// 防同义反复：确有带 user_id 的行被检查到
-	expect(checked, `${context} · 带 user_id 的行数`).toBeGreaterThan(0);
 }
 
 /**
@@ -637,7 +606,6 @@ describe("PERSONAL DELETION 的最后 Owner 保护（创建阶段 + 锁内复验
 			{ userId: deleting.id, role: "ADMIN" },
 		]);
 		await seedOrgLedgerRows(org.id, deleting.id);
-		await seedBusinessData(prisma, deleting.id);
 		const tx = db as unknown as Prisma.TransactionClient;
 		// 创建阶段（无锁）：本人是 ADMIN，不阻塞
 		expect(await findLastOwnerBlocking(tx, deleting.id)).toEqual([]);
@@ -647,7 +615,6 @@ describe("PERSONAL DELETION 的最后 Owner 保护（创建阶段 + 锁内复验
 			scope: "PERSONAL",
 		});
 		const before = await readOrgRows([org.id]);
-		expectRowsOwnedBy(before, deleting.id, "过户前");
 
 		const attempt = runBehindAdvisoryLock(
 			db,
@@ -687,16 +654,12 @@ describe("PERSONAL DELETION 的最后 Owner 保护（创建阶段 + 锁内复验
 			},
 		});
 
-		// 整体回滚：认领撤销（仍 PENDING）、账号仍在、共享账本与个人域行原样
+		// 整体回滚：认领撤销（仍 PENDING）、账号仍在、共享账本原样
 		const row = await db.dataRequest.findUniqueOrThrow({ where: { id: request.id } });
 		expect(row.status).toBe("PENDING");
 		expect(await db.user.findUnique({ where: { id: deleting.id } })).not.toBeNull();
 		const after = await readOrgRows([org.id]);
 		expect(after).toEqual(before);
-		// 个人域行（organization_id IS NULL 的计划）同样原样
-		expect(
-			await db.plan.count({ where: { userId: deleting.id, organizationId: null } }),
-		).toBe(1);
 	});
 
 	it("到期时已成为唯一 Owner：请求由系统作废（CANCELLED）而非 FAILED，账号锁随之解除、数据零变化", async () => {
@@ -734,55 +697,52 @@ describe("PERSONAL DELETION 的最后 Owner 保护（创建阶段 + 锁内复验
 // PERSONAL DELETION：共享组织账本过户（零级联误删）
 // ─────────────────────────────────────────────────────────────
 
-describe("PERSONAL DELETION：共享组织账本 1 行不丢、余额零变化", () => {
-	it("共享行 user_id 过户给所属组织的 ACTIVE OWNER；created_by_id / actor_user_id / updated_at / 金额全部不变", async () => {
+describe("PERSONAL DELETION：共享组织账本 1 行不丢、余额零变化（ON DELETE SET NULL 作者置空）", () => {
+	it("账本行整行留存、作者置空（createdById/actorUserId/requesterUserId → null）；他人作者不变；个人域清空", async () => {
 		const [ownerX, deleting, ownerY] = await Promise.all([
 			createUser("owner-x"),
 			createUser("deleting"),
 			createUser("owner-y"),
 		]);
-		const orgX = await createOrg("过户组织", [
+		const orgX = await createOrg("共享组织 X", [
 			{ userId: ownerX.id, role: "OWNER" },
 			{ userId: deleting.id, role: "ADMIN" },
 		]);
-		const orgY = await createOrg("旁观组织", [
+		const orgY = await createOrg("旁观组织 Y", [
 			{ userId: ownerY.id, role: "OWNER" },
 			{ userId: deleting.id, role: "VIEWER" },
 		]);
 
-		// 组织 X：本人在全部带 user_id 的共享表各写一行
+		// 组织 X：本人创建全部共享表各一行
 		const shared = await seedOrgLedgerRows(orgX.id, deleting.id);
-		// 组织 Y：本人只有一条共享行（VIEWER 写入的历史行，同样须过户而非删除）
-		await db.account.create({
+		// 组织 Y：本人创建的一条账户行（VIEWER 写入的历史行，同样留存且作者置空）
+		const orgYAccount = await db.account.create({
 			data: {
-				userId: deleting.id,
 				organizationId: orgY.id,
 				createdById: deleting.id,
 				currencyCode: "EUR",
 				balance: "12.3400",
 			},
 		});
-		// 组织 X 的 Owner 自己的一行（本人注销不得波及他人行）
-		await db.account.create({
+		// 组织 X 的 Owner 自己创建的一行（本人注销不得置空他人作者）
+		const ownerXAccount = await db.account.create({
 			data: {
-				userId: ownerX.id,
 				organizationId: orgX.id,
 				createdById: ownerX.id,
 				currencyCode: "CHF",
 				balance: "1.0000",
 			},
 		});
-		// 接任者自己对同一条提醒的已读态（独立于行主存量 read_at）
+		// 接任者自己对同一条提醒的已读态
 		await db.reminderRead.create({
 			data: { reminderId: shared.reminder, userId: ownerX.id, readAt: T0 },
 		});
-		// 个人域：NULL 行 + 条款 + 设置 + OTP 身份 + 个人请求
-		await seedBusinessData(prisma, deleting.id);
+		// 个人域：条款 + 设置 + OTP 身份 + 个人请求
 		await db.termsConsent.create({
 			data: { userId: deleting.id, termsVersion: "v1", consentType: "TERMS", consentedAt: T0 },
 		});
 		await db.userSettings.create({
-			data: { userId: deleting.id, baseCurrency: "CNY", locale: "zh-CN", region: "CN" },
+			data: { userId: deleting.id, locale: "zh-CN", region: "CN" },
 		});
 		await db.otpIdentity.create({
 			data: { userId: deleting.id, channel: "email", target: deleting.email },
@@ -821,61 +781,46 @@ describe("PERSONAL DELETION：共享组织账本 1 行不丢、余额零变化",
 		// 守卫契约：本次请求已物理删除用户（守卫据此让同请求的 JwtAuthGuard 返回 401）
 		expect(advanced).toEqual({ userDeleted: true, lock: null, lockSubject: null });
 
-		// 1. 共享账本：除 user_id（与提醒行内 read_at）外整行不变——行数、主键、
-		//    created_by_id / actor_user_id / updated_at、全部金额逐字段一致。
-		//    例外：AI 会话是成员个人内容（按 (userId, organizationId) 私有），随账号删除而非过户
+		// 1. 共享账本：除作者外键置空外整行不变——行数、主键、updated_at、全部金额逐字段一致。
+		//    例外：AI 会话是成员个人内容（按 (userId, organizationId) 私有），随账号删除
 		const after = await readOrgRows([orgX.id, orgY.id]);
 		const { aiConversations: conversationsBefore, ...ledgerBefore } = before;
 		const { aiConversations: conversationsAfter, ...ledgerAfter } = after;
 		expect(conversationsBefore).toHaveLength(1);
 		expect(conversationsAfter).toEqual([]);
 		expect(await db.aiMessage.count({ where: { conversationId: shared.conversation } })).toBe(0);
-		expectRowsUnchangedExceptUser(ledgerBefore, ledgerAfter, "注销后");
+		expectRowsUnchangedExceptAuthor(ledgerBefore, ledgerAfter, "注销后");
 		// 防同义反复：被逐字段比对的账本行确有 12 张表 14 行
-		//（accounts 3 + transactions/holdings/lots/plans/changeLogs/usages/allocations/corrections/reminders/requests/installments 各 1）
 		expect(Object.values(ledgerBefore).reduce((sum, rows) => sum + rows.length, 0)).toBe(14);
 		expect(Object.keys(ledgerBefore)).toHaveLength(12);
 
-		// 2. 每一行的 user_id 都是所属组织的 ACTIVE OWNER（本人降为不存在，他人行原样）
-		const ownerByOrg = new Map([
-			[orgX.id, ownerX.id],
-			[orgY.id, ownerY.id],
-		]);
-		for (const table of Object.keys(ledgerAfter) as string[]) {
-			for (const row of ledgerAfter[table] ?? []) {
-				if ("userId" in row) {
-					expect(row.userId, `${table} ${String(row.id)}`).toBe(
-						ownerByOrg.get(String(row.organizationId)),
-					);
-				}
-			}
-		}
+		// 2. 注销用户作为作者的行均被置空（ON DELETE SET NULL），他人作者行保持原值
+		expect(
+			after.accounts.find((row) => row.id === orgYAccount.id)?.createdById,
+		).toBeNull();
+		expect(
+			after.accounts.find((row) => row.id === ownerXAccount.id)?.createdById,
+		).toBe(ownerX.id);
+		expect(
+			after.dataRequests.find((row) => row.id === shared.request)?.requesterUserId,
+		).toBeNull();
 
-		// 3. 提醒：行内 read_at 清空（接任者不得继承本人已读态），接任者自己的已读行保留
-		expect(
-			after.reminders.find((row) => row.id === shared.reminder),
-		).toMatchObject({ userId: ownerX.id, readAt: null });
-		// 过户前该行确有本人的存量已读态（防同义反复：清空的不是一个本来就为空的值）
-		expect(
-			before.reminders.find((row) => row.id === shared.reminder)?.readAt,
-		).toBe(T0.toISOString());
+		// 3. 提醒：接任者自己的成员级已读行保留，注销用户的已读行随个人清理删除
 		const readStates = await db.reminderRead.findMany({
 			where: { reminderId: shared.reminder },
 		});
 		expect(readStates.map((row) => row.userId)).toEqual([ownerX.id]);
 
-		// 4. 个人域清空：账号、成员关系、个人设置、条款、OTP 身份、个人请求、NULL 行
+		// 4. 个人域清空：账号、成员关系、个人设置、条款、OTP 身份、个人请求
 		expect(await db.user.findUnique({ where: { id: deleting.id } })).toBeNull();
 		expect(await db.membership.count({ where: { userId: deleting.id } })).toBe(0);
 		expect(await db.userSettings.count({ where: { userId: deleting.id } })).toBe(0);
 		expect(await db.termsConsent.count({ where: { userId: deleting.id } })).toBe(0);
 		expect(await db.otpIdentity.count({ where: { userId: deleting.id } })).toBe(0);
-		expect(await db.dataRequest.count({ where: { userId: deleting.id } })).toBe(0);
 		expect(
-			await db.plan.count({ where: { userId: deleting.id, organizationId: null } }),
-		).toBe(0);
-		expect(
-			await db.account.count({ where: { userId: deleting.id, organizationId: null } }),
+			await db.dataRequest.count({
+				where: { requesterUserId: deleting.id, scope: "PERSONAL" },
+			}),
 		).toBe(0);
 
 		// 5. 组织与接任者安然无恙；组织审计一条不少
@@ -891,7 +836,7 @@ describe("PERSONAL DELETION：共享组织账本 1 行不丢、余额零变化",
 		).toEqual(auditBefore.map((row) => row.id));
 	});
 
-	it("零残留引用断言：任何仍指向该用户的行都令注销响亮失败（user.delete 不依赖级联）", async () => {
+	it("零残留引用断言：任何仍指向该用户的级联外键行都令注销响亮失败（user.delete 不依赖级联）", async () => {
 		const [owner, member] = await Promise.all([
 			createUser("ref-owner"),
 			createUser("ref-member"),
@@ -906,9 +851,9 @@ describe("PERSONAL DELETION：共享组织账本 1 行不丢、余额零变化",
 		await expect(assertNoRemainingUserReferences(tx, member.id)).rejects.toThrow(
 			/Membership\.userId/,
 		);
-		// 全部外键表都被逐一计数（防同义反复：确有 15 张表指向 users）
+		// 全部 ON DELETE CASCADE 指向 users 的表都被逐一计数（W30 MIG-E/F 后为 6 张）
 		const references = await countUserReferences(tx, member.id);
-		expect(references).toHaveLength(15);
+		expect(references).toHaveLength(6);
 		expect(references.filter((reference) => reference.count > 0).map((r) => r.model)).toEqual([
 			"Membership",
 		]);
@@ -919,12 +864,11 @@ describe("PERSONAL DELETION：共享组织账本 1 行不丢、余额零变化",
 
 	it("无任何组织的纯个人账号：到期直接删除，个人域行全部清空，不建任何组织", async () => {
 		const user = await createUser("no-org");
-		const seeded = await seedBusinessData(prisma, user.id);
 		await db.termsConsent.create({
 			data: { userId: user.id, termsVersion: "v1", consentType: "TERMS", consentedAt: T0 },
 		});
 		await db.userSettings.create({
-			data: { userId: user.id, baseCurrency: "CNY", locale: "zh-CN", region: "CN" },
+			data: { userId: user.id, locale: "zh-CN", region: "CN" },
 		});
 		await db.otpIdentity.create({
 			data: { userId: user.id, channel: "email", target: user.email },
@@ -939,17 +883,62 @@ describe("PERSONAL DELETION：共享组织账本 1 行不丢、余额零变化",
 		expect(advanced).toEqual({ userDeleted: true, lock: null, lockSubject: null });
 
 		expect(await db.user.findUnique({ where: { id: user.id } })).toBeNull();
-		// 15 张指向 users 的表全部零残留（user.delete 未依赖任何级联）
+		// 6 张 ON DELETE CASCADE 指向 users 的表全部零残留（user.delete 未依赖任何级联）
 		const references = await countUserReferences(db as unknown as Prisma.TransactionClient, user.id);
-		expect(references).toHaveLength(15);
+		expect(references).toHaveLength(6);
 		expect(references.filter((reference) => reference.count > 0)).toEqual([]);
-		// 裸外键子表（无数据库级联）随个人域行显式清空，不留孤儿
-		expect(await db.planAllocation.count({ where: { planId: seeded.planId } })).toBe(0);
 		expect(
-			await db.usageLotAllocation.count({ where: { usageId: seeded.usageRecordId } }),
+			await db.dataRequest.count({ where: { requesterUserId: user.id } }),
 		).toBe(0);
 		// 纯个人注销不触碰任何组织
 		expect(await db.organization.count()).toBe(organizationsBefore);
+	});
+
+	it("唯一成员的空组织：个人注销删除成员关系后仍能回收该空组织（无残留设置/邀请/数据请求/审计）", async () => {
+		const user = await createUser("sole-empty-member");
+		// 唯一非 OWNER 成员（例如前任 Owner 离场后留下的 ADMIN/VIEWER 或已禁用成员）：
+		// 不受 LAST_OWNER_REQUIRED 阻塞，但注销删掉 membership 后组织已无任何成员，应被回收
+		const emptyOrg = await createOrg("待回收空组织", [
+			{ userId: user.id, role: "ADMIN" },
+		]);
+		await db.organizationSettings.create({
+			data: { organizationId: emptyOrg.id, baseCurrency: "CNY" },
+		});
+		await db.organizationInvitation.create({
+			data: {
+				organizationId: emptyOrg.id,
+				email: `invite-${Date.now()}@example.com`,
+				tokenHash: `hash-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+				role: "VIEWER",
+				invitedById: user.id,
+				expiresAt: new Date(Date.now() + 86_400_000),
+			},
+		});
+		await db.auditLog.create({
+			data: {
+				organizationId: emptyOrg.id,
+				actorUserId: user.id,
+				actorType: "USER",
+				action: "organization.settings.update",
+				result: "SUCCESS",
+			},
+		});
+		await createRequest({ userId: user.id, type: "DELETION", scope: "PERSONAL" });
+
+		const advanced = await service.advanceAndResolvePersonalLock(user.id, {
+			skipLock: true,
+			method: "GET",
+		});
+		expect(advanced).toEqual({ userDeleted: true, lock: null, lockSubject: null });
+		expect(await db.user.findUnique({ where: { id: user.id } })).toBeNull();
+		expect(await db.organization.findUnique({ where: { id: emptyOrg.id } })).toBeNull();
+		expect(
+			await db.organizationSettings.count({ where: { organizationId: emptyOrg.id } }),
+		).toBe(0);
+		expect(
+			await db.organizationInvitation.count({ where: { organizationId: emptyOrg.id } }),
+		).toBe(0);
+		expect(await db.auditLog.count({ where: { organizationId: emptyOrg.id } })).toBe(0);
 	});
 });
 
@@ -985,15 +974,11 @@ async function setupOrganizationFixture(label: string) {
 	await db.userSettings.create({
 		data: {
 			userId: creator.id,
-			baseCurrency: "CNY",
 			locale: "zh-CN",
 			region: "CN",
-			ledgerStartedAt: T0,
 		},
 	});
 	await seedOrgLedgerRows(orgX.id, admin.id);
-	await seedBusinessData(prisma, creator.id);
-	await seedBusinessData(prisma, admin.id);
 	await seedOrgLedgerRows(orgY.id, outsider.id);
 	return { creator, admin, outsider, orgX, orgY };
 }
@@ -1015,8 +1000,8 @@ async function runOrganizationRequest(
 }
 
 describe("ORGANIZATION CLEAR：只清当前组织账本", () => {
-	it("作用域 = 当前组织 + 其默认创建者的存量 NULL 行；不动其他组织、成员个人行、会话与数据请求；重置记账起点并同事务审计", async () => {
-		const { creator, admin, outsider, orgX, orgY } =
+	it("作用域 = 当前组织全部账本行；不动其他组织、会话与数据请求；重置记账起点并同事务审计", async () => {
+		const { admin, outsider, orgX, orgY } =
 			await setupOrganizationFixture("clear");
 		const request = await createRequest({
 			userId: admin.id,
@@ -1025,29 +1010,27 @@ describe("ORGANIZATION CLEAR：只清当前组织账本", () => {
 			organizationId: orgX.id,
 		});
 
-		// 作用域口径：X 含创建者存量 NULL 行；Y 的创建者是 outsider（与 X 无关）
 		const tx = db as unknown as Prisma.TransactionClient;
 		expect(await organizationLedgerScope(tx, orgX.id)).toEqual({
-			OR: [{ organizationId: orgX.id }, { organizationId: null, userId: creator.id }],
+			organizationId: orgX.id,
 		});
 		const otherBefore = await readOrgRows([orgY.id]);
 
 		const result = await runOrganizationRequest(request, orgX.id);
 		expect(result.outcome).toBe("completed");
 		expect(result.exportFilesToDelete).toEqual([]);
-		// 行数：admin 的组织化行 + 创建者的存量 NULL 行（各 1）；变更日志只有组织化计划才有
 		expect(result.stats).toEqual({
-			usageLotAllocations: 2,
-			planAllocations: 2,
+			usageLotAllocations: 1,
+			planAllocations: 1,
 			planChangeLogs: 1,
-			plans: 2,
-			usageRecords: 2,
-			corrections: 2,
-			reminders: 2,
-			costLots: 2,
-			transactions: 2,
-			initialHoldings: 2,
-			accounts: 2,
+			plans: 1,
+			usageRecords: 1,
+			corrections: 1,
+			reminders: 1,
+			costLots: 1,
+			transactions: 1,
+			initialHoldings: 1,
+			accounts: 1,
 		});
 
 		// X 的账本清空；会话保留；数据请求保留（原导出 + 本次 CLEAR）
@@ -1071,32 +1054,16 @@ describe("ORGANIZATION CLEAR：只清当前组织账本", () => {
 			aiConversations: 1,
 			planInstallments: 0,
 		});
-		// 创建者的存量 NULL 行随组织一并清空
-		expect(
-			await db.account.count({ where: { userId: creator.id, organizationId: null } }),
-		).toBe(0);
-		expect(
-			await db.plan.count({ where: { userId: creator.id, organizationId: null } }),
-		).toBe(0);
-		// admin 自己的个人域行、无关组织 Y 的账本原样
-		expect(
-			await db.plan.count({ where: { userId: admin.id, organizationId: null } }),
-		).toBe(1);
 		expect(await readOrgRows([orgY.id])).toEqual(otherBefore);
 		// 成员关系与账号不受影响
 		expect(await db.membership.count({ where: { organizationId: orgX.id } })).toBe(2);
 
-		// 记账起点重置（组织设置与默认创建者的个人设置保持一致），本位币不变
+		// 记账起点重置（仅组织设置），本位币不变
 		const settings = await db.organizationSettings.findUniqueOrThrow({
 			where: { organizationId: orgX.id },
 		});
 		expect(settings.ledgerStartedAt).toBeNull();
 		expect(settings.baseCurrency).toBe("CNY");
-		expect(
-			(
-				await db.userSettings.findUniqueOrThrow({ where: { userId: creator.id } })
-			).ledgerStartedAt,
-		).toBeNull();
 
 		// 请求终态 + 同事务审计留痕（操作者 = 发起人）
 		const row = await db.dataRequest.findUniqueOrThrow({ where: { id: request.id } });
@@ -1123,7 +1090,7 @@ describe("ORGANIZATION CLEAR：只清当前组织账本", () => {
 	});
 
 	it("审计写入失败 → 整单回滚：账本零变化、记账起点不变、请求仍为 PENDING（§13.1 同事务）", async () => {
-		const { creator, admin, orgX, orgY } =
+		const { admin, orgX, orgY } =
 			await setupOrganizationFixture("clear-audit-fail");
 		const request = await createRequest({
 			userId: admin.id,
@@ -1143,9 +1110,6 @@ describe("ORGANIZATION CLEAR：只清当前组织账本", () => {
 		);
 
 		expect(await readOrgRows([orgX.id, orgY.id])).toEqual(before);
-		expect(
-			await db.plan.count({ where: { userId: creator.id, organizationId: null } }),
-		).toBe(1);
 		expect(
 			(
 				await db.organizationSettings.findUniqueOrThrow({
@@ -1172,7 +1136,7 @@ describe("ORGANIZATION CLEAR：只清当前组织账本", () => {
 			});
 		}],
 	] as const)("冷静期内发起人%s → 到期不执行：请求由系统作废并留 DENIED 审计，账本零变化", async (_label, mutate) => {
-		const { creator, admin, orgX, orgY } = await setupOrganizationFixture("clear-lapsed");
+		const { admin, orgX, orgY } = await setupOrganizationFixture("clear-lapsed");
 		const request = await createRequest({
 			userId: admin.id,
 			type: "CLEAR",
@@ -1194,9 +1158,6 @@ describe("ORGANIZATION CLEAR：只清当前组织账本", () => {
 			request.id,
 			"失权作废后",
 		);
-		expect(
-			await db.plan.count({ where: { userId: creator.id, organizationId: null } }),
-		).toBe(1);
 		const logs = await db.auditLog.findMany({
 			where: { organizationId: orgX.id, action: "data.clear.cancel" },
 		});
@@ -1214,7 +1175,7 @@ describe("ORGANIZATION DELETION：删组织不删任何成员 User", () => {
 	it("账本 / 成员关系 / 邀请 / 设置 / 数据请求 / 既有审计全部清理并保留一条删除留痕；其他组织零变化", async () => {
 		const { creator, admin, orgX, orgY } =
 			await setupOrganizationFixture("delete");
-		// X 的其余从属数据：邀请、既有审计留痕、创建者尚未迁入组织的存量 NULL 会话
+		// X 的其余从属数据：邀请、既有审计留痕
 		await db.organizationInvitation.create({
 			data: {
 				organizationId: orgX.id,
@@ -1236,18 +1197,6 @@ describe("ORGANIZATION DELETION：删组织不删任何成员 User", () => {
 				}),
 			),
 		});
-		const legacyConversation = await db.aiConversation.create({
-			data: {
-				userId: creator.id,
-				organizationId: null,
-				title: "创建者存量会话",
-				lastMessageAt: T0,
-			},
-			select: { id: true },
-		});
-		await db.aiMessage.create({
-			data: { conversationId: legacyConversation.id, role: "user", content: "你好" },
-		});
 		const request = await createRequest({
 			userId: creator.id,
 			type: "DELETION",
@@ -1258,12 +1207,10 @@ describe("ORGANIZATION DELETION：删组织不删任何成员 User", () => {
 
 		const result = await runOrganizationRequest(request, orgX.id);
 		expect(result.outcome).toBe("completed");
-		// 账本 2 份（admin 组织化 + 创建者存量 NULL）+ 组织从属数据 + 既有审计 3 条
 		expect(result.stats).toMatchObject({
-			accounts: 2,
-			plans: 2,
-			usageLotAllocations: 2,
-			legacyAiConversations: 1,
+			accounts: 1,
+			plans: 1,
+			usageLotAllocations: 1,
 			aiConversations: 1,
 			dataRequests: 2,
 			invitations: 1,
@@ -1282,16 +1229,8 @@ describe("ORGANIZATION DELETION：删组织不删任何成员 User", () => {
 		expect(await db.organizationSettings.count({ where: { organizationId: orgX.id } })).toBe(0);
 		expect(await db.dataRequest.count({ where: { organizationId: orgX.id } })).toBe(0);
 
-		// 创建者的存量 NULL 行与会话随组织删除——组织删除后其「默认组织」会漂移到
-		// 创建者的下一个组织，这些行不得跟着漂移过去
-		expect(await db.account.count({ where: { userId: creator.id, organizationId: null } })).toBe(0);
-		expect(await db.plan.count({ where: { userId: creator.id, organizationId: null } })).toBe(0);
-		expect(await db.aiConversation.count({ where: { id: legacyConversation.id } })).toBe(0);
-		expect(await db.aiMessage.count({ where: { conversationId: legacyConversation.id } })).toBe(0);
-
-		// 不删任何成员 User：两位成员的账号都在，admin 的个人域行保留；X 的成员关系随组织移除
+		// 不删任何成员 User：两位成员的账号都在；X 的成员关系随组织移除
 		expect(await db.user.count({ where: { id: { in: [creator.id, admin.id] } } })).toBe(2);
-		expect(await db.plan.count({ where: { userId: admin.id, organizationId: null } })).toBe(1);
 		expect(await db.membership.count({ where: { organizationId: orgX.id } })).toBe(0);
 
 		// 审计：既有 3 条留痕在删组织前统一清理，仅保留一条删除留痕（AUDIT-01：组织删除必须记录）
@@ -1350,10 +1289,41 @@ describe("ORGANIZATION DELETION：删组织不删任何成员 User", () => {
 			detail: { reason: "REQUESTER_NOT_AUTHORIZED" },
 		});
 	});
+
+	it("发起人账号已被删除（requesterUserId=null）导致到期无资格作废时，仍记录系统/空操作者取消审计", async () => {
+		const { creator, admin, orgX } = await setupOrganizationFixture("null-requester-cancel");
+		const request = await createRequest({
+			userId: creator.id,
+			type: "DELETION",
+			scope: "ORGANIZATION",
+			organizationId: orgX.id,
+		});
+		// 模拟发起人转为 ADMIN 并被后续个人注销物理删除（requesterUserId 经 ON DELETE SET NULL 置空）
+		await transferOwnership(orgX.id, creator.id, admin.id);
+		await db.membership.deleteMany({ where: { userId: creator.id } });
+		await db.user.delete({ where: { id: creator.id } });
+
+		const result = await runOrganizationRequest(
+			{ ...request, requesterUserId: null },
+			orgX.id,
+		);
+		expect(result.outcome).toBe("cancelled");
+
+		const logs = await db.auditLog.findMany({
+			where: { organizationId: orgX.id, action: "organization.delete.cancel" },
+		});
+		expect(logs).toHaveLength(1);
+		expect(logs[0]).toMatchObject({
+			actorUserId: null,
+			result: "DENIED",
+			targetId: request.id,
+			detail: { reason: "REQUESTER_NOT_AUTHORIZED" },
+		});
+	});
 });
 
 describe("零残留引用断言的覆盖面（schema 推导 ↔ 数据库目录）", () => {
-	it("Prisma DMMF 推导出的 User 外键集合与 pg_constraint 中指向 users 的单列外键逐项一致", async () => {
+	it("Prisma DMMF 推导出的 User 级联外键集合与 pg_constraint 中 ON DELETE CASCADE 指向 users 的单列外键逐项一致", async () => {
 		const catalog = await db.$queryRaw<Array<{ table: string; column: string }>>`
 			SELECT rel.relname AS "table", att.attname AS "column"
 			FROM pg_constraint con
@@ -1361,6 +1331,7 @@ describe("零残留引用断言的覆盖面（schema 推导 ↔ 数据库目录�
 			JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = ANY (con.conkey)
 			WHERE con.contype = 'f'
 				AND con.confrelid = to_regclass('users')
+				AND con.confdeltype = 'c'
 				AND cardinality(con.conkey) = 1`;
 		const fromCatalog = catalog
 			.map((foreignKey) => `${foreignKey.table}.${foreignKey.column}`)
@@ -1377,8 +1348,31 @@ describe("零残留引用断言的覆盖面（schema 推导 ↔ 数据库目录�
 			})
 			.sort();
 
-		// 15 张表指向 users（User 模型声明的 15 个 onDelete: Cascade 关系）
-		expect(fromCatalog).toHaveLength(15);
+		// W30（MIG-E/F）后 6 张表对 users 为 ON DELETE CASCADE
+		expect(fromCatalog).toHaveLength(6);
 		expect(fromSchema).toEqual(fromCatalog);
+
+		// W30（MIG-E/F）：8 张作者/发起人列为 ON DELETE SET NULL（confdeltype = 'n'），删用户不吞行
+		const setNullCatalog = await db.$queryRaw<Array<{ table: string; column: string }>>`
+			SELECT rel.relname AS "table", att.attname AS "column"
+			FROM pg_constraint con
+			JOIN pg_class rel ON rel.oid = con.conrelid
+			JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = ANY (con.conkey)
+			WHERE con.contype = 'f'
+				AND con.confrelid = to_regclass('users')
+				AND con.confdeltype = 'n'
+				AND cardinality(con.conkey) = 1`;
+		expect(
+			setNullCatalog.map((fk) => `${fk.table}.${fk.column}`).sort(),
+		).toEqual([
+			"accounts.created_by_id",
+			"corrections.actor_user_id",
+			"data_requests.requester_user_id",
+			"initial_holdings.created_by_id",
+			"plan_change_logs.actor_user_id",
+			"plans.created_by_id",
+			"transactions.created_by_id",
+			"usage_records.created_by_id",
+		]);
 	});
 });

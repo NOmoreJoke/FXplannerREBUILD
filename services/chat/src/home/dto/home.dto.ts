@@ -33,6 +33,14 @@ export class PlanSummaryDto {
 	id!: string;
 
 	@ApiProperty({
+		description: "目标名称（缺省为 null）",
+		example: "今年换 5 万美元",
+		type: String,
+		nullable: true,
+	})
+	name!: string | null;
+
+	@ApiProperty({
 		description: "目标币种（ISO 4217）",
 		example: "USD",
 		type: String,

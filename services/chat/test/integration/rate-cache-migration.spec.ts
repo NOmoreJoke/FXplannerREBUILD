@@ -318,7 +318,10 @@ describe("旧汇率缓存 CLI 与 PostgreSQL 完成记录", () => {
 				? jsonResponse(erApiLatestBody({ TWD: "0.625" }, currentAt.getTime() / 1000))
 				: new Response(null, { status: 503 }),
 		});
-		const rates = new RateService(prisma as PrismaService, new RateProvider(undefined, upstream));
+		const rates = new RateService(
+			prisma as PrismaService,
+			new RateProvider(undefined, upstream as unknown as typeof fetch),
+		);
 		try {
 			await expect(rates.getLatest(base, [quote])).rejects.toMatchObject({ status: 502 });
 			expect((await rates.getHistory(base, quote, 7)).data_points).toEqual([]);
@@ -424,7 +427,10 @@ describe("旧汇率缓存 CLI 与 PostgreSQL 完成记录", () => {
 				)));
 			},
 		});
-		const rates = new RateService(prisma as PrismaService, new RateProvider(undefined, upstream));
+		const rates = new RateService(
+			prisma as PrismaService,
+			new RateProvider(undefined, upstream as unknown as typeof fetch),
+		);
 		try {
 			expect(await rates.findQuoteAt(base, quote, prior)).toBeNull();
 			const refreshed = await prisma.exchangeRate.findUniqueOrThrow({ where: { id: priorId } });
@@ -471,7 +477,11 @@ describe("旧汇率缓存 CLI 与 PostgreSQL 完成记录", () => {
 				}] },
 			}),
 		});
-		const fromAbc = () => new RateService(prisma as PrismaService, new RateProvider(undefined, upstream));
+		const fromAbc = () =>
+			new RateService(
+				prisma as PrismaService,
+				new RateProvider(undefined, upstream as unknown as typeof fetch),
+			);
 
 		const switched = fromAbc();
 		expect(await switched.findQuoteAt(base, quote, at)).toBeNull();

@@ -16,7 +16,7 @@ import {
 import { PrismaService } from "../prisma/prisma.service";
 import {
 	lockOrgLedgerAccounts,
-	upsertOrgAccountWithLegacyMerge,
+	upsertOrgAccount,
 } from "../prisma/ledger-write-lock";
 import { RateService } from "../rate/rate.service";
 import type {
@@ -34,15 +34,12 @@ import type {
 	ActorContext,
 	OrganizationRole,
 } from "../authorization/authorization.types";
-import { resolveDefaultOrganizationCreatorUserId } from "../authorization/default-organization";
 import type { ReadScope } from "../authorization/organization-scope";
 import { can } from "../authorization/permission-policy";
 import { lockOrganizationForActor } from "../organization/default-organization";
 import {
-	materializeLegacyOrganizationSettings,
 	PERSONAL_DEFAULT_LOCALE,
 	PERSONAL_DEFAULT_REGION,
-	PERSONAL_PLACEHOLDER_BASE_CURRENCY,
 	resolveOrganizationPreferences,
 } from "../organization/organization-preferences";
 import {
@@ -204,8 +201,9 @@ const ONBOARDING_DEFAULT_REGION = PERSONAL_DEFAULT_REGION;
 /**
  * 首次设置编排（技术方案 §2/§3）：
  * - 完成态判定 / 条款 / 完成设置；向导中间态无后端存储，中断即从头重填；
- * - 本位币锁定的保证：UserSettings 创建后本模块（及全代码库）不存在任何
- *   更新 baseCurrency 的写路径（settings 模块 PATCH 为白名单四字段，不含 baseCurrency）；
+ * - 本位币锁定的保证：本位币只存于 OrganizationSettings，创建后本模块
+ *   （及全代码库）不存在任何更新 baseCurrency 的写路径（settings 模块 PATCH
+ *   为白名单四字段，不含 baseCurrency）；
  * - 初始持仓：complete 可选入参与建账后补录共用单一入账方法 recordInitialHoldings，
  *   取价→时效断言→算成本→写 InitialHolding+CostLot→按批次汇总重算 Account，
  *   任一失败整体回滚。
@@ -223,11 +221,10 @@ export class OnboardingService {
 	 * 完成态判定：只读无副作用（W18 组织隔离；评审 I-10）。
 	 *
 	 * 完成态与组织偏好以**当前组织**为准（resolveOrganizationPreferences：
-	 * OrganizationSettings 优先，兼容回落仅限默认组织所有者的个人设置）——
-	 * 此前只读请求者本人的 UserSettings：受邀加入已建账组织的成员读到
-	 * completed=false（前端据此永久停发提醒），而已建账成员切到未建账的新组织
-	 * 却读到 completed=true。locale/region 是个人展示偏好、条款确认进度是个人维度，
-	 * 两者仍按请求者本人取值。
+	 * 唯一真相是 OrganizationSettings，无行即未建账）——此前只读请求者本人的
+	 * UserSettings：受邀加入已建账组织的成员读到 completed=false（前端据此
+	 * 永久停发提醒），而已建账成员切到未建账的新组织却读到 completed=true。
+	 * locale/region 是个人展示偏好、条款确认进度是个人维度，两者仍按请求者本人取值。
 	 */
 	async getStatus(scope: ReadScope): Promise<OnboardingStatusDto> {
 		const [preferences, personal, consentCount] = await Promise.all([
@@ -379,43 +376,20 @@ export class OnboardingService {
 						throw error;
 					});
 
-				// 个人展示行维护：仅当当前组织为个人默认组织（isDefaultOrganization === true）且尚无有效
-				// baseCurrency（无行或占位 ""）时才写入本位币与记账起点；非默认组织新建账绝不向
-				// UserSettings 写非空 baseCurrency/ledgerStartedAt（防默认组织误判为 OWNER_LEGACY 已建账）。
-				const existingPersonal = await tx.userSettings.findUnique({
-					where: { userId: actor.userId },
-					select: { baseCurrency: true },
-				});
-				const canWriteLegacyPersonalColumns =
-					actor.isDefaultOrganization === true &&
-					(!existingPersonal ||
-						existingPersonal.baseCurrency === PERSONAL_PLACEHOLDER_BASE_CURRENCY);
+				// 个人展示行维护（W30 MIG-F）：UserSettings 只承载个人展示偏好
+				// （locale / region）；组织偏好（本位币 / 准备节奏 / 提醒开关 / 记账起点）
+				// 已全部归 OrganizationSettings，个人行不再写任何组织域字段。
 				const personal = await tx.userSettings.upsert({
 					where: { userId: actor.userId },
 					create: {
 						userId: actor.userId,
-						baseCurrency: canWriteLegacyPersonalColumns
-							? baseCurrency
-							: PERSONAL_PLACEHOLDER_BASE_CURRENCY,
 						locale: dto.locale,
 						region: dto.region,
-						prepPreference: orgSettings.prepPreference,
-						reminderEnabled: orgSettings.reminderEnabled,
-						ledgerStartedAt: canWriteLegacyPersonalColumns ? completedAt : null,
 					},
-					update: canWriteLegacyPersonalColumns
-						? {
-								baseCurrency,
-								locale: dto.locale,
-								region: dto.region,
-								prepPreference: orgSettings.prepPreference,
-								reminderEnabled: orgSettings.reminderEnabled,
-								ledgerStartedAt: completedAt,
-							}
-						: {
-								locale: dto.locale,
-								region: dto.region,
-							},
+					update: {
+						locale: dto.locale,
+						region: dto.region,
+					},
 					select: { locale: true, region: true },
 				});
 
@@ -471,8 +445,8 @@ export class OnboardingService {
 	/**
 	 * 建账后补录初始持仓（ToB R1 W22 组织作用域 + 账本锁 + 同事务审计）：
 	 * - 事务内 lockOrganizationForActor 复验 settings.update；
-	 * - 未建账 → 409 ONBOARDING_NOT_COMPLETED；OWNER_LEGACY 先固化为 OrganizationSettings；
-	 * - assertHoldings 后先取组织账本锁，再按 compatReadWhere(actor) 查重（409 INITIAL_HOLDING_EXISTS）；
+	 * - 未建账 → 409 ONBOARDING_NOT_COMPLETED；
+	 * - assertHoldings 后先取组织账本锁，再按当前组织作用域查重（409 INITIAL_HOLDING_EXISTS）；
 	 * - 写入带 organizationId / createdById 的记录并同事务写 onboarding.initial_holdings 审计。
 	 */
 	async saveInitialHoldings(
@@ -501,9 +475,6 @@ export class OnboardingService {
 					);
 					throw new OnboardingNotCompletedException();
 				}
-				if (preferences.source === "OWNER_LEGACY") {
-					await materializeLegacyOrganizationSettings(tx, actor.organizationId);
-				}
 
 				this.assertHoldings(preferences.baseCurrency, dto.holdings);
 				const codes = dto.holdings.map((item) =>
@@ -511,20 +482,11 @@ export class OnboardingService {
 				);
 				await lockOrgLedgerAccounts(tx, actor.organizationId, codes);
 
-				const defaultOwnerUserId = await resolveDefaultOrganizationCreatorUserId(
-					tx,
-					actor.organizationId,
-				);
-				// 锁内按当前组织（含默认创建者遗留 NULL 行）查重（不做部分成功）；并发兜底由唯一约束承担
+				// 锁内按当前组织作用域查重（不做部分成功）；并发兜底由唯一约束承担
 				const existing = await tx.initialHolding.findMany({
 					where: {
+						organizationId: actor.organizationId,
 						currencyCode: { in: codes },
-						OR: [
-							{ organizationId: actor.organizationId },
-							...(defaultOwnerUserId
-								? [{ organizationId: null, userId: defaultOwnerUserId }]
-								: []),
-						],
 					},
 					select: { currencyCode: true },
 				});
@@ -580,8 +542,8 @@ export class OnboardingService {
 	 * ① 币种/金额校验 ② 批量取价（现汇卖出价优先，项级错误统一 400）③ 逐币种：
 	 *    8 位舍入 → 成本折算（按本位币精度）→ 按当前确认时刻复核 fresh/validUntil →
 	 *    写 InitialHolding（P2002 → 409）→ 写 CostLot(sourceType=INITIAL) →
-	 *    Account 余额按组织（含默认组织兼容）全部批次 remainingQty 汇总重算，
-	 *    兼容升级默认组织存量 organizationId: null 账户行后按 organizationId_currencyCode upsert。
+	 *    Account 余额按组织全部批次 remainingQty 汇总重算后按
+	 *    (organizationId, currencyCode) upsert。
 	 * 本方法必须在持有组织账本锁的事务内调用：任一异常抛出即整体回滚。
 	 */
 	private async recordInitialHoldings(
@@ -643,7 +605,6 @@ export class OnboardingService {
 			const holding = await tx.initialHolding
 				.create({
 					data: {
-						userId: actor.userId,
 						organizationId: actor.organizationId,
 						createdById: actor.userId,
 						currencyCode: code,
@@ -674,7 +635,6 @@ export class OnboardingService {
 			// acquiredAt=ledgerStartedAt（INITIAL 批次排同日 PURCHASE 之前，满足未来消耗排序前置）
 			await tx.costLot.create({
 				data: {
-					user: { connect: { id: actor.userId } },
 					organizationId: actor.organizationId,
 					currencyCode: code,
 					sourceType: "INITIAL",
@@ -687,9 +647,8 @@ export class OnboardingService {
 				},
 			});
 
-			// 收口默认创建者 legacy 账户/批次并重算组织账户余额；
-			// 若已有存量账户无对应批次（如测试夹具），保留合并前账户余额并累加本次持仓
-			await upsertOrgAccountWithLegacyMerge({
+			// 按组织维度收口账户余额：同组织同币种恒有且仅有一行账户
+			await upsertOrgAccount({
 				tx,
 				organizationId: actor.organizationId,
 				currencyCode: code,

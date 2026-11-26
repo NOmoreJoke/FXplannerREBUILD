@@ -160,9 +160,10 @@ export function isExpectedControlFlowApiError(
 }
 
 /**
- * 读取当前组织头值（ToB W20）：业务端点统一注入 X-Organization-Id；
- * 未选择组织（null）不注入——兼容窗口由后端回落唯一默认组织
- * （多组织用户会收到 400 ORGANIZATION_REQUIRED → 组织选择引导）。
+ * 读取当前组织头值（ToB W20）：组织域端点统一注入 X-Organization-Id；
+ * 未选择组织（null）不注入——W30（MIG-D）起组织域端点缺头一律 400
+ * ORGANIZATION_REQUIRED（后端不再回落「唯一默认组织」），组织路由分流据此
+ * 把用户带到组织选择态。
  */
 export function getActiveOrganizationId(): string | null {
 	return useOrganizationStore.getState().activeOrganizationId;
@@ -246,10 +247,11 @@ export async function apiClient<T>(
 		if (token) {
 			headers["Authorization"] = `Bearer ${token}`;
 		}
-		// 组织上下文头（ToB W20）：已有选中组织时对业务请求注入；
-		// 个人域端点显式 skipOrganizationScope——请求不带组织头，也不参与组织上下文失效处理
-		// （个人数据权利不得依赖组织选择，W28）。其余个人端点（/auth、/organizations、
-		// 邀请 token 端点）后端不读此头，沿用注入
+		// 组织上下文头（ToB W20）：已有选中组织时对组织域请求注入；
+		// 个人域端点（/auth/*、/organizations 列表与新建、/organization-invitations/:token*、
+		// /onboarding/consents、/settings/personal、/data-requests/* 个人域）一律显式
+		// skipOrganizationScope——请求不带组织头，也不参与组织上下文失效处理
+		// （个人数据权利不得依赖组织选择，W28）。
 		if (!skipOrganizationScope) {
 			sentOrganizationId = getActiveOrganizationId();
 			if (sentOrganizationId) {

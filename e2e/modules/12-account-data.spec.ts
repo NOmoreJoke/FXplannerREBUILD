@@ -119,7 +119,7 @@ function assertShape(value: string, pattern: RegExp, label: string): string {
  * 把 owner 在其唯一组织里的所有权转给 successor（T-DATA-006 前置，全部走真实组织 API）：
  * 邀请（一次性 token 仅创建响应出现）→ 受邀者接受（返回其 Membership id）→ 转交所有权
  * （原 Owner 降为 ADMIN）。组织管理端点挂严格守卫，必须带 X-Organization-Id——
- * 造数 api() 缺省不带头，故显式传入。
+ * 造数 api() 会按 token 自动解析本人组织并带上该头，此处显式传入以锁定目标组织。
  *
  * 可重入（Playwright 重试复用同一批用户）：已转交（原 Owner 已是 ADMIN）直接返回；
  * 上次中断在「已邀请未接受」→ 撤回旧邀请重建（reused=true 不重发 token）；

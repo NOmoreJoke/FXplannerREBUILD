@@ -56,10 +56,17 @@ export type AuditLogList = Schemas["AuditLogListDto"];
 export type AuditLogsQuery = Schemas["ListAuditLogsQueryDto"];
 
 export const organizationsApi = {
-	/** 本人全部有效组织（个人端点，单/多组织路由依据） */
+	/**
+	 * 本人全部有效组织（个人端点，单/多组织路由依据）
+	 *
+	 * 个人域端点（后端只挂 JwtAuthGuard）：与当前组织无关——请求不带组织头
+	 * （skipOrganizationScope）。列表项自带 onboardingCompleted，登录后据此分流
+	 * 无需先选定组织。
+	 */
 	async list(): Promise<OrganizationSummary[]> {
 		return apiClient<OrganizationSummary[]>("/organizations", {
 			method: "GET",
+			skipOrganizationScope: true,
 		});
 	},
 
@@ -78,11 +85,16 @@ export const organizationsApi = {
 		});
 	},
 
-	/** 创建组织（个人端点） */
+	/**
+	 * 创建组织（个人端点）
+	 *
+	 * 个人域端点（后端只挂 JwtAuthGuard）：请求不带组织头（skipOrganizationScope）。
+	 */
 	async create(input: OrganizationUpsertInput): Promise<OrganizationSummary> {
 		return apiClient<OrganizationSummary>("/organizations", {
 			method: "POST",
 			body: JSON.stringify(input),
+			skipOrganizationScope: true,
 		});
 	},
 };
@@ -158,27 +170,27 @@ export const invitationsApi = {
 		);
 	},
 
-	/** 受邀摘要（登录个人端点；脱敏） */
+	/** 受邀摘要（登录个人端点；脱敏）——个人域：请求不带组织头 */
 	async summary(token: string): Promise<InvitationSummary> {
 		return apiClient<InvitationSummary>(
 			`/organization-invitations/${encodeURIComponent(token)}`,
-			{ method: "GET" },
+			{ method: "GET", skipOrganizationScope: true },
 		);
 	},
 
-	/** 接受（邮箱严格匹配） */
+	/** 接受（邮箱严格匹配）——个人域：请求不带组织头 */
 	async accept(token: string): Promise<InvitationAcceptResult> {
 		return apiClient<InvitationAcceptResult>(
 			`/organization-invitations/${encodeURIComponent(token)}/accept`,
-			{ method: "POST" },
+			{ method: "POST", skipOrganizationScope: true },
 		);
 	},
 
-	/** 拒绝 */
+	/** 拒绝——个人域：请求不带组织头 */
 	async decline(token: string): Promise<InvitationStatusResult> {
 		return apiClient<InvitationStatusResult>(
 			`/organization-invitations/${encodeURIComponent(token)}/decline`,
-			{ method: "POST" },
+			{ method: "POST", skipOrganizationScope: true },
 		);
 	},
 };

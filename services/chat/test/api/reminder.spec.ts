@@ -2,10 +2,10 @@ import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-	bearer,
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -83,7 +83,7 @@ describe("ReminderController（接口）", () => {
 		userIds.push(fresh.userId);
 		const res = await request(app.getHttpServer())
 			.get("/api/reminders")
-			.set(bearer(fresh.accessToken))
+			.set(orgBearer(fresh))
 			.expect(409);
 		expect(res.body.code).toBe("ONBOARDING_NOT_COMPLETED");
 	});
@@ -133,14 +133,14 @@ describe("ReminderController（接口）", () => {
 
 		const first = await request(app.getHttpServer())
 			.post(`/api/reminders/${id}/read`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		expect(first.body.data.id).toBe(id);
 		expect(typeof first.body.data.readAt).toBe("string");
 
 		const second = await request(app.getHttpServer())
 			.post(`/api/reminders/${id}/read`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		expect(second.body.data.readAt).toBe(first.body.data.readAt);
 
@@ -155,7 +155,7 @@ describe("ReminderController（接口）", () => {
 		const id = list.body.data.items[0].id;
 		const res = await request(app.getHttpServer())
 			.post(`/api/reminders/${id}/read`)
-			.set(bearer(other.accessToken))
+			.set(orgBearer(other))
 			.expect(404);
 		expect(res.body.code).toBe("REMINDER_NOT_FOUND");
 		// 本人行未被他人标读
@@ -172,13 +172,13 @@ describe("ReminderController（接口）", () => {
 
 		const first = await request(app.getHttpServer())
 			.post("/api/reminders/read-all")
-			.set(bearer(other.accessToken))
+			.set(orgBearer(other))
 			.expect(200);
 		expect(first.body.data.updatedCount).toBe(1);
 
 		const second = await request(app.getHttpServer())
 			.post("/api/reminders/read-all")
-			.set(bearer(other.accessToken))
+			.set(orgBearer(other))
 			.expect(200);
 		expect(second.body.data.updatedCount).toBe(0);
 	});
@@ -186,22 +186,24 @@ describe("ReminderController（接口）", () => {
 	it("#8 PATCH /settings reminderEnabled=false → 不再生成新行；既有行仍返回", async () => {
 		await request(app.getHttpServer())
 			.patch("/api/settings")
-			.set(bearer(other.accessToken))
+			.set(orgBearer(other))
 			.send({ reminderEnabled: false })
 			.expect(200);
 
 		// 删除既有行模拟「行消失」；开关关闭下 GET 不得重新生成
-		await ctx.prisma.reminder.deleteMany({ where: { userId: other.userId } });
+		await ctx.prisma.reminder.deleteMany({
+			where: { organizationId: other.defaultOrganizationId },
+		});
 		const closed = await getReminders(app, other);
 		expect(closed.body.data.items).toHaveLength(0);
 
 		// 既有行保留时照常返回（开关只关「生成」，不关「展示」）
 		const otherPlan = await ctx.prisma.plan.findFirstOrThrow({
-			where: { userId: other.userId },
+			where: { organizationId: other.defaultOrganizationId },
 		});
 		const kept = await ctx.prisma.reminder.create({
 			data: {
-				userId: other.userId,
+				organizationId: other.defaultOrganizationId,
 				type: "PREP_DUE",
 				planId: otherPlan.id,
 				dedupKey: `PLAN:${otherPlan.id}`,
@@ -216,7 +218,7 @@ describe("ReminderController（接口）", () => {
 		// 重新开启 → 恢复生成（同日已有行仍幂等，不新增）
 		await request(app.getHttpServer())
 			.patch("/api/settings")
-			.set(bearer(other.accessToken))
+			.set(orgBearer(other))
 			.send({ reminderEnabled: true })
 			.expect(200);
 		const reopened = await getReminders(app, other);
@@ -225,19 +227,19 @@ describe("ReminderController（接口）", () => {
 
 	it("#9 GET 返回的 matters 不含非 ACTIVE 计划 → 取消后行不可见", async () => {
 		const plans = await ctx.prisma.plan.findMany({
-			where: { userId: user.userId },
+			where: { organizationId: user.defaultOrganizationId },
 		});
 		expect(plans.length).toBeGreaterThan(0);
 		await request(app.getHttpServer())
 			.post(`/api/plans/${plans[0].id}/cancel`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		const res = await getReminders(app, user);
 		expect(res.body.data.items).toHaveLength(0);
 		// 行未删（DB 保留；重开后按规则自然恢复）
 		const remaining = await ctx.prisma.reminder.findMany({
-			where: { userId: user.userId },
+			where: { organizationId: user.defaultOrganizationId },
 		});
 		expect(remaining.length).toBeGreaterThan(0);
 	});
@@ -274,7 +276,6 @@ describe("ReminderController（成员级已读与组织隔离）", () => {
 		// 组织内计划（预计使用日 = 业务今天 → R3 USE_DUE 事项）
 		const plan = await ctx.prisma.plan.create({
 			data: {
-				userId: org.owner.userId,
 				organizationId: org.orgId,
 				createdById: org.owner.userId,
 				targetCurrency: "USD",
@@ -339,12 +340,8 @@ describe("ReminderController（成员级已读与组织隔离）", () => {
 		expect(res.body.data.id).toBe(reminderId);
 		expect(typeof res.body.data.readAt).toBe("string");
 
-		// 数据库只写该成员自己的成员级已读行
+		// 数据库只写该成员自己的成员级已读行（MIG-F 起 Reminder 无共享 readAt 列）
 		expect(await readUserIds(reminderId)).toEqual([member.userId]);
-		const row = await ctx.prisma.reminder.findUniqueOrThrow({
-			where: { id: reminderId },
-		});
-		expect(row.readAt).toBeNull(); // 共享 readAt 未被写入
 	});
 
 	it("W25-2 成员 A 标已读不影响成员 B 与行主的未读态", async () => {
@@ -402,10 +399,6 @@ describe("ReminderController（成员级已读与组织隔离）", () => {
 
 		// 只写当前成员自己的成员级已读行
 		expect(await readUserIds(reminderId)).toEqual([member.userId]);
-		const row = await ctx.prisma.reminder.findUniqueOrThrow({
-			where: { id: reminderId },
-		});
-		expect(row.readAt).toBeNull(); // 共享 readAt 仍未被写入
 	});
 
 	it("W25-4 受邀成员（FINANCE）单条标已读 → 200（三个受邀角色均可标已读）", async () => {

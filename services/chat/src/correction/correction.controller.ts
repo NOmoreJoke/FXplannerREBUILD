@@ -27,7 +27,7 @@ import type { Request } from "express";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
-import { BusinessOrgScopeGuard } from "../authorization/guards/business-org-scope.guard";
+import { OrganizationContextGuard } from "../authorization/guards/organization-context.guard";
 import { PermissionGuard } from "../authorization/guards/permission.guard";
 import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
@@ -73,7 +73,7 @@ export class CorrectionController {
 	// 带其他组织头仍返回本人别的组织的账本重放，受邀成员则按自己的空账本重放）
 	@Post("preview")
 	@HttpCode(HttpStatus.OK)
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("correction.preview")
 	@ApiOperation({
 		summary: "影响预览（只读重放）",
@@ -111,12 +111,12 @@ export class CorrectionController {
 	}
 
 	@Post()
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("correction.apply")
 	@ApiOperation({
 		summary: "提交更正（事务）",
 		description:
-			"组织共享账本：须具备 correction.apply 权限（OWNER/ADMIN/FINANCE；OPERATOR/VIEWER 403 PERMISSION_DENIED 并写 DENIED 审计）。事务内依次执行：锁组织并按最新角色复验权限（锁等期间降权同样 403）→ 校验组织已建账 → 锁定受影响币种的组织账户（兼容窗口内先把默认组织创建者的存量账本行收口进组织）与相关计划行 → 按组织账本重算。USAGE 须确认本次影响，初始持仓改币种须确认预览报价。版本或使用影响失配返回 409 CORRECTION_TARGET_CHANGED（另一成员已更新目标时不覆盖后者，须重新预览），报价失配返回 409 CORRECTION_QUOTE_CHANGED。校验通过后重放账本并写入 APPLIED（含所属组织与操作者）；资金、分配或历史缺口拒绝时，业务数据零变化，另写带组织与操作者的 FAILED 尝试留痕及 FAILED 审计。",
+			"组织共享账本：须具备 correction.apply 权限（OWNER/ADMIN/FINANCE；OPERATOR/VIEWER 403 PERMISSION_DENIED 并写 DENIED 审计）。事务内依次执行：锁组织并按最新角色复验权限（锁等期间降权同样 403）→ 校验组织已建账 → 锁定受影响币种的组织账户与相关计划行（W30 MIG-E/F 后组织账本恒有归属，无存量收口步骤） → 按组织账本重算。USAGE 须确认本次影响，初始持仓改币种须确认预览报价。版本或使用影响失配返回 409 CORRECTION_TARGET_CHANGED（另一成员已更新目标时不覆盖后者，须重新预览），报价失配返回 409 CORRECTION_QUOTE_CHANGED。校验通过后重放账本并写入 APPLIED（含所属组织与操作者）；资金、分配或历史缺口拒绝时，业务数据零变化，另写带组织与操作者的 FAILED 尝试留痕及 FAILED 审计。",
 	})
 	@ApiBody({ type: CorrectionRequestDto })
 	@ApiResponse({
@@ -184,7 +184,7 @@ export class CorrectionController {
 		description: "目标不存在或不属于当前组织（CORRECTION_TARGET_NOT_FOUND）",
 		type: CorrectionErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("correction.read")
 	async getTarget(
 		@CurrentUser() user: User,
@@ -225,7 +225,7 @@ export class CorrectionController {
 		description: "目标不存在或不属于当前组织（CORRECTION_TARGET_NOT_FOUND）",
 		type: CorrectionErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("correction.read")
 	async list(
 		@CurrentUser() user: User,

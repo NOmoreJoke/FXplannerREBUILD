@@ -166,7 +166,9 @@ async function openStreamResponse(
 		headers["Authorization"] = `Bearer ${token}`;
 	}
 	// 组织上下文头（ToB W20）：AI 会话按 (userId, organizationId) 隔离；
-	// 与 apiClient 同源（organization-store），未选组织不注入（兼容窗口后端回落）
+	// 与 apiClient 同源（organization-store）。组织域端点：W30（MIG-D）起缺头一律
+	// 400 ORGANIZATION_REQUIRED（不再回落唯一默认组织）——未选组织不发请求
+	// （useChat 的会话查询 enabled 门控 + 受保护区布局的组织路由分流双重保证）。
 	const organizationId = getActiveOrganizationId();
 	if (organizationId) {
 		headers["X-Organization-Id"] = organizationId;

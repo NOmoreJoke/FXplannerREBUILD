@@ -18,7 +18,7 @@ import {
 describe("AuthController（e2e）", () => {
 	let ctx: TestContext;
 	let app: INestApplication;
-	let user: TestUser;
+	let user: Omit<TestUser, "defaultOrganizationId">;
 
 	const EMAIL = `auth-${Date.now()}@example.com`;
 	const PASSWORD = TEST_PASSWORD;

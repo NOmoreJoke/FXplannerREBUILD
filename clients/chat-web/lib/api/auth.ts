@@ -61,10 +61,14 @@ export const authApi = {
 
 	/**
 	 * 获取当前用户信息
+	 *
+	 * 个人域端点（后端只挂 JwtAuthGuard）：与组织无关——请求不带组织头
+	 * （skipOrganizationScope），换账号登录后首个请求不得携带上一个账号的组织。
 	 */
 	async getMe(): Promise<AuthUser> {
 		return apiClient<AuthUser>("/auth/me", {
 			method: "GET",
+			skipOrganizationScope: true,
 		});
 	},
 

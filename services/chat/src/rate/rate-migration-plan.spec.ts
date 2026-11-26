@@ -6,7 +6,7 @@
  * 排除/校验和四侧比对）、executeMigrationBatches 可执行差分（首次转换、
  * 二次 0 更新、冻结字段漂移中止、逐字段零差异条件、回滚方向）。
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import {
 	checksumOfPlan,

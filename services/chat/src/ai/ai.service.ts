@@ -87,9 +87,8 @@ export class AiService {
 	 *
 	 * 会话边界 = **本人** 且 **当前组织**：
 	 * - `userId = actor.userId`（会话个人所有，跨成员不可见）；
-	 * - 组织维度：默认组织上下文（actor.isDefaultOrganization === true）允许本人
-	 *   存量 `organizationId IS NULL` 会话（兼容窗口存量行，逻辑上属默认组织）；
-	 *   其他组织上下文**严格**等于当前组织——Org B 绝不看到 Org A 迁移前的 NULL 会话。
+	 * - 组织维度：严格等于当前组织——W30（MIG-D）兼容窗口关闭后，
+	 *   `organizationId IS NULL` 的存量会话不再被任何组织读取。
 	 *
 	 * 跨组织访问、成员被移出组织（DISABLED，由守卫先行 404）一律 404，无写入副作用。
 	 */
@@ -110,20 +109,12 @@ export class AiService {
 
 	/**
 	 * 会话的组织维度 where 片段（列表 / 详情 / 追问 / 删除共用同一口径）：
-	 * 默认组织上下文附带存量 NULL 会话分支；其他组织严格等于当前组织。
+	 * W30（MIG-D）后兼容窗口关闭——只有当前组织一个分支，不再有 NULL 组织存量行。
 	 */
 	private conversationOrgWhere(scope: ReadScope): {
-		OR: Array<{ organizationId: string | null }>;
+		organizationId: string;
 	} {
-		if (scope.isDefaultOrganization === true) {
-			return {
-				OR: [
-					{ organizationId: scope.organizationId },
-					{ organizationId: null },
-				],
-			};
-		}
-		return { OR: [{ organizationId: scope.organizationId }] };
+		return { organizationId: scope.organizationId };
 	}
 
 	async listConversations(scope: ReadScope, limit?: number) {
@@ -182,7 +173,15 @@ export class AiService {
 		if (this.busyConversations.has(conversationId)) {
 			throw new AiConversationBusyException("会话正在回复中，请稍后再删除");
 		}
-		await this.prisma.aiConversation.delete({ where: { id: conversationId } });
+		const deleted = await this.prisma.aiConversation.deleteMany({
+			where: {
+				id: conversationId,
+				AND: [{ userId: scope.userId }, this.conversationOrgWhere(scope)],
+			},
+		});
+		if (deleted.count === 0) {
+			throw new AiConversationNotFoundException();
+		}
 	}
 
 	/**
@@ -281,10 +280,19 @@ export class AiService {
 			const userMessage = await this.prisma.aiMessage.create({
 				data: { conversationId: conversation.id, role: "user", content },
 			});
-			await this.prisma.aiConversation.update({
-				where: { id: conversation.id },
+			const updated = await this.prisma.aiConversation.updateMany({
+				where: {
+					id: conversation.id,
+					AND: [
+						{ userId: params.scope.userId },
+						this.conversationOrgWhere(params.scope),
+					],
+				},
 				data: { lastMessageAt: userMessage.createdAt },
 			});
+			if (updated.count === 0) {
+				throw new AiConversationNotFoundException();
+			}
 
 			return {
 				conversation,
@@ -317,6 +325,7 @@ export class AiService {
 		conversationId: string,
 		content: string,
 		model: string,
+		scope: ReadScope,
 	): Promise<{
 		id: string;
 		role: string;
@@ -326,10 +335,19 @@ export class AiService {
 	} | null> {
 		try {
 			return await this.prisma.$transaction(async (tx) => {
-				await tx.aiConversation.update({
-					where: { id: conversationId },
+				const updated = await tx.aiConversation.updateMany({
+					where: {
+						id: conversationId,
+						AND: [{ userId: scope.userId }, this.conversationOrgWhere(scope)],
+					},
 					data: { lastMessageAt: new Date() },
 				});
+				if (updated.count === 0) {
+					this.logger.warn(
+						`助手消息落库时会话已消失（conversationId=${conversationId}），按 404 收尾`,
+					);
+					return null;
+				}
 				return tx.aiMessage.create({
 					data: { conversationId, role: "assistant", content, model },
 				});
@@ -337,7 +355,7 @@ export class AiService {
 		} catch (error) {
 			if (
 				error instanceof Prisma.PrismaClientKnownRequestError &&
-				error.code === "P2025"
+				(error.code === "P2025" || error.code === "P2003")
 			) {
 				this.logger.warn(
 					`助手消息落库时会话已消失（conversationId=${conversationId}），按 404 收尾`,

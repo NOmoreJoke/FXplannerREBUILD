@@ -116,7 +116,8 @@ const EXPORT_FILENAME_PATTERN =
 /** 读时推进的单次查询选出的行（锁判定数据源 + 到期候选） */
 interface ActiveRequestRow {
 	id: string;
-	userId: string;
+	/** 发起人（MIG-F：user_id → requester_user_id，ON DELETE SET NULL，可空） */
+	requesterUserId: string | null;
 	scope: string;
 	organizationId: string | null;
 	type: string;
@@ -128,7 +129,7 @@ interface ActiveRequestRow {
 /** 锁查询的公共列（个人域单查与双锁合并查共用） */
 const LOCK_ROW_SELECT = {
 	id: true,
-	userId: true,
+	requesterUserId: true,
 	scope: true,
 	organizationId: true,
 	type: true,
@@ -225,7 +226,7 @@ export class DataRequestService {
 		const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 		const request = await this.prisma.dataRequest.findFirst({
 			where: {
-				userId,
+				requesterUserId: userId,
 				scope,
 				requestedAt: { gte: since },
 				status: { not: "CANCELLED" },
@@ -392,7 +393,7 @@ export class DataRequestService {
 			// 1. 互斥 / 幂等（重复点击导出返回原请求）
 			const existing = await tx.dataRequest.findFirst({
 				where: {
-					userId: user.id,
+					requesterUserId: user.id,
 					OR: [
 						{ status: { in: ACTIVE_STATUSES as string[] } },
 						{
@@ -482,7 +483,7 @@ export class DataRequestService {
 					// 同域幂等：该组织已有本人仍可下载的组织导出 → 返回原请求，不重复生成
 					const downloadable = await tx.dataRequest.findFirst({
 						where: {
-							userId: user.id,
+							requesterUserId: user.id,
 							organizationId: targetOrganizationId,
 							scope: "ORGANIZATION",
 							type: "EXPORT",
@@ -518,7 +519,11 @@ export class DataRequestService {
 			if (dto.type !== "EXPORT") {
 				await this.expireDownloadableExports(
 					tx,
-					{ userId: user.id, scope, organizationId: targetOrganizationId },
+					{
+						requesterUserId: user.id,
+						scope,
+						organizationId: targetOrganizationId,
+					},
 					now,
 				);
 			}
@@ -536,7 +541,7 @@ export class DataRequestService {
 			}
 			const created = await tx.dataRequest.create({
 				data: {
-					userId: user.id,
+					requesterUserId: user.id,
 					scope,
 					organizationId: targetOrganizationId,
 					type: dto.type,
@@ -602,7 +607,7 @@ export class DataRequestService {
 		// 非本人 / 跨域 / 不存在 → 同一响应，不泄露存在性（需求验收 18）
 		if (
 			!request ||
-			request.userId !== user.id ||
+			request.requesterUserId !== user.id ||
 			request.scope !== domain.scope
 		) {
 			throw new DataRequestNotFoundException();
@@ -747,7 +752,7 @@ export class DataRequestService {
 		// 单次查询：同时取回锁判定与到期推进所需字段（至多 1 条 data_requests 查询）
 		const activeRows = await this.prisma.dataRequest.findMany({
 			where: {
-				userId,
+				requesterUserId: userId,
 				scope: "PERSONAL",
 				type: "DELETION",
 				status: { in: ACTIVE_STATUSES as string[] },
@@ -836,7 +841,11 @@ export class DataRequestService {
 			where: {
 				status: { in: ACTIVE_STATUSES as string[] },
 				OR: [
-					{ scope: "PERSONAL", userId: actor.userId, type: "DELETION" },
+					{
+						scope: "PERSONAL",
+						requesterUserId: actor.userId,
+						type: "DELETION",
+					},
 					{
 						scope: "ORGANIZATION",
 						organizationId: actor.organizationId,
@@ -1027,7 +1036,7 @@ export class DataRequestService {
 	): Promise<CleanupOutcome> {
 		const dueRequest: DueRequest = {
 			id: request.id,
-			userId: request.userId,
+			requesterUserId: request.requesterUserId,
 			scope: request.scope,
 			organizationId: request.organizationId,
 			type: request.type,
@@ -1063,7 +1072,7 @@ export class DataRequestService {
 		await this.unlinkExportFiles(result.exportFilesToDelete);
 		if (result.outcome !== "skipped") {
 			this.logger.log(
-				`[data-request] ${result.outcome} scope=${request.scope} type=${request.type} id=${request.id} userId=${request.userId} rows=${JSON.stringify(result.stats)}`,
+				`[data-request] ${result.outcome} scope=${request.scope} type=${request.type} id=${request.id} requesterUserId=${request.requesterUserId ?? "-"} rows=${JSON.stringify(result.stats)}`,
 			);
 		}
 		return result.outcome;
@@ -1096,7 +1105,7 @@ export class DataRequestService {
 		});
 		if (
 			!request ||
-			request.userId !== userId ||
+			request.requesterUserId !== userId ||
 			request.type !== "EXPORT" ||
 			request.status !== "COMPLETED" ||
 			request.scope !== domain.scope
@@ -1236,12 +1245,13 @@ export class DataRequestService {
 		>,
 		scope: OrganizationLedgerScope,
 	): Promise<ImpactTotalsDto> {
-		const accounts = await db.account.count({ where: scope });
-		const transactions = await db.transaction.count({ where: scope });
-		const initialHoldings = await db.initialHolding.count({ where: scope });
-		const plans = await db.plan.count({ where: scope });
-		const usageRecords = await db.usageRecord.count({ where: scope });
-		const corrections = await db.correction.count({ where: scope });
+		const where = { organizationId: scope.organizationId };
+		const accounts = await db.account.count({ where });
+		const transactions = await db.transaction.count({ where });
+		const initialHoldings = await db.initialHolding.count({ where });
+		const plans = await db.plan.count({ where });
+		const usageRecords = await db.usageRecord.count({ where });
+		const corrections = await db.correction.count({ where });
 		return {
 			accounts,
 			transactions,
@@ -1259,7 +1269,7 @@ export class DataRequestService {
 	private async expireDownloadableExports(
 		tx: Tx,
 		target: {
-			userId: string;
+			requesterUserId: string;
 			scope: DataRequestScope;
 			organizationId: string | null;
 		},
@@ -1268,7 +1278,7 @@ export class DataRequestService {
 		const domainWhere: Prisma.DataRequestWhereInput =
 			target.scope === "ORGANIZATION"
 				? { scope: "ORGANIZATION", organizationId: target.organizationId }
-				: { scope: "PERSONAL", userId: target.userId };
+				: { scope: "PERSONAL", requesterUserId: target.requesterUserId };
 		const downloadable = await tx.dataRequest.findMany({
 			where: {
 				type: "EXPORT",
@@ -1345,7 +1355,7 @@ export class DataRequestService {
 		try {
 			created = await tx.dataRequest.create({
 				data: {
-					userId,
+					requesterUserId: userId,
 					scope,
 					organizationId,
 					type: "EXPORT",
@@ -1403,6 +1413,7 @@ export class DataRequestService {
 						organization: { select: { name: true } },
 					},
 				}),
+				// @org-scope-exempt: 个人数据导出（DATA-01）按 userId 导出本人全部组织下的个人会话元数据
 				tx.aiConversation.findMany({
 					where: { userId },
 					orderBy: { createdAt: "asc" },
@@ -1413,7 +1424,7 @@ export class DataRequestService {
 					orderBy: { consentedAt: "asc" },
 				}),
 				tx.dataRequest.findMany({
-					where: { userId, scope: "PERSONAL" },
+					where: { requesterUserId: userId, scope: "PERSONAL" },
 					orderBy: { requestedAt: "asc" },
 				}),
 			]);
@@ -1460,15 +1471,16 @@ export class DataRequestService {
 		tx: Tx,
 		organizationId: string,
 	): Promise<OrganizationExportBundleData> {
-		const [organization, settingsRow, preferences, scope] = await Promise.all([
+		const [organization, settingsRow, scope] = await Promise.all([
 			tx.organization.findUniqueOrThrow({
 				where: { id: organizationId },
 				select: { id: true, name: true, createdAt: true },
 			}),
 			tx.organizationSettings.findUnique({ where: { organizationId } }),
-			resolveOrganizationPreferences(tx, organizationId),
 			organizationLedgerScope(tx, organizationId),
 		]);
+		// W30（MIG-F）：OrganizationSettings 是组织偏好的唯一真相（个人设置不再承载
+		// 组织偏好），无组织设置行 = 组织未建账 → 导出不带设置段。
 		const settings: ExportSettingsRow | null = settingsRow
 			? {
 					baseCurrency: settingsRow.baseCurrency,
@@ -1478,49 +1490,40 @@ export class DataRequestService {
 					createdAt: settingsRow.createdAt,
 					updatedAt: settingsRow.updatedAt,
 				}
-			: preferences
-				? {
-						// 兼容窗口回落：偏好值取自默认组织创建者的个人设置（无组织设置行，时间戳留空）
-						baseCurrency: preferences.baseCurrency,
-						prepPreference: preferences.prepPreference,
-						reminderEnabled: preferences.reminderEnabled,
-						ledgerStartedAt: preferences.ledgerStartedAt,
-						createdAt: null,
-						updatedAt: null,
-					}
-				: null;
+			: null;
+		const ledgerWhere = { organizationId: scope.organizationId };
 		// PlanAllocation/UsageLotAllocation 为裸外键（无 relation）：先查作用域内 plan/usage id 再 in 查询
 		const [ownPlans, ownUsages] = await Promise.all([
-			tx.plan.findMany({ where: scope, select: { id: true } }),
-			tx.usageRecord.findMany({ where: scope, select: { id: true } }),
+			tx.plan.findMany({ where: ledgerWhere, select: { id: true } }),
+			tx.usageRecord.findMany({ where: ledgerWhere, select: { id: true } }),
 		]);
 		const planIdFilter = { in: ownPlans.map((p) => p.id) };
 		const usageIdFilter = { in: ownUsages.map((u) => u.id) };
 		const [initialHoldings, transactions, accounts, plans, planAllocations, usageRecords, usageLotAllocations, corrections, dataRequests] =
 			await Promise.all([
 				tx.initialHolding.findMany({
-					where: scope,
+					where: ledgerWhere,
 					orderBy: { confirmedAt: "asc" },
 				}),
 				tx.transaction.findMany({
-					where: scope,
+					where: ledgerWhere,
 					orderBy: { transactedAt: "asc" },
 				}),
-				tx.account.findMany({ where: scope, orderBy: { currencyCode: "asc" } }),
-				tx.plan.findMany({ where: scope, orderBy: { createdAt: "asc" } }),
+				tx.account.findMany({ where: ledgerWhere, orderBy: { currencyCode: "asc" } }),
+				tx.plan.findMany({ where: ledgerWhere, orderBy: { createdAt: "asc" } }),
 				tx.planAllocation.findMany({
 					where: { planId: planIdFilter },
 					orderBy: { createdAt: "asc" },
 				}),
 				tx.usageRecord.findMany({
-					where: scope,
+					where: ledgerWhere,
 					orderBy: { usedAt: "asc" },
 				}),
 				tx.usageLotAllocation.findMany({
 					where: { usageId: usageIdFilter },
 					orderBy: { createdAt: "asc" },
 				}),
-				tx.correction.findMany({ where: scope, orderBy: { createdAt: "asc" } }),
+				tx.correction.findMany({ where: ledgerWhere, orderBy: { createdAt: "asc" } }),
 				tx.dataRequest.findMany({
 					where: { organizationId, scope: "ORGANIZATION" },
 					orderBy: { requestedAt: "asc" },
@@ -1619,7 +1622,7 @@ export class DataRequestService {
 	private async purgeExpiredFiles(userId: string): Promise<void> {
 		const expired = await this.prisma.dataRequest.findMany({
 			where: {
-				userId,
+				requesterUserId: userId,
 				type: "EXPORT",
 				status: "COMPLETED",
 				downloadExpiresAt: { lt: new Date() },

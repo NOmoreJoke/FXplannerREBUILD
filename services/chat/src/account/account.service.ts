@@ -9,10 +9,9 @@ import { getCurrency } from "@fxplanner-new/money";
 import { Prisma, type Account } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import {
-	compatReadWhere,
+	orgWhere,
 	type ReadScope,
 } from "../authorization/organization-scope";
-import { planReservationWhere } from "../authorization/default-organization";
 import { resolveOrganizationPreferences } from "../organization/organization-preferences";
 import {
 	computeRemainingCost,
@@ -78,14 +77,14 @@ export class AccountService {
 
 	/**
 	 * 账户列表（GET /api/accounts，§4.1；W18 组织隔离）：当前组织账户
-	 * （currencyCode 升序）+ 本位币 + 分配汇总。账户查询按组织作用域（组织行
-	 * 跨用户共享 + 兼容窗口 NULL 行仅本人）；baseCurrency 组织设置优先，
-	 * 回落 UserSettings（未迁旧记录兼容）。
+	 * （currencyCode 升序）+ 本位币 + 分配汇总。账户查询按**纯组织作用域**
+	 * （W30 MIG-E/F：账户行属于组织，跨成员共享，无兼容回落分支）；
+	 * baseCurrency 取 OrganizationSettings（组织设置是唯一真相）。
 	 */
 	async list(scope: ReadScope): Promise<AccountListDto> {
 		const [accounts, baseCurrency, allocatedByCurrency] = await Promise.all([
 			this.prisma.account.findMany({
-				where: compatReadWhere(scope),
+				where: orgWhere(scope),
 				orderBy: { currencyCode: "asc" },
 			}),
 			this.resolveBaseCurrency(scope),
@@ -112,11 +111,11 @@ export class AccountService {
 		const [account, baseCurrency, costLots, allocatedByCurrency] =
 			await Promise.all([
 				this.prisma.account.findFirst({
-					where: { currencyCode, ...compatReadWhere(scope) },
+					where: { currencyCode, ...orgWhere(scope) },
 				}),
 				this.resolveBaseCurrency(scope),
 				this.prisma.costLot.findMany({
-					where: { currencyCode, ...compatReadWhere(scope) },
+					where: { currencyCode, ...orgWhere(scope) },
 				}),
 				this.sumAllocatedByCurrencyForUser(scope),
 			]);
@@ -158,14 +157,14 @@ export class AccountService {
 		const { plans, allocations } = await this.prisma.$transaction(
 			async (tx) => {
 				const account = await tx.account.findFirst({
-					where: { currencyCode, ...compatReadWhere(scope) },
+					where: { currencyCode, ...orgWhere(scope) },
 					select: { id: true },
 				});
 				if (!account) {
 					throw new AccountNotFoundException();
 				}
 				const plans = await tx.plan.findMany({
-					where: { targetCurrency: currencyCode, ...compatReadWhere(scope) },
+					where: { targetCurrency: currencyCode, ...orgWhere(scope) },
 					orderBy: { createdAt: "asc" },
 					select: { id: true, name: true, status: true },
 				});
@@ -217,7 +216,7 @@ export class AccountService {
 		const currencyCode = this.normalizeCurrency(currencyCodeRaw);
 		const [account, baseCurrency] = await Promise.all([
 			this.prisma.account.findFirst({
-				where: { currencyCode, ...compatReadWhere(scope) },
+				where: { currencyCode, ...orgWhere(scope) },
 			}),
 			this.resolveBaseCurrency(scope),
 		]);
@@ -226,13 +225,13 @@ export class AccountService {
 		}
 		const [transactions, usageRecords, initialHoldings] = await Promise.all([
 			this.prisma.transaction.findMany({
-				where: { currencyCode, ...compatReadWhere(scope) },
+				where: { currencyCode, ...orgWhere(scope) },
 			}),
 			this.prisma.usageRecord.findMany({
-				where: { currencyCode, ...compatReadWhere(scope) },
+				where: { currencyCode, ...orgWhere(scope) },
 			}),
 			this.prisma.initialHolding.findMany({
-				where: { currencyCode, ...compatReadWhere(scope) },
+				where: { currencyCode, ...orgWhere(scope) },
 			}),
 		]);
 		// USAGE 行成本（M7 落地）：按 usageId 聚合分摊明细（一次 groupBy，禁止循环内查询）
@@ -338,9 +337,8 @@ export class AccountService {
 	private async sumAllocatedByCurrencyForUser(
 		scope: ReadScope,
 	): Promise<Map<string, Prisma.Decimal>> {
-		const reservationOwner = await planReservationWhere(this.prisma, scope);
 		const plans = await this.prisma.plan.findMany({
-			where: reservationOwner,
+			where: orgWhere(scope),
 			select: { id: true, targetCurrency: true },
 		});
 		const allocations =

@@ -13,10 +13,10 @@ import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-	bearer,
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -68,13 +68,13 @@ describe("报告成本摘要联动（集成）", () => {
 	function getPlans(query = "") {
 		return request(app.getHttpServer())
 			.get(`/api/reports/plans${query}`)
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	function getDetail(id: string) {
 		return request(app.getHttpServer())
 			.get(`/api/reports/plans/${id}`)
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	beforeAll(async () => {
@@ -254,7 +254,7 @@ describe("报告成本摘要联动（集成）", () => {
 		// userAdjusted 的 token 访问自己（独立用户隔离主流程断言）
 		const res = await request(app.getHttpServer())
 			.get(`/api/reports/plans/${adjustedPlanId}`)
-			.set(bearer(userAdjusted.accessToken))
+			.set(orgBearer(userAdjusted))
 			.expect(200);
 		const data = res.body.data;
 		expect(data.plan.status).toBe("COMPLETED"); // 调小后不回退状态、无补足提醒语义

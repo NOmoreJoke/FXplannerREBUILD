@@ -12,6 +12,7 @@ import {
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -65,38 +66,38 @@ describe("AccountController（接口）", () => {
 	function getAccounts(user: TestUser) {
 		return request(app.getHttpServer())
 			.get("/api/accounts")
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	function getDetail(user: TestUser, currencyCode: string) {
 		return request(app.getHttpServer())
 			.get(`/api/accounts/${currencyCode}`)
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	function getLedger(user: TestUser, currencyCode: string) {
 		return request(app.getHttpServer())
 			.get(`/api/accounts/${currencyCode}/transactions`)
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	function getAllocations(user: TestUser, currencyCode: string) {
 		return request(app.getHttpServer())
 			.get(`/api/accounts/${currencyCode}/allocations`)
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	function postTx(user: TestUser, body: Record<string, unknown>) {
 		return request(app.getHttpServer())
 			.post("/api/transactions")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(body);
 	}
 
 	function cancelPlan(user: TestUser, planId: string) {
 		return request(app.getHttpServer())
 			.post(`/api/plans/${planId}/cancel`)
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	beforeAll(async () => {
@@ -178,6 +179,30 @@ describe("AccountController（接口）", () => {
 		await request(app.getHttpServer())
 			.get("/api/accounts/CAD/allocations")
 			.expect(401);
+	});
+
+	it("#1b 组织域端点缺 X-Organization-Id → 400 ORGANIZATION_REQUIRED（W30 MIG-D：不再猜唯一默认组织）", async () => {
+		// 仅带 Bearer、刻意不带组织头：兼容窗口已关闭，一律 400 ORGANIZATION_REQUIRED
+		const res = await request(app.getHttpServer())
+			.get("/api/accounts")
+			.set(bearer(userMain.accessToken))
+			.expect(400);
+		expect(res.body.code).toBe("ORGANIZATION_REQUIRED");
+
+		// 非法（非 cuid）组织头同样 400 ORGANIZATION_REQUIRED
+		const malformed = await request(app.getHttpServer())
+			.get("/api/accounts")
+			.set(bearer(userMain.accessToken))
+			.set("X-Organization-Id", "not-a-cuid")
+			.expect(400);
+		expect(malformed.body.code).toBe("ORGANIZATION_REQUIRED");
+
+		// 显式带组织头 → 200（正常业务路径未被破坏）
+		const ok = await request(app.getHttpServer())
+			.get("/api/accounts")
+			.set(orgBearer(userMain))
+			.expect(200);
+		expect(ok.body.success).toBe(true);
 	});
 
 	it("#2 新用户无账户且无 userSettings：200 { baseCurrency: null, accounts: [] }", async () => {
@@ -269,7 +294,8 @@ describe("AccountController（接口）", () => {
 		await ensureAccount(ctx.prisma, userOld.userId, "USD", "0");
 		await ctx.prisma.costLot.create({
 			data: {
-				userId: userOld.userId,
+				// W30（MIG-E）：批次直连组织（organization_id NOT NULL，user_id 列已删）
+				organizationId: userOld.defaultOrganizationId,
 				currencyCode: "USD",
 				sourceType: "PURCHASE",
 				sourceId: `manual-lot-${Date.now()}`,
@@ -320,7 +346,7 @@ describe("AccountController（接口）", () => {
 		// ID 可跳转交易详情（PURCHASE 行即交易 ID）
 		const detail = await request(app.getHttpServer())
 			.get(`/api/transactions/${latest.id}`)
-			.set(bearer(userLedger.accessToken))
+			.set(orgBearer(userLedger))
 			.expect(200);
 		expect(detail.body.data.quantity).toBe("2000.0000");
 	});
@@ -359,7 +385,7 @@ describe("AccountController（接口）", () => {
 		// 使用 1,500：FIFO 先耗 1,020@1 = 1,020 + 480@1 = 480 → 1,500
 		await request(app.getHttpServer())
 			.post(`/api/plans/${planId}/usages`)
-			.set(bearer(userUsage.accessToken))
+			.set(orgBearer(userUsage))
 			.send({
 				amount: "1500",
 				usedAt: new Date().toISOString(),
@@ -487,9 +513,9 @@ describe("AccountController（接口）", () => {
 		};
 
 		// 真实 Plan 查询返回后，等取消接口完成提交，再让分配请求继续读取。
-		// W18 组织隔离：分配明细的 Plan 查询已从 { userId, targetCurrency } 改为
-		// 组织作用域形状（targetCurrency + compatReadWhere OR 分支），钩子按新形状匹配；
-		// 该请求内仅此一处 Plan.findMany（Guard 只查 Membership），匹配仍精确。
+		// W30（MIG-D）：组织作用域查询形状已从 compatReadWhere 的 OR 分支收口为
+		// orgWhere({ organizationId })，钩子按新形状匹配（该请求内仅此一处
+		// Plan.findMany，Guard 只查 Membership），匹配仍精确。
 		let cancelPending = true;
 		ctx.prisma.$use(async (params, next) => {
 			const result = await next(params);
@@ -498,7 +524,7 @@ describe("AccountController（接口）", () => {
 				params.model === "Plan" &&
 				params.action === "findMany" &&
 				params.args.where?.targetCurrency === currency &&
-				Array.isArray(params.args.where?.OR)
+				params.args.where?.organizationId === user.defaultOrganizationId
 			) {
 				cancelPending = false;
 				await cancelPlan(user, planId).expect(200);

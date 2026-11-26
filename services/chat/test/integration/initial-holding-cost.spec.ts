@@ -14,6 +14,7 @@ import {
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -87,7 +88,7 @@ describe("初始持仓成本口径（集成）", () => {
 			.expect(201);
 		const res = await request(app.getHttpServer())
 			.post("/api/onboarding/complete")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				...wizard,
 				baseCurrency,
@@ -133,7 +134,7 @@ describe("初始持仓成本口径（集成）", () => {
 		]);
 
 		const holdings = await ctx.prisma.initialHolding.findMany({
-			where: { userId: user.userId },
+			where: { organizationId: user.defaultOrganizationId },
 		});
 		const byCode = new Map(holdings.map((h) => [h.currencyCode, h]));
 
@@ -162,7 +163,7 @@ describe("初始持仓成本口径（集成）", () => {
 
 		// CostLot 成本批次字段口径 + 收益排除口径标记
 		const lot = await ctx.prisma.costLot.findFirst({
-			where: { userId: user.userId, currencyCode: "SGD" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "SGD" },
 		});
 		expect(lot).not.toBeNull();
 		expect(lot!.sourceType).toBe("INITIAL");
@@ -182,7 +183,7 @@ describe("初始持仓成本口径（集成）", () => {
 		]);
 
 		const holding = await ctx.prisma.initialHolding.findFirst({
-			where: { userId: user.userId, currencyCode: "GBP" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "GBP" },
 		});
 		expect(holding).not.toBeNull();
 		// 100.5 × 150.12345678 = 15087.40741639 → JPY 0 位 HALF_UP → 15087
@@ -202,21 +203,25 @@ describe("初始持仓成本口径（集成）", () => {
 		// 只改 locale（含 baseCurrency 字段会被白名单剥离，见 settings.spec）
 		await request(app.getHttpServer())
 			.patch("/api/settings")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ locale: "en" })
 			.expect(200);
 
-		const settings = await ctx.prisma.userSettings.findUnique({
+		// W30（MIG-F）：baseCurrency 只存于 OrganizationSettings（组织偏好唯一真相）
+		const orgSettings = await ctx.prisma.organizationSettings.findUnique({
+			where: { organizationId: user.defaultOrganizationId },
+		});
+		expect(orgSettings?.baseCurrency).toBe("CNY");
+		const personal = await ctx.prisma.userSettings.findUnique({
 			where: { userId: user.userId },
 		});
-		expect(settings?.baseCurrency).toBe("CNY");
-		expect(settings?.locale).toBe("en");
+		expect(personal?.locale).toBe("en");
 	});
 
 	it("并发补录同币种双请求（P2002）：一个 201 一个 409 INITIAL_HOLDING_EXISTS，批次仅一条（§8.2 行 7）", async () => {
 		await seedRate("CNY", "THB", "0.21");
 		const user = await setupUser("int-cost-d", "CNY");
-		const auth = bearer(user.accessToken);
+		const auth = orgBearer(user);
 		const body = { holdings: [{ currencyCode: "THB", amount: "100.00" }] };
 
 		// 真并发：两个请求同时发出（同币种；预检查都通过，插入时分出胜负）
@@ -237,11 +242,11 @@ describe("初始持仓成本口径（集成）", () => {
 
 		// 批次仅一条、余额按批次汇总恰为单笔
 		const lots = await ctx.prisma.costLot.findMany({
-			where: { userId: user.userId, currencyCode: "THB" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "THB" },
 		});
 		expect(lots).toHaveLength(1);
 		const account = await ctx.prisma.account.findFirst({
-			where: { userId: user.userId, currencyCode: "THB" },
+			where: { organizationId: user.defaultOrganizationId, currencyCode: "THB" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("100.0000");
 	});

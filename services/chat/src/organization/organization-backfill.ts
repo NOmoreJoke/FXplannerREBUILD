@@ -18,9 +18,14 @@
  * prisma/tob-r1-migration/backfill.ts（dry-run 默认，--apply 需双旗标确认）。
  */
 
-import type { PrismaClient, Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 import { resolveDefaultOrganizationId } from "../authorization/default-organization";
 import { defaultOrganizationName } from "./default-organization";
+import {
+	detectMigrationSchemaCapabilities,
+	type MigrationSchemaCapabilities,
+} from "./migration-schema-capabilities";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 type Tx = Prisma.TransactionClient;
@@ -64,6 +69,12 @@ export interface BackfillOptions {
 	userIds?: string[];
 	/** 每个事务处理的用户数（默认 50） */
 	chunkSize?: number;
+	/**
+	 * 库阶段能力（MIG-F 前瞻）；缺省由本函数自行探测。
+	 * MIG-F 删除业务表 `user_id` / `user_settings` legacy 列后，相关回填分支
+	 * 变为 no-op（行已迁完且 organization_id NOT NULL），而不是因「列不存在」崩溃。
+	 */
+	capabilities?: MigrationSchemaCapabilities;
 }
 
 /** 默认分片大小：每用户约 16 条语句，50 用户/片在百毫秒~秒级完成 */
@@ -194,50 +205,14 @@ async function assertNoInitialHoldingConflicts(
 }
 
 /**
- * 幂等回填单个用户的存量个人数据到其默认组织。
- *
- * 仅更新 organization_id IS NULL 的行；created_by_id / actor_user_id 写原 userId
- * （操作者快照）。原生 UPDATE 只触碰租户列——Prisma updateMany 会经 `@updatedAt`
- * 改写 updated_at，违反 §12.2.6「时间戳不改」；MIG-B 相关表上无 updated_at 触发器。
- * SQL 全部静态 + 绑定参数（迁移工具不得留任何拼接面）。
+ * 初始持仓冲突计数（I-2 fail-closed）：默认组织已存在同币种 initial_holdings 行，
+ * 而名下仍有同币种 organization_id IS NULL 存量行时禁止静默合并。
  */
-export async function backfillUserRows(
+async function countInitialHoldingConflicts(
 	tx: Tx,
 	userId: string,
 	organizationId: string,
-): Promise<BackfillSummary["rowsBackfilled"]> {
-	// I-2 双账户行防冲突：先将与默认组织已有 (organization_id, currency_code) 冲突的
-	// NULL 账户余额合并入存活组织行（保留组织行 updated_at）并删去旧 NULL 行，再回填其余 NULL 行
-	const mergedAccounts = Number(
-		await tx.$executeRaw`
-			WITH merged AS (
-				UPDATE accounts org
-				SET balance = org.balance + leg.balance
-				FROM accounts leg
-				WHERE org.organization_id = ${organizationId}
-					AND leg.user_id = ${userId}
-					AND leg.organization_id IS NULL
-					AND org.currency_code = leg.currency_code
-				RETURNING leg.id
-			)
-			DELETE FROM accounts
-			WHERE id IN (SELECT id FROM merged)`,
-	);
-	const updatedAccounts = Number(
-		await tx.$executeRaw`
-			UPDATE accounts
-			SET organization_id = ${organizationId}, created_by_id = ${userId}
-			WHERE user_id = ${userId} AND organization_id IS NULL`,
-	);
-	const accounts = mergedAccounts + updatedAccounts;
-
-	const transactions = Number(
-		await tx.$executeRaw`
-			UPDATE transactions
-			SET organization_id = ${organizationId}, created_by_id = ${userId}
-			WHERE user_id = ${userId} AND organization_id IS NULL`,
-	);
-
+): Promise<number> {
 	// 初始持仓不可静默累加：若默认组织已有同币种记录，fail-closed 阻断
 	const [ihConflict] = await tx.$queryRaw<Array<{ n: bigint }>>`
 		SELECT count(*) AS n
@@ -247,43 +222,18 @@ export async function backfillUserRows(
 			AND org.currency_code = leg.currency_code
 		WHERE leg.user_id = ${userId}
 			AND leg.organization_id IS NULL`;
-	if (Number(ihConflict?.n ?? 0n) > 0) {
-		throw new BackfillAnomalyError(
-			"MIG-B 初始持仓冲突阻断：默认组织已存在同币种 initial_holdings，禁止静默合并",
-			{ initial_holdings_conflict: Number(ihConflict?.n ?? 0n) },
-		);
-	}
-	const initialHoldings = Number(
-		await tx.$executeRaw`
-			UPDATE initial_holdings
-			SET organization_id = ${organizationId}, created_by_id = ${userId}
-			WHERE user_id = ${userId} AND organization_id IS NULL`,
-	);
-	const costLots = Number(
-		await tx.$executeRaw`
-			UPDATE cost_lots
-			SET organization_id = ${organizationId}
-			WHERE user_id = ${userId} AND organization_id IS NULL`,
-	);
-	const plans = Number(
-		await tx.$executeRaw`
-			UPDATE plans
-			SET organization_id = ${organizationId}, created_by_id = ${userId}
-			WHERE user_id = ${userId} AND organization_id IS NULL`,
-	);
-	const usageRecords = Number(
-		await tx.$executeRaw`
-			UPDATE usage_records
-			SET organization_id = ${organizationId}, created_by_id = ${userId}
-			WHERE user_id = ${userId} AND organization_id IS NULL`,
-	);
-	const corrections = Number(
-		await tx.$executeRaw`
-			UPDATE corrections
-			SET organization_id = ${organizationId}, actor_user_id = ${userId}
-			WHERE user_id = ${userId} AND organization_id IS NULL`,
-	);
+	return Number(ihConflict?.n ?? 0n);
+}
 
+/**
+ * 提醒去重保护：若同组织已有同 (dedup_key, scheduled_for) 提醒，先迁移已读态并
+ * 删去冲突 NULL 行；返回被删去的冲突行数。
+ */
+async function dedupeLegacyReminders(
+	tx: Tx,
+	userId: string,
+	organizationId: string,
+): Promise<number> {
 	// 提醒去重保护：若同组织已有同 (dedup_key, scheduled_for) 提醒，先迁移已读态并删去冲突 NULL 行
 	await tx.$executeRaw`
 		INSERT INTO reminder_reads (id, reminder_id, user_id, read_at)
@@ -308,7 +258,7 @@ export async function backfillUserRows(
 			AND leg.organization_id IS NULL
 			AND leg.read_at IS NOT NULL
 		ON CONFLICT (reminder_id, user_id) DO NOTHING`;
-	const dedupedReminders = Number(
+	return Number(
 		await tx.$executeRaw`
 			DELETE FROM reminders leg
 			USING reminders org
@@ -318,23 +268,140 @@ export async function backfillUserRows(
 				AND org.dedup_key = leg.dedup_key
 				AND org.scheduled_for = leg.scheduled_for`,
 	);
-	const updatedReminders = Number(
-		await tx.$executeRaw`
+}
+
+/**
+ * 幂等回填单个用户的存量个人数据到其默认组织。
+ *
+ * 仅更新 organization_id IS NULL 的行；created_by_id / actor_user_id 写原 userId
+ * （操作者快照）。原生 UPDATE 只触碰租户列——Prisma updateMany 会经 `@updatedAt`
+ * 改写 updated_at，违反 §12.2.6「时间戳不改」；MIG-B 相关表上无 updated_at 触发器。
+ * SQL 全部静态 + 绑定参数（迁移工具不得留任何拼接面）。
+ *
+ * MIG-F 前瞻：MIG-F 删除业务表上的冗余 `user_id` 列后，对应表的回填分支变为
+ * no-op（跳过该表、计入 0 行），而不是发出引用已删除列的 SQL。
+ */
+export async function backfillUserRows(
+	tx: Tx,
+	userId: string,
+	organizationId: string,
+	capabilities?: MigrationSchemaCapabilities,
+): Promise<BackfillSummary["rowsBackfilled"]> {
+	// 该表是否仍按 user_id 归属（MIG-F 后无此列 → 该表无需回填）
+	const canBackfill = (table: string): boolean =>
+		capabilities === undefined ||
+		capabilities.legacyUserIdTables.has(table);
+	// 按表开关执行回填语句（MIG-F 后被删列的表恒 0 行）
+	const count = async (table: string, query: Prisma.Sql): Promise<number> =>
+		canBackfill(table) ? Number(await tx.$executeRaw(query)) : 0;
+	// I-2 双账户行防冲突：先将与默认组织已有 (organization_id, currency_code) 冲突的
+	// NULL 账户余额合并入存活组织行（保留组织行 updated_at）并删去旧 NULL 行，再回填其余 NULL 行
+	const mergedAccounts = await count(
+		"accounts",
+		Prisma.sql`
+			WITH merged AS (
+				UPDATE accounts org
+				SET balance = org.balance + leg.balance
+				FROM accounts leg
+				WHERE org.organization_id = ${organizationId}
+					AND leg.user_id = ${userId}
+					AND leg.organization_id IS NULL
+					AND org.currency_code = leg.currency_code
+				RETURNING leg.id
+			)
+			DELETE FROM accounts
+			WHERE id IN (SELECT id FROM merged)`,
+	);
+	const updatedAccounts = await count(
+		"accounts",
+		Prisma.sql`
+			UPDATE accounts
+			SET organization_id = ${organizationId}, created_by_id = ${userId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	const accounts = mergedAccounts + updatedAccounts;
+
+	const transactions = await count(
+		"transactions",
+		Prisma.sql`
+			UPDATE transactions
+			SET organization_id = ${organizationId}, created_by_id = ${userId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+
+	// 初始持仓不可静默累加：若默认组织已有同币种记录，fail-closed 阻断
+	if (canBackfill("initial_holdings")) {
+		const ihConflict = await countInitialHoldingConflicts(
+			tx,
+			userId,
+			organizationId,
+		);
+		if (ihConflict > 0) {
+			throw new BackfillAnomalyError(
+				"MIG-B 初始持仓冲突阻断：默认组织已存在同币种 initial_holdings，禁止静默合并",
+				{ initial_holdings_conflict: ihConflict },
+			);
+		}
+	}
+	const initialHoldings = await count(
+		"initial_holdings",
+		Prisma.sql`
+			UPDATE initial_holdings
+			SET organization_id = ${organizationId}, created_by_id = ${userId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	const costLots = await count(
+		"cost_lots",
+		Prisma.sql`
+			UPDATE cost_lots
+			SET organization_id = ${organizationId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	const plans = await count(
+		"plans",
+		Prisma.sql`
+			UPDATE plans
+			SET organization_id = ${organizationId}, created_by_id = ${userId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	const usageRecords = await count(
+		"usage_records",
+		Prisma.sql`
+			UPDATE usage_records
+			SET organization_id = ${organizationId}, created_by_id = ${userId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	const corrections = await count(
+		"corrections",
+		Prisma.sql`
+			UPDATE corrections
+			SET organization_id = ${organizationId}, actor_user_id = ${userId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+
+	const dedupedReminders = canBackfill("reminders")
+		? await dedupeLegacyReminders(tx, userId, organizationId)
+		: 0;
+	const updatedReminders = await count(
+		"reminders",
+		Prisma.sql`
 			UPDATE reminders
 			SET organization_id = ${organizationId}
 			WHERE user_id = ${userId} AND organization_id IS NULL`,
 	);
 	const reminders = dedupedReminders + updatedReminders;
-	const aiConversations = Number(
-		await tx.$executeRaw`
+	const aiConversations = await count(
+		"ai_conversations",
+		Prisma.sql`
 			UPDATE ai_conversations
 			SET organization_id = ${organizationId}
 			WHERE user_id = ${userId} AND organization_id IS NULL`,
 	);
 	// PlanChangeLog 按父 Plan 校对回填（§12.2.4）：此时该用户全部 Plan 已回填为
 	// 本组织，父缺失行由孤儿预检阻断
-	const planChangeLogs = Number(
-		await tx.$executeRaw`
+	const planChangeLogs = await count(
+		"plans",
+		Prisma.sql`
 			UPDATE plan_change_logs c
 			SET organization_id = ${organizationId}, actor_user_id = ${userId}
 			FROM plans p
@@ -395,6 +462,7 @@ async function rescopeLegacyDataRequests(
 async function backfillUser(
 	tx: Tx,
 	user: { id: string; name: string | null; email: string | null },
+	capabilities: MigrationSchemaCapabilities,
 ): Promise<{
 	organizationId: string;
 	organizationCreated: boolean;
@@ -423,53 +491,83 @@ async function backfillUser(
 	}
 
 	// §12.2.3：UserSettings 有则幂等复制到 OrganizationSettings；无则（含个人偏好占位行 baseCurrency=""）保持待建账
+	// MIG-F 前瞻：MIG-F 删除 user_settings 的 legacy 设置列后，个人设置已无处可读，
+	// 该复制分支变为 no-op（组织设置在 MIG-F 之前已复制完毕）。
 	let settingsCreated = 0;
-	const userSettings = await tx.userSettings.findUnique({
-		where: { userId: user.id },
-	});
-	if (userSettings && userSettings.baseCurrency.trim() !== "") {
-		const existing = await tx.organizationSettings.findUnique({
-			where: { organizationId },
-		});
-		if (!existing) {
-			await tx.organizationSettings.create({
-				data: {
-					organizationId,
-					baseCurrency: userSettings.baseCurrency,
-					prepPreference: userSettings.prepPreference,
-					reminderEnabled: userSettings.reminderEnabled,
-					ledgerStartedAt: userSettings.ledgerStartedAt,
-				},
+	if (capabilities.hasUserSettingsLegacyColumns) {
+		const [userSettings] = await tx.$queryRaw<
+			Array<{
+				baseCurrency: string;
+				prepPreference: string;
+				reminderEnabled: boolean;
+				ledgerStartedAt: Date | null;
+			}>
+		>`
+			SELECT
+				base_currency AS "baseCurrency",
+				prep_preference AS "prepPreference",
+				reminder_enabled AS "reminderEnabled",
+				ledger_started_at AS "ledgerStartedAt"
+			FROM user_settings
+			WHERE user_id = ${user.id}
+			LIMIT 1`;
+		if (userSettings && userSettings.baseCurrency.trim() !== "") {
+			const existing = await tx.organizationSettings.findUnique({
+				where: { organizationId },
 			});
-			settingsCreated = 1;
+			if (!existing) {
+				await tx.organizationSettings.create({
+					data: {
+						organizationId,
+						baseCurrency: userSettings.baseCurrency,
+						prepPreference: userSettings.prepPreference,
+						reminderEnabled: userSettings.reminderEnabled,
+						ledgerStartedAt: userSettings.ledgerStartedAt,
+					},
+				});
+				settingsCreated = 1;
+			}
 		}
 	}
 
-	const rows = await backfillUserRows(tx, user.id, organizationId);
-
-	// §12.2.5（LEDGER-03）：已读提醒回填成员级 ReminderRead（唯一约束兜底，重复不重建）
-	const readReminders = await tx.reminder.findMany({
-		where: { userId: user.id, readAt: { not: null } },
-		select: { id: true, userId: true, readAt: true },
-	});
-	let reminderReadsCreated = 0;
-	if (readReminders.length > 0) {
-		const created = await tx.reminderRead.createMany({
-			data: readReminders.map((r) => ({
-				reminderId: r.id,
-				userId: r.userId,
-				readAt: r.readAt as Date,
-			})),
-			skipDuplicates: true,
-		});
-		reminderReadsCreated = created.count;
-	}
-
-	const dataRequestsRescoped = await rescopeLegacyDataRequests(
+	const rows = await backfillUserRows(
 		tx,
 		user.id,
 		organizationId,
+		capabilities,
 	);
+
+	// §12.2.5（LEDGER-03）：已读提醒回填成员级 ReminderRead（唯一约束兜底，重复不重建）
+	// MIG-F 前瞻：MIG-F 删除 reminders.read_at 后，已读态只由 reminder_reads 承载，
+	// 该回填分支变为 no-op；`reminders.user_id` 同时被删时亦不可按用户过滤，
+	// 故两个条件**同时**成立才执行（与 dry-run 估算分支同口径，对抗审 R1-N1）。
+	let reminderReadsCreated = 0;
+	if (
+		capabilities.hasReminderReadAtColumn &&
+		capabilities.legacyUserIdTables.has("reminders")
+	) {
+		const readReminders = await tx.$queryRaw<
+			Array<{ id: string; userId: string; readAt: Date }>
+		>`
+			SELECT id, user_id AS "userId", read_at AS "readAt"
+			FROM reminders
+			WHERE user_id = ${user.id} AND read_at IS NOT NULL`;
+		if (readReminders.length > 0) {
+			const created = await tx.reminderRead.createMany({
+				data: readReminders.map((r) => ({
+					reminderId: r.id,
+					userId: r.userId,
+					readAt: r.readAt,
+				})),
+				skipDuplicates: true,
+			});
+			reminderReadsCreated = created.count;
+		}
+	}
+
+	const dataRequestsRescoped = capabilities.legacyUserIdTables.has("data_requests")
+		? await rescopeLegacyDataRequests(tx, user.id, organizationId)
+		: 0;
 
 	return {
 		organizationId,
@@ -479,6 +577,109 @@ async function backfillUser(
 		reminderReadsCreated,
 		dataRequestsRescoped,
 	};
+}
+
+/**
+ * 共享账本表「待回填存量行」的原生 SQL 计数（`organization_id IS NULL`）。
+ *
+ * 为什么用**原生 SQL**而不是 Prisma 类型化 `count({ where: { organizationId: null } })`：
+ * MIG-E 之后 `organization_id` 是必填 `String`，Prisma 客户端会对
+ * `organizationId: null` 直接抛 `Argument organizationId must not be null`
+ * ——**即使目标库仍是 pre-MIG-E 的可空列**。原生 SQL 不经 Prisma 类型检查，
+ * 因此同一份 CLI：
+ * - 跑 pre-MIG-E 库 → 估出真实的待回填行数（迁移期 dry-run 的核心用途）；
+ * - 跑 post-MIG-F 库 → 列已 NOT NULL，恒为 0（且不会因列已删而报 column does not exist）。
+ *
+ * 分片变体带 `user_id = ANY(...)`：仅在目标表**仍有** `user_id` 列（pre-MIG-F）时
+ * 使用——post-MIG-F 库上该列已删，不能出现在 SQL 里（Postgres 在解析期解析列名，
+ * 即便 CASE 为假也会报 column does not exist，故必须分语句而非拼条件）。
+ *
+ * SQL 纪律：静态语句 + 绑定参数；表名/列名均为源码内字面量，不拼接外部输入。
+ */
+type LegacyCountRow = { n: bigint };
+type LegacyCountDb = Pick<Db, "$queryRaw">;
+
+const LEGACY_ROW_COUNT = {
+	accounts: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM accounts WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM accounts WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	transactions: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM transactions WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM transactions WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	initial_holdings: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM initial_holdings WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM initial_holdings WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	cost_lots: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM cost_lots WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM cost_lots WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	plans: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM plans WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM plans WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	usage_records: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM usage_records WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM usage_records WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	corrections: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM corrections WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM corrections WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	reminders: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM reminders WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM reminders WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+	ai_conversations: {
+		base: (db: LegacyCountDb) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM ai_conversations WHERE organization_id IS NULL`,
+		byUser: (db: LegacyCountDb, ids: string[]) =>
+			db.$queryRaw<LegacyCountRow[]>`SELECT count(*) AS n FROM ai_conversations WHERE organization_id IS NULL AND user_id = ANY(${ids}::text[])`,
+	},
+} as const;
+
+type LegacyCountTable = keyof typeof LEGACY_ROW_COUNT;
+
+/**
+ * 统计某表「待回填的存量行」（organization_id IS NULL）。
+ *
+ * - 目标表仍有 `user_id` 列（pre-MIG-F）→ 分片时按 user_id 限定；
+ * - 分片时若无 `user_id` 列（post-MIG-F），退化为全表计数——此时该列已 NOT NULL，
+ *   结果恒为 0，分片语义无影响。
+ */
+async function countLegacyRows(
+	db: LegacyCountDb,
+	table: LegacyCountTable,
+	options: {
+		capabilities: MigrationSchemaCapabilities;
+		shardIds: string[];
+	},
+): Promise<number> {
+	const statements = LEGACY_ROW_COUNT[table];
+	const hasUserId = options.capabilities.legacyUserIdTables.has(table);
+	const useShard = options.shardIds.length > 0 && hasUserId;
+	const rows = useShard
+		? await statements.byUser(db, options.shardIds)
+		: await statements.base(db);
+	return Number(rows[0]?.n ?? 0n);
 }
 
 function emptyRows(): BackfillSummary["rowsBackfilled"] {
@@ -532,7 +733,22 @@ export async function backfillDefaultOrganizations(
 ): Promise<BackfillSummary> {
 	// 孤儿预检在任何写入之前（全库只读），失败即阻断且零写入
 	await assertNoOrphanRows(prisma);
-	await assertNoInitialHoldingConflicts(prisma, options.userIds);
+
+	// MIG-F 前瞻：探测库阶段。MIG-F 删除业务表 `user_id` 与 `user_settings` legacy 列后，
+	// 依赖这些列的回填/估算分支全部变为 no-op，而不是因「列不存在」崩溃。
+	// 探测必须**先于**任何引用 legacy 列的语句（对抗审 R1-I1）：冲突预检的 SQL
+	// 引用 `initial_holdings.user_id`，MIG-F 后该列已删 → 先跑会直接报
+	// `column leg.user_id does not exist`。
+	const capabilities =
+		options.capabilities ??
+		(await detectMigrationSchemaCapabilities(prisma));
+
+	// 冲突初始持仓预检只在 `initial_holdings.user_id` 仍在时才有意义：
+	// MIG-F 后存量行已迁完且 organization_id NOT NULL，不存在「NULL 存量行」可冲突，
+	// 该预检降级为 no-op（而不是引用已删除列崩溃）。
+	if (capabilities.legacyUserIdTables.has("initial_holdings")) {
+		await assertNoInitialHoldingConflicts(prisma, options.userIds);
+	}
 
 	const userWhere = options.userIds ? { id: { in: options.userIds } } : {};
 	const sharded = options.userIds !== undefined;
@@ -542,8 +758,7 @@ export async function backfillDefaultOrganizations(
 		orderBy: { id: "asc" },
 	});
 	const userIds = users.map((user) => user.id);
-	const userScope = sharded ? { userId: { in: userIds } } : {};
-
+	// 待回填行的过滤条件：MIG-F 前按 user_id 限定分片；MIG-F 后该列已删，只剩
 	const summary: BackfillSummary = {
 		usersProcessed: users.length,
 		organizationsCreated: 0,
@@ -585,109 +800,106 @@ export async function backfillDefaultOrganizations(
 		summary.ownerMembershipsCreated = summary.organizationsCreated;
 
 		// 待回填行：organizationId IS NULL 的用户行
-		const legacyRows = { organizationId: null, ...userScope };
-		summary.rowsBackfilled.accounts = await prisma.account.count({
-			where: legacyRows,
-		});
-		summary.rowsBackfilled.transactions = await prisma.transaction.count({
-			where: legacyRows,
-		});
-		summary.rowsBackfilled.initialHoldings =
-			await prisma.initialHolding.count({ where: legacyRows });
-		summary.rowsBackfilled.costLots = await prisma.costLot.count({
-			where: legacyRows,
-		});
-		summary.rowsBackfilled.plans = await prisma.plan.count({
-			where: legacyRows,
-		});
-		summary.rowsBackfilled.usageRecords = await prisma.usageRecord.count({
-			where: legacyRows,
-		});
-		summary.rowsBackfilled.corrections = await prisma.correction.count({
-			where: legacyRows,
-		});
-		summary.rowsBackfilled.reminders = await prisma.reminder.count({
-			where: legacyRows,
-		});
-		summary.rowsBackfilled.aiConversations =
-			await prisma.aiConversation.count({ where: legacyRows });
+		// MIG-F 前瞻：MIG-F 后各表无 user_id 列 → 只按 organization_id IS NULL 统计
+		// （此时该列已 NOT NULL，结果恒为 0）
+		summary.rowsBackfilled.accounts = await countLegacyRows(prisma, "accounts", { capabilities, shardIds });
+		summary.rowsBackfilled.transactions = await countLegacyRows(prisma, "transactions", { capabilities, shardIds });
+		summary.rowsBackfilled.initialHoldings = await countLegacyRows(prisma, "initial_holdings", { capabilities, shardIds });
+		summary.rowsBackfilled.costLots = await countLegacyRows(prisma, "cost_lots", { capabilities, shardIds });
+		summary.rowsBackfilled.plans = await countLegacyRows(prisma, "plans", { capabilities, shardIds });
+		summary.rowsBackfilled.usageRecords = await countLegacyRows(prisma, "usage_records", { capabilities, shardIds });
+		summary.rowsBackfilled.corrections = await countLegacyRows(prisma, "corrections", { capabilities, shardIds });
+		summary.rowsBackfilled.reminders = await countLegacyRows(prisma, "reminders", { capabilities, shardIds });
+		summary.rowsBackfilled.aiConversations = await countLegacyRows(prisma, "ai_conversations", { capabilities, shardIds });
 		// PlanChangeLog 无 userId 列：经父 Plan 归属。与 backfillUserRows 的写入条件逐项
 		// 一致——父计划尚未挂组织，或已挂该用户的默认组织（回填重跑）；父计划已挂其他
 		// 组织的变更日志不会被写入，也不计入（评审 R2-I05）。defaults CTE 与
 		// resolveDefaultOrganizationId 同口径，改一处须同步另一处
-		const [changeLogs] = await prisma.$queryRaw<Array<{ n: bigint }>>`
-			WITH first_members AS (
-				SELECT DISTINCT ON (m.organization_id)
-					m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
-				FROM memberships m
-				ORDER BY m.organization_id, m.created_at ASC, m.id ASC
-			),
-			defaults AS (
-				SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
-				FROM first_members f
-				JOIN organizations o ON o.id = f.organization_id
-				WHERE f.created_at = o.created_at
-				ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
-			)
-			SELECT count(*) AS n
-			FROM plan_change_logs c
-			JOIN plans p ON p.id = c.plan_id
-			LEFT JOIN defaults d ON d.user_id = p.user_id
-			WHERE c.organization_id IS NULL
-				AND (p.organization_id IS NULL OR p.organization_id = d.organization_id)
-				AND (NOT ${sharded} OR p.user_id = ANY(${shardIds}::text[]))`;
-		summary.rowsBackfilled.planChangeLogs = Number(changeLogs?.n ?? 0n);
+		// MIG-F 前瞻：plans 无 user_id 列 → 该估算分支 no-op（恒 0 行）
+		if (capabilities.legacyUserIdTables.has("plans")) {
+			const [changeLogs] = await prisma.$queryRaw<Array<{ n: bigint }>>`
+				WITH first_members AS (
+					SELECT DISTINCT ON (m.organization_id)
+						m.organization_id, m.user_id, m.created_at, m.id
+					FROM memberships m
+					ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+				),
+				defaults AS (
+					SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+					FROM first_members f
+					JOIN organizations o ON o.id = f.organization_id
+					WHERE f.created_at = o.created_at
+					ORDER BY f.user_id, f.created_at ASC, f.id ASC
+				)
+				SELECT count(*) AS n
+				FROM plan_change_logs c
+				JOIN plans p ON p.id = c.plan_id
+				LEFT JOIN defaults d ON d.user_id = p.user_id
+				WHERE c.organization_id IS NULL
+					AND (p.organization_id IS NULL OR p.organization_id = d.organization_id)
+					AND (NOT ${sharded} OR p.user_id = ANY(${shardIds}::text[]))`;
+			summary.rowsBackfilled.planChangeLogs = Number(changeLogs?.n ?? 0n);
+		}
 		// 待映射数据请求：与 rescopeLegacyDataRequests 的写入条件逐项一致——
 		// EXPORT/DELETION 且非 PERSONAL；历史 CLEAR 一律映射（含 scope 已是
 		// ORGANIZATION 但尚未挂组织的行，此前漏计，评审 R2-I05）
-		summary.dataRequestsRescoped = await prisma.dataRequest.count({
-			where: {
-				organizationId: null,
-				...userScope,
-				OR: [
-					{
-						type: { in: ["EXPORT", "DELETION"] },
-						scope: { not: "PERSONAL" },
-					},
-					{ type: "CLEAR" },
-				],
-			},
-		});
+		// MIG-F 前瞻：data_requests.user_id 被重命名 → 该估算分支 no-op
+		if (capabilities.legacyUserIdTables.has("data_requests")) {
+			const [pendingRequests] = await prisma.$queryRaw<Array<{ n: bigint }>>`
+				SELECT count(*) AS n
+				FROM data_requests
+				WHERE organization_id IS NULL
+					AND (
+						(type IN ('EXPORT', 'DELETION') AND scope <> 'PERSONAL')
+						OR type = 'CLEAR'
+					)
+					AND (NOT ${sharded} OR user_id = ANY(${shardIds}::text[]))`;
+			summary.dataRequestsRescoped = Number(pendingRequests?.n ?? 0n);
+		}
 		// 待补建的已读行：行主已读、但尚无**行主本人**的成员级已读行（与真实写入的
 		// createMany 条件及 reconcileMigration 的 reminder_read.parity 同口径；
 		// 此前用「无任何已读行」估算，他人已读时会漏计，评审 R2-I05）
-		const [readParity] = await prisma.$queryRaw<Array<{ n: bigint }>>`
-			SELECT count(*) AS n FROM reminders r
-			WHERE r.read_at IS NOT NULL
-				AND NOT EXISTS (
-					SELECT 1 FROM reminder_reads rr
-					WHERE rr.reminder_id = r.id AND rr.user_id = r.user_id)
-				AND (NOT ${sharded} OR r.user_id = ANY(${shardIds}::text[]))`;
-		summary.reminderReadsCreated = Number(readParity?.n ?? 0n);
+		// MIG-F 前瞻：reminders.read_at 已删 → 该估算分支 no-op
+		if (
+			capabilities.hasReminderReadAtColumn &&
+			capabilities.legacyUserIdTables.has("reminders")
+		) {
+			const [readParity] = await prisma.$queryRaw<Array<{ n: bigint }>>`
+				SELECT count(*) AS n FROM reminders r
+				WHERE r.read_at IS NOT NULL
+					AND NOT EXISTS (
+						SELECT 1 FROM reminder_reads rr
+						WHERE rr.reminder_id = r.id AND rr.user_id = r.user_id)
+					AND (NOT ${sharded} OR r.user_id = ANY(${shardIds}::text[]))`;
+			summary.reminderReadsCreated = Number(readParity?.n ?? 0n);
+		}
 		// 待补建的组织设置：有个人设置、而（尚不存在的）默认组织无组织设置。
 		// defaults CTE 与 resolveDefaultOrganizationId 同口径（用户创建的最早组织：
 		// 组织的第一个成员且成员关系与组织同事务创建），改一处须同步另一处
-		const [settingsToCreate] = await prisma.$queryRaw<Array<{ n: bigint }>>`
-			WITH first_members AS (
-				SELECT DISTINCT ON (m.organization_id)
-					m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
-				FROM memberships m
-				ORDER BY m.organization_id, m.created_at ASC, m.id ASC
-			),
-			defaults AS (
-				SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
-				FROM first_members f
-				JOIN organizations o ON o.id = f.organization_id
-				WHERE f.created_at = o.created_at
-				ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
-			)
-			SELECT count(*) AS n FROM user_settings s
-			LEFT JOIN defaults d ON d.user_id = s.user_id
-			LEFT JOIN organization_settings o ON o.organization_id = d.organization_id
-			WHERE o.organization_id IS NULL
-				AND COALESCE(btrim(s.base_currency), '') <> ''
-				AND (NOT ${sharded} OR s.user_id = ANY(${shardIds}::text[]))`;
-		summary.organizationSettingsCreated = Number(settingsToCreate?.n ?? 0n);
+		// MIG-F 前瞻：user_settings legacy 设置列已删 → 该估算分支 no-op
+		if (capabilities.hasUserSettingsLegacyColumns) {
+			const [settingsToCreate] = await prisma.$queryRaw<Array<{ n: bigint }>>`
+				WITH first_members AS (
+					SELECT DISTINCT ON (m.organization_id)
+						m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
+					FROM memberships m
+					ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+				),
+				defaults AS (
+					SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+					FROM first_members f
+					JOIN organizations o ON o.id = f.organization_id
+					WHERE f.created_at = o.created_at
+					ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
+				)
+				SELECT count(*) AS n FROM user_settings s
+				LEFT JOIN defaults d ON d.user_id = s.user_id
+				LEFT JOIN organization_settings o ON o.organization_id = d.organization_id
+				WHERE o.organization_id IS NULL
+					AND COALESCE(btrim(s.base_currency), '') <> ''
+					AND (NOT ${sharded} OR s.user_id = ANY(${shardIds}::text[]))`;
+			summary.organizationSettingsCreated = Number(settingsToCreate?.n ?? 0n);
+		}
 		return summary;
 	}
 
@@ -700,7 +912,7 @@ export async function backfillDefaultOrganizations(
 		await prisma.$transaction(
 			async (tx) => {
 				for (const user of userChunk) {
-					const result = await backfillUser(tx, user);
+					const result = await backfillUser(tx, user, capabilities);
 					if (result.organizationCreated) {
 						summary.organizationsCreated += 1;
 						summary.ownerMembershipsCreated += 1;

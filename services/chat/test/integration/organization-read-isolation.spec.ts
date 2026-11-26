@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	cleanupUser,
 	createTestApp,
+	deleteOrganizationsCascadeLedger,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -13,6 +14,7 @@ import { ensureOnboarded } from "../helpers/onboarding-helper";
 import { backfillDefaultOrganizations } from "../../src/organization/organization-backfill";
 import { reconcileMigration } from "../../src/organization/organization-reconcile";
 import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
+import { PrismaService } from "../../src/prisma/prisma.service";
 
 /**
  * 组织只读隔离集成测试（GOAL-3A W18；技术方案 §14.2 通用矩阵 + 需求 15.2.11）
@@ -82,45 +84,12 @@ describe("组织只读隔离（integration）", () => {
 	});
 
 	afterAll(async () => {
-		// 派生行先清（裸外键），再组织级联、用户级联
-		for (const orgId of orgIds) {
-			const plans = await ctx.prisma.plan.findMany({
-				where: { organizationId: orgId },
-				select: { id: true },
-			});
-			const usages = await ctx.prisma.usageRecord.findMany({
-				where: { organizationId: orgId },
-				select: { id: true },
-			});
-			const lots = await ctx.prisma.costLot.findMany({
-				where: { organizationId: orgId },
-				select: { id: true },
-			});
-			// 裸外键派生行按 ID 集合先清（UsageLotAllocation 无 relation）
-			await ctx.prisma.usageLotAllocation.deleteMany({
-				where: {
-					OR: [
-						...(usages.length > 0
-							? [{ usageId: { in: usages.map((u) => u.id) } }]
-							: []),
-						...(lots.length > 0
-							? [{ lotId: { in: lots.map((l) => l.id) } }]
-							: []),
-					],
-				},
-			});
-			await ctx.prisma.usageRecord.deleteMany({
-				where: { organizationId: orgId },
-			});
-			await ctx.prisma.planAllocation.deleteMany({
-				where: { planId: { in: plans.map((p) => p.id) } },
-			});
-			await ctx.prisma.planInstallment.deleteMany({
-				where: { planId: { in: plans.map((p) => p.id) } },
-			});
-			await ctx.prisma.auditLog.deleteMany({ where: { organizationId: orgId } });
-			await ctx.prisma.organization.delete({ where: { id: orgId } }).catch(() => {});
-		}
+		// W30（MIG-E）：账本表直连 organizations（ON DELETE RESTRICT）——删组织前
+		// 必须按「子 → 父」顺序清掉全部账本子表
+		await ctx.prisma.$transaction(async (tx) => {
+			await deleteOrganizationsCascadeLedger(tx, orgIds);
+			await tx.organization.deleteMany({ where: { id: { in: orgIds } } });
+		});
 		for (const userId of userIds) {
 			await cleanupUser(ctx.prisma, userId);
 		}
@@ -137,11 +106,16 @@ describe("组织只读隔离（integration）", () => {
 			.post("/api/auth/login")
 			.send({ email, password: TEST_PASSWORD })
 			.expect(200);
+		const userId: string = login.body.data.user.id;
+		const defaultMembership = await ctx.prisma.membership.findFirstOrThrow({
+			where: { userId, role: "OWNER", status: "ACTIVE" },
+		});
 		const user: TestUser = {
 			email,
 			password: TEST_PASSWORD,
 			accessToken: login.body.data.accessToken,
-			userId: login.body.data.user.id,
+			userId,
+			defaultOrganizationId: defaultMembership.organizationId,
 		};
 		userIds.push(user.userId);
 		return user;
@@ -193,10 +167,10 @@ describe("组织只读隔离（integration）", () => {
 			},
 		});
 
-		// Org A 业务数据（DB 直造，organizationId 显式 = orgA；模拟 MIG-B 后组织行）
+		// Org A 业务数据（DB 直造，organizationId 显式 = orgA）
+		// W30（MIG-E）：共享账本表已删除 user_id 列，直连 organizations
 		await ctx.prisma.account.create({
 			data: {
-				userId: u1.userId,
 				organizationId: orgA,
 				createdById: u1.userId,
 				currencyCode: "USD",
@@ -205,7 +179,6 @@ describe("组织只读隔离（integration）", () => {
 		});
 		planA = await ctx.prisma.plan.create({
 			data: {
-				userId: u1.userId,
 				organizationId: orgA,
 				createdById: u1.userId,
 				targetCurrency: "USD",
@@ -221,7 +194,6 @@ describe("组织只读隔离（integration）", () => {
 		});
 		txnA = await ctx.prisma.transaction.create({
 			data: {
-				userId: u1.userId,
 				organizationId: orgA,
 				createdById: u1.userId,
 				currencyCode: "USD",
@@ -237,7 +209,6 @@ describe("组织只读隔离（integration）", () => {
 		});
 		await ctx.prisma.costLot.create({
 			data: {
-				userId: u1.userId,
 				organizationId: orgA,
 				currencyCode: "USD",
 				sourceType: "PURCHASE",
@@ -251,7 +222,6 @@ describe("组织只读隔离（integration）", () => {
 		});
 		usageA = await ctx.prisma.usageRecord.create({
 			data: {
-				userId: u1.userId,
 				organizationId: orgA,
 				createdById: u1.userId,
 				planId: planA.id,
@@ -262,7 +232,6 @@ describe("组织只读隔离（integration）", () => {
 		});
 		await ctx.prisma.correction.create({
 			data: {
-				userId: u1.userId,
 				organizationId: orgA,
 				actorUserId: u1.userId,
 				targetType: "TRANSACTION",
@@ -466,19 +435,9 @@ describe("组织只读隔离（integration）", () => {
 		}
 	});
 
-	it("5. 单组织用户无头请求回落默认组织（兼容窗口正路径）", async () => {
-		// u2 已禁用后重新激活（保持单组织）；U3 单组织 Owner
-		const res = await request(app.getHttpServer())
-			.get("/api/accounts")
-			.set(hdr(u3))
-			.expect(200);
-		expect(res.body.data.accounts).toHaveLength(0); // Org B 无数据但不 400
-		const plans = await request(app.getHttpServer())
-			.get("/api/plans")
-			.set(hdr(u3))
-			.expect(200);
-		expect(plans.body.data.items).toHaveLength(0);
-	});
+	// 5. 「单组织用户无头请求回落默认组织（兼容窗口正路径）」已删除：
+	// W30（MIG-D）关闭兼容窗口——组织域端点缺 X-Organization-Id 一律 400
+	// ORGANIZATION_REQUIRED（见用例 3），不再回落默认组织。
 });
 
 /** UTC+8 日初（提醒规则的业务日口径） */
@@ -505,11 +464,16 @@ async function registerR2User(
 		.post("/api/auth/login")
 		.send({ email, password: TEST_PASSWORD })
 		.expect(200);
+	const userId: string = login.body.data.user.id;
+	const defaultMembership = await app.get(PrismaService).membership.findFirstOrThrow({
+		where: { userId, role: "OWNER", status: "ACTIVE" },
+	});
 	const user: TestUser = {
 		email,
 		password: TEST_PASSWORD,
 		accessToken: login.body.data.accessToken,
-		userId: login.body.data.user.id,
+		userId,
+		defaultOrganizationId: defaultMembership.organizationId,
 	};
 	userIds.push(user.userId);
 	return user;
@@ -572,11 +536,16 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 			.post("/api/auth/login")
 			.send({ email, password: TEST_PASSWORD })
 			.expect(200);
+		const userId: string = login.body.data.user.id;
+		const defaultMembership = await ctx.prisma.membership.findFirstOrThrow({
+			where: { userId, role: "OWNER", status: "ACTIVE" },
+		});
 		const user: TestUser = {
 			email,
 			password: TEST_PASSWORD,
 			accessToken: login.body.data.accessToken,
-			userId: login.body.data.user.id,
+			userId,
+			defaultOrganizationId: defaultMembership.organizationId,
 		};
 		userIds.push(user.userId);
 		return user;
@@ -590,7 +559,6 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 	): Promise<string> {
 		const plan = await ctx.prisma.plan.create({
 			data: {
-				userId: u1.userId,
 				organizationId,
 				createdById: u1.userId,
 				targetCurrency: "USD",
@@ -628,17 +596,38 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 		await ctx.prisma.membership.create({
 			data: { organizationId: orgA, userId: u2.userId, role: "VIEWER", status: "ACTIVE" },
 		});
-		await ensureOnboarded(ctx.prisma, u1.userId, "CNY", null, { legacyOnly: true });
-		// 旧写路径产生的存量行（organizationId IS NULL）：仅在默认组织 A 可见
+		// W30（MIG-F）：组织偏好唯一真相 = OrganizationSettings（无 OWNER_LEGACY 回落）
+		await ensureOnboarded(ctx.prisma, u1.userId, "CNY");
+		// W30（MIG-E）：organization_id NOT NULL——「存量 NULL 行」不再存在，
+		// 默认组织 A 的行一律是组织行（跨成员共享，跨组织隔离）
 		await ctx.prisma.account.create({
-			data: { userId: u1.userId, currencyCode: "USD", balance: "100.0000" },
+			data: {
+				organizationId: orgA,
+				createdById: u1.userId,
+				currencyCode: "USD",
+				balance: "12.0000",
+			},
+		});
+		const legacyHolding = await ctx.prisma.initialHolding.create({
+			data: {
+				organizationId: orgA,
+				createdById: u1.userId,
+				currencyCode: "USD",
+				amount: "12.0000",
+				rate: "7.0000000000",
+				rawRate: "7.0000000000",
+				rateSource: "fixture",
+				rateObservedAt: utc8Midday(-50),
+				cost: "84.0000",
+				confirmedAt: utc8Midday(-50),
+			},
 		});
 		await ctx.prisma.costLot.create({
 			data: {
-				userId: u1.userId,
+				organizationId: orgA,
 				currencyCode: "USD",
 				sourceType: "INITIAL",
-				sourceId: `legacy-${Date.now()}`,
+				sourceId: legacyHolding.id,
 				quantity: "12.0000",
 				remainingQty: "12.0000",
 				unitCost: "7.0000000000",
@@ -666,36 +655,29 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 		await ctx.prisma.membership.create({
 			data: { organizationId: orgC, userId: u1.userId, role: "FINANCE", status: "ACTIVE" },
 		});
-		await ensureOnboarded(ctx.prisma, u3.userId, "CNY", null, { legacyOnly: true });
+		await ensureOnboarded(ctx.prisma, u3.userId, "CNY");
 		await ctx.prisma.account.create({
 			data: {
-				userId: u3.userId,
 				organizationId: orgC,
+				createdById: u3.userId,
 				currencyCode: "USD",
 				balance: "500.0000",
 			},
 		});
-		// R1 I-4：两个组织都不得有 OrganizationSettings —— I-08 / I-10 必须真正跑在
-		// OWNER_LEGACY 回落路径上（一旦回落分支失效，这两条用例会立刻挂）
-		expect(
-			await ctx.prisma.organizationSettings.count({
-				where: { organizationId: { in: [orgA, orgC] } },
-			}),
-		).toBe(0);
 	}, 30_000);
 
 	afterAll(async () => {
-		await ctx.prisma.auditLog.deleteMany({
-			where: { organizationId: { in: orgIds } },
+		await ctx.prisma.$transaction(async (tx) => {
+			await deleteOrganizationsCascadeLedger(tx, orgIds);
+			await tx.organization.deleteMany({ where: { id: { in: orgIds } } });
 		});
-		await ctx.prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
 		for (const userId of userIds) {
 			await cleanupUser(ctx.prisma, userId);
 		}
 		await app.close();
 	});
 
-	it("I-08：默认组织内可见自己的存量 NULL 行与个人设置（回落正路径不变）", async () => {
+	it("I-08：默认组织内可见自己的组织行与组织偏好（组织偏好只认 OrganizationSettings）", async () => {
 		const accounts = await request(app.getHttpServer())
 			.get("/api/accounts")
 			.set(headers(u1, orgA))
@@ -703,7 +685,7 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 		const usd = accounts.body.data.accounts.find(
 			(item: { currencyCode: string }) => item.currencyCode === "USD",
 		);
-		expect(usd.balance).toBe("100.0000");
+		expect(usd.balance).toBe("12.0000");
 		expect(accounts.body.data.baseCurrency).toBe("CNY");
 
 		const state = await request(app.getHttpServer())
@@ -714,7 +696,7 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 		expect(state.body.data.hasAccounts).toBe(true);
 	});
 
-	it("I-08：用户新建的组织 B 不渗入其存量 NULL 行与个人设置", async () => {
+	it("I-08：用户新建的组织 B 不渗入默认组织 A 的行与组织偏好", async () => {
 		const accounts = await request(app.getHttpServer())
 			.get("/api/accounts")
 			.set(headers(u1, orgB))
@@ -775,7 +757,7 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 		expect(byId.get(orgC)).toMatchObject({ onboardingCompleted: true, baseCurrency: "CNY" });
 	});
 
-	it("I-08：受邀加入的组织 C 不混入个人 NULL 行——不产生重复币种、不混算余额与持仓", async () => {
+	it("I-08：受邀加入的组织 C 不混入默认组织 A 的行——不产生重复币种、不混算余额与持仓", async () => {
 		const accounts = await request(app.getHttpServer())
 			.get("/api/accounts")
 			.set(headers(u1, orgC))
@@ -791,7 +773,7 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 			.set(headers(u1, orgC))
 			.expect(200);
 		expect(detail.body.data.balance).toBe("500.0000");
-		expect(detail.body.data.remainingTotalCost).toBeNull(); // C 无批次；不得带出 U1 的 NULL 批次
+		expect(detail.body.data.remainingTotalCost).toBeNull(); // C 无批次；不得带出 A 的批次
 
 		const portfolio = await request(app.getHttpServer())
 			.get("/api/home/portfolio")
@@ -832,16 +814,18 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 		planA1 = await seedPlan(orgA, installmentDay, utc8Midday(20));
 		const reminder = await ctx.prisma.reminder.create({
 			data: {
-				userId: u1.userId,
 				organizationId: orgA,
 				planId: planA1,
 				type: "PREP_DUE",
 				dedupKey: `review-read-${Date.now()}`,
 				scheduledFor: installmentDay,
-				readAt: new Date(), // 行主 U1 已读
 			},
 		});
 		ownerReadReminderId = reminder.id;
+		// W30（MIG-F）：共享 Reminder.readAt 列已删——已读态只落成员级 ReminderRead
+		await ctx.prisma.reminderRead.create({
+			data: { reminderId: reminder.id, userId: u1.userId, readAt: new Date() },
+		});
 
 		// 行主本人：已读且不在近 30 天窗口 → 不再出现
 		const ownerList = await request(app.getHttpServer())
@@ -864,9 +848,12 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 		expect(forViewer.readAt).toBeNull();
 		expect(viewerList.body.data.unreadCount).toBeGreaterThanOrEqual(1);
 
-		// 行主的已读态未被成员的读取改动
-		const row = await ctx.prisma.reminder.findUnique({ where: { id: ownerReadReminderId } });
-		expect(row?.readAt).not.toBeNull();
+		// 行主的已读态未被成员的读取改动（已读态只在成员级 ReminderRead）
+		const reads = await ctx.prisma.reminderRead.findMany({
+			where: { reminderId: ownerReadReminderId },
+			select: { userId: true },
+		});
+		expect(reads.map((read) => read.userId)).toEqual([u1.userId]);
 	});
 
 	it("I-11：提醒生成按当前组织作用域——读组织 C 不会为组织 A 的计划生成提醒", async () => {
@@ -893,7 +880,6 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 		expect(generated.length).toBeGreaterThanOrEqual(1);
 		for (const row of generated) {
 			expect(row.organizationId).toBe(orgA);
-			expect(row.userId).toBe(u1.userId);
 		}
 	});
 });
@@ -901,11 +887,13 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 /**
  * 外部评审 R2 回归（R2-I02）：三个只读 @Post 预览端点的读作用域。
  *
- * 修复前三个预览只把 user.id 传给服务，BusinessOrgScopeGuard 形同虚设：
+ * 修复前三个预览只把 user.id 传给服务，组织作用域守卫形同虚设：
  * - 携带其他组织头仍按本人 userId 直查 → 带出本人别的组织的余额 caps / 账本重放（IDOR）；
  * - 受邀成员按自己的 userId 查 → 目标 404 或按自己的空账本计算。
- * 修复后预览与业务 GET 同口径：目标归属、账户/计划/账本行按 compatReadWhere(scope)，
+ * 修复后预览与业务 GET 同口径：目标归属、账户/计划/账本行按纯组织作用域（orgWhere），
  * 本位币取组织偏好（resolveOrganizationPreferences）。
+ * W30（MIG-D/E/F）：兼容窗口关闭——无「存量 NULL 行」，预览与业务 GET 一律按
+ * 当前组织口径。
  *
  * 构造：Org A（Owner U1，默认组织、个人本位币 CNY；组织行 USD 账户 1000 + 计划分配 200
  * + 两笔买入；另有一条仅本人在默认组织可见的存量 NULL 行 EUR 300）；U2 为 A 的 FINANCE；
@@ -938,7 +926,12 @@ describe("R2 回归：只读预览端点按组织作用域读取（R2-I02）", (
 		prepLeadDays: 3,
 		pacePreference: "balanced",
 	});
-	const post = (url: string, user: TestUser, org: string, body: unknown) =>
+	const post = (
+		url: string,
+		user: TestUser,
+		org: string,
+		body: Record<string, unknown>,
+	) =>
 		request(app.getHttpServer()).post(url).set(headers(user, org)).send(body);
 	const registerUser = (label: string) => registerR2User(app, label, userIds);
 
@@ -949,7 +942,6 @@ describe("R2 回归：只读预览端点按组织作用域读取（R2-I02）", (
 	): Promise<{ id: string }> {
 		return ctx.prisma.transaction.create({
 			data: {
-				userId: ownerA.userId,
 				organizationId: orgA,
 				createdById: ownerA.userId,
 				currencyCode: "USD",
@@ -980,7 +972,6 @@ describe("R2 回归：只读预览端点按组织作用域读取（R2-I02）", (
 		await ensureOnboarded(ctx.prisma, ownerA.userId, "CNY");
 		await ctx.prisma.account.create({
 			data: {
-				userId: ownerA.userId,
 				organizationId: orgA,
 				createdById: ownerA.userId,
 				currencyCode: "USD",
@@ -989,7 +980,6 @@ describe("R2 回归：只读预览端点按组织作用域读取（R2-I02）", (
 		});
 		planA = await ctx.prisma.plan.create({
 			data: {
-				userId: ownerA.userId,
 				organizationId: orgA,
 				createdById: ownerA.userId,
 				targetCurrency: "USD",
@@ -1007,9 +997,15 @@ describe("R2 回归：只读预览端点按组织作用域读取（R2-I02）", (
 		// 账本事件合计 = 账户余额 1000（600 + 400）：重放余额与分配 200 自洽，不触发 V2' 拦截
 		txnA = await seedPurchase("600.0000", "4320.0000");
 		await seedPurchase("400.0000", "2880.0000");
-		// 存量 NULL 行（旧写路径）：逻辑上属默认组织 A，且仅本人可见
+		// W30（MIG-E）：organization_id NOT NULL——不存在「仅本人可见的存量 NULL 行」，
+		// EUR 账户是组织 A 的组织行（跨成员共享、跨组织隔离）
 		await ctx.prisma.account.create({
-			data: { userId: ownerA.userId, currencyCode: "EUR", balance: "300.0000" },
+			data: {
+				organizationId: orgA,
+				createdById: ownerA.userId,
+				currencyCode: "EUR",
+				balance: "300.0000",
+			},
 		});
 
 		// Org B：U1 新建的空组织（未建账）
@@ -1030,17 +1026,17 @@ describe("R2 回归：只读预览端点按组织作用域读取（R2-I02）", (
 	}, 30_000);
 
 	afterAll(async () => {
-		await ctx.prisma.auditLog.deleteMany({
-			where: { organizationId: { in: orgIds } },
+		await ctx.prisma.$transaction(async (tx) => {
+			await deleteOrganizationsCascadeLedger(tx, orgIds);
+			await tx.organization.deleteMany({ where: { id: { in: orgIds } } });
 		});
-		await ctx.prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
 		for (const userId of userIds) {
 			await cleanupUser(ctx.prisma, userId);
 		}
 		await app.close();
 	});
 
-	it("R2-I02：带 Org B 头做排期预览，不带出 Org A 的余额 caps 与存量 NULL 行", async () => {
+	it("R2-I02：带 Org B 头做排期预览，不带出 Org A 的余额 caps（跨组织不串账）", async () => {
 		const inB = await post("/api/plans/schedule-preview", ownerA, orgB, scheduleBody("USD")).expect(
 			200,
 		);
@@ -1049,7 +1045,7 @@ describe("R2 回归：只读预览端点按组织作用域读取（R2-I02）", (
 			allocatableBalance: "0.0000",
 			maxAllocatable: "0.0000",
 		});
-		// 存量 NULL 行（EUR 300）逻辑上属默认组织 A：在 B 的上下文同样不可见
+		// 组织 A 的 EUR 300 账户：在 B 的上下文同样不可见
 		const inBNull = await post(
 			"/api/plans/schedule-preview",
 			ownerA,
@@ -1078,7 +1074,7 @@ describe("R2 回归：只读预览端点按组织作用域读取（R2-I02）", (
 		expect(res.body.data).toBeUndefined();
 	});
 
-	it("对照：所有者在默认组织 A 内的三个预览不变（组织行 + 本人存量 NULL 行均可见）", async () => {
+	it("对照：所有者在默认组织 A 内的三个预览不变（组织行均可见）", async () => {
 		const schedule = await post(
 			"/api/plans/schedule-preview",
 			ownerA,
@@ -1089,7 +1085,7 @@ describe("R2 回归：只读预览端点按组织作用域读取（R2-I02）", (
 			allocatableBalance: "800.0000", // 1000 − 计划分配 200
 			maxAllocatable: "100.0000", // min(800, 还需准备 100)
 		});
-		// 本人存量 NULL 行在默认组织上下文可见
+		// 组织 A 的 EUR 账户在默认组织上下文可见
 		const legacy = await post(
 			"/api/plans/schedule-preview",
 			ownerA,
@@ -1132,7 +1128,7 @@ describe("R2 回归：只读预览端点按组织作用域读取（R2-I02）", (
 		expect(correction.body.data.after.totalCost).toBe("4330.0000");
 	});
 
-	it("R2-I02：受邀 FINANCE 成员的排期预览按组织账本计算——不是自己的空账本，也不含行主的存量 NULL 行", async () => {
+	it("R2-I02：受邀 FINANCE 成员的排期预览按组织账本计算——不是自己的空账本，组织行跨成员共享", async () => {
 		const schedule = await post(
 			"/api/plans/schedule-preview",
 			financeA,
@@ -1144,14 +1140,14 @@ describe("R2 回归：只读预览端点按组织作用域读取（R2-I02）", (
 			allocatableBalance: "800.0000",
 			maxAllocatable: "100.0000",
 		});
-		// 行主的 NULL 行仅本人可见：成员在 A 看不到 EUR 300
+		// 组织 A 的 EUR 300 对同组织成员同样可见（组织行跨成员共享）
 		const legacy = await post(
 			"/api/plans/schedule-preview",
 			financeA,
 			orgA,
 			scheduleBody("EUR"),
 		).expect(200);
-		expect(legacy.body.data.caps.allocatableBalance).toBe("0.0000");
+		expect(legacy.body.data.caps.allocatableBalance).toBe("300.0000");
 	});
 
 	it("R2-I02：受邀 FINANCE 成员可对组织的计划做修改预览，caps 取组织账户余额", async () => {
@@ -1231,19 +1227,24 @@ describe("R2 回归：所有权转移后默认组织不漂移（R2-I03）", () =
 		successorB = await registerR2User(app, "drift-successor", userIds);
 		memberF = await registerR2User(app, "drift-member", userIds);
 
-		// 组织 A：A 的默认组织，已建账但设置仍是个人设置（无 OrganizationSettings）
+		// 组织 A：A 的默认组织，已建账且有自己的 OrganizationSettings
+		// （W30 MIG-F：组织偏好唯一真相 = OrganizationSettings，无 OWNER_LEGACY 回落）
 		orgA = await trackDefaultOrg(ctx.prisma, ownerA.userId, orgIds);
-		await ensureOnboarded(ctx.prisma, ownerA.userId, "CNY", null, {
-			legacyOnly: true,
-		});
+		await ensureOnboarded(ctx.prisma, ownerA.userId, "CNY");
 		await ctx.prisma.membership.create({
 			data: { organizationId: orgA, userId: successorB.userId, role: "ADMIN", status: "ACTIVE" },
 		});
 		await ctx.prisma.membership.create({
 			data: { organizationId: orgA, userId: memberF.userId, role: "FINANCE", status: "ACTIVE" },
 		});
+		// W30（MIG-E）：organization_id NOT NULL——A 的行是组织 A 的组织行
 		const legacy = await ctx.prisma.account.create({
-			data: { userId: ownerA.userId, currencyCode: "EUR", balance: "300.0000" },
+			data: {
+				organizationId: orgA,
+				createdById: ownerA.userId,
+				currencyCode: "EUR",
+				balance: "300.0000",
+			},
 		});
 		legacyAccountId = legacy.id;
 
@@ -1261,10 +1262,10 @@ describe("R2 回归：所有权转移后默认组织不漂移（R2-I03）", () =
 	}, 30_000);
 
 	afterAll(async () => {
-		await ctx.prisma.auditLog.deleteMany({
-			where: { organizationId: { in: orgIds } },
+		await ctx.prisma.$transaction(async (tx) => {
+			await deleteOrganizationsCascadeLedger(tx, orgIds);
+			await tx.organization.deleteMany({ where: { id: { in: orgIds } } });
 		});
-		await ctx.prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
 		for (const userId of userIds) {
 			await cleanupUser(ctx.prisma, userId);
 		}
@@ -1290,7 +1291,7 @@ describe("R2 回归：所有权转移后默认组织不漂移（R2-I03）", () =
 		expect(successorDefault).not.toBe(orgA);
 	});
 
-	it("R2-I03：转移前基线——组织 A 靠原所有者个人设置回落为已建账；组织 C 未建账", async () => {
+	it("R2-I03：转移前基线——组织 A 已有自己的组织设置（已建账）；组织 C 未建账", async () => {
 		expect(await current(ownerA, orgA)).toMatchObject({
 			onboardingCompleted: true,
 			baseCurrency: "CNY",
@@ -1299,12 +1300,12 @@ describe("R2 回归：所有权转移后默认组织不漂移（R2-I03）", () =
 			onboardingCompleted: false,
 			baseCurrency: null,
 		});
-		// A 的存量 NULL 行在默认组织 A 的上下文里对 A 本人可见
+		// A 的组织行在默认组织 A 的上下文里对 A 本人可见
 		const accounts = await get("/api/accounts", ownerA, orgA).expect(200);
 		expect(accounts.body.data.accounts).toEqual([usd]);
 	});
 
-	it("R2-I03：转移后——组织 A 固化自己的设置，原所有者的默认组织仍是 A，组织 C 不继承", async () => {
+	it("R2-I03：转移后——组织 A 保留自己的组织设置，原所有者的默认组织仍是 A，组织 C 不继承", async () => {
 		const successorMembership = await ctx.prisma.membership.findFirstOrThrow({
 			where: { organizationId: orgA, userId: successorB.userId },
 		});
@@ -1323,7 +1324,7 @@ describe("R2 回归：所有权转移后默认组织不漂移（R2-I03）", () =
 		});
 		const settings = await get("/api/settings", memberF, orgA).expect(200);
 		expect(settings.body.data.baseCurrency).toBe("CNY");
-		// 组织 A 的偏好已是组织自己的行，不再依赖任何人的个人设置；审计留痕
+		// 组织 A 的偏好是组织自己的行，不依赖任何人的个人设置；审计留痕
 		expect(
 			await ctx.prisma.organizationSettings.findUnique({ where: { organizationId: orgA } }),
 		).toMatchObject({ baseCurrency: "CNY" });
@@ -1331,7 +1332,7 @@ describe("R2 回归：所有权转移后默认组织不漂移（R2-I03）", () =
 			where: { organizationId: orgA, action: "owner.transfer" },
 			orderBy: { createdAt: "desc" },
 		});
-		expect(audit?.detail).toMatchObject({ settingsMaterialized: true });
+		expect(audit).not.toBeNull();
 
 		// 原所有者（现为 ADMIN）：默认组织仍是 A，自己的存量 NULL 行留在原处
 		expect(await resolveDefaultOrganizationId(db, ownerA.userId)).toBe(orgA);
@@ -1366,7 +1367,7 @@ describe("R2 回归：所有权转移后默认组织不漂移（R2-I03）", () =
 		});
 	});
 
-	it("R2-I03：MIG-B 重跑把原所有者的存量行归回组织 A，而不是他后建的组织 C", async () => {
+	it("R2-I03：MIG-B 重跑不搬动原所有者的组织行——仍留在组织 A，而不是他后建的组织 C", async () => {
 		const run = await backfillDefaultOrganizations(db, { userIds: [ownerA.userId] });
 		expect(run.organizationsCreated).toBe(0);
 		expect(
@@ -1381,7 +1382,7 @@ describe("R2 回归：所有权转移后默认组织不漂移（R2-I03）", () =
 		});
 	});
 
-	it("R2-I03：组织已有自己的设置时，再转移不重复固化（不覆盖组织设置）", async () => {
+	it("R2-I03：组织已有自己的设置时，再转移不覆盖组织设置", async () => {
 		// 模拟组织化写路径已独立修改过组织设置：转移不得用任何人的个人设置覆盖
 		await db.organizationSettings.update({
 			where: { organizationId: orgA },
@@ -1400,7 +1401,7 @@ describe("R2 回归：所有权转移后默认组织不漂移（R2-I03）", () =
 			where: { organizationId: orgA, action: "owner.transfer" },
 			orderBy: { createdAt: "desc" },
 		});
-		expect(audit?.detail).toMatchObject({ settingsMaterialized: false });
+		expect(audit).not.toBeNull();
 		expect(await current(ownerA, orgA)).toMatchObject({
 			role: "OWNER",
 			baseCurrency: "USD",

@@ -11,10 +11,10 @@ import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { AuditService } from "../../src/audit/audit.service";
 import {
-	bearer,
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -89,20 +89,20 @@ describe("UsageController（接口）", () => {
 	) {
 		return request(app.getHttpServer())
 			.post(`/api/plans/${planId}/usages`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(body);
 	}
 
 	function getUsages(user: TestUser, planId: string) {
 		return request(app.getHttpServer())
 			.get(`/api/plans/${planId}/usages`)
-			.set(bearer(user.accessToken));
+			.set(orgBearer(user));
 	}
 
 	function postTx(user: TestUser, body: Record<string, unknown>) {
 		return request(app.getHttpServer())
 			.post("/api/transactions")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send(body);
 	}
 
@@ -270,7 +270,7 @@ describe("UsageController（接口）", () => {
 		// 本次不记账（需求 §7）：记录数不变、余额与 usedAmount 不变
 		expect(await ctx.prisma.usageRecord.count()).toBe(before);
 		const account = await ctx.prisma.account.findFirst({
-			where: { userId: userErr.userId, currencyCode: "USD" },
+			where: { organizationId: userErr.defaultOrganizationId, currencyCode: "USD" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("10000.0000");
 		const allocation = await ctx.prisma.planAllocation.findUnique({
@@ -364,7 +364,7 @@ describe("UsageController（接口）", () => {
 		}).expect(404);
 		const nonexistent = await request(app.getHttpServer())
 			.post("/api/plans/nonexistent-plan-id/usages")
-			.set(bearer(userOther.accessToken))
+			.set(orgBearer(userOther))
 			.send({ amount: "1", usedAt: todayIso() })
 			.expect(404);
 		expect(byOther.body.code).toBe("PLAN_NOT_FOUND");
@@ -450,7 +450,7 @@ describe("UsageController（接口）", () => {
 		});
 		const before = await request(app.getHttpServer())
 			.get(`/api/plans/${planId}`)
-			.set(bearer(userDetail.accessToken))
+			.set(orgBearer(userDetail))
 			.expect(200);
 		expect(before.body.data.stillNeeded).toBe("1000.0000");
 		expect(before.body.data.fundStatus).toBe("PREPARING");
@@ -462,7 +462,7 @@ describe("UsageController（接口）", () => {
 		}).expect(201);
 		const afterPartial = await request(app.getHttpServer())
 			.get(`/api/plans/${planId}`)
-			.set(bearer(userDetail.accessToken))
+			.set(orgBearer(userDetail))
 			.expect(200);
 		expect(afterPartial.body.data.stillNeeded).toBe("500.0000");
 		expect(afterPartial.body.data.fundStatus).toBe("PREPARING"); // 仍有缺口
@@ -479,7 +479,7 @@ describe("UsageController（接口）", () => {
 		}).expect(201);
 		const afterUsedUp = await request(app.getHttpServer())
 			.get(`/api/plans/${planUp}`)
-			.set(bearer(userUp.accessToken))
+			.set(orgBearer(userUp))
 			.expect(200);
 		expect(afterUsedUp.body.data.stillNeeded).toBe("0.0000");
 		expect(afterUsedUp.body.data.fundStatus).toBe("USED_UP");
@@ -516,7 +516,7 @@ describe("未建账写入口防线（BE-03 回归）", () => {
 	it("未建账建计划 → 409 ONBOARDING_NOT_COMPLETED，message 指向 /onboarding", async () => {
 		const res = await request(app.getHttpServer())
 			.post("/api/plans")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				targetCurrency: "USD",
 				targetAmount: "1000",
@@ -532,7 +532,7 @@ describe("未建账写入口防线（BE-03 回归）", () => {
 	it("未建账录交易 → 409 同码同引导", async () => {
 		const res = await request(app.getHttpServer())
 			.post("/api/transactions")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				currencyCode: "USD",
 				principalAmount: "1000.00",
@@ -548,7 +548,7 @@ describe("未建账写入口防线（BE-03 回归）", () => {
 	it("未建账记使用 → 409 优先于计划 404（引导建账而非泄露不存在）", async () => {
 		const res = await request(app.getHttpServer())
 			.post("/api/plans/tx-nonexistent-plan/usages")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ amount: "1", usedAt: todayIso() })
 			.expect(409);
 		expect(res.body.code).toBe("ONBOARDING_NOT_COMPLETED");
@@ -559,7 +559,7 @@ describe("未建账写入口防线（BE-03 回归）", () => {
 		await ensureOnboarded(ctx.prisma, user.userId);
 		const res = await request(app.getHttpServer())
 			.post("/api/plans")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({
 				targetCurrency: "USD",
 				targetAmount: "1000",
@@ -932,14 +932,13 @@ describe("ToB R1 W24：Usage 写接口 Actor 化 + 权限矩阵 + 跨组织隔�
 		expect(snapshot.usages).toEqual([
 			expect.objectContaining({
 				id: usageId,
-				userId: finance2.userId,
 				createdById: finance2.userId,
 				organizationId: org.orgId,
 			}),
 		]);
-		expect(snapshot.lots.map((lot) => lot.userId)).toEqual([
-			finance1.userId,
-			finance1.userId,
+		expect(snapshot.lots.map((lot) => lot.organizationId)).toEqual([
+			org.orgId,
+			org.orgId,
 		]);
 		// 按来源批次比对剩余量（不依赖行 id 字典序）：买入一 1,000 全耗，买入二只耗 200
 		const remainingBySource = new Map(

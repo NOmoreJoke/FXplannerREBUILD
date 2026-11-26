@@ -6,6 +6,7 @@ import type { components } from "../../clients/chat-web/lib/api/schema.gen";
 import {
 	api,
 	injectLoginCookie,
+	resolveOrganizationId,
 	seedOnboarding,
 	seedPlanWithAllocation,
 	seedRegisterAndLogin,
@@ -39,12 +40,15 @@ type Schemas = components["schemas"];
 async function seedUnknownFeePurchase(
 	token: string,
 	currencyCode: string,
+	organizationId?: string,
 ): Promise<string> {
+	const orgId = await resolveOrganizationId(token, organizationId);
 	const res = await localFetch(buildApiUrl(API_URL, "/api/transactions"), {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${token}`,
+			"X-Organization-Id": orgId,
 		},
 		body: JSON.stringify({
 			currencyCode,
@@ -73,8 +77,12 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 		logger.setupPageListeners(page);
 
 		const user = await seedRegisterAndLogin(`corr-fee-${Date.now()}`);
-		await seedOnboarding(user.accessToken, "CNY");
-		const transactionId = await seedUnknownFeePurchase(user.accessToken, "HKD");
+		await seedOnboarding(user.accessToken, "CNY", user.defaultOrganizationId);
+		const transactionId = await seedUnknownFeePurchase(
+			user.accessToken,
+			"HKD",
+			user.defaultOrganizationId,
+		);
 		await injectLoginCookie(page.context(), user.accessToken, BASE_URL);
 
 		// 交易详情 → 更正入口
@@ -141,9 +149,19 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 		logger.setupPageListeners(page);
 
 		const user = await seedRegisterAndLogin(`corr-swap-${Date.now()}`);
-		await seedOnboarding(user.accessToken, "CNY");
-		const transactionId = await seedUnknownFeePurchase(user.accessToken, "CAD");
-		await seedPlanWithAllocation(user.accessToken, "CAD", "1000");
+		await seedOnboarding(user.accessToken, "CNY", user.defaultOrganizationId);
+		const transactionId = await seedUnknownFeePurchase(
+			user.accessToken,
+			"CAD",
+			user.defaultOrganizationId,
+		);
+		await seedPlanWithAllocation(
+			user.accessToken,
+			"CAD",
+			"1000",
+			undefined,
+			user.defaultOrganizationId,
+		);
 		await injectLoginCookie(page.context(), user.accessToken, BASE_URL);
 
 		await page.goto(`${BASE_URL}/transactions/${transactionId}`);
@@ -203,6 +221,7 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 				headers: {
 					"Content-Type": "application/json",
 					Authorization: `Bearer ${user.accessToken}`,
+					"X-Organization-Id": user.defaultOrganizationId,
 				},
 				body: JSON.stringify({
 					baseCurrency: "CNY",
@@ -259,14 +278,20 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 		logger.log("action", "info", "开始：使用更正改小全流程");
 		logger.setupPageListeners(page);
 
-		const { accessToken: token } = await seedRegisterAndLogin(
+		const { accessToken: token, defaultOrganizationId } = await seedRegisterAndLogin(
 			`corr-usage-${Date.now()}`,
 		);
-		await seedOnboarding(token, "CNY");
+		await seedOnboarding(token, "CNY", defaultOrganizationId);
 		// 先买入 7,800 CAD（汇率 1），再分配 3,000，使用 800 后余额 7,000。
-		await seedTransaction(token, "CAD", "7800");
-		const planId = await seedPlanWithAllocation(token, "CAD", "3000");
-		const usage = await seedUsage(token, planId, "800");
+		await seedTransaction(token, "CAD", "7800", defaultOrganizationId);
+		const planId = await seedPlanWithAllocation(
+			token,
+			"CAD",
+			"3000",
+			undefined,
+			defaultOrganizationId,
+		);
+		const usage = await seedUsage(token, planId, "800", defaultOrganizationId);
 		await injectLoginCookie(page.context(), token, BASE_URL);
 
 		const planPath = `/plans/${planId}`;
@@ -356,7 +381,11 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 		expect(applyResponse.status()).toBe(201);
 
 		// 提交成功后独立读取账本、计划分配和版本历史。
-		const read = { method: "GET", token };
+		const read = {
+			method: "GET",
+			token,
+			headers: { "X-Organization-Id": defaultOrganizationId },
+		};
 		const [ledger, target, history, account, allocations] = await Promise.all([
 			api<Schemas["UsageListRespDto"]>(`/api/plans/${planId}/usages`, read),
 			api<Schemas["CorrectionTargetDto"]>(
@@ -411,10 +440,26 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 
 	test("W6-03: 使用更正资金来源变化须重新预览并确认", async ({ page }) => {
 		const user = await seedRegisterAndLogin(`corr-usage-impact-${Date.now()}`);
-		await seedOnboarding(user.accessToken, "CNY");
-		await seedTransaction(user.accessToken, "CAD", "7800");
-		const planId = await seedPlanWithAllocation(user.accessToken, "CAD", "3000");
-		const { id: usageId } = await seedUsage(user.accessToken, planId, "800");
+		await seedOnboarding(user.accessToken, "CNY", user.defaultOrganizationId);
+		await seedTransaction(
+			user.accessToken,
+			"CAD",
+			"7800",
+			user.defaultOrganizationId,
+		);
+		const planId = await seedPlanWithAllocation(
+			user.accessToken,
+			"CAD",
+			"3000",
+			undefined,
+			user.defaultOrganizationId,
+		);
+		const { id: usageId } = await seedUsage(
+			user.accessToken,
+			planId,
+			"800",
+			user.defaultOrganizationId,
+		);
 		await injectLoginCookie(page.context(), user.accessToken, BASE_URL);
 		await page.goto(`${BASE_URL}/corrections/new?targetType=USAGE&targetId=${usageId}`);
 
@@ -426,7 +471,12 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 		await expect(page.getByText("从本计划剩余分配使用 1800.0000 CAD", { exact: true })).toBeVisible();
 		await expect(page.getByText("未分配余额 0.0000 CAD", { exact: true })).toBeVisible();
 
-		await seedUsage(user.accessToken, planId, "800");
+		await seedUsage(
+			user.accessToken,
+			planId,
+			"800",
+			user.defaultOrganizationId,
+		);
 		const staleResponse = page.waitForResponse(
 			(response) => response.url().endsWith("/api/corrections") && response.request().method() === "POST",
 		);
@@ -447,7 +497,11 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 		expect(applied.status()).toBe(201);
 		await expect(page).toHaveURL(`${BASE_URL}/plans/${planId}`);
 		const query = new URLSearchParams({ targetType: "USAGE", targetId: usageId });
-		const auth = { method: "GET", token: user.accessToken };
+		const auth = {
+			method: "GET",
+			token: user.accessToken,
+			headers: { "X-Organization-Id": user.defaultOrganizationId },
+		};
 		const { target } = await api<{ target: { version: number; amount: string } }>(
 			`/api/corrections/target?${query}`, auth,
 		);
@@ -475,12 +529,14 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 		const correctedUsedAt = `${purchaseDay}T00:00:00.000Z`;
 		const reason = "实际使用日期是买入当天";
 
-		await seedOnboarding(token);
+		const orgHeaders = { "X-Organization-Id": user.defaultOrganizationId };
+		await seedOnboarding(token, "CNY", user.defaultOrganizationId);
 		// 让前一日通过起点校验，确保验证的是 FIFO 缺口。
 		await setTestLedgerStart(user, new Date(`${previousDay}T00:00:00+08:00`));
 		await api("/api/transactions", {
 			method: "POST",
 			token,
+			headers: orgHeaders,
 			body: {
 				currencyCode: "CAD",
 				principalAmount: "2000",
@@ -490,12 +546,19 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 				transactedAt: `${purchaseDay}T11:00:00.000Z`,
 			},
 		});
-		const planId = await seedPlanWithAllocation(token, "CAD", "800");
+		const planId = await seedPlanWithAllocation(
+			token,
+			"CAD",
+			"800",
+			undefined,
+			user.defaultOrganizationId,
+		);
 		const { usage } = await api<{ usage: { id: string } }>(
 			`/api/plans/${planId}/usages`,
 			{
 				method: "POST",
 				token,
+				headers: orgHeaders,
 				body: { amount: "500", usedAt: originalUsedAt },
 			},
 		);
@@ -506,7 +569,7 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 		const getTarget = async () =>
 			(await api<{ target: { version: number; usedAt: string } }>(
 				`/api/corrections/target?${targetQuery}`,
-				{ method: "GET", token },
+				{ method: "GET", token, headers: orgHeaders },
 			)).target;
 
 		await injectLoginCookie(page.context(), token, BASE_URL);
@@ -546,6 +609,7 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 		const { items } = await api<{ items: unknown[] }>(`/api/plans/${planId}/usages`, {
 			method: "GET",
 			token,
+			headers: orgHeaders,
 		});
 		expect(items).toEqual([
 			expect.objectContaining({
@@ -558,6 +622,7 @@ test.describe("【更正与日志】交易/初始持仓更正", () => {
 		const history = await api<{ items: unknown[] }>(`/api/corrections?${targetQuery}`, {
 			method: "GET",
 			token,
+			headers: orgHeaders,
 		});
 		expect(history.items).toEqual([
 			expect.objectContaining({ status: "APPLIED", reason }),

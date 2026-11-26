@@ -23,6 +23,7 @@ import {
 	cleanupUser,
 	createTestApp,
 	createTestUser,
+	orgBearer,
 	type TestContext,
 	type TestUser,
 } from "../helpers/test-app";
@@ -331,7 +332,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 
 		const res = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: longContent })
 			.expect(200);
 
@@ -382,7 +383,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		scriptHolder.steps = [textReply("首轮回答")];
 		const first = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "第一轮问题" })
 			.expect(200);
 		const conversationId = (
@@ -392,7 +393,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		scriptHolder.steps = [textReply("第二轮回答")];
 		const second = await request(app.getHttpServer())
 			.post(`/api/ai/conversations/${conversationId}/messages`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "第二轮问题" })
 			.expect(200);
 		expect(parseSse(second.text).at(-1)?.event).toBe("done");
@@ -445,7 +446,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		scriptHolder.steps = [textReply("五点五回复")];
 		const res = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "用 GPT-5.5 回答", modelKey: "gpt-5.5" })
 			.expect(200);
 
@@ -467,7 +468,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		scriptHolder.steps = [textReply("默认模型回复")];
 		const res = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "用默认模型回答" })
 			.expect(200);
 
@@ -485,7 +486,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		// 白名单语义层 400 才是 { code: "AI_MODEL_UNKNOWN" }（service 兜底兜「合法字符但非白名单」）
 		const res = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "超长 key", modelKey: "a".repeat(65) })
 			.expect(400);
 		expect(JSON.stringify(res.body.message)).toContain("modelKey 最长 64 字符");
@@ -495,7 +496,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		scriptHolder.steps = [textReply("首轮")];
 		const first = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "首轮问题" })
 			.expect(200);
 		const conversationId = (
@@ -506,7 +507,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		scriptHolder.steps = [textReply("claude 回复")];
 		const ok = await request(app.getHttpServer())
 			.post(`/api/ai/conversations/${conversationId}/messages`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "追问", modelKey: "claude-sonnet-4-6" })
 			.expect(200);
 		expect(scriptHolder.shared.modelKeys.at(-1)).toBe("claude-sonnet-4-6");
@@ -520,7 +521,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		});
 		const bad = await request(app.getHttpServer())
 			.post(`/api/ai/conversations/${conversationId}/messages`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "非法追问", modelKey: "claude-3-opus" })
 			.expect(400);
 		expect(bad.body.code).toBe("AI_MODEL_UNKNOWN");
@@ -534,7 +535,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		scriptHolder.steps = [textReply("新回复")];
 		const res = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "混合存量用例" })
 			.expect(200);
 		const frames = parseSse(res.text);
@@ -553,7 +554,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 
 		const list = await request(app.getHttpServer())
 			.get(`/api/ai/conversations/${conversationId}/messages`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		const items = list.body.data.items as {
 			role: string;
@@ -609,7 +610,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 
 		const res = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "现在美元兑人民币多少？" })
 			.expect(200);
 
@@ -670,7 +671,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 			];
 			const res = await request(app.getHttpServer())
 				.post("/api/ai/conversations")
-				.set(bearer(user.accessToken))
+				.set(orgBearer(user))
 				.send({ content: "查询加元兑台币最近七天的汇率走势" })
 				.expect(200);
 			expect(parseSse(res.text).at(-1)?.event).toBe("done");
@@ -701,7 +702,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		for (const content of ["   ", "a".repeat(2001)]) {
 			const res = await request(app.getHttpServer())
 				.post("/api/ai/conversations")
-				.set(bearer(user.accessToken))
+				.set(orgBearer(user))
 				.send({ content })
 				.expect(400);
 			expect(res.body.code).toBe("AI_MESSAGE_EMPTY");
@@ -714,7 +715,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		scriptHolder.steps = [textReply("他人在用")];
 		const otherRes = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(other.accessToken))
+			.set(orgBearer(other))
 			.send({ content: "他人的会话" })
 			.expect(200);
 		const otherConversationId = (
@@ -724,7 +725,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		for (const id of [otherConversationId, "nonexistent-id"]) {
 			const res = await request(app.getHttpServer())
 				.post(`/api/ai/conversations/${id}/messages`)
-				.set(bearer(user.accessToken))
+				.set(orgBearer(user))
 				.send({ content: "越权追问" })
 				.expect(404);
 			expect(res.body.code).toBe("AI_CONVERSATION_NOT_FOUND");
@@ -735,7 +736,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		scriptHolder.steps = [textReply("消息列表")];
 		const created = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "列表用例会话" })
 			.expect(200);
 		const conversationId = (
@@ -744,28 +745,28 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 
 		const otherMessages = await request(app.getHttpServer())
 			.get(`/api/ai/conversations/${conversationId}/messages`)
-			.set(bearer(other.accessToken))
+			.set(orgBearer(other))
 			.expect(404);
 		expect(otherMessages.body.code).toBe("AI_CONVERSATION_NOT_FOUND");
 
 		await request(app.getHttpServer())
 			.get("/api/ai/conversations/nonexistent-id/messages")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(404);
 
 		await request(app.getHttpServer())
 			.get(`/api/ai/conversations/${conversationId}/messages?limit=0`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(400);
 		await request(app.getHttpServer())
 			.get(`/api/ai/conversations/${conversationId}/messages?limit=501`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(400);
 
 		// 合法 limit：本人可读、升序
 		const ok = await request(app.getHttpServer())
 			.get(`/api/ai/conversations/${conversationId}/messages`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 		expect(ok.body.data.items).toHaveLength(2);
 		expect(
@@ -789,7 +790,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 			app.getHttpServer(),
 		)
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "挂起的首发" })
 			.then((res) => ({ status: res.status }));
 
@@ -806,7 +807,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 		// 同会话流进行中再发 → 409（§4：追问端点命中忙碌标记）
 		const second = await request(app.getHttpServer())
 			.post(`/api/ai/conversations/${conversationId}/messages`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "并发的第二发" })
 			.expect(409);
 		expect(second.body.code).toBe("AI_CONVERSATION_BUSY");
@@ -830,7 +831,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 			app.getHttpServer(),
 		)
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "删除时序用例" })
 			.then((res) => ({ status: res.status, text: res.text }));
 
@@ -845,7 +846,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 
 		await request(app.getHttpServer())
 			.delete(`/api/ai/conversations/${conversationId}`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(409);
 
 		release();
@@ -854,7 +855,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 
 		await request(app.getHttpServer())
 			.delete(`/api/ai/conversations/${conversationId}`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		const remaining = await prisma.aiMessage.count({
@@ -870,7 +871,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 
 		const res = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "会失败的消息" })
 			.expect(200);
 
@@ -904,7 +905,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 			app.getHttpServer(),
 		)
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "流中被删的会话" })
 			.then((res) => ({ status: res.status, text: res.text }));
 
@@ -963,6 +964,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 			headers: {
 				"content-type": "application/json",
 				authorization: `Bearer ${user.accessToken}`,
+				"x-organization-id": user.defaultOrganizationId,
 			},
 			body: JSON.stringify({ content: "断连用例" }),
 			signal: clientAbort.signal,
@@ -1012,14 +1014,14 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 			scriptHolder.steps = [textReply("列表回复")];
 			await request(app.getHttpServer())
 				.post("/api/ai/conversations")
-				.set(bearer(user.accessToken))
+				.set(orgBearer(user))
 				.send({ content })
 				.expect(200);
 		}
 
 		const res = await request(app.getHttpServer())
 			.get("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.expect(200);
 
 		const items = res.body.data.items as {
@@ -1078,7 +1080,11 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 		userIds.push(user.userId);
 
 		const conversation = await prisma.aiConversation.create({
-			data: { userId: user.userId, title: "窗口用例" },
+			data: {
+				userId: user.userId,
+				organizationId: user.defaultOrganizationId,
+				title: "窗口用例",
+			},
 		});
 		// 显式递增 createdAt：同批 createMany 的 default(now()) 完全相同，
 		// orderBy createdAt desc 无 tiebreaker 会取错「最近 3 条」
@@ -1094,7 +1100,7 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 		scriptHolder.steps = [textReply("窗口回复")];
 		const res = await request(app.getHttpServer())
 			.post(`/api/ai/conversations/${conversation.id}/messages`)
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "最新一条问题" })
 			.expect(200);
 		expect(parseSse(res.text).at(-1)?.event).toBe("done");
@@ -1131,7 +1137,7 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 			app.getHttpServer(),
 		)
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "占满并发的首发" })
 			.then((res) => ({ status: res.status }));
 
@@ -1144,7 +1150,7 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 
 		const second = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "被拒的第二发" })
 			.expect(429);
 		expect(second.body.code).toBe("AI_BUSY");
@@ -1167,7 +1173,7 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 			scriptHolder.steps = [textReply("配额回复")];
 			await request(app.getHttpServer())
 				.post("/api/ai/conversations")
-				.set(bearer(user.accessToken))
+				.set(orgBearer(user))
 				.send({ content })
 				.expect(200);
 		}
@@ -1175,7 +1181,7 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 		scriptHolder.steps = [textReply("配额回复")];
 		const third = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "配额第三条" })
 			.expect(429);
 		expect(third.body.code).toBe("AI_QUOTA_EXCEEDED");
@@ -1205,7 +1211,7 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 			// 大小写变形（pattern 合法）穿透形状层，由白名单语义层兜底
 			const res = await request(app.getHttpServer())
 				.post("/api/ai/conversations")
-				.set(bearer(user.accessToken))
+				.set(orgBearer(user))
 				.send({ content: "非法模型", modelKey })
 				.expect(400);
 		console.log("[DEBUG-RESP2] status:", res.status, "body:", JSON.stringify(res.body), "modelKey:", JSON.stringify(modelKey));
@@ -1216,7 +1222,7 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 		// 含空格（形状层非法字符）：全局 ValidationPipe @Matches 拦截，400 全局错误体格式
 		const resSp = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "非法模型", modelKey: "gpt 4.1-mini" })
 			.expect(400);
 		expect(JSON.stringify(resSp.body.message)).toContain("modelKey 含非法字符");
@@ -1226,7 +1232,7 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 			scriptHolder.steps = [textReply("正常回复")];
 			await request(app.getHttpServer())
 				.post("/api/ai/conversations")
-				.set(bearer(user.accessToken))
+				.set(orgBearer(user))
 				.send({ content })
 				.expect(200);
 		}
@@ -1254,7 +1260,7 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 
 		const res = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "你好" })
 			.expect(503);
 		expect(res.body.code).toBe("AI_NOT_CONFIGURED");
@@ -1283,7 +1289,7 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 
 		const blocked = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "用 Claude 回答", modelKey: "claude-sonnet-4-6" })
 			.expect(503);
 		expect(blocked.body.code).toBe("AI_NOT_CONFIGURED");
@@ -1292,7 +1298,7 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 		scriptHolder.steps = [textReply("mini 回复")];
 		const ok = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "用 mini 回答", modelKey: "gpt-4.1-mini" })
 			.expect(200);
 		expect(parseSse(ok.text).at(-1)?.event).toBe("done");
@@ -1310,7 +1316,7 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 
 		const res = await request(app.getHttpServer())
 			.post("/api/ai/conversations")
-			.set(bearer(user.accessToken))
+			.set(orgBearer(user))
 			.send({ content: "你好" })
 			.expect(503);
 		expect(res.body.code).toBe("AI_DISABLED");
@@ -1427,38 +1433,38 @@ describe("AiController 组织隔离（W25）", () => {
 		).toBe(messagesBefore); // 跨组织追问未追加任何消息
 	});
 
-	it("W25-AI-3 非默认组织看不到 organizationId IS NULL 的存量会话；默认组织可见", async () => {
-		const legacy = await prisma.aiConversation.create({
+	it("W25-AI-3 跨组织会话严格隔离：Org A 创建的会话在 Org B 不可见且访问消息 404", async () => {
+		const convA = await prisma.aiConversation.create({
 			data: {
 				userId: user.userId,
-				organizationId: null,
-				title: "存量 NULL 会话",
+				organizationId: orgA,
+				title: "Org A 隔离会话",
 			},
 		});
 
-		// 默认组织上下文：本人存量 NULL 会话可见
+		// 所属组织上下文：可见
 		const inA = await request(app.getHttpServer())
 			.get("/api/ai/conversations")
 			.set(orgHeaders(user, orgA))
 			.expect(200);
 		expect(
 			(inA.body.data.items as Array<{ id: string }>).map((item) => item.id),
-		).toContain(legacy.id);
+		).toContain(convA.id);
 
-		// 非默认组织：严格隔离，看不到存量 NULL 会话
+		// 其他组织上下文：严格隔离，看不到也不允许访问详情
 		const inB = await request(app.getHttpServer())
 			.get("/api/ai/conversations")
 			.set(orgHeaders(user, orgB))
 			.expect(200);
 		expect(
 			(inB.body.data.items as Array<{ id: string }>).map((item) => item.id),
-		).not.toContain(legacy.id);
+		).not.toContain(convA.id);
 		await request(app.getHttpServer())
-			.get(`/api/ai/conversations/${legacy.id}/messages`)
+			.get(`/api/ai/conversations/${convA.id}/messages`)
 			.set(orgHeaders(user, orgB))
 			.expect(404);
 		await request(app.getHttpServer())
-			.get(`/api/ai/conversations/${legacy.id}/messages`)
+			.get(`/api/ai/conversations/${convA.id}/messages`)
 			.set(orgHeaders(user, orgA))
 			.expect(200);
 	});
