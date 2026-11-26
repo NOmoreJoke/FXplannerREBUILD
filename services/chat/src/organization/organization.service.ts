@@ -120,8 +120,17 @@ export class OrganizationService {
 		return name;
 	}
 
-	/** 当前组织详情 + capabilities + 组织锁 + 建账状态（organization.read） */
-	async getCurrent(actor: ActorContext): Promise<{
+	/**
+	 * 当前组织详情 + capabilities + 组织锁 + 建账状态（organization.read）。
+	 *
+	 * 组织锁摘要优先复用 OrganizationLockGuard 挂到 request 上的结果
+	 * （技术方案 §9.3：至多 1 条 data_requests 查询——守卫已查过，不再重复查库）；
+	 * 缺省时才回落一次查询（守卫未挂载的调用路径）。
+	 */
+	async getCurrent(
+		actor: ActorContext,
+		lockSummary?: { active: boolean; type: string | null },
+	): Promise<{
 		id: string;
 		name: string;
 		role: string;
@@ -146,16 +155,21 @@ export class OrganizationService {
 		// 组织锁（只读摘要；技术方案 §9 / data-request-rules）：
 		// 仅 CLEAR / DELETION 锁定组织账本（EXPORT 不锁写），进行中状态含 FAILED
 		// （失败保锁态，ACTIVE_STATUSES 单一真源）——评审 I-14
-		const activeLock = await this.prisma.dataRequest.findFirst({
-			where: {
-				organizationId: actor.organizationId,
-				scope: "ORGANIZATION",
-				type: { in: ["CLEAR", "DELETION"] },
-				status: { in: [...ACTIVE_STATUSES] },
-			},
-			orderBy: { requestedAt: "desc" },
-			select: { type: true },
-		});
+		// 复用守卫的合并查询结果（评审 N-3）：同一请求至多 1 条 data_requests 查询
+		const activeLock = lockSummary
+			? lockSummary.active
+				? { type: lockSummary.type }
+				: null
+			: await this.prisma.dataRequest.findFirst({
+					where: {
+						organizationId: actor.organizationId,
+						scope: "ORGANIZATION",
+						type: { in: ["CLEAR", "DELETION"] },
+						status: { in: [...ACTIVE_STATUSES] },
+					},
+					orderBy: { requestedAt: "desc" },
+					select: { type: true },
+				});
 		return {
 			id: organization.id,
 			name: organization.name,

@@ -12,12 +12,14 @@ import {
 	formatDisplayAmount,
 	formatDisplayDate,
 } from "@/components/business/plan/schedule-preview-card";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 
 /**
  * 换汇计划列表卡（changes/plan-management/技术方案.md §5.2 plan-list）
  *
- * 列表卡片 + 状态徽标 + 「新建计划」按钮 + 准备进度条（阶段5 §3）；
- * 金额/日期为服务端口径的展示格式化（去尾零 / 取日期部分）。纯受控组件，数据由页面装配。
+ * 列表卡片 + 状态徽标 + 「新建计划」按钮（plan.create 能力门控）+ 准备进度条（阶段5 §3）；
+ * 金额/日期为服务端口径的展示格式化（去尾零 / 取日期部分）。数据由页面装配，
+ * 入口显隐按后端 capabilities（Goal #3B W28；后端仍强制校验，这里只防误触）。
  */
 
 /** 状态徽标文案与配色（官方术语：进行中/已完成/已取消） */
@@ -71,6 +73,10 @@ export function PlanList({
 	isError,
 	onRetry,
 }: PlanListProps) {
+	// 「新建计划」入口需 plan.create（Viewer 不显示，而不是点进去吃 403）
+	const { can } = useOrganizationCapabilities();
+	const canCreate = can("plan.create");
+
 	return (
 		<div className="mx-auto max-w-5xl px-8 py-6">
 			<header className="mb-6 flex items-center justify-between">
@@ -80,15 +86,18 @@ export function PlanList({
 						管理分批准备外币的全部计划：查看进度、调整目标与分配。
 					</p>
 				</div>
-				<Link
-					href="/plans/new"
-					className={buttonVariants({
-						className: "bg-mint-700 text-white hover:bg-mint-700/90",
-					})}
-				>
-					<Plus className="size-4" />
-					新建计划
-				</Link>
+				{canCreate ? (
+					<Link
+						href="/plans/new"
+						data-testid="plan-create-entry"
+						className={buttonVariants({
+							className: "bg-mint-700 text-white hover:bg-mint-700/90",
+						})}
+					>
+						<Plus className="size-4" />
+						新建计划
+					</Link>
+				) : null}
 			</header>
 
 			{isLoading ? (
@@ -121,15 +130,21 @@ export function PlanList({
 					<p className="mt-2 max-w-md text-sm text-muted-foreground">
 						设定一个目标金额与用途日期，系统会按你选择的节奏自动生成分批准备排期。
 					</p>
-					<Link
-						href="/plans/new"
-						className={buttonVariants({
-							className: "mt-6 bg-mint-700 text-white hover:bg-mint-700/90",
-						})}
-					>
-						<Plus className="size-4" />
-						新建计划
-					</Link>
+					{canCreate ? (
+						<Link
+							href="/plans/new"
+							className={buttonVariants({
+								className: "mt-6 bg-mint-700 text-white hover:bg-mint-700/90",
+							})}
+						>
+							<Plus className="size-4" />
+							新建计划
+						</Link>
+					) : (
+						<p className="mt-6 text-xs text-muted-foreground">
+							当前角色无权创建换汇计划，请联系组织所有者、管理员或财务创建
+						</p>
+					)}
 				</div>
 			) : (
 				<div className="grid gap-4 md:grid-cols-2">

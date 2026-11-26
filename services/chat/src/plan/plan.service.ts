@@ -3,17 +3,40 @@ import {
 	HttpStatus,
 	Inject,
 	Injectable,
+	Logger,
 } from "@nestjs/common";
 import { getCurrency } from "@fxplanner-new/money";
 import type { Plan, PlanAllocation } from "@prisma/client";
 import { Prisma } from "@prisma/client";
-import { lockLedgerAccounts, lockPlanAccount } from "../prisma/ledger-write-lock";
+import {
+	lockOrgLedgerAccounts,
+	lockOrgPlanAccount,
+	mergeLegacyOrgAccountIfExists,
+} from "../prisma/ledger-write-lock";
 import { PrismaService } from "../prisma/prisma.service";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
 import {
+	AuditService,
+	recordDeniedAuditBestEffort,
+} from "../audit/audit.service";
+import { PermissionDeniedException } from "../authorization/authorization.errors";
+import type {
+	ActorContext,
+	OrganizationRole,
+	Permission,
+} from "../authorization/authorization.types";
+import {
+	assertParentChildSameOrg,
 	compatReadWhere,
 	type ReadScope,
 } from "../authorization/organization-scope";
+import { planReservationWhere } from "../authorization/default-organization";
+import { can } from "../authorization/permission-policy";
+import { lockOrganizationForActor } from "../organization/default-organization";
+import {
+	materializeLegacyOrganizationSettings,
+	resolveOrganizationPreferences,
+} from "../organization/organization-preferences";
 import type {
 	AdjustPreviewDto,
 	AdjustPreviewResultDto,
@@ -56,7 +79,6 @@ import {
 	type ComputeAdjustPreviewInput,
 } from "./plan-calculator";
 import { computeFundStatus } from "../usage/usage-calculator";
-import { resolveOrganizationPreferences } from "../organization/organization-preferences";
 
 /**
  * 模块错误（错误响应统一 { code, message }，风格与 onboarding 模块一致）。
@@ -98,7 +120,7 @@ export class PlanInsufficientBalanceException extends HttpException {
 	}
 }
 
-/** 计划不存在或不属于本人（§4 通用约定：非本人按 404 处理，防枚举） */
+/** 计划不存在或不属于当前组织（§4.4.2：跨组织按 404 处理，防枚举） */
 export class PlanNotFoundException extends HttpException {
 	constructor() {
 		super(
@@ -134,7 +156,7 @@ export class PlanInvalidTransitionException extends HttpException {
 /** caps 计算所需的最小数据面（PrismaService 与事务客户端均满足） */
 type CapsDb = Pick<
 	Prisma.TransactionClient,
-	"account" | "plan" | "planAllocation"
+	"account" | "plan" | "planAllocation" | "$queryRaw"
 >;
 
 /** caps 的内存形态（Decimal），出口序列化为固定 4 位小数字符串 */
@@ -145,15 +167,6 @@ interface AllocatableCaps {
 
 /** 列表服务端兑底条数（§4.1：个人工具无分页，limit 100 防御） */
 const PLAN_LIST_LIMIT = 100;
-
-/**
- * 账本行归属过滤（W18 兼容窗口；评审 R2-I02）：
- * - 传入 scope（只读预览）：按组织作用域——组织行跨成员共享 + 默认组织的存量 NULL 行；
- * - 不传（create / adjust 等写路径）：沿用 `{ userId }`，写侧 Actor 化随 Goal #3B 收口。
- */
-function ledgerWhere(scope: ReadScope | undefined, userId: string) {
-	return scope ? compatReadWhere(scope) : { userId };
-}
 
 /** 解析后的排期入参（全部规范化：币种大写、日期 UTC 0 点、金额 Decimal） */
 interface ParsedPlanParams {
@@ -168,8 +181,11 @@ interface ParsedPlanParams {
 
 @Injectable()
 export class PlanService {
+	private readonly logger = new Logger(PlanService.name);
+
 	constructor(
 		@Inject(PrismaService) private readonly prisma: PrismaService,
+		@Inject(AuditService) private readonly auditService: AuditService,
 	) {}
 
 	/**
@@ -215,10 +231,9 @@ export class PlanService {
 		});
 		const caps = await this.computeCaps(
 			this.prisma,
-			scope.userId,
+			scope,
 			params.targetCurrency,
 			params.targetAmount,
-			scope,
 		);
 		return {
 			latestPrepDate: latestPrepDate.toISOString(),
@@ -230,113 +245,167 @@ export class PlanService {
 	}
 
 	/**
-	 * 创建计划（POST /api/plans，方案 §5.2）：全程交互式事务——
-	 * ① 重检 caps（并发安全的关键防线，前端 caps 仅作体验层预检）
-	 * ② 插入 Plan（latestPrepDate 服务端重算，不信任前端；name 缺省 null）
-	 * ③ PlanAllocation（usedAmount = 0）
-	 * ④ 3 条 PlanInstallment；任一失败全部回滚。
+	 * 创建计划（POST /api/plans，方案 §5.2 / ToB R1 W23）：全程交互式事务——
+	 * ① lockOrganizationForActor 重读最新角色并复验 plan.create（锁等降权 → 403 + DENIED 审计）
+	 * ② resolveOrganizationPreferences 解析组织建账态（409）与本位币；OWNER_LEGACY 先固化
+	 * ③ 锁组织账本账户 lockOrgLedgerAccounts 后重检 caps（并发安全权威防线）
+	 * ④ 插入 Plan（userId + organizationId + createdById）、PlanAllocation、PlanInstallment
+	 * ⑤ 同事务写入 plan.create 审计日志；任一失败全部回滚。
 	 */
-	async create(userId: string, dto: CreatePlanDto): Promise<PlanDto> {
-		// BE-03 防线：与 reminder/settings/data-request 的 409 ONBOARDING_NOT_COMPLETED
-		// 一致——未建账（无 UserSettings）不允许建计划；错误体附 /onboarding 引导。
-		// preview 不拦（无副作用计算）；adjust/complete/cancel 前置已含计划归属 404。
-		const settings = await this.prisma.userSettings.findUnique({
-			where: { userId },
-			select: { userId: true, baseCurrency: true },
-		});
-		if (!settings) {
-			throw new OnboardingNotCompletedException(
-				"尚未完成首次设置，请先前往 /onboarding 完成建账后再创建计划",
-			);
-		}
-		const params = this.parsePlanParams(dto, settings.baseCurrency);
+	async create(
+		actor: ActorContext,
+		dto: CreatePlanDto,
+		requestId: string | null = null,
+	): Promise<PlanDto> {
+		const params = this.parsePlanParams(dto, null);
 		const allocatedAmount =
 			dto.allocatedAmount !== undefined && dto.allocatedAmount !== null
 				? this.parseNonNegativeAmount(dto.allocatedAmount, "分配金额")
 				: new Prisma.Decimal(0);
 
-		return this.prisma.$transaction(async (tx) => {
-			await lockLedgerAccounts(tx, userId, [params.targetCurrency]);
-			// ① 事务内重检（READ COMMITTED 下读到其他事务已提交的最新余额/分配）
-			const caps = await this.computeCaps(
-				tx,
-				userId,
-				params.targetCurrency,
-				params.targetAmount,
-			);
-			if (allocatedAmount.gt(caps.maxAllocatable)) {
-				throw new PlanInsufficientBalanceException(this.toCapsDto(caps));
-			}
+		let deniedRole: OrganizationRole = actor.role;
+		try {
+			return await this.prisma.$transaction(async (tx) => {
+				const latestRole = await lockOrganizationForActor(tx, actor);
+				if (!can(latestRole, "plan.create")) {
+					deniedRole = latestRole;
+					throw new PermissionDeniedException();
+				}
 
-			// ② latestPrepDate 服务端重算（前端值不参与落库）
-			const latestPrepDate = computeLatestPrepDate(
-				params.expectUseDate,
-				params.prepLeadDays,
-			);
-			// 分批总额 = 目标金额 − 已使用（创建场景恒 0）− 剩余分配（= 本次 allocatedAmount）
-			const installments = this.buildInstallmentsOrThrow({
-				targetAmount: params.targetAmount,
-				allocatedAmount,
-				decimalPlaces: params.decimalPlaces,
-				startDate: params.startDate,
-				latestPrepDate,
-				pacePreference: params.pacePreference,
-			});
+				const preferences = await resolveOrganizationPreferences(
+					tx,
+					actor.organizationId,
+				);
+				if (!preferences) {
+					throw new OnboardingNotCompletedException(
+						"尚未完成首次设置，请先前往 /onboarding 完成建账后再创建计划",
+					);
+				}
+				if (preferences.source === "OWNER_LEGACY") {
+					await materializeLegacyOrganizationSettings(tx, actor.organizationId);
+				}
+				if (params.targetCurrency === preferences.baseCurrency) {
+					throw new PlanInvalidParamsException(
+						`目标币种不能与本位币相同（本位币：${preferences.baseCurrency}）`,
+					);
+				}
 
-			const plan = await tx.plan.create({
-				data: {
-					userId,
-					name: dto.name?.trim() ? dto.name.trim() : null,
-					targetCurrency: params.targetCurrency,
+				await lockOrgLedgerAccounts(
+					tx,
+					actor.organizationId,
+					[params.targetCurrency],
+				);
+				await mergeLegacyOrgAccountIfExists(
+					tx,
+					actor.organizationId,
+					params.targetCurrency,
+				);
+				// 事务内重检（READ COMMITTED 下读到其他事务已提交的最新余额/分配）
+				const caps = await this.computeCaps(
+					tx,
+					actor,
+					params.targetCurrency,
+					params.targetAmount,
+				);
+				if (allocatedAmount.gt(caps.maxAllocatable)) {
+					throw new PlanInsufficientBalanceException(this.toCapsDto(caps));
+				}
+
+				// latestPrepDate 服务端重算（前端值不参与落库）
+				const latestPrepDate = computeLatestPrepDate(
+					params.expectUseDate,
+					params.prepLeadDays,
+				);
+				// 分批总额 = 目标金额 − 已使用（创建场景恒 0）− 剩余分配（= 本次 allocatedAmount）
+				const installments = this.buildInstallmentsOrThrow({
 					targetAmount: params.targetAmount,
-					expectUseDate: params.expectUseDate,
-					prepLeadDays: params.prepLeadDays,
+					allocatedAmount,
+					decimalPlaces: params.decimalPlaces,
+					startDate: params.startDate,
 					latestPrepDate,
 					pacePreference: params.pacePreference,
-					// M5 起落库（plan-management §3.3）：修改接口重建排期时 earliest 优先取本字段，
-					// 禁止无基准重建导致批次日期漂移（存量计划为 NULL，重建回退「明天起首个工作日」）
-					planStartDate: params.startDate,
-				},
-			});
+				});
 
-			// ③ amount = 0 也必须创建：planId @unique 保证计划与分配 1:1，
-			// 读取方（home 等）按「存在分配行」计算 allocated/remaining，缺行只能兜底 0，
-			// 统一落一行 amount=0 保持数据形态一致（usedAmount 恒 0，无余额占用）
-			await tx.planAllocation.create({
-				data: {
-					planId: plan.id,
-					amount: allocatedAmount,
-					usedAmount: new Prisma.Decimal(0),
-				},
-			});
+				const plan = await tx.plan.create({
+					data: {
+						userId: actor.userId,
+						organizationId: actor.organizationId,
+						createdById: actor.userId,
+						name: dto.name?.trim() ? dto.name.trim() : null,
+						targetCurrency: params.targetCurrency,
+						targetAmount: params.targetAmount,
+						expectUseDate: params.expectUseDate,
+						prepLeadDays: params.prepLeadDays,
+						latestPrepDate,
+						pacePreference: params.pacePreference,
+						// M5 起落库（plan-management §3.3）：修改接口重建排期时 earliest 优先取本字段，
+						// 禁止无基准重建导致批次日期漂移（存量计划为 NULL，重建回退「明天起首个工作日」）
+						planStartDate: params.startDate,
+					},
+				});
 
-			// ④ 固定 3/2/1 条排期（R2/R5）
-			await tx.planInstallment.createMany({
-				data: installments.map((installment) => ({
-					planId: plan.id,
-					seq: installment.seq,
-					scheduledAt: installment.scheduledAt,
-					amount: installment.amount,
-				})),
-			});
+				// amount = 0 也必须创建：planId @unique 保证计划与分配 1:1，
+				// 读取方（home 等）按「存在分配行」计算 allocated/remaining，缺行只能兜底 0，
+				// 统一落一行 amount=0 保持数据形态一致（usedAmount 恒 0，无余额占用）
+				await tx.planAllocation.create({
+					data: {
+						planId: plan.id,
+						amount: allocatedAmount,
+						usedAmount: new Prisma.Decimal(0),
+					},
+				});
 
-			return {
-				id: plan.id,
-				name: plan.name,
-				targetCurrency: plan.targetCurrency,
-				targetAmount: plan.targetAmount.toFixed(4),
-				allocatedAmount: allocatedAmount.toFixed(4),
-				remainingAmount: allocatedAmount.toFixed(4),
-				expectUseDate: plan.expectUseDate.toISOString(),
-				latestPrepDate: plan.latestPrepDate.toISOString(),
-				prepLeadDays: plan.prepLeadDays,
-				pacePreference: plan.pacePreference as PlanDto["pacePreference"],
-				status: plan.status as PlanDto["status"],
-				installments: installments.map((installment) =>
-					this.toInstallmentDto(installment),
-				),
-			};
-		});
+				// 固定 3/2/1 条排期（R2/R5）
+				await tx.planInstallment.createMany({
+					data: installments.map((installment) => ({
+						planId: plan.id,
+						seq: installment.seq,
+						scheduledAt: installment.scheduledAt,
+						amount: installment.amount,
+					})),
+				});
+
+				await this.auditService.recordInTx(tx, {
+					organizationId: actor.organizationId,
+					actorUserId: actor.userId,
+					actorType: "USER",
+					action: "plan.create",
+					targetType: "plan",
+					targetId: plan.id,
+					result: "SUCCESS",
+					requestId: requestId ?? null,
+					detail: {
+						targetCurrency: plan.targetCurrency,
+						targetAmount: plan.targetAmount.toFixed(4),
+						allocatedAmount: allocatedAmount.toFixed(4),
+						pacePreference: plan.pacePreference,
+						prepLeadDays: plan.prepLeadDays,
+					},
+				});
+
+				return {
+					id: plan.id,
+					name: plan.name,
+					targetCurrency: plan.targetCurrency,
+					targetAmount: plan.targetAmount.toFixed(4),
+					allocatedAmount: allocatedAmount.toFixed(4),
+					remainingAmount: allocatedAmount.toFixed(4),
+					expectUseDate: plan.expectUseDate.toISOString(),
+					latestPrepDate: plan.latestPrepDate.toISOString(),
+					prepLeadDays: plan.prepLeadDays,
+					pacePreference: plan.pacePreference as PlanDto["pacePreference"],
+					status: plan.status as PlanDto["status"],
+					installments: installments.map((installment) =>
+						this.toInstallmentDto(installment),
+					),
+				};
+			});
+		} catch (error) {
+			if (error instanceof PermissionDeniedException) {
+				await this.recordDeniedAudit(actor, deniedRole, "plan.create", requestId);
+			}
+			throw error;
+		}
 	}
 
 	// ────────────────────────── M5 计划管理（plan-management §4.1~4.6）──────────────────────────
@@ -410,15 +479,15 @@ export class PlanService {
 	}
 
 	/**
-	 * 写路径收尾详情（原 getDetail 语义）：事务提交后按 { id, userId } 重读，
-	 * 含本次写入的变更记录；写路径 organizationId 语义随 Goal #3B Actor 化收口。
+	 * 写路径收尾详情（原 getDetail 语义）：事务提交后按 compatReadWhere(scope) 重读，
+	 * 含本次写入的变更记录。
 	 */
 	private async detailAfterWrite(
-		userId: string,
+		scope: ReadScope,
 		planId: string,
 	): Promise<PlanDetailDto> {
 		const plan = await this.prisma.plan.findFirst({
-			where: { id: planId, userId },
+			where: { id: planId, ...compatReadWhere(scope) },
 		});
 		if (!plan) {
 			throw new PlanNotFoundException();
@@ -427,9 +496,8 @@ export class PlanService {
 	}
 
 	/**
-	 * 详情组装（写路径复用）：adjust/complete/cancel 事务内已按 { id, userId }
-	 * 校验并持有 plan 行，直接组装详情，不重复归属查询（写路径 OrganizationId
-	 * 语义随 Goal #3B Actor 化收口）。
+	 * 详情组装：查询已按 compatReadWhere(scope) 校验计划归属，直接组装详情，
+	 * 不重复归属查询（写路径收尾通过 detailAfterWrite 重读最新状态）。
 	 */
 	private async buildDetail(plan: Plan): Promise<PlanDetailDto> {
 		const planId = plan.id;
@@ -525,9 +593,8 @@ export class PlanService {
 		const { change } = this.parseAdjustChange(dto);
 		const { plan, allocation, context } = await this.loadAdjustContext(
 			this.prisma,
-			scope.userId,
-			planId,
 			scope,
+			planId,
 		);
 		const result = this.computeAdjustPreviewOrThrow({
 			plan: this.toAdjustPlanState(plan, allocation),
@@ -538,21 +605,20 @@ export class PlanService {
 	}
 
 	/**
-	 * 提交修改 / 重新开启（PATCH /api/plans/:id，§3.2 时序）：
-	 * $transaction 内先锁定计划所属的币种，再读取状态和资金面——
-	 * ① 条件更新（WHERE id + userId + updatedAt = expected）原子完成乐观锁检查与行锁获取，
-	 *    行数 = 0 → 409 PLAN_STATE_CHANGED（写 status 原值仅为驱动 @updatedAt 跳变 + 取锁）
-	 * ② 事务内重算重校验：重读分配/账户/他计划分配（链路 a 防线：预览结果不作为提交依据），
-	 *    再调 computeAdjustPreview，任何拦截失败抛错回滚（含排期不可生成 NO_AVAILABLE_DATES 等）
-	 * ③ confirmReopen 组合规则（§3.4：缺确认 400 / 重开携带分配或节奏参数 400）
-	 * ④ 更新 Plan + PlanAllocation；重建排期（缺口为 0 清空；> 0 全量重建，earliest 优先 planStartDate）
-	 * ⑤ 写 plan_change_logs（before/after 全量快照；零变更不写）
-	 * 返回提交后的详情（事务外重读，含本次变更记录）。
+	 * 提交修改 / 重新开启（PATCH /api/plans/:id，§3.2 时序 / ToB R1 W23）：
+	 * $transaction 内：
+	 * ① lockOrganizationForActor 重读最新角色并复验 plan.adjust（锁等降权 → 403 + DENIED 审计）
+	 * ② resolveOrganizationPreferences 解析组织建账态与固化 OWNER_LEGACY
+	 * ③ lockOrgPlanAccount 锁组织账本账户 + FOR UPDATE 锁目标 Plan 行
+	 * ④ 条件更新（WHERE id + compatReadWhere(actor) + updatedAt = expected）原子完成乐观锁检查
+	 * ⑤ 重算重校验 → confirmReopen 规则 → 落库 Plan / PlanAllocation / PlanInstallment
+	 * ⑥ 写 plan_change_logs（带 organizationId + actorUserId）+ 同事务写入 plan.adjust 审计日志。
 	 */
 	async adjust(
-		userId: string,
+		actor: ActorContext,
 		planId: string,
 		dto: AdjustPlanDto,
+		requestId: string | null = null,
 	): Promise<PlanDetailDto> {
 		const { change, confirmReopen } = this.parseAdjustChange(dto);
 		const expectedUpdatedAt = this.parseTimestamp(
@@ -560,238 +626,450 @@ export class PlanService {
 			"expectedUpdatedAt",
 		);
 
-		await this.prisma.$transaction(async (tx) => {
-			if (!(await lockPlanAccount(tx, userId, planId))) {
-				throw new PlanNotFoundException();
-			}
-			const current = await tx.plan.findFirst({ where: { id: planId, userId } });
-			if (!current) {
-				throw new PlanNotFoundException();
-			}
+		let deniedRole: OrganizationRole = actor.role;
+		try {
+			await this.prisma.$transaction(async (tx) => {
+				const latestRole = await lockOrganizationForActor(tx, actor);
+				if (!can(latestRole, "plan.adjust")) {
+					deniedRole = latestRole;
+					throw new PermissionDeniedException();
+				}
 
-			// ① 条件更新 = 乐观锁检查 + 行锁获取（原子；检查与写入合并为单条语句）
-			const checkpoint = await tx.plan.updateMany({
-				where: {
-					id: planId,
-					userId,
-					updatedAt: expectedUpdatedAt,
-				},
-				data: { status: current.status },
-			});
-			if (checkpoint.count === 0) {
-				throw new PlanStateConflictException();
-			}
-
-			// ② 重算重校验：条件更新后重读全部输入（分配/账户/他计划分配均为最新已提交值）
-			const fresh = await this.loadAdjustContext(tx, userId, planId);
-			const result = this.computeAdjustPreviewOrThrow({
-				plan: this.toAdjustPlanState(fresh.plan, fresh.allocation),
-				change,
-				context: fresh.context,
-			});
-
-			// ③ confirmReopen 组合规则（§3.4）：仅在真实触发重开时生效；ACTIVE 携带一律忽略
-			if (result.reopen) {
-				if (confirmReopen !== true) {
-					throw new PlanInvalidParamsException(
-						"已完成计划重新开启必须显式确认：confirmReopen = true",
+				const preferences = await resolveOrganizationPreferences(
+					tx,
+					actor.organizationId,
+				);
+				if (!preferences) {
+					throw new OnboardingNotCompletedException(
+						"尚未完成首次设置，请先前往 /onboarding 完成建账后再修改计划",
 					);
 				}
-				if (
-					change.newAllocAmount !== undefined ||
-					change.pacePreference !== null ||
-					change.prepLeadDays !== null
-				) {
-					throw new PlanInvalidParamsException(
-						"重新开启只调整目标金额，不能同时修改分配总额、节奏或准备缓冲",
-					);
+				if (preferences.source === "OWNER_LEGACY") {
+					await materializeLegacyOrganizationSettings(tx, actor.organizationId);
 				}
-			}
 
-			// ④ 落库：计划主行 + 分配行（金额/目标一律以事务内重算结果为准）
-			await tx.plan.update({
-				where: { id: planId },
-				data: {
-					targetAmount: result.after.targetAmount,
-					pacePreference: result.after.pacePreference,
-					prepLeadDays: result.after.prepLeadDays,
-					latestPrepDate: result.newLatestPrepDate,
-					planStartDate: result.after.planStartDate,
-					status: result.reopen ? "ACTIVE" : fresh.plan.status,
-				},
-			});
-			await tx.planAllocation.update({
-				where: { planId },
-				data: { amount: result.after.allocAmount },
-			});
-
-			// 排期重建（§3.4）：全量 deleteMany + createMany；缺口为 0 → 清空（不生成排期）
-			await tx.planInstallment.deleteMany({ where: { planId } });
-			if (result.impact.newSchedule) {
-				await tx.planInstallment.createMany({
-					data: result.impact.newSchedule.map((installment) => ({
-						planId,
-						seq: installment.seq,
-						scheduledAt: installment.scheduledAt,
-						amount: installment.amount,
-					})),
+				if (!(await lockOrgPlanAccount(tx, actor, planId))) {
+					throw new PlanNotFoundException();
+				}
+				await this.lockScopedPlanRow(tx, actor, planId);
+				const current = await tx.plan.findFirst({
+					where: { id: planId, ...compatReadWhere(actor) },
 				});
-			}
+				if (!current) {
+					throw new PlanNotFoundException();
+				}
+				if (current.organizationId !== null) {
+					assertParentChildSameOrg(current.organizationId, actor.organizationId);
+				}
+				await mergeLegacyOrgAccountIfExists(
+					tx,
+					actor.organizationId,
+					current.targetCurrency,
+				);
 
-			// ⑤ 变更记录（§3.3）：主类型按「目标金额变化优先」归类；零变更不写日志
-			const changeType = pickAdjustChangeType(result);
-			if (changeType) {
+				// 条件更新 = 乐观锁检查 + 行写（原子；检查与写入合并为单条语句）
+				const checkpoint = await tx.plan.updateMany({
+					where: {
+						id: planId,
+						...compatReadWhere(actor),
+						updatedAt: expectedUpdatedAt,
+					},
+					data: {
+						status: current.status,
+						...legacyPlanAdoptFields(current, actor.organizationId),
+					},
+				});
+				if (checkpoint.count === 0) {
+					throw new PlanStateConflictException();
+				}
+
+				// 重算重校验：条件更新后重读全部输入（分配/账户/他计划分配均为最新已提交值）
+				const fresh = await this.loadAdjustContext(tx, actor, planId);
+				const result = this.computeAdjustPreviewOrThrow({
+					plan: this.toAdjustPlanState(fresh.plan, fresh.allocation),
+					change,
+					context: fresh.context,
+				});
+
+				// confirmReopen 组合规则（§3.4）：仅在真实触发重开时生效；ACTIVE 携带一律忽略
+				if (result.reopen) {
+					if (confirmReopen !== true) {
+						throw new PlanInvalidParamsException(
+							"已完成计划重新开启必须显式确认：confirmReopen = true",
+						);
+					}
+					if (
+						change.newAllocAmount !== undefined ||
+						change.pacePreference !== null ||
+						change.prepLeadDays !== null
+					) {
+						throw new PlanInvalidParamsException(
+							"重新开启只调整目标金额，不能同时修改分配总额、节奏或准备缓冲",
+						);
+					}
+				}
+
+				// 落库：计划主行 + 分配行（金额/目标一律以事务内重算结果为准）
+				await tx.plan.update({
+					where: { id: planId },
+					data: {
+						targetAmount: result.after.targetAmount,
+						pacePreference: result.after.pacePreference,
+						prepLeadDays: result.after.prepLeadDays,
+						latestPrepDate: result.newLatestPrepDate,
+						planStartDate: result.after.planStartDate,
+						status: result.reopen ? "ACTIVE" : fresh.plan.status,
+					},
+				});
+				await tx.planAllocation.update({
+					where: { planId },
+					data: { amount: result.after.allocAmount },
+				});
+
+				// 排期重建（§3.4）：全量 deleteMany + createMany；缺口为 0 → 清空（不生成排期）
+				await tx.planInstallment.deleteMany({ where: { planId } });
+				if (result.impact.newSchedule) {
+					await tx.planInstallment.createMany({
+						data: result.impact.newSchedule.map((installment) => ({
+							planId,
+							seq: installment.seq,
+							scheduledAt: installment.scheduledAt,
+							amount: installment.amount,
+						})),
+					});
+				}
+
+				// 变更记录（§3.3）：主类型按「目标金额变化优先」归类；零变更不写日志
+				const changeType = pickAdjustChangeType(result);
+				if (changeType) {
+					await tx.planChangeLog.create({
+						data: {
+							planId,
+							organizationId: actor.organizationId,
+							actorUserId: actor.userId,
+							changeType,
+							beforeTarget: result.before.targetAmount,
+							afterTarget: result.after.targetAmount,
+							beforeAlloc: result.before.allocAmount,
+							afterAlloc: result.after.allocAmount,
+							releasedAmount: result.impact.releasedAmount,
+							beforeSnapshot: this.adjustSnapshotPayload(
+								result.before,
+								fresh.plan,
+								fresh.plan.status,
+								fresh.plan.latestPrepDate,
+							),
+							afterSnapshot: this.adjustSnapshotPayload(
+								result.after,
+								fresh.plan,
+								result.reopen ? "ACTIVE" : fresh.plan.status,
+								result.newLatestPrepDate,
+							),
+						},
+					});
+				}
+
+				await this.auditService.recordInTx(tx, {
+					organizationId: actor.organizationId,
+					actorUserId: actor.userId,
+					actorType: "USER",
+					action: "plan.adjust",
+					targetType: "plan",
+					targetId: planId,
+					result: "SUCCESS",
+					requestId: requestId ?? null,
+					detail: {
+						changeType: changeType ?? "NO_OP",
+						targetCurrency: fresh.plan.targetCurrency,
+						beforeTarget: result.before.targetAmount.toFixed(4),
+						afterTarget: result.after.targetAmount.toFixed(4),
+						beforeAlloc: result.before.allocAmount.toFixed(4),
+						afterAlloc: result.after.allocAmount.toFixed(4),
+						releasedAmount: result.impact.releasedAmount.toFixed(4),
+					},
+				});
+			});
+		} catch (error) {
+			if (error instanceof PermissionDeniedException) {
+				await this.recordDeniedAudit(actor, deniedRole, "plan.adjust", requestId);
+			}
+			throw error;
+		}
+		return this.detailAfterWrite(actor, planId);
+	}
+
+	/**
+	 * 完成确认（POST /api/plans/:id/complete，§4.5 / ToB R1 W23）：
+	 * 锁组织复验 plan.adjust → 组织账本与计划行锁 → 条件更新（WHERE status = "ACTIVE"）
+	 * 原子防「并发取消 + 完成」双写；检查点后重读最新数据跑 checkCompleteReady，
+	 * 失败回滚。写 COMPLETED 变更记录与同事务 plan.complete 审计日志。
+	 */
+	async complete(
+		actor: ActorContext,
+		planId: string,
+		requestId: string | null = null,
+	): Promise<PlanDetailDto> {
+		let deniedRole: OrganizationRole = actor.role;
+		try {
+			await this.prisma.$transaction(async (tx) => {
+				const latestRole = await lockOrganizationForActor(tx, actor);
+				if (!can(latestRole, "plan.adjust")) {
+					deniedRole = latestRole;
+					throw new PermissionDeniedException();
+				}
+
+				const preferences = await resolveOrganizationPreferences(
+					tx,
+					actor.organizationId,
+				);
+				if (!preferences) {
+					throw new OnboardingNotCompletedException(
+						"尚未完成首次设置，请先前往 /onboarding 完成建账后再完成计划",
+					);
+				}
+				if (preferences.source === "OWNER_LEGACY") {
+					await materializeLegacyOrganizationSettings(tx, actor.organizationId);
+				}
+
+				if (!(await lockOrgPlanAccount(tx, actor, planId))) {
+					throw new PlanNotFoundException();
+				}
+				await this.lockScopedPlanRow(tx, actor, planId);
+				const current = await tx.plan.findFirst({
+					where: { id: planId, ...compatReadWhere(actor) },
+					select: {
+						id: true,
+						organizationId: true,
+						userId: true,
+						createdById: true,
+					},
+				});
+				if (!current) {
+					throw new PlanNotFoundException();
+				}
+				if (current.organizationId !== null) {
+					assertParentChildSameOrg(current.organizationId, actor.organizationId);
+				}
+
+				const updated = await tx.plan.updateMany({
+					where: {
+						id: planId,
+						...compatReadWhere(actor),
+						status: "ACTIVE",
+					},
+					data: {
+						status: "COMPLETED",
+						...legacyPlanAdoptFields(current, actor.organizationId),
+					},
+				});
+				if (updated.count === 0) {
+					throw new PlanInvalidTransitionException(
+						"仅进行中的计划可以确认完成",
+					);
+				}
+				// 检查点后重读（行锁已持有，本计划不再被并发修改；used 读 allocation 行最新值）
+				const [freshPlan, allocation] = await Promise.all([
+					tx.plan.findUnique({ where: { id: planId } }),
+					tx.planAllocation.findUnique({ where: { planId } }),
+				]);
+				if (!freshPlan || !allocation) {
+					throw new PlanNotFoundException();
+				}
+				try {
+					checkCompleteReady({
+						targetAmount: freshPlan.targetAmount,
+						usedAmount: allocation.usedAmount,
+						allocAmount: allocation.amount,
+					});
+				} catch (error) {
+					// 400 PLAN_COMPLETE_NOT_READY（附差值）→ 异常穿透令整个事务回滚，状态流转一并撤销
+					throw this.mapCalcError(error);
+				}
 				await tx.planChangeLog.create({
 					data: {
 						planId,
-						changeType,
-						beforeTarget: result.before.targetAmount,
-						afterTarget: result.after.targetAmount,
-						beforeAlloc: result.before.allocAmount,
-						afterAlloc: result.after.allocAmount,
-						releasedAmount: result.impact.releasedAmount,
-						beforeSnapshot: this.adjustSnapshotPayload(
-							result.before,
-							fresh.plan,
-							fresh.plan.status,
-							fresh.plan.latestPrepDate,
+						organizationId: actor.organizationId,
+						actorUserId: actor.userId,
+						changeType: "COMPLETED",
+						beforeTarget: freshPlan.targetAmount,
+						afterTarget: freshPlan.targetAmount,
+						beforeAlloc: allocation.amount,
+						afterAlloc: allocation.amount,
+						releasedAmount: new Prisma.Decimal(0),
+						beforeSnapshot: this.planRowSnapshot(
+							freshPlan,
+							allocation,
+							"ACTIVE",
 						),
-						afterSnapshot: this.adjustSnapshotPayload(
-							result.after,
-							fresh.plan,
-							result.reopen ? "ACTIVE" : fresh.plan.status,
-							result.newLatestPrepDate,
+						afterSnapshot: this.planRowSnapshot(
+							freshPlan,
+							allocation,
+							"COMPLETED",
 						),
 					},
 				});
-			}
-		});
-		return this.detailAfterWrite(userId, planId);
-	}
 
-	/**
-	 * 完成确认（POST /api/plans/:id/complete，§4.5）：
-	 * 条件更新（WHERE status = "ACTIVE"）原子防「并发取消 + 完成」双写（READ COMMITTED 下
-	 * Postgres 基于最新已提交行重估 WHERE，后到者行数 = 0 → 409）；检查点后重读最新数据
-	 * 跑 checkCompleteReady（含超用拒绝），失败抛 400 并回滚状态流转。数据不变，仅写 COMPLETED 记录。
-	 */
-	async complete(userId: string, planId: string): Promise<PlanDetailDto> {
-		await this.prisma.$transaction(async (tx) => {
-			if (!(await lockPlanAccount(tx, userId, planId))) {
-				throw new PlanNotFoundException();
-			}
-			const updated = await tx.plan.updateMany({
-				where: { id: planId, userId, status: "ACTIVE" },
-				data: { status: "COMPLETED" },
-			});
-			if (updated.count === 0) {
-				throw new PlanInvalidTransitionException(
-					"仅进行中的计划可以确认完成",
-				);
-			}
-			// 检查点后重读（行锁已持有，本计划不再被并发修改；used 读 allocation 行最新值）
-			const [freshPlan, allocation] = await Promise.all([
-				tx.plan.findUnique({ where: { id: planId } }),
-				tx.planAllocation.findUnique({ where: { planId } }),
-			]);
-			if (!freshPlan || !allocation) {
-				throw new PlanNotFoundException();
-			}
-			try {
-				checkCompleteReady({
-					targetAmount: freshPlan.targetAmount,
-					usedAmount: allocation.usedAmount,
-					allocAmount: allocation.amount,
+				await this.auditService.recordInTx(tx, {
+					organizationId: actor.organizationId,
+					actorUserId: actor.userId,
+					actorType: "USER",
+					action: "plan.complete",
+					targetType: "plan",
+					targetId: planId,
+					result: "SUCCESS",
+					requestId: requestId ?? null,
+					detail: {
+						targetCurrency: freshPlan.targetCurrency,
+						targetAmount: freshPlan.targetAmount.toFixed(4),
+						allocatedAmount: allocation.amount.toFixed(4),
+						usedAmount: allocation.usedAmount.toFixed(4),
+					},
 				});
-			} catch (error) {
-				// 400 PLAN_COMPLETE_NOT_READY（附差值）→ 异常穿透令整个事务回滚，状态流转一并撤销
-				throw this.mapCalcError(error);
-			}
-			await tx.planChangeLog.create({
-				data: {
-					planId,
-					changeType: "COMPLETED",
-					beforeTarget: freshPlan.targetAmount,
-					afterTarget: freshPlan.targetAmount,
-					beforeAlloc: allocation.amount,
-					afterAlloc: allocation.amount,
-					releasedAmount: new Prisma.Decimal(0),
-					beforeSnapshot: this.planRowSnapshot(
-						freshPlan,
-						allocation,
-						"ACTIVE",
-					),
-					afterSnapshot: this.planRowSnapshot(
-						freshPlan,
-						allocation,
-						"COMPLETED",
-					),
-				},
 			});
-		});
-		return this.detailAfterWrite(userId, planId);
+		} catch (error) {
+			if (error instanceof PermissionDeniedException) {
+				await this.recordDeniedAudit(actor, deniedRole, "plan.adjust", requestId);
+			}
+			throw error;
+		}
+		return this.detailAfterWrite(actor, planId);
 	}
 
 	/**
-	 * 取消计划（POST /api/plans/:id/cancel，§4.6）：条件更新同 §4.5（status = "ACTIVE" 谓词）；
-	 * amount → max(used, 0) 释放全部剩余分配（账户余额与真实记录不动，已用部分沉淀不恢复）；
-	 * installments 清空；写 CANCELLED 记录。
+	 * 取消计划（POST /api/plans/:id/cancel，§4.6 / ToB R1 W23）：
+	 * 锁组织复验 plan.adjust → 组织账本与计划行锁 → 条件更新（WHERE status = "ACTIVE"）；
+	 * amount → max(used, 0) 释放全部剩余分配；installments 清空；
+	 * 写 CANCELLED 变更记录与同事务 plan.cancel 审计日志。
 	 */
-	async cancel(userId: string, planId: string): Promise<PlanDetailDto> {
-		await this.prisma.$transaction(async (tx) => {
-			if (!(await lockPlanAccount(tx, userId, planId))) {
-				throw new PlanNotFoundException();
-			}
-			const updated = await tx.plan.updateMany({
-				where: { id: planId, userId, status: "ACTIVE" },
-				data: { status: "CANCELLED" },
-			});
-			if (updated.count === 0) {
-				throw new PlanInvalidTransitionException(
-					"仅进行中的计划可以取消",
+	async cancel(
+		actor: ActorContext,
+		planId: string,
+		requestId: string | null = null,
+	): Promise<PlanDetailDto> {
+		let deniedRole: OrganizationRole = actor.role;
+		try {
+			await this.prisma.$transaction(async (tx) => {
+				const latestRole = await lockOrganizationForActor(tx, actor);
+				if (!can(latestRole, "plan.adjust")) {
+					deniedRole = latestRole;
+					throw new PermissionDeniedException();
+				}
+
+				const preferences = await resolveOrganizationPreferences(
+					tx,
+					actor.organizationId,
 				);
-			}
-			const [freshPlan, allocation] = await Promise.all([
-				tx.plan.findUnique({ where: { id: planId } }),
-				tx.planAllocation.findUnique({ where: { planId } }),
-			]);
-			if (!freshPlan || !allocation) {
-				throw new PlanNotFoundException();
-			}
-			// amount → max(used, 0)（§3.4）：释放额 = max(0, 原分配总额 − 已使用)；余额不动
-			const newAmount = Prisma.Decimal.max(allocation.usedAmount, 0);
-			const releasedAmount = Prisma.Decimal.max(
-				allocation.amount.sub(newAmount),
-				0,
-			);
-			await tx.planAllocation.update({
-				where: { planId },
-				data: { amount: newAmount },
+				if (!preferences) {
+					throw new OnboardingNotCompletedException(
+						"尚未完成首次设置，请先前往 /onboarding 完成建账后再取消计划",
+					);
+				}
+				if (preferences.source === "OWNER_LEGACY") {
+					await materializeLegacyOrganizationSettings(tx, actor.organizationId);
+				}
+
+				if (!(await lockOrgPlanAccount(tx, actor, planId))) {
+					throw new PlanNotFoundException();
+				}
+				await this.lockScopedPlanRow(tx, actor, planId);
+				const current = await tx.plan.findFirst({
+					where: { id: planId, ...compatReadWhere(actor) },
+					select: {
+						id: true,
+						organizationId: true,
+						userId: true,
+						createdById: true,
+					},
+				});
+				if (!current) {
+					throw new PlanNotFoundException();
+				}
+				if (current.organizationId !== null) {
+					assertParentChildSameOrg(current.organizationId, actor.organizationId);
+				}
+
+				const updated = await tx.plan.updateMany({
+					where: {
+						id: planId,
+						...compatReadWhere(actor),
+						status: "ACTIVE",
+					},
+					data: {
+						status: "CANCELLED",
+						...legacyPlanAdoptFields(current, actor.organizationId),
+					},
+				});
+				if (updated.count === 0) {
+					throw new PlanInvalidTransitionException(
+						"仅进行中的计划可以取消",
+					);
+				}
+				const [freshPlan, allocation] = await Promise.all([
+					tx.plan.findUnique({ where: { id: planId } }),
+					tx.planAllocation.findUnique({ where: { planId } }),
+				]);
+				if (!freshPlan || !allocation) {
+					throw new PlanNotFoundException();
+				}
+				// amount → max(used, 0)（§3.4）：释放额 = max(0, 原分配总额 − 已使用)；余额不动
+				const newAmount = Prisma.Decimal.max(allocation.usedAmount, 0);
+				const releasedAmount = Prisma.Decimal.max(
+					allocation.amount.sub(newAmount),
+					0,
+				);
+				await tx.planAllocation.update({
+					where: { planId },
+					data: { amount: newAmount },
+				});
+				await tx.planInstallment.deleteMany({ where: { planId } });
+				await tx.planChangeLog.create({
+					data: {
+						planId,
+						organizationId: actor.organizationId,
+						actorUserId: actor.userId,
+						changeType: "CANCELLED",
+						beforeTarget: freshPlan.targetAmount,
+						afterTarget: freshPlan.targetAmount,
+						beforeAlloc: allocation.amount,
+						afterAlloc: newAmount,
+						releasedAmount,
+						beforeSnapshot: this.planRowSnapshot(
+							freshPlan,
+							allocation,
+							"ACTIVE",
+						),
+						afterSnapshot: this.planRowSnapshot(
+							freshPlan,
+							{ ...allocation, amount: newAmount },
+							"CANCELLED",
+						),
+					},
+				});
+
+				await this.auditService.recordInTx(tx, {
+					organizationId: actor.organizationId,
+					actorUserId: actor.userId,
+					actorType: "USER",
+					action: "plan.cancel",
+					targetType: "plan",
+					targetId: planId,
+					result: "SUCCESS",
+					requestId: requestId ?? null,
+					detail: {
+						targetCurrency: freshPlan.targetCurrency,
+						beforeAlloc: allocation.amount.toFixed(4),
+						afterAlloc: newAmount.toFixed(4),
+						releasedAmount: releasedAmount.toFixed(4),
+					},
+				});
 			});
-			await tx.planInstallment.deleteMany({ where: { planId } });
-			await tx.planChangeLog.create({
-				data: {
-					planId,
-					changeType: "CANCELLED",
-					beforeTarget: freshPlan.targetAmount,
-					afterTarget: freshPlan.targetAmount,
-					beforeAlloc: allocation.amount,
-					afterAlloc: newAmount,
-					releasedAmount,
-					beforeSnapshot: this.planRowSnapshot(
-						freshPlan,
-						allocation,
-						"ACTIVE",
-					),
-					afterSnapshot: this.planRowSnapshot(
-						freshPlan,
-						{ ...allocation, amount: newAmount },
-						"CANCELLED",
-					),
-				},
-			});
-		});
-		return this.detailAfterWrite(userId, planId);
+		} catch (error) {
+			if (error instanceof PermissionDeniedException) {
+				await this.recordDeniedAudit(actor, deniedRole, "plan.adjust", requestId);
+			}
+			throw error;
+		}
+		return this.detailAfterWrite(actor, planId);
 	}
 
 // ────────────────────────── 私有辅助 ──────────────────────────
@@ -878,19 +1156,19 @@ private toAdjustPlanState(
  * 计划（404 归属校验）→ 分配行（1:1，缺行防御性 404）→ 同币种账户余额 →
  * 同币种「其他」计划分配快照（computeCaps otherPlanAllocations 必须按 targetCurrency 过滤）。
  * db 传 PrismaService 或事务客户端均可。
- * 归属过滤见 ledgerWhere：预览传 scope（组织作用域），提交修改不传（{ userId }）。
+ * 全部按 compatReadWhere(scope) 组织作用域读取（零 userId 旁路）。
  */
 private async loadAdjustContext(
 	db: CapsDb,
-	userId: string,
+	scope: ReadScope,
 	planId: string,
-	scope?: ReadScope,
 ): Promise<{
 	plan: Plan;
 	allocation: PlanAllocation;
 	context: AdjustPreviewContext;
 }> {
-	const owner = ledgerWhere(scope, userId);
+	const owner = compatReadWhere(scope);
+	const reservationOwner = await planReservationWhere(db, scope);
 	const plan = await db.plan.findFirst({ where: { id: planId, ...owner } });
 	if (!plan) {
 		throw new PlanNotFoundException();
@@ -901,19 +1179,24 @@ private async loadAdjustContext(
 	if (!allocation) {
 		throw new PlanNotFoundException(); // 创建事务保证 1:1，此处防御性兑底
 	}
-	const [account, siblingPlans] = await Promise.all([
-		db.account.findFirst({
+	const [accounts, siblingPlans] = await Promise.all([
+		db.account.findMany({
 			where: { currencyCode: plan.targetCurrency, ...owner },
+			select: { balance: true },
 		}),
 		db.plan.findMany({
 			where: {
 				targetCurrency: plan.targetCurrency,
 				id: { not: planId },
-				...owner,
+				...reservationOwner,
 			},
 			select: { id: true },
 		}),
 	]);
+	const accountBalance = accounts.reduce(
+		(sum, row) => sum.add(row.balance),
+		new Prisma.Decimal(0),
+	);
 	const currencyInfo = getCurrency(plan.targetCurrency);
 	if (!currencyInfo) {
 		throw new PlanInvalidParamsException(
@@ -932,7 +1215,7 @@ private async loadAdjustContext(
 		plan,
 		allocation,
 		context: {
-			accountBalance: account?.balance ?? new Prisma.Decimal(0),
+			accountBalance,
 			otherPlanAllocations: siblingAllocations.map((allocation) => ({
 				amount: allocation.amount,
 				usedAmount: allocation.usedAmount,
@@ -1366,28 +1649,31 @@ private parseAdjustChange(dto: AdjustPreviewDto): {
 	 * 分配校验（方案 §4.2 / plan-management §3.4）：
 	 * DB 读取在此（账户余额 + 同币种全部计划分配），公式下沉 plan-calculator 唯一实现——
 	 * 未分配余额 = max(0, balance − Σ同币种剩余分配)；创建上限 = min(未分配余额, 还需准备金额)。
-	 * 口径注（§3.4）：迁移后统一 max(0) clamp 口径，与存量公式在 usedAmount = 0 域内
-	 * 逐位一致（存量回归 test/api/plan.spec.ts 锁定）；used > 0 域以新口径为准。
 	 * 事务内调用即为「创建时重检余额」（并发安全的权威防线）。
-	 * MVP 无取消/停用入口（方案 §11），所有计划恒 ACTIVE，故不作 status 过滤。
-	 * 归属过滤见 ledgerWhere：预览传 scope（组织作用域），创建事务不传（{ userId }）。
+	 * 全部按 compatReadWhere(scope) 组织作用域读取（零 userId 旁路）。
 	 */
 	private async computeCaps(
 		db: CapsDb,
-		userId: string,
+		scope: ReadScope,
 		currencyCode: string,
 		targetAmount: Prisma.Decimal,
-		scope?: ReadScope,
 	): Promise<AllocatableCaps> {
-		const owner = ledgerWhere(scope, userId);
-		const [account, plans] = await Promise.all([
-			// (userId, currencyCode) 唯一：不传 scope 时与原 findUnique 等价
-			db.account.findFirst({ where: { currencyCode, ...owner } }),
+		const owner = compatReadWhere(scope);
+		const reservationOwner = await planReservationWhere(db, scope);
+		const [accounts, plans] = await Promise.all([
+			db.account.findMany({
+				where: { currencyCode, ...owner },
+				select: { balance: true },
+			}),
 			db.plan.findMany({
-				where: { targetCurrency: currencyCode, ...owner },
+				where: { targetCurrency: currencyCode, ...reservationOwner },
 				select: { id: true },
 			}),
 		]);
+		const accountBalance = accounts.reduce(
+			(sum, row) => sum.add(row.balance),
+			new Prisma.Decimal(0),
+		);
 		// PlanAllocation 与 Plan 无 Prisma relation（planId 裸外键），按计划 ID 批量取出
 		const allocations =
 			plans.length > 0
@@ -1399,7 +1685,7 @@ private parseAdjustChange(dto: AdjustPreviewDto): {
 		// 创建场景本计划尚不存在：ownPlan = null，全部计划均为「其他计划」
 		const caps = computeCapsPure({
 			mode: "create",
-			accountBalance: account?.balance ?? new Prisma.Decimal(0),
+			accountBalance,
 			otherPlanAllocations: allocations.map((allocation) => ({
 				amount: allocation.amount,
 				usedAmount: allocation.usedAmount,
@@ -1411,6 +1697,39 @@ private parseAdjustChange(dto: AdjustPreviewDto): {
 			allocatableBalance: caps.unallocatedBalance,
 			maxAllocatable: caps.maxAllocatable,
 		};
+	}
+
+	/** 锁内按 compatReadWhere(scope) 对目标 Plan 行加 FOR UPDATE 锁，防止跨组织泄露与并发写竞态 */
+	private async lockScopedPlanRow(
+		tx: Prisma.TransactionClient,
+		scope: ReadScope,
+		planId: string,
+	): Promise<void> {
+		const rows = await tx.$queryRaw<Array<{ id: string }>>`
+			SELECT id FROM plans
+			WHERE id = ${planId}
+				AND (
+					organization_id = ${scope.organizationId}
+					OR (${scope.isDefaultOrganization === true} AND organization_id IS NULL AND user_id = ${scope.userId})
+				)
+			FOR UPDATE`;
+		if (rows.length === 0) {
+			throw new PlanNotFoundException();
+		}
+	}
+
+	private async recordDeniedAudit(
+		actor: ActorContext,
+		role: OrganizationRole,
+		required: Permission,
+		requestId: string | null,
+	): Promise<void> {
+		await recordDeniedAuditBestEffort(this.auditService, this.logger, {
+			actor,
+			role,
+			required,
+			requestId,
+		});
 	}
 
 	/** R1~R6 纯函数调用 + 错误码到 HTTP 400 的映射 */
@@ -1451,6 +1770,18 @@ private parseAdjustChange(dto: AdjustPreviewDto): {
 }
 
 // ── 模块内工具（不依赖注入）─────────────────────────────
+
+/** 收口 legacy (organizationId: null) Plan 时同步回填 organizationId 与 createdById（N-8）。 */
+function legacyPlanAdoptFields(
+	plan: { organizationId: string | null; userId: string; createdById: string | null },
+	organizationId: string,
+): { organizationId: string; createdById: string } | Record<string, never> {
+	if (plan.organizationId !== null) return {};
+	return {
+		organizationId,
+		createdById: plan.createdById ?? plan.userId,
+	};
+}
 
 /**
  * 修改变更主类型归类（§3.3：多字段同改时以目标金额变化优先）：

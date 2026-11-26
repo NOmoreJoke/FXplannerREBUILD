@@ -1,54 +1,91 @@
 import type { HttpException } from "@nestjs/common";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuditService } from "../audit/audit.service";
+import type { ActorContext } from "../authorization/authorization.types";
 import type { PrismaService } from "../prisma/prisma.service";
 import { SettingsService } from "./settings.service";
 
 const T0 = new Date("2026-08-01T00:00:00.000Z");
 
-const settingsRow = {
-	region: "CN",
-	locale: "zh-CN",
-	baseCurrency: "CNY",
-	prepPreference: "balanced",
-	reminderEnabled: true,
-	ledgerStartedAt: T0,
-	user: { email: "user@example.com" },
-};
-
-/** 组织偏好解析所需的 mock（评审 I-08/I-10）：组织设置 → 所有者 → 所有者默认组织 → 所有者个人设置 */
 type SettingsRowLike = Record<string, unknown>;
 
 function createPrismaMock(overrides: {
 	organizationSettings?: SettingsRowLike | null;
 	ownerUserId?: string | null;
 	ownerDefaultOrganizationId?: string | null;
-	/** 各用户的个人设置行（按 userId）；缺省用户 = 无个人设置行 */
 	userSettingsByUserId?: Record<string, SettingsRowLike>;
+	lockedMembership?: {
+		organizationId: string;
+		role: string;
+		status: string;
+	} | null;
 } = {}) {
 	const userSettings = {
-		// 同一个 mock 服务两种查询：请求者本人的展示字段 / 兼容回落时所有者的设置
 		findUnique: vi.fn((args: { where: { userId: string } }) =>
 			Promise.resolve(overrides.userSettingsByUserId?.[args.where.userId] ?? null),
 		),
 		update: vi.fn(),
+		updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+		upsert: vi.fn(
+			async (args: {
+				where: { userId: string };
+				create: { region: string; locale: string };
+				update: { region?: string; locale?: string };
+			}) => {
+				const existing = overrides.userSettingsByUserId?.[args.where.userId];
+				return {
+					region: args.update.region ?? (existing?.region as string | undefined) ?? args.create.region,
+					locale: args.update.locale ?? (existing?.locale as string | undefined) ?? args.create.locale,
+				};
+			},
+		),
 	};
 	const organizationSettings = {
 		findUnique: vi.fn().mockResolvedValue(overrides.organizationSettings ?? null),
+		create: vi.fn(async (args: { data: SettingsRowLike }) => args.data),
+		upsert: vi.fn(async (args: { create: SettingsRowLike }) => args.create),
+		update: vi.fn(async (args: { data: SettingsRowLike }) => ({
+			...(overrides.organizationSettings ?? orgSettingsRow),
+			...args.data,
+		})),
 	};
 	const membership = {
-		// 组织的活跃 Owner（resolveOrganizationPreferences）
 		findFirst: vi.fn(() =>
 			Promise.resolve(overrides.ownerUserId ? { userId: overrides.ownerUserId } : null),
 		),
+		findUnique: vi.fn().mockResolvedValue(
+			overrides.lockedMembership === undefined
+				? { organizationId: "org-test", role: "OWNER", status: "ACTIVE" }
+				: overrides.lockedMembership,
+		),
 	};
-	// 所有者的默认组织（resolveDefaultOrganizationId 走原生 SQL，评审 R2-I03）：
-	// 无 = 该用户尚未创建任何组织
 	const $queryRaw = vi.fn(async () =>
 		overrides.ownerDefaultOrganizationId
 			? [{ organizationId: overrides.ownerDefaultOrganizationId }]
 			: [],
 	);
-	return { userSettings, organizationSettings, membership, $queryRaw };
+	const $executeRaw = vi.fn().mockResolvedValue(1);
+	const prisma = {
+		userSettings,
+		organizationSettings,
+		membership,
+		$queryRaw,
+		$executeRaw,
+		$transaction: vi.fn(async (cb: (tx: typeof prisma) => Promise<unknown>) =>
+			cb(prisma),
+		),
+	};
+	return prisma;
+}
+
+function createAuditMock() {
+	return {
+		recordInTx: vi.fn().mockResolvedValue(undefined),
+		recordStandalone: vi.fn().mockResolvedValue(undefined),
+	} as unknown as {
+		recordInTx: ReturnType<typeof vi.fn>;
+		recordStandalone: ReturnType<typeof vi.fn>;
+	} & AuditService;
 }
 
 const orgSettingsRow = {
@@ -63,6 +100,15 @@ const legacySettingsRow = {
 	prepPreference: "cautious",
 	reminderEnabled: false,
 	ledgerStartedAt: T0,
+};
+
+const OWNER_ACTOR: ActorContext = {
+	userId: "u1",
+	organizationId: "org-test",
+	membershipId: "mem-1",
+	role: "OWNER",
+	authMethod: "USER",
+	isDefaultOrganization: true,
 };
 
 function errorOf(action: () => Promise<unknown>) {
@@ -82,25 +128,30 @@ function errorOf(action: () => Promise<unknown>) {
 
 describe("SettingsService", () => {
 	let prisma: ReturnType<typeof createPrismaMock>;
+	let audit: ReturnType<typeof createAuditMock>;
 	let service: SettingsService;
 
-	/** 以指定组织偏好形态构造服务（默认：无组织设置、无所有者 = 未建账） */
 	function buildService(overrides: Parameters<typeof createPrismaMock>[0] = {}) {
 		const mock = createPrismaMock(overrides);
+		const auditMock = createAuditMock();
 		return {
 			mock,
-			instance: new SettingsService(mock as unknown as PrismaService),
+			auditMock,
+			instance: new SettingsService(
+				mock as unknown as PrismaService,
+				auditMock,
+			),
 		};
 	}
 
 	beforeEach(() => {
-		prisma = createPrismaMock();
-		service = new SettingsService(prisma as unknown as PrismaService);
+		prisma = createPrismaMock({ organizationSettings: orgSettingsRow });
+		audit = createAuditMock();
+		service = new SettingsService(prisma as unknown as PrismaService, audit);
 	});
 
 	describe("getSettings（组织偏好 + 个人展示字段；评审 I-08/I-10）", () => {
 		const SCOPE = { userId: "u1", organizationId: "org-test" };
-		/** 守卫链已解析的登录身份（控制器传入，服务不再查 user） */
 		const IDENTITY = { email: "user@example.com" };
 
 		it("未建账（无组织设置、无所有者个人设置）→ 409 ONBOARDING_NOT_COMPLETED", async () => {
@@ -118,7 +169,7 @@ describe("SettingsService", () => {
 			const view = await instance.getSettings(SCOPE, IDENTITY);
 
 			expect(view).toEqual({
-				email: "user@example.com", // 守卫链解析的登录身份，不依赖个人设置行
+				email: "user@example.com",
 				region: "CN",
 				locale: "zh-CN",
 				baseCurrency: "CNY",
@@ -135,7 +186,7 @@ describe("SettingsService", () => {
 					u1: {
 						region: "HK",
 						locale: "en",
-						baseCurrency: "JPY", // 个人行里的旧本位币不得带出
+						baseCurrency: "JPY",
 					},
 				},
 			});
@@ -191,7 +242,7 @@ describe("SettingsService", () => {
 		it("非默认组织绝不回落：创建者个人已建账，但其新建组织仍判未建账（评审 I-08）", async () => {
 			const { instance } = buildService({
 				ownerUserId: "u1",
-				ownerDefaultOrganizationId: "org-default", // 创建者的默认组织是另一个
+				ownerDefaultOrganizationId: "org-default",
 				userSettingsByUserId: {
 					u1: { ...legacySettingsRow, region: "CN", locale: "zh-CN", user: { email: "user@example.com" } },
 				},
@@ -204,88 +255,334 @@ describe("SettingsService", () => {
 		});
 	});
 
-	describe("updateSettings", () => {
+	describe("updateSettings（个人/组织分权 + 锁内复验 + 审计）", () => {
+		const IDENTITY = { email: "user@example.com" };
+
 		it("全空入参 → 400 SETTINGS_UPDATE_EMPTY（含 baseCurrency 的请求剥后为空，同一防线）", async () => {
 			const { status, body } = await errorOf(() =>
-				service.updateSettings("u1", {}),
+				service.updateSettings(OWNER_ACTOR, {}, IDENTITY, "req-empty"),
 			);
 
 			expect(status).toBe(400);
 			expect(body.code).toBe("SETTINGS_UPDATE_EMPTY");
-			expect(prisma.userSettings.update).not.toHaveBeenCalled();
+			expect(prisma.organizationSettings.update).not.toHaveBeenCalled();
+			expect(prisma.userSettings.upsert).not.toHaveBeenCalled();
 		});
 
-		it("四字段更新：data 只含白名单字段，绝不含 baseCurrency", async () => {
-			prisma.userSettings.update.mockResolvedValue(settingsRow);
-			prisma.userSettings.findUnique.mockResolvedValue(settingsRow);
+		it("VIEWER/OPERATOR/FINANCE 更新组织偏好 → 403 PERMISSION_DENIED + recordStandalone DENIED", async () => {
+			for (const role of ["VIEWER", "OPERATOR", "FINANCE"] as const) {
+				const { instance, mock, auditMock } = buildService({
+					organizationSettings: orgSettingsRow,
+				});
+				const { status, body } = await errorOf(() =>
+					instance.updateSettings(
+						{ ...OWNER_ACTOR, role },
+						{ prepPreference: "cautious" },
+						IDENTITY,
+						`req-${role}`,
+					),
+				);
 
-			await service.updateSettings("u1", {
-				region: "HK",
-				locale: "en",
-				prepPreference: "cautious",
-				reminderEnabled: false,
+				expect(status, role).toBe(403);
+				expect(body.code).toBe("PERMISSION_DENIED");
+				expect(auditMock.recordStandalone).toHaveBeenCalledWith({
+					organizationId: "org-test",
+					actorUserId: "u1",
+					actorType: "USER",
+					action: "permission.denied.settings.update",
+					result: "DENIED",
+					requestId: `req-${role}`,
+					detail: { required: "settings.update", role },
+				});
+				expect(mock.$transaction).not.toHaveBeenCalled();
+			}
+		});
+
+		it("锁等期间降权 → 事务中止 + recordStandalone DENIED + 403", async () => {
+			const { instance, mock, auditMock } = buildService({
+				organizationSettings: orgSettingsRow,
+				lockedMembership: {
+					organizationId: "org-test",
+					role: "VIEWER",
+					status: "ACTIVE",
+				},
 			});
-
-			const [arg] = prisma.userSettings.update.mock.calls[0];
-			expect(arg.where).toEqual({ userId: "u1" });
-			expect(arg.data).toEqual({
-				region: "HK",
-				locale: "en",
-				prepPreference: "cautious",
-				reminderEnabled: false,
-			});
-			expect("baseCurrency" in arg.data).toBe(false);
-		});
-
-		it("部分字段更新：未提供的字段不出现在 data（不覆盖）", async () => {
-			prisma.userSettings.update.mockResolvedValue(settingsRow);
-			prisma.userSettings.findUnique.mockResolvedValue(settingsRow);
-
-			await service.updateSettings("u1", { reminderEnabled: false });
-
-			const [arg] = prisma.userSettings.update.mock.calls[0];
-			expect(arg.data).toEqual({ reminderEnabled: false });
-		});
-
-		it("更新成功后返回完整视图（同 getSettings 形状）", async () => {
-			const updated = {
-				...settingsRow,
-				locale: "en",
-				user: { email: "u@e.com" },
-			};
-			prisma.userSettings.update.mockResolvedValue(updated);
-			prisma.userSettings.findUnique.mockResolvedValue(updated);
-
-			const view = await service.updateSettings("u1", { locale: "en" });
-
-			expect(view.locale).toBe("en");
-			expect(view.email).toBe("u@e.com");
-			expect(view.baseCurrency).toBe("CNY");
-		});
-
-		it("记录不存在（P2025）→ 409 ONBOARDING_NOT_COMPLETED", async () => {
-			prisma.userSettings.update.mockRejectedValue(
-				Object.assign(new Error("Record to update not found"), {
-					code: "P2025",
-				}),
-			);
 
 			const { status, body } = await errorOf(() =>
-				service.updateSettings("u1", { locale: "en" }),
+				instance.updateSettings(
+					OWNER_ACTOR,
+					{ reminderEnabled: false },
+					IDENTITY,
+					"req-demoted",
+				),
+			);
+
+			expect(status).toBe(403);
+			expect(body.code).toBe("PERMISSION_DENIED");
+			expect(mock.organizationSettings.update).not.toHaveBeenCalled();
+			expect(auditMock.recordInTx).not.toHaveBeenCalled();
+			expect(auditMock.recordStandalone).toHaveBeenCalledWith({
+				organizationId: "org-test",
+				actorUserId: "u1",
+				actorType: "USER",
+				action: "permission.denied.settings.update",
+				result: "DENIED",
+				requestId: "req-demoted",
+				detail: { required: "settings.update", role: "VIEWER" },
+			});
+		});
+
+		it("N-17 混合个人+组织字段（{ region, prepPreference }）对无权角色 / 锁等降权均 403 且双方零写入", async () => {
+			for (const role of ["VIEWER", "OPERATOR"] as const) {
+				const { instance, mock, auditMock } = buildService({
+					organizationSettings: orgSettingsRow,
+				});
+				const { status, body } = await errorOf(() =>
+					instance.updateSettings(
+						{ ...OWNER_ACTOR, role, isDefaultOrganization: false },
+						{ region: "HK", prepPreference: "cautious" },
+						IDENTITY,
+						`req-mixed-${role}`,
+					),
+				);
+				expect(status, role).toBe(403);
+				expect(body.code).toBe("PERMISSION_DENIED");
+				expect(mock.$transaction).not.toHaveBeenCalled();
+				expect(mock.userSettings.upsert).not.toHaveBeenCalled();
+				expect(mock.organizationSettings.update).not.toHaveBeenCalled();
+				expect(auditMock.recordStandalone).toHaveBeenCalledWith({
+					organizationId: "org-test",
+					actorUserId: "u1",
+					actorType: "USER",
+					action: "permission.denied.settings.update",
+					result: "DENIED",
+					requestId: `req-mixed-${role}`,
+					detail: { required: "settings.update", role },
+				});
+			}
+
+			// 锁等降权场景：混合入参也不得提前写入 UserSettings
+			const { instance, mock, auditMock } = buildService({
+				organizationSettings: orgSettingsRow,
+				lockedMembership: {
+					organizationId: "org-test",
+					role: "OPERATOR",
+					status: "ACTIVE",
+				},
+			});
+			const { status } = await errorOf(() =>
+				instance.updateSettings(
+					OWNER_ACTOR,
+					{ region: "HK", locale: "en", prepPreference: "cautious" },
+					IDENTITY,
+					"req-mixed-demote",
+				),
+			);
+			expect(status).toBe(403);
+			expect(mock.userSettings.upsert).not.toHaveBeenCalled();
+			expect(mock.organizationSettings.update).not.toHaveBeenCalled();
+			expect(auditMock.recordInTx).not.toHaveBeenCalled();
+		});
+
+		it("VIEWER 仅更新 region/locale → 放行写 UserSettings，不写组织设置或组织审计", async () => {
+			const { instance, mock, auditMock } = buildService({
+				organizationSettings: orgSettingsRow,
+			});
+
+			const view = await instance.updateSettings(
+				{ ...OWNER_ACTOR, role: "VIEWER", isDefaultOrganization: false },
+				{ region: "HK", locale: "en" },
+				IDENTITY,
+				"req-viewer-personal",
+			);
+
+			expect(view).toMatchObject({
+				email: "user@example.com",
+				region: "HK",
+				locale: "en",
+				baseCurrency: "CNY",
+				prepPreference: "balanced",
+			});
+			expect(mock.userSettings.upsert).toHaveBeenCalledWith({
+				where: { userId: "u1" },
+				create: {
+					userId: "u1",
+					baseCurrency: "",
+					region: "HK",
+					locale: "en",
+				},
+				update: { region: "HK", locale: "en" },
+				select: { region: true, locale: true },
+			});
+			expect(mock.organizationSettings.update).not.toHaveBeenCalled();
+			expect(auditMock.recordInTx).not.toHaveBeenCalled();
+		});
+
+		it("四字段更新（默认组织）：写 OrganizationSettings + 同步本人 UserSettings 兼容列 + 同事务写审计", async () => {
+			const view = await service.updateSettings(
+				OWNER_ACTOR,
+				{
+					region: "HK",
+					locale: "en",
+					prepPreference: "cautious",
+					reminderEnabled: false,
+				},
+				IDENTITY,
+				"req-1",
+			);
+
+			expect(prisma.organizationSettings.update).toHaveBeenCalledWith({
+				where: { organizationId: "org-test" },
+				data: { prepPreference: "cautious", reminderEnabled: false },
+			});
+			expect(prisma.userSettings.updateMany).toHaveBeenCalledWith({
+				where: { userId: "u1" },
+				data: { prepPreference: "cautious", reminderEnabled: false },
+			});
+			const [upsertArg] = prisma.userSettings.upsert.mock.calls[0];
+			expect(upsertArg.update).toEqual({ region: "HK", locale: "en" });
+			expect("baseCurrency" in upsertArg.update).toBe(false);
+			expect(audit.recordInTx).toHaveBeenCalledWith(
+				prisma,
+				expect.objectContaining({
+					organizationId: "org-test",
+					actorUserId: "u1",
+					action: "settings.update",
+					targetType: "organization_settings",
+					targetId: "org-test",
+					result: "SUCCESS",
+					requestId: "req-1",
+				}),
+			);
+			expect(view).toMatchObject({
+				region: "HK",
+				locale: "en",
+				prepPreference: "cautious",
+				reminderEnabled: false,
+				baseCurrency: "CNY",
+			});
+		});
+
+		it("非默认组织更新组织偏好：不触碰本人 UserSettings 兼容列", async () => {
+			await service.updateSettings(
+				{ ...OWNER_ACTOR, isDefaultOrganization: false },
+				{ reminderEnabled: false },
+				IDENTITY,
+			);
+
+			expect(prisma.organizationSettings.update).toHaveBeenCalledWith({
+				where: { organizationId: "org-test" },
+				data: { reminderEnabled: false },
+			});
+			expect(prisma.userSettings.updateMany).not.toHaveBeenCalled();
+		});
+
+		it("OWNER_LEGACY 组织更新组织偏好前先固化 OrganizationSettings", async () => {
+			const { instance, mock } = buildService({
+				organizationSettings: null,
+				ownerUserId: "u1",
+				ownerDefaultOrganizationId: "org-test",
+				userSettingsByUserId: { u1: legacySettingsRow },
+			});
+
+			const view = await instance.updateSettings(
+				OWNER_ACTOR,
+				{ prepPreference: "proactive" },
+				IDENTITY,
+			);
+
+			expect(mock.organizationSettings.upsert).toHaveBeenCalledTimes(1);
+			expect(mock.organizationSettings.update).toHaveBeenCalledWith({
+				where: { organizationId: "org-test" },
+				data: { prepPreference: "proactive" },
+			});
+			expect(view.baseCurrency).toBe("USD");
+		});
+
+		it("未建账组织 PATCH → 409 ONBOARDING_NOT_COMPLETED", async () => {
+			const { instance } = buildService();
+
+			const { status, body } = await errorOf(() =>
+				instance.updateSettings(OWNER_ACTOR, { locale: "en" }, IDENTITY),
 			);
 
 			expect(status).toBe(409);
 			expect(body.code).toBe("ONBOARDING_NOT_COMPLETED");
 		});
+	});
 
-		it("非 P2025 的更新错误原样抛出", async () => {
-			prisma.userSettings.update.mockRejectedValue(
-				new Error("connection refused"),
+	describe("getPersonalSettings / updatePersonalSettings（无组织/未建账可用）", () => {
+		it("无 UserSettings 时 GET /settings/personal 返回产品默认值", async () => {
+			const { instance } = buildService();
+
+			const view = await instance.getPersonalSettings("u1", { email: "u@e.com" });
+
+			expect(view).toEqual({
+				email: "u@e.com",
+				region: "CN",
+				locale: "zh-CN",
+			});
+		});
+
+		it("PATCH /settings/personal 全空 → 400 SETTINGS_UPDATE_EMPTY", async () => {
+			const { status, body } = await errorOf(() =>
+				service.updatePersonalSettings("u1", {}, { email: "u@e.com" }),
 			);
 
-			await expect(
-				service.updateSettings("u1", { locale: "en" }),
-			).rejects.toThrow("connection refused");
+			expect(status).toBe(400);
+			expect(body.code).toBe("SETTINGS_UPDATE_EMPTY");
+		});
+
+		it("PATCH /settings/personal upsert 个人行且不创建 OrganizationSettings", async () => {
+			const { instance, mock, auditMock } = buildService();
+
+			const view = await instance.updatePersonalSettings(
+				"u1",
+				{ region: "HK", locale: "en" },
+				{ email: "u@e.com" },
+			);
+
+			expect(view).toEqual({ email: "u@e.com", region: "HK", locale: "en" });
+			expect(mock.userSettings.upsert).toHaveBeenCalledWith({
+				where: { userId: "u1" },
+				create: {
+					userId: "u1",
+					baseCurrency: "",
+					region: "HK",
+					locale: "en",
+				},
+				update: { region: "HK", locale: "en" },
+				select: { region: true, locale: true },
+			});
+			expect(mock.organizationSettings.create).not.toHaveBeenCalled();
+			expect(mock.organizationSettings.upsert).not.toHaveBeenCalled();
+			expect(mock.organizationSettings.update).not.toHaveBeenCalled();
+			expect(auditMock.recordInTx).not.toHaveBeenCalled();
+		});
+
+		it("个人占位行（baseCurrency=\"\"）不影响组织未建账判定（getSettings 仍 409）", async () => {
+			const { instance } = buildService({
+				organizationSettings: null,
+				ownerUserId: "u1",
+				ownerDefaultOrganizationId: "org-test",
+				userSettingsByUserId: {
+					u1: {
+						baseCurrency: "",
+						region: "HK",
+						locale: "en",
+						prepPreference: "balanced",
+						reminderEnabled: true,
+						ledgerStartedAt: null,
+					},
+				},
+			});
+
+			const { status, body } = await errorOf(() =>
+				instance.getSettings({ userId: "u1", organizationId: "org-test" }, { email: "u@e.com" }),
+			);
+
+			expect(status).toBe(409);
+			expect(body.code).toBe("ONBOARDING_NOT_COMPLETED");
 		});
 	});
 });

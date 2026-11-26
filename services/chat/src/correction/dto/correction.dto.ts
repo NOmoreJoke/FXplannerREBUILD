@@ -569,10 +569,32 @@ export class CorrectionApplyResultDto {
 	createdAt!: string;
 }
 
-/** 修改记录条目（列表响应；FAILED 附 failReason，快照原样透出） */
+/**
+ * 修改记录条目（列表响应；FAILED 附 failReason，快照原样透出）。
+ * LEDGER-04.4：更正日志须显示实际操作者与所属组织——organizationId / actorUserId 在这里下发
+ * （提交响应 CorrectionApplyResultDto 保持原形，不新增必填字段，前端既有类型夹具不受影响）。
+ */
 export class CorrectionDto {
 	@ApiProperty({ description: "更正记录 ID", example: "cmbC...", type: String })
 	id!: string;
+
+	@ApiProperty({
+		description:
+			"所属组织 ID（LEDGER-04.4：更正日志须显示所属组织；组织化之前尚未回填的存量记录为 null）",
+		example: "cmbO...",
+		type: String,
+		nullable: true,
+	})
+	organizationId!: string | null;
+
+	@ApiProperty({
+		description:
+			"实际操作者用户 ID（LEDGER-04.4：发起本次更正的成员；组织化之前尚未回填的存量记录为 null）",
+		example: "cme…",
+		type: String,
+		nullable: true,
+	})
+	actorUserId!: string | null;
 
 	@ApiProperty({
 		description: "目标类型",

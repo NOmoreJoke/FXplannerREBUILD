@@ -7,7 +7,10 @@
 import type { INestApplication } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { AuditService } from "../../src/audit/audit.service";
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
+import { runBehindAdvisoryLock } from "../helpers/postgres-lock-barrier";
 import {
 	bearer,
 	cleanupUser,
@@ -311,19 +314,9 @@ describe("TransactionController（接口）", () => {
 			expect(late.body.code).toBe("INVALID_TRANSACTION_PARAMS");
 			expect(late.body.message).toContain("晚于今天");
 
-			// 设置账本起点为 10 天前
+			// 设置账本起点为 10 天前（同步更新 UserSettings 与默认组织 OrganizationSettings）
 			const ledgerStart = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
-			await ctx.prisma.userSettings.upsert({
-				where: { userId: userA.userId },
-				update: { ledgerStartedAt: ledgerStart },
-				create: {
-					userId: userA.userId,
-					baseCurrency: "CNY",
-					locale: "zh-CN",
-					region: "CN",
-					ledgerStartedAt: ledgerStart,
-				},
-			});
+			await ensureOnboarded(ctx.prisma, userA.userId, "CNY", ledgerStart);
 
 			// 早于账本起点 → 400，message 与上界失败可区分
 			const early = await postTx(userA, {
@@ -431,10 +424,8 @@ describe("TransactionController（接口）", () => {
 
 	it("#16 组合级不变式：USD 账户 Σ costLot.remainingQty === balance（10000 + 250.25）", async () => {
 		// 前序用例累计：#2 doc 05（10000）+ #6（250.25）= 10250.25
-		const account = await ctx.prisma.account.findUnique({
-			where: {
-				userId_currencyCode: { userId: userA.userId, currencyCode: "USD" },
-			},
+		const account = await ctx.prisma.account.findFirst({
+			where: { userId: userA.userId, currencyCode: "USD" },
 		});
 		expect(account?.balance.toFixed(4)).toBe("10250.2500");
 
@@ -478,5 +469,339 @@ describe("TransactionController（接口）", () => {
 				where: { userId: userA.userId, currencyCode: "CAD" },
 			}),
 		).toBe(0);
+	});
+});
+
+describe("ToB R1 W23：Transaction 写接口 Actor 化 + 权限矩阵 + 跨组织隔离 + 锁内降权 + 审计回滚（支持 -t 独立运行）", () => {
+	let ctx: TestContext;
+	let app: INestApplication;
+	const scopedUserIds: string[] = [];
+	const scopedPlanIds: string[] = [];
+
+	beforeAll(async () => {
+		ctx = await createTestApp();
+		app = ctx.app;
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		if (scopedPlanIds.length > 0) {
+			await ctx.prisma.planAllocation.deleteMany({
+				where: { planId: { in: scopedPlanIds.splice(0) } },
+			});
+		}
+		while (scopedUserIds.length > 0) {
+			const uid = scopedUserIds.pop()!;
+			await cleanupUser(ctx.prisma, uid);
+		}
+	});
+
+	afterAll(async () => {
+		await app?.close();
+	});
+
+	async function setupOrgWithMember(
+		label: string,
+		role: "OWNER" | "ADMIN" | "FINANCE" | "OPERATOR" | "VIEWER",
+	) {
+		const owner = await createTestUser(app, `tx-w23-owner-${label}`);
+		scopedUserIds.push(owner.userId);
+		await ensureOnboarded(ctx.prisma, owner.userId);
+		const orgId = (await resolveDefaultOrganizationId(ctx.prisma, owner.userId))!;
+		const member = await createTestUser(app, `tx-w23-mem-${label}`);
+		scopedUserIds.push(member.userId);
+		await ctx.prisma.membership.create({
+			data: {
+				organizationId: orgId,
+				userId: member.userId,
+				role,
+				status: "ACTIVE",
+			},
+		});
+		return { owner, member, orgId };
+	}
+
+	it.each(["OPERATOR", "VIEWER"] as const)(
+		"W23-TX-1 %s 调用 POST /api/transactions → 403 PERMISSION_DENIED + DENIED 审计 + 零账本写入",
+		async (role) => {
+			const { member, orgId } = await setupOrgWithMember(role.toLowerCase(), role);
+			const reqId = `req-tx-denied-${role}-${Date.now()}`;
+
+			const res = await request(app.getHttpServer())
+				.post("/api/transactions")
+				.set(bearer(member.accessToken))
+				.set("X-Organization-Id", orgId)
+				.set("X-Request-Id", reqId)
+				.send(simpleBody("USD", "100.00"))
+				.expect(403);
+			expect(res.body.code).toBe("PERMISSION_DENIED");
+
+			expect(
+				await ctx.prisma.transaction.count({ where: { organizationId: orgId } }),
+			).toBe(0);
+			expect(
+				await ctx.prisma.costLot.count({ where: { organizationId: orgId } }),
+			).toBe(0);
+			expect(
+				await ctx.prisma.account.count({ where: { organizationId: orgId } }),
+			).toBe(0);
+
+			const deniedAudit = await ctx.prisma.auditLog.findFirst({
+				where: {
+					organizationId: orgId,
+					actorUserId: member.userId,
+					action: "permission.denied.transaction.create",
+					result: "DENIED",
+					requestId: reqId,
+				},
+			});
+			expect(deniedAudit).not.toBeNull();
+		},
+	);
+
+	it("W23-TX-2 多成员共享账本：Owner 与 Finance 同币种买入共写同一组织 Account + CostLot + 同事务 AuditLog", async () => {
+		const { owner, member: finance, orgId } = await setupOrgWithMember(
+			"shared",
+			"FINANCE",
+		);
+		const req1 = `req-tx-owner-${Date.now()}`;
+		const req2 = `req-tx-fin-${Date.now()}`;
+
+		const res1 = await request(app.getHttpServer())
+			.post("/api/transactions")
+			.set(bearer(owner.accessToken))
+			.set("X-Organization-Id", orgId)
+			.set("X-Request-Id", req1)
+			.send(simpleBody("USD", "300.00"))
+			.expect(201);
+
+		const res2 = await request(app.getHttpServer())
+			.post("/api/transactions")
+			.set(bearer(finance.accessToken))
+			.set("X-Organization-Id", orgId)
+			.set("X-Request-Id", req2)
+			.send(simpleBody("USD", "200.50"))
+			.expect(201);
+
+		const accounts = await ctx.prisma.account.findMany({
+			where: { organizationId: orgId, currencyCode: "USD" },
+		});
+		expect(accounts).toHaveLength(1);
+		expect(accounts[0].balance.toFixed(4)).toBe("500.5000");
+
+		const txRows = await ctx.prisma.transaction.findMany({
+			where: { organizationId: orgId },
+			orderBy: { createdAt: "asc" },
+		});
+		expect(txRows).toHaveLength(2);
+		expect(txRows.map((t) => t.createdById)).toEqual([
+			owner.userId,
+			finance.userId,
+		]);
+
+		const lots = await ctx.prisma.costLot.findMany({
+			where: { organizationId: orgId, currencyCode: "USD" },
+		});
+		expect(lots).toHaveLength(2);
+		expect(lots.every((l) => l.organizationId === orgId)).toBe(true);
+
+		const audits = await ctx.prisma.auditLog.findMany({
+			where: {
+				organizationId: orgId,
+				action: "transaction.create",
+				result: "SUCCESS",
+			},
+		});
+		expect(audits.map((a) => a.targetId).sort()).toEqual(
+			[res1.body.data.id, res2.body.data.id].sort(),
+		);
+		expect(audits.map((a) => a.requestId).sort()).toEqual([req1, req2].sort());
+	});
+
+	it("W23-TX-3 跨组织 planId 隔离：多组织用户在 Org B 关联 Org A 计划 → 404 PLAN_NOT_FOUND", async () => {
+		const user = await createTestUser(app, "tx-w23-cross-org");
+		scopedUserIds.push(user.userId);
+		await ensureOnboarded(ctx.prisma, user.userId);
+		const orgAId = (await resolveDefaultOrganizationId(ctx.prisma, user.userId))!;
+
+		const orgBRes = await request(app.getHttpServer())
+			.post("/api/organizations")
+			.set(bearer(user.accessToken))
+			.send({ name: "TX 跨组织测试 B" })
+			.expect(201);
+		const orgBId = orgBRes.body.data.id as string;
+		await ctx.prisma.organizationSettings.create({
+			data: {
+				organizationId: orgBId,
+				baseCurrency: "CNY",
+				prepPreference: "balanced",
+				reminderEnabled: true,
+			},
+		});
+
+		const future = new Date("2030-02-15T00:00:00.000Z");
+		const planInA = await ctx.prisma.plan.create({
+			data: {
+				userId: user.userId,
+				organizationId: orgAId,
+				createdById: user.userId,
+				name: "Org A 专属计划",
+				targetCurrency: "USD",
+				targetAmount: "5000",
+				expectUseDate: future,
+				latestPrepDate: future,
+			},
+		});
+		scopedPlanIds.push(planInA.id);
+
+		const cross = await request(app.getHttpServer())
+			.post("/api/transactions")
+			.set(bearer(user.accessToken))
+			.set("X-Organization-Id", orgBId)
+			.send({ ...simpleBody("USD", "100.00"), planId: planInA.id })
+			.expect(404);
+		expect(cross.body.code).toBe("PLAN_NOT_FOUND");
+		expect(
+			await ctx.prisma.transaction.count({ where: { organizationId: orgBId } }),
+		).toBe(0);
+	});
+
+	it("W23-TX-4 锁等期间降权（FINANCE → OPERATOR）：事务内复验失败 → 403 + DENIED 审计 + 零写入", async () => {
+		const { member: finance, orgId } = await setupOrgWithMember(
+			"demote",
+			"FINANCE",
+		);
+		const reqId = `req-tx-demote-${Date.now()}`;
+
+		const res = await runBehindAdvisoryLock(
+			ctx.prisma,
+			`membership:${orgId}`,
+			() =>
+				request(app.getHttpServer())
+					.post("/api/transactions")
+					.set(bearer(finance.accessToken))
+					.set("X-Organization-Id", orgId)
+					.set("X-Request-Id", reqId)
+					.send(simpleBody("USD", "250.00")),
+			async () => {
+				await ctx.prisma.membership.update({
+					where: {
+						organizationId_userId: {
+							organizationId: orgId,
+							userId: finance.userId,
+						},
+					},
+					data: { role: "OPERATOR" },
+				});
+			},
+		);
+
+		expect(res.status).toBe(403);
+		expect(res.body.code).toBe("PERMISSION_DENIED");
+		expect(
+			await ctx.prisma.transaction.count({ where: { organizationId: orgId } }),
+		).toBe(0);
+		expect(
+			await ctx.prisma.costLot.count({ where: { organizationId: orgId } }),
+		).toBe(0);
+		expect(
+			await ctx.prisma.account.count({ where: { organizationId: orgId } }),
+		).toBe(0);
+		const denied = await ctx.prisma.auditLog.findFirst({
+			where: {
+				organizationId: orgId,
+				actorUserId: finance.userId,
+				action: "permission.denied.transaction.create",
+				result: "DENIED",
+				requestId: reqId,
+			},
+		});
+		expect(denied).not.toBeNull();
+	});
+
+	it("W23-TX-5 AuditService.recordInTx 故障注入：Transaction / CostLot / Account 整单回滚", async () => {
+		const { member: finance, orgId } = await setupOrgWithMember(
+			"audit-fault",
+			"FINANCE",
+		);
+
+		vi.spyOn(app.get(AuditService), "recordInTx").mockRejectedValueOnce(
+			new Error("injected tx audit failure"),
+		);
+
+		await request(app.getHttpServer())
+			.post("/api/transactions")
+			.set(bearer(finance.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send(simpleBody("EUR", "500.00"))
+			.expect(500);
+
+		expect(
+			await ctx.prisma.transaction.count({ where: { organizationId: orgId } }),
+		).toBe(0);
+		expect(
+			await ctx.prisma.costLot.count({ where: { organizationId: orgId } }),
+		).toBe(0);
+		expect(
+			await ctx.prisma.account.count({ where: { organizationId: orgId } }),
+		).toBe(0);
+	});
+
+	it("I-2 双账户行防护：受邀 FINANCE 买入合并 Owner 遗留 NULL 账户与既有组织账户（零 P2002 且双方余额一致）", async () => {
+		const { owner, member: finance, orgId } = await setupOrgWithMember(
+			"i2-dual-merge",
+			"FINANCE",
+		);
+		// 构造双行异常前置态：既有组织行(20) + Owner legacy NULL 行(50)
+		await ctx.prisma.account.create({
+			data: {
+				userId: owner.userId,
+				organizationId: orgId,
+				createdById: owner.userId,
+				currencyCode: "USD",
+				balance: "20.0000",
+			},
+		});
+		await ctx.prisma.account.create({
+			data: {
+				userId: owner.userId,
+				organizationId: null,
+				currencyCode: "USD",
+				balance: "50.0000",
+			},
+		});
+
+		await request(app.getHttpServer())
+			.post("/api/transactions")
+			.set(bearer(finance.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send(simpleBody("USD", "30.00"))
+			.expect(201);
+
+		const orgAccounts = await ctx.prisma.account.findMany({
+			where: { organizationId: orgId, currencyCode: "USD" },
+		});
+		expect(orgAccounts).toHaveLength(1);
+		expect(orgAccounts[0].balance.toFixed(4)).toBe("100.0000");
+		expect(
+			await ctx.prisma.account.count({
+				where: { userId: owner.userId, organizationId: null, currencyCode: "USD" },
+			}),
+		).toBe(0);
+
+		const [ownerAccounts, financeAccounts] = await Promise.all([
+			request(app.getHttpServer())
+				.get("/api/accounts/USD")
+				.set(bearer(owner.accessToken))
+				.set("X-Organization-Id", orgId)
+				.expect(200),
+			request(app.getHttpServer())
+				.get("/api/accounts/USD")
+				.set(bearer(finance.accessToken))
+				.set("X-Organization-Id", orgId)
+				.expect(200),
+		]);
+		expect(ownerAccounts.body.data.balance).toBe("100.0000");
+		expect(financeAccounts.body.data.balance).toBe("100.0000");
 	});
 });

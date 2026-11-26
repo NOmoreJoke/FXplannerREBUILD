@@ -114,14 +114,24 @@ function nowIso(): string {
 const PLAN_EXPECT_USE_DATE = "2030-02-15T00:00:00.000Z";
 const PLAN_START_DATE = "2030-01-01T00:00:00.000Z";
 
-/** HTTP 请求封装（success 包装校验；报告等模块 seeder 复用；含探针与 429 退避） */
+/**
+ * HTTP 请求封装（success 包装校验；报告等模块 seeder 复用；含探针与 429 退避）。
+ * headers 用于追加请求头（如组织管理端点必需的 X-Organization-Id——那类端点挂严格守卫，
+ * 缺头直接 400，不做单组织回落）。
+ */
 export async function api<T>(
 	path: string,
-	init: { method: string; token?: string; body?: unknown },
+	init: {
+		method: string;
+		token?: string;
+		body?: unknown;
+		headers?: Record<string, string>;
+	},
 ): Promise<T> {
 	await ensureApiReachable();
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
+		...init.headers,
 	};
 	if (init.token) {
 		headers.Authorization = `Bearer ${init.token}`;

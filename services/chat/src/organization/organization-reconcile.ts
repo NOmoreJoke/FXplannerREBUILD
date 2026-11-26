@@ -262,9 +262,12 @@ export async function reconcileMigration(
 		}
 	}
 
-	// 5. DataRequest 语义映射（§12.2.7）：EXPORT/DELETION 为 PERSONAL 且不挂组织；
-	//    历史 CLEAR 归属默认组织（scope=ORGANIZATION）。
-	//    defaults CTE 同第 1 项口径；无默认组织的用户的数据请求计为未映射（R2-I05）
+	// 5. DataRequest 语义映射（§12.2.7；Goal #3B W26 双域拆分后口径）：
+	//    合法形态 = DB CHECK data_requests_scope_type_org_check 的同一谓词——
+	//    PERSONAL 仅 EXPORT/DELETION 且不挂组织；ORGANIZATION 可为 EXPORT/CLEAR/DELETION
+	//    且必挂组织（任意成员组织，不再限定为请求者的默认组织）。
+	//    defaults CTE 同第 1 项口径；无默认组织的用户的数据请求仍计为未映射（R2-I05，
+	//    迁移闸门的 fail-closed 信号不变）。
 	const [dataRequests] = await db.$queryRaw<Array<{ n: bigint }>>`
 		WITH first_members AS (
 			SELECT DISTINCT ON (m.organization_id)
@@ -282,11 +285,9 @@ export async function reconcileMigration(
 		SELECT count(*) AS n FROM data_requests r
 		LEFT JOIN defaults d ON d.user_id = r.user_id
 		WHERE (d.organization_id IS NULL
-			OR ((r.type IN ('EXPORT', 'DELETION')
-					AND (r.scope <> 'PERSONAL' OR r.organization_id IS NOT NULL))
-				OR (r.type = 'CLEAR'
-					AND (r.scope <> 'ORGANIZATION'
-						OR r.organization_id IS DISTINCT FROM d.organization_id))))
+			OR NOT (
+				(r.scope = 'PERSONAL' AND r.type IN ('EXPORT', 'DELETION') AND r.organization_id IS NULL)
+				OR (r.scope = 'ORGANIZATION' AND r.type IN ('EXPORT', 'CLEAR', 'DELETION') AND r.organization_id IS NOT NULL)))
 			AND (NOT ${sharded} OR r.user_id = ANY(${ids}::text[]))`;
 	expectZero("data_request.scope_mapping", dataRequests?.n ?? 0n);
 
@@ -322,19 +323,72 @@ export async function reconcileMigration(
 			(SELECT count(*) FROM user_settings s
 				LEFT JOIN defaults d ON d.user_id = s.user_id
 				JOIN organization_settings o ON o.organization_id = d.organization_id
-				WHERE (o.base_currency <> s.base_currency
+				WHERE COALESCE(btrim(s.base_currency), '') <> ''
+					AND (o.base_currency <> s.base_currency
 						OR o.prep_preference <> s.prep_preference
 						OR o.reminder_enabled <> s.reminder_enabled
 						OR o.ledger_started_at IS DISTINCT FROM s.ledger_started_at)
 					AND (NOT ${sharded} OR s.user_id = ANY(${ids}::text[]))) AS mismatch,
 			(SELECT count(*) FROM user_settings s
 				LEFT JOIN defaults d ON d.user_id = s.user_id
-				WHERE (d.organization_id IS NULL OR NOT EXISTS (
+				WHERE COALESCE(btrim(s.base_currency), '') <> ''
+					AND (d.organization_id IS NULL OR NOT EXISTS (
 						SELECT 1 FROM organization_settings o
 						WHERE o.organization_id = d.organization_id))
 					AND (NOT ${sharded} OR s.user_id = ANY(${ids}::text[]))) AS missing`;
 	expectZero("settings_parity.value_mismatch", settings?.mismatch ?? 0n);
 	expectZero("settings_parity.missing", settings?.missing ?? 0n);
+
+	// 8. 双写冲突（I-2 防护）：默认组织已存在组织行且同用户仍有同键 organization_id IS NULL 存量行
+	const [dualRows] = await db.$queryRaw<
+		Array<{
+			dualAccountRows: bigint;
+			dualInitialHoldingRows: bigint;
+			dualReminderRows: bigint;
+		}>
+	>`
+		WITH first_members AS (
+			SELECT DISTINCT ON (m.organization_id)
+				m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
+			FROM memberships m
+			ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+		),
+		defaults AS (
+			SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+			FROM first_members f
+			JOIN organizations o ON o.id = f.organization_id
+			WHERE f.created_at = o.created_at
+			ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
+		)
+		SELECT
+			(SELECT count(*) FROM accounts leg
+				JOIN defaults d ON d.user_id = leg.user_id
+				JOIN accounts org
+					ON org.organization_id = d.organization_id
+					AND org.currency_code = leg.currency_code
+				WHERE leg.organization_id IS NULL
+					AND (NOT ${sharded} OR leg.user_id = ANY(${ids}::text[]))) AS "dualAccountRows",
+			(SELECT count(*) FROM initial_holdings leg
+				JOIN defaults d ON d.user_id = leg.user_id
+				JOIN initial_holdings org
+					ON org.organization_id = d.organization_id
+					AND org.currency_code = leg.currency_code
+				WHERE leg.organization_id IS NULL
+					AND (NOT ${sharded} OR leg.user_id = ANY(${ids}::text[]))) AS "dualInitialHoldingRows",
+			(SELECT count(*) FROM reminders leg
+				JOIN defaults d ON d.user_id = leg.user_id
+				JOIN reminders org
+					ON org.organization_id = d.organization_id
+					AND org.dedup_key = leg.dedup_key
+					AND org.scheduled_for = leg.scheduled_for
+				WHERE leg.organization_id IS NULL
+					AND (NOT ${sharded} OR leg.user_id = ANY(${ids}::text[]))) AS "dualReminderRows"`;
+	expectZero("dual_rows.accounts", dualRows?.dualAccountRows ?? 0n);
+	expectZero(
+		"dual_rows.initial_holdings",
+		dualRows?.dualInitialHoldingRows ?? 0n,
+	);
+	expectZero("dual_rows.reminders", dualRows?.dualReminderRows ?? 0n);
 
 	return { checks, diffs, sharded };
 }

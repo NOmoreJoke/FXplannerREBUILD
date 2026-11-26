@@ -1,7 +1,12 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Prisma } from "@prisma/client";
+import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
 import { ensureOnboarded } from "../helpers/onboarding-helper";
-import { orderLedgerRequests } from "../helpers/postgres-lock-barrier";
+import {
+	orderLedgerRequests,
+	raceBehindAdvisoryLock,
+} from "../helpers/postgres-lock-barrier";
 import {
 	bearer,
 	cleanupUser,
@@ -185,8 +190,8 @@ describe("计划与账本写入串行化（W6-02）", () => {
 		const [persistedPlan, allocation, account, lots, usages, corrections] = await Promise.all([
 			prisma.plan.findUniqueOrThrow({ where: { id: plan.id } }),
 			prisma.planAllocation.findUniqueOrThrow({ where: { planId: plan.id } }),
-			prisma.account.findUniqueOrThrow({
-				where: { userId_currencyCode: { userId: user.userId, currencyCode: "USD" } },
+			prisma.account.findFirstOrThrow({
+				where: { userId: user.userId, currencyCode: "USD" },
 			}),
 			prisma.costLot.aggregate({ where: { userId: user.userId }, _sum: { remainingQty: true } }),
 			prisma.usageRecord.findMany({ where: { planId: plan.id }, orderBy: { usedAt: "asc" } }),
@@ -200,5 +205,185 @@ describe("计划与账本写入串行化（W6-02）", () => {
 		expect(lots._sum.remainingQty?.toString()).toBe(scenario.balance);
 		expect(usages.map((usage) => [usage.amount.toString(), usage.version])).toEqual(scenario.usages);
 		expect(corrections.map((correction) => correction.status)).toEqual(scenario.audits);
+	});
+});
+
+describe("ToB R1 W23：多成员并发交易与计划分配锁竞争（支持 -t 独立运行）", () => {
+	let ctx: TestContext;
+	const scopedUserIds: string[] = [];
+	const scopedPlanIds: string[] = [];
+
+	beforeEach(async () => {
+		ctx = await createTestApp();
+	});
+
+	afterEach(async () => {
+		try {
+			if (scopedPlanIds.length > 0) {
+				await ctx.prisma.planAllocation.deleteMany({
+					where: { planId: { in: scopedPlanIds.splice(0) } },
+				});
+			}
+			while (scopedUserIds.length > 0) {
+				const uid = scopedUserIds.pop()!;
+				await cleanupUser(ctx.prisma, uid);
+			}
+		} finally {
+			await ctx.app.close();
+		}
+	});
+
+	it("W23-CONC-1 多成员并发买入与建计划分配：余额、未分配额与同事务审计数严格一致", async () => {
+		const { app, prisma } = ctx;
+		const owner = await createTestUser(app, "w23-conc-owner");
+		scopedUserIds.push(owner.userId);
+		const finance = await createTestUser(app, "w23-conc-fin");
+		scopedUserIds.push(finance.userId);
+		const operatorA = await createTestUser(app, "w23-conc-opa");
+		scopedUserIds.push(operatorA.userId);
+		const operatorB = await createTestUser(app, "w23-conc-opb");
+		scopedUserIds.push(operatorB.userId);
+		await ensureOnboarded(prisma, owner.userId);
+		const orgId = (await resolveDefaultOrganizationId(prisma, owner.userId))!;
+		await prisma.membership.createMany({
+			data: [
+				{ organizationId: orgId, userId: finance.userId, role: "FINANCE", status: "ACTIVE" },
+				{ organizationId: orgId, userId: operatorA.userId, role: "OPERATOR", status: "ACTIVE" },
+				{ organizationId: orgId, userId: operatorB.userId, role: "OPERATOR", status: "ACTIVE" },
+			],
+		});
+
+		const http = request(app.getHttpServer());
+		// 初始买入 USD 500
+		await http
+			.post("/api/transactions")
+			.set(bearer(finance.accessToken))
+			.set("X-Organization-Id", orgId)
+			.send({
+				currencyCode: "USD",
+				principalAmount: "3600.00",
+				exchangeRate: "7.20000000",
+				quantity: "500.00",
+				transactedAt: dateAtOffset(-2),
+			})
+			.expect(201);
+
+		// 竞争 1：Operator A 与 Operator B 并发分配 400（余额 500 → 恰一 201、恰一 409）
+		const [resOpA, resOpB] = await raceBehindAdvisoryLock(
+			prisma,
+			`membership:${orgId}`,
+			[
+				() =>
+					http
+						.post("/api/plans")
+						.set(bearer(operatorA.accessToken))
+						.set("X-Organization-Id", orgId)
+						.send({
+							targetCurrency: "USD",
+							targetAmount: "1000",
+							allocatedAmount: "400",
+							expectUseDate: dateAtOffset(30),
+							prepLeadDays: 3,
+							pacePreference: "balanced",
+							startDate: dateAtOffset(5),
+						}),
+				() =>
+					http
+						.post("/api/plans")
+						.set(bearer(operatorB.accessToken))
+						.set("X-Organization-Id", orgId)
+						.send({
+							targetCurrency: "USD",
+							targetAmount: "1000",
+							allocatedAmount: "400",
+							expectUseDate: dateAtOffset(30),
+							prepLeadDays: 3,
+							pacePreference: "balanced",
+							startDate: dateAtOffset(5),
+						}),
+			],
+		);
+		const statuses = [resOpA.status, resOpB.status].sort((a, b) => a - b);
+		expect(statuses).toEqual([201, 409]);
+		const rejected = resOpA.status === 409 ? resOpA : resOpB;
+		const winner = resOpA.status === 201 ? resOpA : resOpB;
+		scopedPlanIds.push(winner.body.data.id as string);
+		expect(rejected.body.code).toBe("INSUFFICIENT_ALLOCATABLE_BALANCE");
+		expect(rejected.body.data.allocatableBalance).toBe("100.0000");
+
+		// 竞争 2：Finance 买入 +300 与 Operator A 再建计划分配 100 并发
+		const [resTx, resPlan2] = await raceBehindAdvisoryLock(
+			prisma,
+			`membership:${orgId}`,
+			[
+				() =>
+					http
+						.post("/api/transactions")
+						.set(bearer(finance.accessToken))
+						.set("X-Organization-Id", orgId)
+						.send({
+							currencyCode: "USD",
+							principalAmount: "2160.00",
+							exchangeRate: "7.20000000",
+							quantity: "300.00",
+							transactedAt: dateAtOffset(-1),
+						}),
+				() =>
+					http
+						.post("/api/plans")
+						.set(bearer(operatorA.accessToken))
+						.set("X-Organization-Id", orgId)
+						.send({
+							targetCurrency: "USD",
+							targetAmount: "1000",
+							allocatedAmount: "100",
+							expectUseDate: dateAtOffset(30),
+							prepLeadDays: 3,
+							pacePreference: "balanced",
+							startDate: dateAtOffset(5),
+						}),
+			],
+		);
+		expect(resTx.status).toBe(201);
+		expect(resPlan2.status).toBe(201);
+		scopedPlanIds.push(resPlan2.body.data.id as string);
+
+		const [account, lotsAgg, plans, audits] = await Promise.all([
+			prisma.account.findUniqueOrThrow({
+				where: {
+					organizationId_currencyCode: {
+						organizationId: orgId,
+						currencyCode: "USD",
+					},
+				},
+			}),
+			prisma.costLot.aggregate({
+				where: { organizationId: orgId, currencyCode: "USD" },
+				_sum: { remainingQty: true },
+			}),
+			prisma.plan.findMany({
+				where: { organizationId: orgId },
+				select: { id: true },
+			}),
+			prisma.auditLog.findMany({
+				where: {
+					organizationId: orgId,
+					action: { in: ["transaction.create", "plan.create"] },
+					result: "SUCCESS",
+				},
+			}),
+		]);
+		const allocations = await prisma.planAllocation.findMany({
+			where: { planId: { in: plans.map((p) => p.id) } },
+		});
+		const totalAllocated = allocations.reduce(
+			(sum, row) => sum.add(row.amount),
+			new Prisma.Decimal(0),
+		);
+		expect(account.balance.toFixed(4)).toBe("800.0000");
+		expect(lotsAgg._sum.remainingQty?.toFixed(4)).toBe("800.0000");
+		expect(totalAllocated.toFixed(4)).toBe("500.0000");
+		expect(account.balance.sub(totalAllocated).toFixed(4)).toBe("300.0000");
+		expect(audits).toHaveLength(4); // 2 transactions + 2 plans
 	});
 });

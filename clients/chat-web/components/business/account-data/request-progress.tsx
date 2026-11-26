@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, Loader2, LifeBuoy } from "lucide-react";
+import { CircleAlert, LifeBuoy, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,17 +11,30 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
-import { dataRequestsApi } from "@/lib/api/data-requests";
-import { invalidateAfterDataRequestMutation } from "@/lib/api/query-keys";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
+import {
+	useCancelOrganizationDataRequest,
+	useCancelPersonalDataRequest,
+} from "@/lib/hooks/use-data-request";
+import type { DataRequestDisplayStatus, DataRequestView } from "@/lib/api/contract";
 import { useAuthStore } from "@/lib/stores/auth-store";
-import type { DataRequestView, DataRequestDisplayStatus } from "@/lib/api/contract";
 import { ExportDownloadButton } from "./export-flow";
 import { OtpVerifyStep } from "./otp-verify-step";
+import { organizationCancelPermission, requestTypeText } from "./request-copy";
 
 /**
  * 请求进度卡（需求第五节）：处理状态 / 提交时间 / 截止时间 / 结果；
  * CLEAR PENDING 可直接撤回；DELETION PENDING 需验证邮箱后撤回；
  * FAILED 显示原因与联系支持入口，不假装成功。
+ *
+ * 个人域与组织域共用本卡，按服务端视图的 scope 决定走哪套端点（Goal #3B W28）：
+ * - 个人域（scope=PERSONAL）：本人的数据，撤回与下载始终可操作——即使本人正处于
+ *   注销锁定期（这正是 403 ACCOUNT_PENDING_DELETION 跳到进度页后要做的事）；
+ * - 组织域（scope=ORGANIZATION）：任意有效成员都可查看进度；撤回与下载按钮按角色
+ *   能力显隐（CLEAR → data.clear、DELETION → organization.delete、下载 → data.export），
+ *   Viewer / 无权成员看得到进度，但不会出现点下去必然 403 的按钮。
+ * 后端对撤回 / 下载另有一道「仅发起人本人」的校验，视图里没有发起人标识，
+ * 因此他人发起的组织请求上，按钮仍可能显示、点击后被后端以 404 拒绝并给出提示。
  */
 
 const STATUS_TEXT: Record<DataRequestDisplayStatus, string> = {
@@ -34,10 +46,14 @@ const STATUS_TEXT: Record<DataRequestDisplayStatus, string> = {
 	FAILED: "处理异常",
 };
 
-const TYPE_TEXT: Record<DataRequestView["type"], string> = {
-	EXPORT: "导出个人数据",
-	CLEAR: "清空业务记录",
-	DELETION: "注销账号",
+/** 状态徽标配色（令牌色；异常用 destructive，进行中用品牌紫，终态降为中性） */
+const STATUS_BADGE_CLASS: Record<DataRequestDisplayStatus, string> = {
+	FAILED: "border border-destructive/30 bg-destructive/10 text-destructive",
+	COMPLETED: "border border-mint-200 bg-mint-50 text-mint-700",
+	CANCELLED: "bg-muted text-muted-foreground",
+	SUBMITTED: "bg-lilac-50 text-lilac-700",
+	WITHDRAWAL_PERIOD: "bg-lilac-50 text-lilac-700",
+	PROCESSING: "bg-lilac-50 text-lilac-700",
 };
 
 function formatTime(value: string | null | undefined): string {
@@ -45,45 +61,108 @@ function formatTime(value: string | null | undefined): string {
 	return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
 
+/** 请求分区的加载态（设置页与进度页的个人 / 组织分区共用） */
+export function RequestPanelLoading() {
+	return (
+		<p
+			role="status"
+			className="flex items-center gap-2 rounded-xl border border-border px-4 py-5 text-sm text-muted-foreground"
+		>
+			<Loader2 className="size-4 animate-spin" aria-hidden="true" />
+			正在加载…
+		</p>
+	);
+}
+
+/** 请求分区的错误态 + 重试（401 已由 apiClient 统一处理，这里只剩网络 / 5xx 等） */
+export function RequestPanelError({
+	error,
+	onRetry,
+	testId,
+}: {
+	error: Error | null;
+	onRetry: () => void;
+	testId?: string;
+}) {
+	return (
+		<div
+			data-testid={testId}
+			role="alert"
+			className="flex flex-col items-center rounded-xl border border-border px-6 py-6 text-center"
+		>
+			<CircleAlert className="size-6 text-cream-300" aria-hidden="true" />
+			<p className="mt-3 text-sm text-muted-foreground">
+				{error instanceof Error && error.message
+					? error.message
+					: "加载失败，请稍后重试。"}
+			</p>
+			<Button
+				variant="outline"
+				size="sm"
+				className="mt-4 bg-white"
+				onClick={onRetry}
+			>
+				重试
+			</Button>
+		</div>
+	);
+}
+
 export function RequestProgress({ view }: { view: DataRequestView }) {
 	const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
 	const userEmail = useAuthStore((state) => state.user?.email ?? "");
-	const queryClient = useQueryClient();
+	const { can } = useOrganizationCapabilities();
+	// 两套撤回 hook 都无条件调用，实际只触发视图所在域的那一个
+	const cancelPersonal = useCancelPersonalDataRequest();
+	const cancelOrganization = useCancelOrganizationDataRequest();
 
-	const cancelMutation = useMutation({
-		mutationFn: (challengeId?: string) =>
-			dataRequestsApi.cancel(view.id, challengeId),
-		onSuccess: () => {
-			toast.success("已撤回，数据恢复原样");
-			invalidateAfterDataRequestMutation(queryClient);
-			setCancelDialogOpen(false);
-		},
-		onError: (error: Error) => toast.error(error.message || "撤回失败"),
-	});
+	const isPersonal = view.scope === "PERSONAL";
+	const isDeletion = view.type === "DELETION";
+	// 组织域撤回按请求类型对应的权限点显隐；个人域是本人的数据，只看服务端 canCancel
+	const cancelPermission = isPersonal
+		? null
+		: organizationCancelPermission(view.type);
+	const canCancel =
+		view.canCancel && (isPersonal || (cancelPermission !== null && can(cancelPermission)));
+
+	const cancel = (challengeId?: string) => {
+		const callbacks = {
+			onSuccess: () => {
+				toast.success("已撤回，数据恢复原样");
+				setCancelDialogOpen(false);
+			},
+			onError: (error: Error) => toast.error(error.message || "撤回失败"),
+		};
+		if (isPersonal) {
+			cancelPersonal.mutate({ requestId: view.id, challengeId }, callbacks);
+		} else {
+			cancelOrganization.mutate({ requestId: view.id, challengeId }, callbacks);
+		}
+	};
+
+	const cancelPending = cancelPersonal.isPending || cancelOrganization.isPending;
+	const cancelLabel = isDeletion
+		? isPersonal
+			? "撤回注销"
+			: "撤回删除"
+		: "撤回请求";
 
 	return (
 		<div
 			data-testid="request-progress"
+			data-scope={view.scope}
 			className="rounded-2xl border border-border bg-white p-5"
 		>
-			<div className="flex items-center justify-between">
+			<div className="flex items-center justify-between gap-3">
 				<div>
 					<p className="text-sm text-muted-foreground">进行中的请求</p>
 					<p className="mt-0.5 text-base font-bold text-foreground">
-						{TYPE_TEXT[view.type]}
+						{requestTypeText(view.scope, view.type)}
 					</p>
 				</div>
 				<span
 					data-testid="request-progress-status"
-					className={`rounded-full px-3 py-1 text-xs font-medium ${
-						view.displayStatus === "FAILED"
-							? "bg-red-100 text-red-700"
-							: view.displayStatus === "COMPLETED"
-								? "bg-emerald-100 text-emerald-700"
-								: view.displayStatus === "CANCELLED"
-									? "bg-muted text-muted-foreground"
-									: "bg-blue-100 text-blue-700"
-					}`}
+					className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${STATUS_BADGE_CLASS[view.displayStatus]}`}
 				>
 					{STATUS_TEXT[view.displayStatus]}
 				</span>
@@ -98,9 +177,7 @@ export function RequestProgress({ view }: { view: DataRequestView }) {
 				</div>
 				<div>
 					<dt className="text-muted-foreground">
-						{view.type === "DELETION" && view.status === "PENDING"
-							? "撤回期截止"
-							: "处理截止"}
+						{isDeletion && view.status === "PENDING" ? "撤回期截止" : "处理截止"}
 					</dt>
 					<dd className="mt-0.5 font-medium text-foreground">
 						{formatTime(view.dueAt)}
@@ -115,20 +192,22 @@ export function RequestProgress({ view }: { view: DataRequestView }) {
 			)}
 			{view.type === "DELETION" && view.status === "PENDING" && (
 				<p className="mt-3 text-xs text-muted-foreground">
-					账号已停用，仅可查看进度或撤回注销；撤回注销需验证邮箱（仅重新登录不算撤回）。
+					{isPersonal
+						? "账号已停用，仅可查看进度或撤回注销；撤回注销需验证邮箱（仅重新登录不算撤回）。"
+						: "组织已进入删除处理期，账本暂不可读写；撤回删除需验证邮箱，到期后组织与共享账本将被删除（成员个人账号不受影响）。"}
 				</p>
 			)}
 			{view.displayStatus === "FAILED" && (
 				<div className="mt-3 space-y-2">
-					<div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-3 dark:bg-red-950/30">
-						<CircleAlert className="mt-0.5 size-4 shrink-0 text-red-600" aria-hidden="true" />
-						<p className="text-sm text-red-800 dark:text-red-200">
+					<div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+						<CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden="true" />
+						<p className="text-sm text-foreground">
 							处理中断，未完成的部分仍在处理中，不会假装成功；数据保持锁定状态。
 						</p>
 					</div>
 					<a
 						href="mailto:support@fxplanner.app"
-						className="inline-flex items-center gap-1.5 text-sm text-blue-600 underline-offset-2 hover:underline"
+						className="inline-flex items-center gap-1.5 text-sm text-mint-700 underline-offset-2 hover:underline"
 						data-testid="request-support-link"
 					>
 						<LifeBuoy className="size-4" aria-hidden="true" />
@@ -139,38 +218,36 @@ export function RequestProgress({ view }: { view: DataRequestView }) {
 
 			<div className="mt-4 flex items-center gap-2">
 				<ExportDownloadButton view={view} />
-				{view.canCancel && (
+				{canCancel && (
 					<Button
 						variant="outline"
 						size="sm"
 						data-testid="request-cancel"
-						onClick={() =>
-							view.type === "DELETION"
-								? setCancelDialogOpen(true)
-								: cancelMutation.mutate(undefined)
-						}
+						disabled={cancelPending}
+						onClick={() => (isDeletion ? setCancelDialogOpen(true) : cancel())}
 					>
-						{cancelMutation.isPending && (
+						{cancelPending && (
 							<Loader2 className="size-4 animate-spin" aria-hidden="true" />
 						)}
-						{view.type === "DELETION" ? "撤回注销" : "撤回请求"}
+						{cancelLabel}
 					</Button>
 				)}
 			</div>
 
-			{/* 撤回注销：验证邮箱＋点击两步齐全（doc 01:133） */}
+			{/* 撤回注销 / 撤回删除：验证邮箱＋点击两步齐全（doc 01:133） */}
 			<Dialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
 				<DialogContent data-testid="deletion-cancel-dialog">
 					<DialogHeader>
-						<DialogTitle>撤回注销</DialogTitle>
+						<DialogTitle>{cancelLabel}</DialogTitle>
 						<DialogDescription>
-							请验证邮箱后确认撤回，账号将恢复原样。
+							请验证邮箱后确认撤回，{isPersonal ? "账号将恢复原样" : "组织与账本将恢复可用"}。
 						</DialogDescription>
 					</DialogHeader>
 					<OtpVerifyStep
 						target={userEmail}
 						purpose="DELETION"
-						onVerified={(challengeId) => cancelMutation.mutate(challengeId)}
+						scope={view.scope}
+						onVerified={(challengeId) => cancel(challengeId)}
 					/>
 				</DialogContent>
 			</Dialog>

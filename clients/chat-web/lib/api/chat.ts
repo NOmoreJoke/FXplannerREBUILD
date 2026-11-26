@@ -3,6 +3,7 @@ import {
 	ApiError,
 	apiClient,
 	buildApiUrl,
+	consumeDataRequestLock,
 	consumeOrganizationContextError,
 	handleUnauthorized,
 	isExpectedControlFlowApiError,
@@ -221,23 +222,9 @@ async function openStreamResponse(
 		throw orgError;
 	}
 
-	// 403 数据请求锁（account-data 方案 §8）：与 apiClient 同一跳转协议
-	if (
-		response.status === 403 &&
-		typeof window !== "undefined" &&
-		!window.location.pathname.startsWith("/data-requests")
-	) {
-		const lockError = await response
-			.clone()
-			.json()
-			.catch(() => ({}) as { code?: string });
-		if (
-			lockError.code === "DATA_REQUEST_LOCKED" ||
-			lockError.code === "ACCOUNT_PENDING_DELETION"
-		) {
-			window.location.href = "/data-requests";
-		}
-	}
+	// 403 数据请求锁（account-data 方案 §8）：与 apiClient 同一处理（consumeDataRequestLock），
+	// 跳纯 /data-requests；组织锁不清空组织选择（保留切换到其他组织的能力）
+	await consumeDataRequestLock(response);
 
 	const contentType = response.headers.get("content-type") ?? "";
 	const isEventStream = contentType.includes("text/event-stream");

@@ -33,6 +33,7 @@ import {
 	ReportPlanListQueryDto,
 } from "./dto/report.dto";
 import { ReportService } from "./report.service";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /**
  * 成本摘要与报告（reports 技术方案 §5）：2 个只读端点，全部需登录。
@@ -103,7 +104,7 @@ export class ReportController {
 			"status 不在三值枚举内，或币种不在支持的 15 币种内（INVALID_REPORT_PARAMS）",
 		type: ReportErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("report.read")
 	async listPlans(
 		@CurrentUser() user: User,
@@ -153,7 +154,7 @@ export class ReportController {
 		description: "计划不存在或不属于本人（PLAN_NOT_FOUND）",
 		type: ReportErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("report.read")
 	async getPlanReport(
 		@CurrentUser() user: User,

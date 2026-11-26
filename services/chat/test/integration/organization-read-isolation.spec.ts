@@ -628,7 +628,7 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 		await ctx.prisma.membership.create({
 			data: { organizationId: orgA, userId: u2.userId, role: "VIEWER", status: "ACTIVE" },
 		});
-		await ensureOnboarded(ctx.prisma, u1.userId, "CNY");
+		await ensureOnboarded(ctx.prisma, u1.userId, "CNY", null, { legacyOnly: true });
 		// 旧写路径产生的存量行（organizationId IS NULL）：仅在默认组织 A 可见
 		await ctx.prisma.account.create({
 			data: { userId: u1.userId, currencyCode: "USD", balance: "100.0000" },
@@ -666,7 +666,7 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 		await ctx.prisma.membership.create({
 			data: { organizationId: orgC, userId: u1.userId, role: "FINANCE", status: "ACTIVE" },
 		});
-		await ensureOnboarded(ctx.prisma, u3.userId, "CNY");
+		await ensureOnboarded(ctx.prisma, u3.userId, "CNY", null, { legacyOnly: true });
 		await ctx.prisma.account.create({
 			data: {
 				userId: u3.userId,
@@ -675,6 +675,13 @@ describe("评审修复回归：兼容回落作用域与组织偏好（I-08 / I-1
 				balance: "500.0000",
 			},
 		});
+		// R1 I-4：两个组织都不得有 OrganizationSettings —— I-08 / I-10 必须真正跑在
+		// OWNER_LEGACY 回落路径上（一旦回落分支失效，这两条用例会立刻挂）
+		expect(
+			await ctx.prisma.organizationSettings.count({
+				where: { organizationId: { in: [orgA, orgC] } },
+			}),
+		).toBe(0);
 	}, 30_000);
 
 	afterAll(async () => {
@@ -1226,7 +1233,9 @@ describe("R2 回归：所有权转移后默认组织不漂移（R2-I03）", () =
 
 		// 组织 A：A 的默认组织，已建账但设置仍是个人设置（无 OrganizationSettings）
 		orgA = await trackDefaultOrg(ctx.prisma, ownerA.userId, orgIds);
-		await ensureOnboarded(ctx.prisma, ownerA.userId, "CNY");
+		await ensureOnboarded(ctx.prisma, ownerA.userId, "CNY", null, {
+			legacyOnly: true,
+		});
 		await ctx.prisma.membership.create({
 			data: { organizationId: orgA, userId: successorB.userId, role: "ADMIN", status: "ACTIVE" },
 		});

@@ -11,6 +11,7 @@ import {
 	Patch,
 	Post,
 	Query,
+	Req,
 	UseGuards,
 } from "@nestjs/common";
 import {
@@ -19,6 +20,7 @@ import {
 	ApiBody,
 	ApiConflictResponse,
 	ApiExtraModels,
+	ApiForbiddenResponse,
 	ApiNotFoundResponse,
 	ApiOkResponse,
 	ApiOperation,
@@ -26,6 +28,7 @@ import {
 	ApiTags,
 } from "@nestjs/swagger";
 import type { User } from "@prisma/client";
+import type { Request } from "express";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CurrentActor } from "../authorization/decorators/current-actor.decorator";
@@ -34,6 +37,7 @@ import { PermissionGuard } from "../authorization/guards/permission.guard";
 import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
 import type { ReadScope } from "../authorization/organization-scope";
+import { extractRequestId } from "../authorization/request-id";
 import {
 	AdjustCapsDto,
 	AdjustImpactDto,
@@ -55,6 +59,7 @@ import {
 	SchedulePreviewResultDto,
 } from "./dto/plan.dto";
 import { PlanService } from "./plan.service";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /**
  * 换汇计划（plan-creation + plan-management）：8 个功能入口，全部需登录。
@@ -121,7 +126,7 @@ export class PlanController {
 	// 读作用域（评审 R2-I02——此前只传 user.id，守卫形同虚设：带其他组织头仍返回
 	// 本人在该组织的余额 caps，受邀成员则命中自己的空账本）
 	@Post("schedule-preview")
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.create")
 	@ApiOperation({
 		summary: "分批排期预览（只读，不落库）",
@@ -155,10 +160,12 @@ export class PlanController {
 	}
 
 	@Post()
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@RequiresPermission("plan.create")
 	@ApiOperation({
 		summary: "创建换汇计划（事务）",
 		description:
-			"事务内依次执行：重检可分配余额（409 INSUFFICIENT_ALLOCATABLE_BALANCE 时附 caps 现值）→ 插入计划（最晚准备日服务端重算，不信任前端）→ 分配记录（usedAmount = 0）→ 分批排期；任一失败全部回滚。allocatedAmount 允许 0（不占用余额的纯新建目标）。",
+			"事务内依次执行：锁组织与复验 plan.create 权限 → 校验组织已建账与目标币种 ≠ 本位币 → 锁组织账本账户 → 重检可分配余额（409 INSUFFICIENT_ALLOCATABLE_BALANCE 时附 caps 现值）→ 插入计划（最晚准备日服务端重算，不信任前端）→ 分配记录（usedAmount = 0）→ 分批排期 → 同事务写入审计日志；任一失败全部回滚。allocatedAmount 允许 0（不占用余额的纯新建目标）。",
 	})
 	@ApiBody({ type: CreatePlanDto })
 	@ApiCreatedPlanResponse()
@@ -167,12 +174,21 @@ export class PlanController {
 			"参数非法（INVALID_PLAN_PARAMS）或无法生成排期（NO_AVAILABLE_DATES / AMOUNT_TOO_SMALL）",
 		type: PlanErrorDto,
 	})
+	@ApiForbiddenResponse({
+		description: "无 plan.create 权限（PERMISSION_DENIED，如 VIEWER）",
+		type: PlanErrorDto,
+	})
 	@ApiConflictResponse({
 		description: "分配超可配余额（INSUFFICIENT_ALLOCATABLE_BALANCE，附 caps 现值）",
 		type: PlanErrorDto,
 	})
-	async create(@CurrentUser() user: User, @Body() dto: CreatePlanDto) {
-		const data = await this.planService.create(user.id, dto);
+	async create(
+		@CurrentActor() actor: ActorContext,
+		@Body() dto: CreatePlanDto,
+		@Req() request: Request,
+	) {
+		const requestId = extractRequestId(request);
+		const data = await this.planService.create(actor, dto, requestId);
 		return { success: true, data, message: "换汇计划创建成功" };
 	}
 
@@ -198,7 +214,7 @@ export class PlanController {
 		description: "status 非法（不在三值枚举内），无模块 code",
 		type: PlanErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.read")
 	async list(
 		@CurrentUser() user: User,
@@ -233,7 +249,7 @@ export class PlanController {
 		description: "计划不存在或不属于本人（PLAN_NOT_FOUND）",
 		type: PlanErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.read")
 	async getDetail(
 		@CurrentUser() user: User,
@@ -250,7 +266,7 @@ export class PlanController {
 
 	@Post(":id/adjust-preview")
 	@HttpCode(HttpStatus.OK)
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("plan.adjust")
 	@ApiOperation({
 		summary: "修改预览（只读，不落库）",
@@ -296,10 +312,12 @@ export class PlanController {
 	}
 
 	@Patch(":id")
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@RequiresPermission("plan.adjust")
 	@ApiOperation({
 		summary: "提交修改 / 重新开启（事务 + 乐观锁）",
 		description:
-			"两段式修改第二段：事务内条件更新（id + userId + updatedAt = expectedUpdatedAt）原子完成乐观锁检查与写入，行数 = 0 返回 409 PLAN_STATE_CHANGED；随后事务内重算重校验（预览结果不作为提交依据），目标/分配/排期/变更记录同一事务落库，任一失败全部回滚。已完成计划提高目标需 confirmReopen: true（缺失 400；重开时不得同时携带分配/节奏/准备缓冲参数）；进行中计划携带 confirmReopen 会被忽略。返回提交后详情。",
+			"两段式修改第二段：事务内先锁组织与复验 plan.adjust 权限，再按组织加账户与计划行锁；条件更新（id + 组织作用域 + updatedAt = expectedUpdatedAt）原子完成乐观锁检查与写入，行数 = 0 返回 409 PLAN_STATE_CHANGED；随后事务内重算重校验（预览结果不作为提交依据），目标/分配/排期/变更记录/同事务审计同一事务落库，任一失败全部回滚。已完成计划提高目标需 confirmReopen: true（缺失 400；重开时不得同时携带分配/节奏/准备缓冲参数）；进行中计划携带 confirmReopen 会被忽略。返回提交后详情。",
 	})
 	@ApiBody({ type: AdjustPlanDto })
 	@ApiOkResponse({
@@ -317,31 +335,39 @@ export class PlanController {
 			"参数非法（INVALID_PLAN_PARAMS）/ 目标低于已用（PLAN_TARGET_BELOW_USED）/ 分配低于已用（PLAN_ALLOCATION_BELOW_USED，附 used 与差额）/ 超上限（PLAN_ALLOCATION_LIMIT，附最新 caps）/ 排期不可生成（NO_AVAILABLE_DATES / AMOUNT_TOO_SMALL）",
 		type: PlanErrorDto,
 	})
+	@ApiForbiddenResponse({
+		description: "无 plan.adjust 权限（PERMISSION_DENIED，如 VIEWER）",
+		type: PlanErrorDto,
+	})
 	@ApiConflictResponse({
 		description:
 			"乐观锁失配（PLAN_STATE_CHANGED）或非法状态流转（PLAN_INVALID_TRANSITION）",
 		type: PlanErrorDto,
 	})
 	@ApiNotFoundResponse({
-		description: "计划不存在或不属于本人（PLAN_NOT_FOUND）",
+		description: "计划不存在或不属于当前组织（PLAN_NOT_FOUND）",
 		type: PlanErrorDto,
 	})
 	async adjust(
-		@CurrentUser() user: User,
+		@CurrentActor() actor: ActorContext,
 		@Param("id") id: string,
 		@Body() dto: AdjustPlanDto,
+		@Req() request: Request,
 	) {
-		return this.withLog("PATCH /plans/:id", user.id, id, () =>
-			this.planService.adjust(user.id, id, dto),
+		const requestId = extractRequestId(request);
+		return this.withLog("PATCH /plans/:id", actor.userId, id, () =>
+			this.planService.adjust(actor, id, dto, requestId),
 		).then((data) => ({ success: true, data, message: "计划修改成功" }));
 	}
 
 	@Post(":id/complete")
 	@HttpCode(HttpStatus.OK)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@RequiresPermission("plan.adjust")
 	@ApiOperation({
 		summary: "完成确认（仅进行中；数据不变）",
 		description:
-			"事务内条件更新（WHERE status = 'ACTIVE'）原子防「并发取消 + 完成」双写，行数 = 0 返回 409。仅当已使用 = 目标且剩余分配 = 0 且无超用可完成（PLAN_COMPLETE_NOT_READY 400 附当前差值；超用提示先走更正流程）。成功后状态转 COMPLETED 并写完成记录，计划数据不变。无请求体。",
+			"事务内先锁组织与复验 plan.adjust 权限，再按组织加账户与计划行锁；条件更新（WHERE status = 'ACTIVE'）原子防「并发取消 + 完成」双写，行数 = 0 返回 409。仅当已使用 = 目标且剩余分配 = 0 且无超用可完成（PLAN_COMPLETE_NOT_READY 400 附当前差值；超用提示先走更正流程）。成功后状态转 COMPLETED 并写完成记录与同事务审计，计划数据不变。无请求体。",
 	})
 	@ApiOkResponse({
 		description: "完成成功，响应体为 { success, data, message } 包装",
@@ -357,26 +383,37 @@ export class PlanController {
 		description: "未达标或存在超用（PLAN_COMPLETE_NOT_READY，附差值）",
 		type: PlanErrorDto,
 	})
+	@ApiForbiddenResponse({
+		description: "无 plan.adjust 权限（PERMISSION_DENIED，如 VIEWER）",
+		type: PlanErrorDto,
+	})
 	@ApiConflictResponse({
 		description: "仅进行中的计划可完成（PLAN_INVALID_TRANSITION）",
 		type: PlanErrorDto,
 	})
 	@ApiNotFoundResponse({
-		description: "计划不存在或不属于本人（PLAN_NOT_FOUND）",
+		description: "计划不存在或不属于当前组织（PLAN_NOT_FOUND）",
 		type: PlanErrorDto,
 	})
-	async complete(@CurrentUser() user: User, @Param("id") id: string) {
-		return this.withLog("POST /plans/:id/complete", user.id, id, () =>
-			this.planService.complete(user.id, id),
+	async complete(
+		@CurrentActor() actor: ActorContext,
+		@Param("id") id: string,
+		@Req() request: Request,
+	) {
+		const requestId = extractRequestId(request);
+		return this.withLog("POST /plans/:id/complete", actor.userId, id, () =>
+			this.planService.complete(actor, id, requestId),
 		).then((data) => ({ success: true, data, message: "计划已完成" }));
 	}
 
 	@Post(":id/cancel")
 	@HttpCode(HttpStatus.OK)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
+	@RequiresPermission("plan.adjust")
 	@ApiOperation({
 		summary: "取消计划（释放剩余分配，终态）",
 		description:
-			"事务内条件更新（WHERE status = 'ACTIVE'）保证与完成/其他修改并发时恰一成功，行数 = 0 返回 409。分配总额下调为累计已使用（释放全部剩余分配回未分配余额，账户余额与已发生的换汇、使用记录不动），准备节点清空，状态转 CANCELLED（终态）并写取消记录。无请求体。",
+			"事务内先锁组织与复验 plan.adjust 权限，再按组织加账户与计划行锁；条件更新（WHERE status = 'ACTIVE'）保证与完成/其他修改并发时恰一成功，行数 = 0 返回 409。分配总额下调为累计已使用（释放全部剩余分配回未分配余额，账户余额与已发生的换汇、使用记录不动），准备节点清空，状态转 CANCELLED（终态）并写取消记录与同事务审计。无请求体。",
 	})
 	@ApiOkResponse({
 		description: "取消成功，响应体为 { success, data, message } 包装",
@@ -388,17 +425,26 @@ export class PlanController {
 			},
 		},
 	})
+	@ApiForbiddenResponse({
+		description: "无 plan.adjust 权限（PERMISSION_DENIED，如 VIEWER）",
+		type: PlanErrorDto,
+	})
 	@ApiConflictResponse({
 		description: "仅进行中的计划可取消（PLAN_INVALID_TRANSITION）",
 		type: PlanErrorDto,
 	})
 	@ApiNotFoundResponse({
-		description: "计划不存在或不属于本人（PLAN_NOT_FOUND）",
+		description: "计划不存在或不属于当前组织（PLAN_NOT_FOUND）",
 		type: PlanErrorDto,
 	})
-	async cancel(@CurrentUser() user: User, @Param("id") id: string) {
-		return this.withLog("POST /plans/:id/cancel", user.id, id, () =>
-			this.planService.cancel(user.id, id),
+	async cancel(
+		@CurrentActor() actor: ActorContext,
+		@Param("id") id: string,
+		@Req() request: Request,
+	) {
+		const requestId = extractRequestId(request);
+		return this.withLog("POST /plans/:id/cancel", actor.userId, id, () =>
+			this.planService.cancel(actor, id, requestId),
 		).then((data) => ({ success: true, data, message: "计划已取消" }));
 	}
 }

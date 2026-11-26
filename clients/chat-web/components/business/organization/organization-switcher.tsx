@@ -1,13 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import { Building2, Check, ChevronsUpDown, Plus, RefreshCw } from "lucide-react";
+import {
+	Building2,
+	Check,
+	ChevronsUpDown,
+	LogOut,
+	Plus,
+	RefreshCw,
+} from "lucide-react";
 import {
 	useCreateOrganization,
 	useOrganizations,
 	useSwitchOrganization,
 } from "@/lib/hooks/use-organizations";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
+import { useLogoutAndRedirect } from "@/lib/query/hooks/use-auth";
 import { cn } from "@/lib/utils";
 
 /**
@@ -116,10 +124,15 @@ export function OrganizationSwitcher() {
  * 创建走 useCreateOrganization（清缓存 + 切换 + 列表失效的唯一步骤序列）。
  * 创建成功后不派发「完成」回调：切换组织会让本组件被布局卸载，mutate 的调用点
  * 回调只向仍挂载的观察者派发，挂上也不会执行（同评审 R3-I02 / R3-I01 的机制）。
+ *
+ * 退出登录入口（Goal #3A §9.6）：本组件整屏渲染时没有侧栏——此前 0 组织或选错账号的
+ * 用户没有任何登出入口，只能手动清 cookie 换账号。登出走 useLogoutAndRedirect
+ * （内部经 resetSessionContext 清掉缓存与组织选择态，换账号登录不会继承上一个账号的组织）。
  */
 export function OrganizationPicker() {
 	const { data: organizations, isLoading } = useOrganizations();
 	const switchOrganization = useSwitchOrganization();
+	const logout = useLogoutAndRedirect();
 	const createMutation = useCreateOrganization();
 	const [creating, setCreating] = useState(false);
 	const [newName, setNewName] = useState("");
@@ -215,6 +228,19 @@ export function OrganizationPicker() {
 						)}
 					</div>
 				)}
+				{/* 登出入口：0 组织与多组织选择两种状态下都在（整屏态没有侧栏） */}
+				<div className="pt-2 text-center">
+					<button
+						type="button"
+						onClick={logout}
+						data-testid="organization-picker-logout"
+						aria-label="退出登录"
+						className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+					>
+						<LogOut className="size-4" aria-hidden />
+						退出登录
+					</button>
+				</div>
 			</div>
 		</div>
 	);
@@ -223,8 +249,10 @@ export function OrganizationPicker() {
 /**
  * 组织列表加载失败（网络/服务不可用）：显式错误态 + 重试。
  * 此前失败态会被当作「0 组织」而显示新建引导，或停留在无限加载。
+ * 附带退出登录入口：整屏态没有侧栏，服务持续不可用时用户仍能换账号或离开。
  */
 export function OrganizationRoutingError({ onRetry }: { onRetry: () => void }) {
+	const logout = useLogoutAndRedirect();
 	return (
 		<div
 			className="flex min-h-screen items-center justify-center bg-background px-4"
@@ -237,15 +265,27 @@ export function OrganizationRoutingError({ onRetry }: { onRetry: () => void }) {
 				<p className="text-sm text-muted-foreground">
 					暂时无法获取你的组织，请检查网络后重试。
 				</p>
-				<button
-					type="button"
-					onClick={onRetry}
-					className="inline-flex items-center gap-2 rounded-lg bg-mint-700 px-4 py-2 text-sm font-medium text-white"
-					data-testid="organization-routing-retry"
-				>
-					<RefreshCw className="size-4" aria-hidden />
-					重试
-				</button>
+				<div className="flex items-center justify-center gap-3">
+					<button
+						type="button"
+						onClick={onRetry}
+						className="inline-flex items-center gap-2 rounded-lg bg-mint-700 px-4 py-2 text-sm font-medium text-white"
+						data-testid="organization-routing-retry"
+					>
+						<RefreshCw className="size-4" aria-hidden />
+						重试
+					</button>
+					<button
+						type="button"
+						onClick={logout}
+						data-testid="organization-routing-logout"
+						aria-label="退出登录"
+						className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-ink-600 transition-colors hover:bg-muted hover:text-foreground"
+					>
+						<LogOut className="size-4" aria-hidden />
+						退出登录
+					</button>
+				</div>
 			</div>
 		</div>
 	);

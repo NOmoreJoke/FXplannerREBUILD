@@ -5,3 +5,8 @@ export {
 } from "./compliance-disclaimer";
 export { PageLoading } from "./page-loading";
 export { PasswordInput } from "./password-input";
+export {
+	NO_PERMISSION_TITLE,
+	PermissionHint,
+	PermissionNotice,
+} from "./permission-notice";

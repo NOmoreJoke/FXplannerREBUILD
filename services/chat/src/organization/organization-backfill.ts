@@ -153,6 +153,47 @@ export async function assertNoOrphanRows(db: Db): Promise<OrphanCounts> {
 }
 
 /**
+ * 冲突初始持仓预检（I-2 fail-closed）：若用户的默认组织已存在同币种 initial_holdings 行，
+ * 而名下仍有同币种 organization_id IS NULL 存量行，禁止静默覆盖或盲目回填（必抛错阻断）。
+ */
+async function assertNoInitialHoldingConflicts(
+	db: Db,
+	userIds?: string[],
+): Promise<void> {
+	const sharded = userIds !== undefined;
+	const shardIds = sharded ? userIds : [];
+	const [row] = await db.$queryRaw<Array<{ n: bigint }>>`
+		WITH first_members AS (
+			SELECT DISTINCT ON (m.organization_id)
+				m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
+			FROM memberships m
+			ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+		),
+		defaults AS (
+			SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+			FROM first_members f
+			JOIN organizations o ON o.id = f.organization_id
+			WHERE f.created_at = o.created_at
+			ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
+		)
+		SELECT count(*) AS n
+		FROM initial_holdings leg
+		JOIN defaults d ON d.user_id = leg.user_id
+		JOIN initial_holdings org
+			ON org.organization_id = d.organization_id
+			AND org.currency_code = leg.currency_code
+		WHERE leg.organization_id IS NULL
+			AND (NOT ${sharded} OR leg.user_id = ANY(${shardIds}::text[]))`;
+	const conflictCount = Number(row?.n ?? 0n);
+	if (conflictCount > 0) {
+		throw new BackfillAnomalyError(
+			"MIG-B 初始持仓冲突阻断：默认组织已存在同币种 initial_holdings，禁止静默合并",
+			{ initial_holdings_conflict: conflictCount },
+		);
+	}
+}
+
+/**
  * 幂等回填单个用户的存量个人数据到其默认组织。
  *
  * 仅更新 organization_id IS NULL 的行；created_by_id / actor_user_id 写原 userId
@@ -165,18 +206,53 @@ export async function backfillUserRows(
 	userId: string,
 	organizationId: string,
 ): Promise<BackfillSummary["rowsBackfilled"]> {
-	const accounts = Number(
+	// I-2 双账户行防冲突：先将与默认组织已有 (organization_id, currency_code) 冲突的
+	// NULL 账户余额合并入存活组织行（保留组织行 updated_at）并删去旧 NULL 行，再回填其余 NULL 行
+	const mergedAccounts = Number(
+		await tx.$executeRaw`
+			WITH merged AS (
+				UPDATE accounts org
+				SET balance = org.balance + leg.balance
+				FROM accounts leg
+				WHERE org.organization_id = ${organizationId}
+					AND leg.user_id = ${userId}
+					AND leg.organization_id IS NULL
+					AND org.currency_code = leg.currency_code
+				RETURNING leg.id
+			)
+			DELETE FROM accounts
+			WHERE id IN (SELECT id FROM merged)`,
+	);
+	const updatedAccounts = Number(
 		await tx.$executeRaw`
 			UPDATE accounts
 			SET organization_id = ${organizationId}, created_by_id = ${userId}
 			WHERE user_id = ${userId} AND organization_id IS NULL`,
 	);
+	const accounts = mergedAccounts + updatedAccounts;
+
 	const transactions = Number(
 		await tx.$executeRaw`
 			UPDATE transactions
 			SET organization_id = ${organizationId}, created_by_id = ${userId}
 			WHERE user_id = ${userId} AND organization_id IS NULL`,
 	);
+
+	// 初始持仓不可静默累加：若默认组织已有同币种记录，fail-closed 阻断
+	const [ihConflict] = await tx.$queryRaw<Array<{ n: bigint }>>`
+		SELECT count(*) AS n
+		FROM initial_holdings leg
+		JOIN initial_holdings org
+			ON org.organization_id = ${organizationId}
+			AND org.currency_code = leg.currency_code
+		WHERE leg.user_id = ${userId}
+			AND leg.organization_id IS NULL`;
+	if (Number(ihConflict?.n ?? 0n) > 0) {
+		throw new BackfillAnomalyError(
+			"MIG-B 初始持仓冲突阻断：默认组织已存在同币种 initial_holdings，禁止静默合并",
+			{ initial_holdings_conflict: Number(ihConflict?.n ?? 0n) },
+		);
+	}
 	const initialHoldings = Number(
 		await tx.$executeRaw`
 			UPDATE initial_holdings
@@ -207,12 +283,48 @@ export async function backfillUserRows(
 			SET organization_id = ${organizationId}, actor_user_id = ${userId}
 			WHERE user_id = ${userId} AND organization_id IS NULL`,
 	);
-	const reminders = Number(
+
+	// 提醒去重保护：若同组织已有同 (dedup_key, scheduled_for) 提醒，先迁移已读态并删去冲突 NULL 行
+	await tx.$executeRaw`
+		INSERT INTO reminder_reads (id, reminder_id, user_id, read_at)
+		SELECT md5(org.id || ':' || rr.user_id), org.id, rr.user_id, rr.read_at
+		FROM reminders leg
+		JOIN reminders org
+			ON org.organization_id = ${organizationId}
+			AND org.dedup_key = leg.dedup_key
+			AND org.scheduled_for = leg.scheduled_for
+		JOIN reminder_reads rr ON rr.reminder_id = leg.id
+		WHERE leg.user_id = ${userId} AND leg.organization_id IS NULL
+		ON CONFLICT (reminder_id, user_id) DO NOTHING`;
+	await tx.$executeRaw`
+		INSERT INTO reminder_reads (id, reminder_id, user_id, read_at)
+		SELECT md5(org.id || ':' || leg.user_id), org.id, leg.user_id, leg.read_at
+		FROM reminders leg
+		JOIN reminders org
+			ON org.organization_id = ${organizationId}
+			AND org.dedup_key = leg.dedup_key
+			AND org.scheduled_for = leg.scheduled_for
+		WHERE leg.user_id = ${userId}
+			AND leg.organization_id IS NULL
+			AND leg.read_at IS NOT NULL
+		ON CONFLICT (reminder_id, user_id) DO NOTHING`;
+	const dedupedReminders = Number(
+		await tx.$executeRaw`
+			DELETE FROM reminders leg
+			USING reminders org
+			WHERE org.organization_id = ${organizationId}
+				AND leg.user_id = ${userId}
+				AND leg.organization_id IS NULL
+				AND org.dedup_key = leg.dedup_key
+				AND org.scheduled_for = leg.scheduled_for`,
+	);
+	const updatedReminders = Number(
 		await tx.$executeRaw`
 			UPDATE reminders
 			SET organization_id = ${organizationId}
 			WHERE user_id = ${userId} AND organization_id IS NULL`,
 	);
+	const reminders = dedupedReminders + updatedReminders;
 	const aiConversations = Number(
 		await tx.$executeRaw`
 			UPDATE ai_conversations
@@ -310,12 +422,12 @@ async function backfillUser(
 		organizationCreated = true;
 	}
 
-	// §12.2.3：UserSettings 有则幂等复制到 OrganizationSettings；无则保持待建账
+	// §12.2.3：UserSettings 有则幂等复制到 OrganizationSettings；无则（含个人偏好占位行 baseCurrency=""）保持待建账
 	let settingsCreated = 0;
 	const userSettings = await tx.userSettings.findUnique({
 		where: { userId: user.id },
 	});
-	if (userSettings) {
+	if (userSettings && userSettings.baseCurrency.trim() !== "") {
 		const existing = await tx.organizationSettings.findUnique({
 			where: { organizationId },
 		});
@@ -420,6 +532,7 @@ export async function backfillDefaultOrganizations(
 ): Promise<BackfillSummary> {
 	// 孤儿预检在任何写入之前（全库只读），失败即阻断且零写入
 	await assertNoOrphanRows(prisma);
+	await assertNoInitialHoldingConflicts(prisma, options.userIds);
 
 	const userWhere = options.userIds ? { id: { in: options.userIds } } : {};
 	const sharded = options.userIds !== undefined;
@@ -572,6 +685,7 @@ export async function backfillDefaultOrganizations(
 			LEFT JOIN defaults d ON d.user_id = s.user_id
 			LEFT JOIN organization_settings o ON o.organization_id = d.organization_id
 			WHERE o.organization_id IS NULL
+				AND COALESCE(btrim(s.base_currency), '') <> ''
 				AND (NOT ${sharded} OR s.user_id = ANY(${shardIds}::text[]))`;
 		summary.organizationSettingsCreated = Number(settingsToCreate?.n ?? 0n);
 		return summary;

@@ -39,6 +39,7 @@ import {
 import { usagesApi } from "@/lib/api/usages";
 import type { PlanDetail } from "@/lib/api/contract";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 
 /**
  * 换汇计划详情页（changes/plan-management/技术方案.md §5.2）
@@ -48,6 +49,11 @@ import { useActiveOrgId } from "@/lib/hooks/use-active-org";
  * 不加其他按钮）。修改与重新开启走两段式对话框；完成/取消走显式确认弹窗。
  * 404（不存在或不属于本人，不泄露存在性）→ 整页提示态；
  * 认证守卫在 (protected)/layout.tsx（勿在此重复）。
+ *
+ * 能力门控（Goal #3B W28）：服务端 canXxx 只按计划状态与数据计算、不含角色，
+ * 所以写按钮还要叠加后端 capabilities——调整/完成/取消/重新开启需 plan.adjust，
+ * 记录使用需 usage.create，录入买入需 transaction.create。Viewer / Operator 不会
+ * 看到点下去必然 403 的按钮（后端仍强制 @RequiresPermission，这里只防误触）。
  */
 
 export default function PlanDetailPage() {
@@ -174,7 +180,7 @@ export default function PlanDetailPage() {
 /**
  * 详情页头（返回链接 + 操作按钮 + 全部写操作交互）：
  * 修改/重新开启走两段式对话框；完成/取消走显式确认弹窗。
- * 按钮显隐完全由服务端 canXxx 标记控制。
+ * 按钮显隐 = 服务端 canXxx 标记 **且** 对应的角色能力。
  */
 function DetailHeader({
 	plan,
@@ -194,6 +200,14 @@ function DetailHeader({
 	const [completeOpen, setCompleteOpen] = useState(false);
 	const [cancelOpen, setCancelOpen] = useState(false);
 	const [usageOpen, setUsageOpen] = useState(false);
+	const { can } = useOrganizationCapabilities();
+	const canAdjust = can("plan.adjust");
+	const canRecordUsage = can("usage.create");
+	const canRecordTransaction = can("transaction.create");
+	// 计划处于可操作状态（任一 canXxx 为真）但角色无权 → 明确告知只读，而不是只剩一个空按钮区
+	const isReadOnly =
+		!canAdjust &&
+		(plan.canModify || plan.canCancel || plan.canComplete || plan.canReopen);
 
 	/** 写操作错误提示：ApiError 透出后端 message（官方术语文案），其余兜底 */
 	const writeError = (error: unknown, fallback: string) => {
@@ -240,7 +254,15 @@ function DetailHeader({
 					← 返回计划列表
 				</Link>
 				<div className="flex items-center gap-2">
-					{plan.canModify ? (
+					{isReadOnly && (
+						<span
+							data-testid="plan-detail-readonly-note"
+							className="mr-1 text-xs text-muted-foreground"
+						>
+							当前角色只能查看此计划
+						</span>
+					)}
+					{plan.canModify && canRecordUsage ? (
 						<Button
 							className="bg-mint-700 text-white hover:bg-mint-700/90"
 							onClick={() => setUsageOpen(true)}
@@ -248,7 +270,7 @@ function DetailHeader({
 							记录使用
 						</Button>
 					) : null}
-					{plan.canModify ? (
+					{plan.canModify && canRecordTransaction ? (
 						<Button
 							asChild
 							className="bg-mint-700 text-white hover:bg-mint-700/90"
@@ -261,7 +283,7 @@ function DetailHeader({
 							</Link>
 						</Button>
 					) : null}
-					{plan.canModify ? (
+					{plan.canModify && canAdjust ? (
 						<Button
 							variant="outline"
 							className="bg-white"
@@ -270,7 +292,7 @@ function DetailHeader({
 							修改
 						</Button>
 					) : null}
-					{plan.canReopen ? (
+					{plan.canReopen && canAdjust ? (
 						<Button
 							className="bg-mint-700 text-white hover:bg-mint-700/90"
 							onClick={() => setAdjustOpen(true)}
@@ -278,7 +300,7 @@ function DetailHeader({
 							重新开启
 						</Button>
 					) : null}
-					{plan.canComplete ? (
+					{plan.canComplete && canAdjust ? (
 						<Button
 							className="bg-mint-700 text-white hover:bg-mint-700/90"
 							onClick={() => setCompleteOpen(true)}
@@ -286,7 +308,7 @@ function DetailHeader({
 							完成确认
 						</Button>
 					) : null}
-					{plan.canCancel ? (
+					{plan.canCancel && canAdjust ? (
 						<Button
 							variant="outline"
 							className="border-red-200 bg-white text-red-600 hover:bg-red-50"

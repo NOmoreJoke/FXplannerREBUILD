@@ -21,6 +21,7 @@ import {
 	formatDisplayDate,
 } from "@/components/business/plan/schedule-preview-card";
 import { getCurrencyName } from "@/lib/api/currencies";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 import type {
 	HomeDashboardData,
 	HomeDashboardFocusPlan,
@@ -35,6 +36,11 @@ import { cn } from "@/lib/utils";
  * - 统计卡：账户数 / 持仓总成本（portfolio 失败显示 "—" 不阻塞整页）/ 最新汇率刷新 / 最晚备汇日（无 ACTIVE 计划不出卡）
  * - 账户卡：余额 + 平均成本，整卡点击进 /accounts/:currencyCode
  * - 计划提醒横幅：焦点计划分配进度 + 备汇日倒计时（逾期红色），「查看计划」进 /plans/:id；无焦点计划不渲染
+ *
+ * 能力门控（Goal #3B W28）：「录入买入」需 transaction.create、「新建计划」需 plan.create，
+ * 按后端 capabilities 显隐——Operator / Viewer 不会看到一个点下去必然 403 的按钮
+ * （后端仍强制 @RequiresPermission，这里只防误触）。首页只在组织详情就绪后才渲染本组件，
+ * 不会出现权限闪烁。
  *
  * 金额口径：接口金额字符串原样/去尾零展示（formatDisplayAmount），禁止前端精度裁剪与浮点换算
  * （对齐 account-module「原样渲染保障 E2E toContainText 精确断言」约定）；
@@ -57,6 +63,7 @@ export function HomeDashboard({ dashboard }: HomeDashboardProps) {
 		focusPlan,
 		hasInitialHoldings,
 	} = dashboard;
+	const { can } = useOrganizationCapabilities();
 
 	return (
 		<div className="mx-auto max-w-5xl px-8 py-6">
@@ -70,23 +77,27 @@ export function HomeDashboard({ dashboard }: HomeDashboardProps) {
 				</div>
 				<div className="flex items-center gap-3">
 					{/* 新建计划次级入口（阶段5 §1）：与录入买入并排，主次分明；空态分支有自己的引导入口，互斥不重复 */}
-					<Link
-						href="/plans/new"
-						className={buttonVariants({ variant: "outline" })}
-					>
-						<Plus className="size-4" />
-						新建计划
-					</Link>
+					{can("plan.create") && (
+						<Link
+							href="/plans/new"
+							className={buttonVariants({ variant: "outline" })}
+						>
+							<Plus className="size-4" />
+							新建计划
+						</Link>
+					)}
 					{/* 快速录入入口（changes/transaction-entry/技术方案.md §6） */}
-					<Link
-						href="/transactions/new"
-						className={buttonVariants({
-							className: "bg-mint-700 text-white hover:bg-mint-700/90",
-						})}
-					>
-						<Plus className="size-4" />
-						录入买入
-					</Link>
+					{can("transaction.create") && (
+						<Link
+							href="/transactions/new"
+							className={buttonVariants({
+								className: "bg-mint-700 text-white hover:bg-mint-700/90",
+							})}
+						>
+							<Plus className="size-4" />
+							录入买入
+						</Link>
+					)}
 					{latestRateObservedAt !== null && (
 						<span className="flex items-center gap-1.5 rounded-full bg-mint-50 px-3 py-1.5 text-xs font-medium text-mint-700">
 							<span className="size-1.5 rounded-full bg-mint-500" />

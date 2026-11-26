@@ -29,6 +29,7 @@ import { OrganizationRoute } from "../authorization/decorators/organization-rout
 import type { ActorContext } from "../authorization/authorization.types";
 import { AuditService } from "./audit.service";
 import { AuditLogListDto, ListAuditLogsQueryDto } from "./dto/audit.dto";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /**
  * 组织审计只读端点（AUDIT-03；技术方案 §4.3 Guard 链；Goal #3A W17 挂链）。
@@ -54,7 +55,7 @@ export class AuditController {
 
 	@Get("current/audit-logs")
 	@OrganizationRoute()
-	@UseGuards(OrganizationContextGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("audit.read")
 	@ApiOperation({
 		summary: "当前组织审计日志（只读分页；Owner/Admin/Finance 可读）",

@@ -5,6 +5,7 @@ import { CircleAlert, PenLine } from "lucide-react";
 import { getCurrencyName } from "@/lib/api/currencies";
 import type { TransactionDto } from "@/lib/api/contract";
 import { CorrectionHistoryList } from "@/components/business/correction";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 
 /**
  * 交易详情卡（changes/transaction-entry/技术方案.md §5.2 / §6）
@@ -16,7 +17,10 @@ import { CorrectionHistoryList } from "@/components/business/correction";
  * 单位口径（FE-01 修复）：到账数量为买入外币（currencyCode）；本金/手续费/
  * 交易总成本按后端契约（TransactionDto @description）一律为「本位币」，当前
  * 系统本位币建账后锁定为 CNY（CompleteOnboardingDto），故标注 CNY；
- * 若未来放开多本位币，需改为读用户 settings.baseCurrency。
+ * 若未来放开多本位币，应改为读组织设置 baseCurrency。
+ *
+ * 能力门控（Goal #3B W28）：「更正」入口需 correction.apply（Operator / Viewer 不显示，
+ * 后端仍强制校验）。修改记录（含失败尝试）对所有可读角色照常展示。
  */
 
 export interface TransactionDetailProps {
@@ -30,6 +34,8 @@ function formatDisplayDate(isoDate: string): string {
 
 export function TransactionDetail({ detail }: TransactionDetailProps) {
 	const currencyName = getCurrencyName(detail.currencyCode);
+	const { can } = useOrganizationCapabilities();
+	const canCorrect = can("correction.apply");
 
 	return (
 		<div className="space-y-6">
@@ -43,7 +49,9 @@ export function TransactionDetail({ detail }: TransactionDetailProps) {
 						<p className="text-sm font-semibold text-foreground">费用未明确</p>
 						<p className="mt-0.5 text-xs leading-5 text-ink-600">
 							本笔交易手续费未知（未知 ≠ 0），交易总成本不完整；
-							了解实际费用后可通过更正功能补录。
+							{canCorrect
+								? "了解实际费用后可通过更正功能补录。"
+								: "如需补录实际费用，请联系有更正权限的成员。"}
 						</p>
 					</div>
 				</section>
@@ -57,14 +65,16 @@ export function TransactionDetail({ detail }: TransactionDetailProps) {
 							{detail.currencyCode}
 							{currencyName ? ` · ${currencyName}` : ""}
 						</span>
-						<Link
-							href={`/corrections/new?targetType=TRANSACTION&targetId=${detail.id}`}
-							className="inline-flex items-center gap-1 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
-							data-testid="correction-entry"
-						>
-							<PenLine className="size-3.5" />
-							更正
-						</Link>
+						{canCorrect ? (
+							<Link
+								href={`/corrections/new?targetType=TRANSACTION&targetId=${detail.id}`}
+								className="inline-flex items-center gap-1 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
+								data-testid="correction-entry"
+							>
+								<PenLine className="size-3.5" />
+								更正
+							</Link>
+						) : null}
 					</div>
 				</div>
 

@@ -7,13 +7,35 @@ import {
 } from "@nestjs/common";
 import { getCurrency } from "@fxplanner-new/money";
 import { Prisma } from "@prisma/client";
-import { lockPlanAccount } from "../prisma/ledger-write-lock";
+import {
+	adoptLegacyOrgLedgerRows,
+	lockOrgPlanRow,
+	mergeLegacyOrgAccountIfExists,
+	lockOrgPlanAccount,
+} from "../prisma/ledger-write-lock";
 import { PrismaService } from "../prisma/prisma.service";
 import { OnboardingNotCompletedException } from "../onboarding/onboarding.service";
 import {
+	AuditService,
+	recordDeniedAuditBestEffort,
+} from "../audit/audit.service";
+import { PermissionDeniedException } from "../authorization/authorization.errors";
+import type {
+	ActorContext,
+	OrganizationRole,
+} from "../authorization/authorization.types";
+import {
+	assertParentChildSameOrg,
+	compatReadPredicate,
 	compatReadWhere,
 	type ReadScope,
 } from "../authorization/organization-scope";
+import { can } from "../authorization/permission-policy";
+import { lockOrganizationForActor } from "../organization/default-organization";
+import {
+	materializeLegacyOrganizationSettings,
+	resolveOrganizationPreferences,
+} from "../organization/organization-preferences";
 import {
 	checkCompleteReady,
 	computeDerived,
@@ -40,11 +62,15 @@ import type {
  * 模块错误（错误响应统一 { code, message, data? }，风格与 plan 模块一致）：
  * - INVALID_USAGE_PARAMS（400）：金额非法/超币种精度/超上限；日期晚于今天/早于
  *   记账起点/格式非法；备注超 200 字
- * - PLAN_NOT_FOUND（404）：计划不存在或不属于本人（防枚举，对齐 plan.service 口径）
+ * - PLAN_NOT_FOUND（404）：计划不存在或不属于当前组织（防枚举，对齐 plan.service 口径）
  * - PLAN_INVALID_TRANSITION（409）：仅 ACTIVE 可记录使用
  * - INSUFFICIENT_PLAN_ALLOCATION（409）：本次金额 > 计划剩余分配（事务内条件更新判定）
  * - INSUFFICIENT_ACCOUNT_BALANCE（409）：余额不足（恒等式下不应发生，防御兜底）
  * - USAGE_LOT_SHORTAGE（409）：FIFO 批次剩余量合计不足（数据异常防御）
+ *
+ * 组织上下文（ToB R1 W24）：本模块写路径以 ActorContext 为数据范围——账本属于组织，
+ * 同组织成员买入的批次构成同一个 FIFO 池；权限 / 建账态拦截沿用授权层与 onboarding
+ * 的统一错误族（403 PERMISSION_DENIED / 409 ONBOARDING_NOT_COMPLETED）。
  */
 export class UsageInvalidParamsException extends HttpException {
 	constructor(message: string) {
@@ -148,176 +174,243 @@ export class UsageService {
 
 	constructor(
 		@Inject(PrismaService) private readonly prisma: PrismaService,
+		@Inject(AuditService) private readonly auditService: AuditService,
 	) {}
 
 	/**
-	 * 记录使用（POST /api/plans/:id/usages，方案 §3.1 五步事务）：
+	 * 记录使用（POST /api/plans/:id/usages，方案 §3.1 五步事务 / ToB R1 W24）：
+	 * 组织共享账本——同组织全量活跃 CostLot 构成同一个 FIFO 池，成员 A 买入的批次
+	 * 可被成员 B 的使用记录消耗；金额全程 Decimal，批次与账户只按组织维度取用。
 	 * 交互式事务——
-	 * ⓪ 锁定计划所属币种及账户行，再确认计划仍为 ACTIVE
-	 * ① $executeRaw 条件扣分配（WHERE used + amt <= amount，列间比较单语句原子）
-	 * ② account.updateMany 条件扣余额（WHERE balance >= amt）
-	 * ③ usageRecord.create（version = 1）
-	 * ④ costLot 剩余批次全取 → 内存 FIFO 排序分摊（usage-calculator 纯函数）
-	 * ⑤ usageLotAllocation.createMany + costLot 逐批递减 remainingQty
+	 * ⓪ lockOrganizationForActor 重读最新角色并复验 usage.create（锁等降权 → 403 + DENIED 审计）
+	 * ① resolveOrganizationPreferences 解析组织建账态（409）与记账起点；OWNER_LEGACY 先固化
+	 * ② lockOrgPlanAccount 锁组织账本账户 → FOR UPDATE 锁目标 Plan 行（跨组织 / 不存在 → 404）
+	 * ③ $executeRaw 条件扣分配（WHERE used + amt <= amount，列间比较单语句原子）
+	 * ④ 组织账户条件扣余额（WHERE balance >= amt）
+	 * ⑤ usageRecord.create（version = 1，organizationId + createdById）
+	 * ⑥ 同组织全量剩余批次 → 内存 FIFO 排序分摊（usage-calculator 纯函数）
+	 * ⑦ usageLotAllocation.createMany + costLot 逐批递减 remainingQty
+	 * ⑧ 同事务写入 usage.create 审计日志（审计失败整单回滚）
 	 * 任一步失败整体回滚，绝不留半条记录（需求 §7 中途中断）。
 	 * READ COMMITTED 下条件更新基于最新已提交行重估 WHERE，行数 0 即失败回滚，
 	 * 与 plan.service complete/cancel 的 updateMany 先例同构（并发权威防线）。
 	 */
 	async create(
-		userId: string,
+		actor: ActorContext,
 		planId: string,
 		dto: CreateUsageDto,
+		requestId: string | null = null,
 	): Promise<CreateUsageRespDto> {
-		const result = await this.prisma.$transaction(async (tx) => {
-			const context = await this.loadPlanContext(tx, userId, planId);
-			const amount = this.parseUsageAmount(dto.amount, context.decimalPlaces);
-			const usedAt = this.parseUsedAt(dto.usedAt);
-			try {
-				assertUsedAtInRange(usedAt, new Date(), context.ledgerStartedAt);
-			} catch (error) {
-				if (error instanceof UsageCalcError) {
-					throw new UsageInvalidParamsException(error.message);
+		let deniedRole: OrganizationRole = actor.role;
+		let result: CreateUsageTxResult;
+		try {
+			result = await this.prisma.$transaction(async (tx) => {
+				const latestRole = await lockOrganizationForActor(tx, actor);
+				if (!can(latestRole, "usage.create")) {
+					deniedRole = latestRole;
+					throw new PermissionDeniedException();
 				}
-				throw error;
-			}
-			const remark = this.parseRemark(dto.remark);
 
-			// ① 条件扣分配：列间比较（used + amt <= amount）Prisma updateMany 无法表达，
-			// 单条 UPDATE 原子完成「检查 + 扣减」；updated_at 手动刷新（绕过 @updatedAt）
-			const allocationUpdated = await tx.$executeRaw`
-				UPDATE "plan_allocations"
-				SET "used_amount" = "used_amount" + ${amount}, "updated_at" = NOW()
-				WHERE "plan_id" = ${planId} AND "used_amount" + ${amount} <= "amount"`;
-			if (allocationUpdated === 0) {
-				const allocation = await tx.planAllocation.findUnique({
-					where: { planId },
-				});
-				const remainingAllocation = allocation
-					? computeRemainingAllocation(
-							allocation.amount,
-							allocation.usedAmount,
-						)
-					: new Prisma.Decimal(0);
-				throw new UsageInsufficientAllocationException(
-					remainingAllocation,
-					amount,
+				const preferences = await resolveOrganizationPreferences(
+					tx,
+					actor.organizationId,
 				);
-			}
+				if (!preferences) {
+					throw new OnboardingNotCompletedException(
+						"尚未完成首次设置，请先前往 /onboarding 完成建账后再记录使用",
+					);
+				}
+				if (preferences.source === "OWNER_LEGACY") {
+					await materializeLegacyOrganizationSettings(
+						tx,
+						actor.organizationId,
+					);
+				}
 
-			// ② 条件扣余额（列对常量，原生 updateMany 表达；恒等式下不应失败，防御兜底）
-			const balanceUpdated = await tx.account.updateMany({
-				where: {
-					userId,
-					currencyCode: context.currencyCode,
-					balance: { gte: amount },
-				},
-				data: { balance: { decrement: amount } },
-			});
-			if (balanceUpdated.count === 0) {
-				const account = await tx.account.findUnique({
-					where: {
-						userId_currencyCode: {
-							userId,
-							currencyCode: context.currencyCode,
-						},
-					},
-				});
-				throw new UsageInsufficientBalanceException(
-					account?.balance ?? new Prisma.Decimal(0),
-					amount,
-				);
-			}
+				const context = await this.loadPlanContext(tx, actor, planId);
+				const amount = this.parseUsageAmount(dto.amount, context.decimalPlaces);
+				const usedAt = this.parseUsedAt(dto.usedAt);
+				try {
+					assertUsedAtInRange(usedAt, new Date(), preferences.ledgerStartedAt);
+				} catch (error) {
+					if (error instanceof UsageCalcError) {
+						throw new UsageInvalidParamsException(error.message);
+					}
+					throw error;
+				}
+				const remark = this.parseRemark(dto.remark);
 
-			// ③ 落使用记录（version = 1，M8 更正预留）
-			const usage = await tx.usageRecord.create({
-				data: {
-					userId,
-					planId,
-					currencyCode: context.currencyCode,
-					amount,
-					usedAt,
-					remark,
-					version: 1,
-				},
-			});
-
-			// ④ 批次重建会刷新批次时间与 ID，FIFO 沿用来源记录的首录键。
-			const lots = await tx.$queryRaw<FifoLotInput[]>`
-				SELECT lot.id, lot.source_id AS "sourceId", lot.source_type AS "sourceType",
-					lot.remaining_qty AS "remainingQty", lot.unit_cost AS "unitCost",
-					lot.acquired_at AS "acquiredAt",
-					COALESCE(trade.created_at, holding.created_at, lot.created_at) AS "createdAt"
-				FROM cost_lots AS lot
-				LEFT JOIN transactions AS trade ON lot.source_type = 'PURCHASE'
-					AND trade.id = lot.source_id AND trade.user_id = lot.user_id
-				LEFT JOIN initial_holdings AS holding ON lot.source_type = 'INITIAL'
-					AND holding.id = lot.source_id AND holding.user_id = lot.user_id
-				WHERE lot.user_id = ${userId} AND lot.currency_code = ${context.currencyCode}
-					AND lot.remaining_qty > 0
-			`;
-			let totalCost: Prisma.Decimal;
-			let slices: {
-				lotId: string;
-				quantity: Prisma.Decimal;
-				cost: Prisma.Decimal;
-			}[];
-			try {
-				const allocation = allocateLotsFifo(
-					lots,
-					amount,
-					context.decimalPlaces,
-				);
-				totalCost = allocation.totalCost;
-				slices = allocation.slices;
-			} catch (error) {
-				if (error instanceof UsageLotShortageError) {
-					// 数据异常防御：批次剩余量合计 < 需求量，宁可拒绝不可错账
-					throw new UsageLotShortageException(
-						(error.data?.lotRemaining as Prisma.Decimal) ??
-							new Prisma.Decimal(0),
+				// ③ 条件扣分配：列间比较（used + amt <= amount）Prisma updateMany 无法表达，
+				// 单条 UPDATE 原子完成「检查 + 扣减」；updated_at 手动刷新（绕过 @updatedAt）
+				const allocationUpdated = await tx.$executeRaw`
+					UPDATE "plan_allocations"
+					SET "used_amount" = "used_amount" + ${amount}, "updated_at" = NOW()
+					WHERE "plan_id" = ${planId} AND "used_amount" + ${amount} <= "amount"`;
+				if (allocationUpdated === 0) {
+					const allocation = await tx.planAllocation.findUnique({
+						where: { planId },
+					});
+					const remainingAllocation = allocation
+						? computeRemainingAllocation(
+								allocation.amount,
+								allocation.usedAmount,
+							)
+						: new Prisma.Decimal(0);
+					throw new UsageInsufficientAllocationException(
+						remainingAllocation,
 						amount,
 					);
 				}
-				throw error;
-			}
 
-			// ⑤ 写分摊明细 + 逐批递减 remainingQty（同事务，任一失败整体回滚）
-			await tx.usageLotAllocation.createMany({
-				data: slices.map((slice) => ({
-					usageId: usage.id,
-					lotId: slice.lotId,
-					quantity: slice.quantity,
-					cost: slice.cost,
-				})),
-			});
-			for (const slice of slices) {
-				await tx.costLot.update({
-					where: { id: slice.lotId },
-					data: { remainingQty: { decrement: slice.quantity } },
+				// ④ 条件扣余额（列对常量，原生 updateMany 表达；恒等式下不应失败，防御兜底）。
+				// 组织账户唯一（loadPlanContext 已把默认组织创建者的 legacy 账户并入），
+				// 扣减只按组织维度命中——成员 B 的使用扣的是组织余额，不是自己的行。
+				const balanceUpdated = await tx.account.updateMany({
+					where: {
+						organizationId: actor.organizationId,
+						currencyCode: context.currencyCode,
+						balance: { gte: amount },
+					},
+					data: { balance: { decrement: amount } },
 				});
-			}
+				if (balanceUpdated.count === 0) {
+					const account = await tx.account.findFirst({
+						where: {
+							organizationId: actor.organizationId,
+							currencyCode: context.currencyCode,
+						},
+					});
+					throw new UsageInsufficientBalanceException(
+						account?.balance ?? new Prisma.Decimal(0),
+						amount,
+					);
+				}
 
-			// 资金面快照（事务内已扣减的最新值，前端一次往返刷新进度区）
-			const [freshPlan, freshAllocation] = await Promise.all([
-				tx.plan.findUnique({ where: { id: planId } }),
-				tx.planAllocation.findUnique({ where: { planId } }),
-			]);
-			if (!freshPlan || !freshAllocation) {
-				// 创建事务保证 1:1，此处防御性兜底（触发即整体回滚）
-				throw new UsagePlanNotFoundException();
-			}
-			return {
-				usage,
-				totalCost,
-				sliceCount: slices.length,
-				plan: freshPlan,
-				allocation: freshAllocation,
-			} satisfies CreateUsageTxResult;
-		});
+				// ⑤ 落使用记录（version = 1，M8 更正预留；createdById = 记录人，仅审计用）
+				const usage = await tx.usageRecord.create({
+					data: {
+						userId: actor.userId,
+						organizationId: actor.organizationId,
+						createdById: actor.userId,
+						planId,
+						currencyCode: context.currencyCode,
+						amount,
+						usedAt,
+						remark,
+						version: 1,
+					},
+				});
 
-		// 可观测性（§7）：成功 Info 记一次汇总（循环外），金额不脱敏（个人工具内部日志）
+				// ⑥ 批次重建会刷新批次时间与 ID，FIFO 沿用来源记录的首录键。
+				// 跨成员共享 FIFO 池：组织内全部活跃批次 + 默认组织创建者尚未收口的存量批次
+				// （compat 口径）；严禁按 userId 过滤批次——否则成员 B 记使用时看不到成员 A 的买入。
+				const scope = compatReadPredicate(actor);
+				const lots = await tx.$queryRaw<FifoLotInput[]>`
+					SELECT lot.id, lot.source_id AS "sourceId", lot.source_type AS "sourceType",
+						lot.remaining_qty AS "remainingQty", lot.unit_cost AS "unitCost",
+						lot.acquired_at AS "acquiredAt",
+						COALESCE(trade.created_at, holding.created_at, lot.created_at) AS "createdAt"
+					FROM cost_lots AS lot
+					LEFT JOIN transactions AS trade ON lot.source_type = 'PURCHASE'
+						AND trade.id = lot.source_id
+					LEFT JOIN initial_holdings AS holding ON lot.source_type = 'INITIAL'
+						AND holding.id = lot.source_id
+					WHERE lot.currency_code = ${context.currencyCode}
+						AND (lot.organization_id = ${scope.organizationId}
+							OR (${scope.includeLegacy} AND lot.organization_id IS NULL AND lot.user_id = ${scope.userId}))
+						AND lot.remaining_qty > 0
+				`;
+				let totalCost: Prisma.Decimal;
+				let slices: {
+					lotId: string;
+					quantity: Prisma.Decimal;
+					cost: Prisma.Decimal;
+				}[];
+				try {
+					const allocation = allocateLotsFifo(
+						lots,
+						amount,
+						context.decimalPlaces,
+					);
+					totalCost = allocation.totalCost;
+					slices = allocation.slices;
+				} catch (error) {
+					if (error instanceof UsageLotShortageError) {
+						// 数据异常防御：批次剩余量合计 < 需求量，宁可拒绝不可错账
+						throw new UsageLotShortageException(
+							(error.data?.lotRemaining as Prisma.Decimal) ??
+								new Prisma.Decimal(0),
+							amount,
+						);
+					}
+					throw error;
+				}
+
+				// ⑦ 写分摊明细 + 逐批递减 remainingQty（同事务，任一失败整体回滚）
+				await tx.usageLotAllocation.createMany({
+					data: slices.map((slice) => ({
+						usageId: usage.id,
+						lotId: slice.lotId,
+						quantity: slice.quantity,
+						cost: slice.cost,
+					})),
+				});
+				for (const slice of slices) {
+					await tx.costLot.update({
+						where: { id: slice.lotId },
+						data: { remainingQty: { decrement: slice.quantity } },
+					});
+				}
+
+				// 资金面快照（事务内已扣减的最新值，前端一次往返刷新进度区）
+				const [freshPlan, freshAllocation] = await Promise.all([
+					tx.plan.findUnique({ where: { id: planId } }),
+					tx.planAllocation.findUnique({ where: { planId } }),
+				]);
+				if (!freshPlan || !freshAllocation) {
+					// 创建事务保证 1:1，此处防御性兜底（触发即整体回滚）
+					throw new UsagePlanNotFoundException();
+				}
+
+				// ⑧ 同事务审计（§13.1：审计写失败 = 本次记账失败，不留「账已改但不知道谁改的」）
+				await this.auditService.recordInTx(tx, {
+					organizationId: actor.organizationId,
+					actorUserId: actor.userId,
+					actorType: "USER",
+					action: "usage.create",
+					targetType: "usage_record",
+					targetId: usage.id,
+					result: "SUCCESS",
+					requestId: requestId ?? null,
+					detail: {
+						planId,
+						currencyCode: usage.currencyCode,
+						amount: usage.amount.toFixed(4),
+						usedAt: usage.usedAt.toISOString(),
+						totalCost: totalCost.toFixed(4),
+						lotCount: slices.length,
+					},
+				});
+
+				return {
+					usage,
+					totalCost,
+					sliceCount: slices.length,
+					plan: freshPlan,
+					allocation: freshAllocation,
+				} satisfies CreateUsageTxResult;
+			});
+		} catch (error) {
+			if (error instanceof PermissionDeniedException) {
+				await this.recordDeniedAudit(actor, deniedRole, requestId);
+			}
+			throw error;
+		}
+
+		// 可观测性（§13.3）：成功 Info 记一次汇总（循环外）——组织账本的公共日志只记
+		// 标识与计数，不记金额明细
 		this.logger.log(
-			`usage created userId=${userId} planId=${planId} usageId=${result.usage.id} amount=${result.usage.amount.toFixed(4)} usedAt=${result.usage.usedAt.toISOString()} lots=${result.sliceCount} totalCost=${result.totalCost.toFixed(4)}`,
+			`usage created organizationId=${actor.organizationId} actorUserId=${actor.userId} planId=${planId} usageId=${result.usage.id} lots=${result.sliceCount} requestId=${requestId ?? "-"}`,
 		);
 
 		return {
@@ -329,7 +422,8 @@ export class UsageService {
 	/**
 	 * 使用记录列表（GET /api/plans/:id/usages，§4.2）：
 	 * usedAt 倒序、同刻 createdAt 倒序，limit 100 兑底；成本按 usageId 聚合
-	 * UsageLotAllocation。plan 不存在或不属于本人 → 404 防枚举。
+	 * UsageLotAllocation。计划不存在或不属于当前组织 → 404 防枚举。
+	 * 组织共享账本：同组织任一成员记录的使用都对其他成员可见（createdById 仅标识记录人）。
 	 */
 	async list(scope: ReadScope, planId: string): Promise<UsageListRespDto> {
 		const plan = await this.prisma.plan.findFirst({
@@ -367,34 +461,53 @@ export class UsageService {
 	// ────────────────────────── 私有辅助 ──────────────────────────
 
 	/**
-	 * 事务内装载计划上下文（§3.1 loadPlanContext）：
-	 * BE-03 防线：未建账（无 UserSettings）409 优先于计划 404（未建账用户必然无计划，
-	 * 409 引导去 /onboarding 而非泄露 404；与 plan/transaction 写入口一致）→
-	 * 归属 404 防枚举 → 锁定所属币种及账户行 → 状态闸门（仅 ACTIVE）→ 币种精度。
+	 * 事务内装载计划上下文（§3.1 loadPlanContext / W24 组织化）：
+	 * 权限复验与未建账 409 由调用方先行（BE-03：409 优先于计划 404——未建账组织必然
+	 * 无计划，409 引导去 /onboarding 而非泄露 404）→ 锁组织账本账户（含默认组织创建者
+	 * legacy 行）→ FOR UPDATE 锁目标 Plan 行 → 归属 404 防枚举（compatReadWhere(actor)：
+	 * 跨组织计划一律不可见）→ 状态闸门（仅 ACTIVE）→ 币种精度。
 	 */
 	private async loadPlanContext(
 		tx: Prisma.TransactionClient,
-		userId: string,
+		actor: ActorContext,
 		planId: string,
 	) {
-		const settings = await tx.userSettings.findUnique({
-			where: { userId },
-			select: { ledgerStartedAt: true },
-		});
-		if (!settings) {
-			throw new OnboardingNotCompletedException(
-				"尚未完成首次设置，请先前往 /onboarding 完成建账后再记录使用",
-			);
+		// 锁前只读取不可调整的目标币种用于路由；持锁后一切读取以锁内重读为准
+		if (!(await lockOrgPlanAccount(tx, actor, planId))) {
+			throw new UsagePlanNotFoundException();
 		}
-		if (!(await lockPlanAccount(tx, userId, planId))) {
+		if (!(await lockOrgPlanRow(tx, actor, planId))) {
 			throw new UsagePlanNotFoundException();
 		}
 		const plan = await tx.plan.findFirst({
-			where: { id: planId, userId },
+			where: { id: planId, ...compatReadWhere(actor) },
+			select: {
+				id: true,
+				organizationId: true,
+				status: true,
+				targetCurrency: true,
+			},
 		});
 		if (!plan) {
 			throw new UsagePlanNotFoundException();
 		}
+		if (plan.organizationId !== null) {
+			assertParentChildSameOrg(plan.organizationId, actor.organizationId);
+		}
+		// 锁内 compat 收口（W23 plan.service 先例 + W24）：默认组织创建者在该币种遗留的
+		// organizationId: null 账本行（批次 / 持仓 / 交易 / 使用记录）无条件并入组织，再把其
+		// legacy 账户并入组织账户。必须在取 FIFO 池之前——任何成员记使用都从同一个完整的
+		// 组织账本取批次，否则成员看不到创建者未收口的存量批次，FIFO 顺序与创建者不一致
+		await adoptLegacyOrgLedgerRows(
+			tx,
+			actor.organizationId,
+			plan.targetCurrency,
+		);
+		await mergeLegacyOrgAccountIfExists(
+			tx,
+			actor.organizationId,
+			plan.targetCurrency,
+		);
 		if (plan.status !== "ACTIVE") {
 			throw new UsagePlanInvalidTransitionException(
 				"仅进行中的计划可记录使用",
@@ -410,8 +523,20 @@ export class UsageService {
 		return {
 			currencyCode: plan.targetCurrency,
 			decimalPlaces: currencyInfo.decimalPlaces,
-			ledgerStartedAt: settings.ledgerStartedAt,
 		};
+	}
+
+	private async recordDeniedAudit(
+		actor: ActorContext,
+		role: OrganizationRole,
+		requestId: string | null,
+	): Promise<void> {
+		await recordDeniedAuditBestEffort(this.auditService, this.logger, {
+			actor,
+			role,
+			required: "usage.create",
+			requestId,
+		});
 	}
 
 	/**
@@ -489,6 +614,7 @@ export class UsageService {
 			amount: record.amount.toFixed(4),
 			usedAt: record.usedAt.toISOString(),
 			remark: record.remark,
+			createdById: record.createdById,
 			cost: cost.toFixed(4),
 			version: record.version,
 			createdAt: record.createdAt.toISOString(),

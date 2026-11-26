@@ -10,14 +10,16 @@ import {
 } from "@/components/business/home";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DATA_REQUESTS_PAGE_PATH } from "@/lib/api/client";
 import { useHomeState } from "@/lib/hooks/use-home-state";
 
 /**
  * 工作台首页（分流瘦壳）
  *
  * 认证守卫在 (protected)/layout.tsx（勿在此重复）。
- * 按 GET /home/state 分流（onboarding-rework 口径）：
- * - 未建账（!onboardingCompleted）    → replace 跳 /onboarding 建账向导；
+ * 分流依据（changes/home-state-routing/技术方案.md §3.1 + onboarding-rework 口径）：
+ * - 当前组织未建账（组织详情 onboardingCompleted=false）→ replace 跳 /onboarding 建账向导；
+ * - 组织删除处理中 → replace 跳 /data-requests（账本端点此时全部被锁，不靠 403 硬跳转）；
  * - 已建账，无账户 且 无计划          → 空状态引导页 + 补录初始持仓引导卡
  *   （未录初始持仓时；E2E 场景 1/10：跳过持仓后首页可见引导卡，补录后消失）；
  * - 已建账，有账户 或 有计划          → 正常数据首页（未录初始持仓时挂补录引导卡）。
@@ -27,18 +29,32 @@ import { useHomeState } from "@/lib/hooks/use-home-state";
  */
 export default function HomePage() {
 	const router = useRouter();
-	const { isLoading, isError, refetch, state, dashboard } = useHomeState();
+	const {
+		isLoading,
+		isError,
+		refetch,
+		state,
+		dashboard,
+		needsOnboarding,
+		isDeletionLocked,
+	} = useHomeState();
 
-	// 未建账分流：导航统一在 effect 中触发（渲染期只提前返回骨架），
-	// hooks 顺序恒定（rules-of-hooks），state 未就绪时不分流
-	const needsOnboarding = state ? !state.onboardingCompleted : false;
+	// 分流：导航统一在 effect 中触发（渲染期只提前返回骨架），
+	// hooks 顺序恒定（rules-of-hooks），组织上下文未就绪时不分流
 	useEffect(() => {
 		if (needsOnboarding) {
 			router.replace("/onboarding");
+		} else if (isDeletionLocked) {
+			router.replace(DATA_REQUESTS_PAGE_PATH);
 		}
-	}, [needsOnboarding, router]);
+	}, [needsOnboarding, isDeletionLocked, router]);
 
 	if (isLoading) {
+		return <HomeSkeleton />;
+	}
+
+	// 组织删除处理中：账本查询已被闸门静默（零 403），此处只是在等上面的跳转生效
+	if (isDeletionLocked) {
 		return <HomeSkeleton />;
 	}
 

@@ -25,10 +25,13 @@ vi.hoisted(() => {
 });
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { act } from "@testing-library/react";
 import { useOrganizationStore } from "@/lib/stores/organization-store";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { addDays, subDays } from "date-fns";
+import { organizationsApi } from "@/lib/api/organizations";
+import { withOrgScope } from "@/lib/api/query-keys";
 import { useHomeState, HOME_STATE_QUERY_KEY } from "./use-home-state";
 import { fetchHomePortfolio, homeApi } from "@/lib/api/home";
 import type { HomePortfolioData } from "@/lib/api/home";
@@ -42,6 +45,45 @@ vi.mock("@/lib/api/home", () => ({
 	},
 	fetchHomePortfolio: vi.fn(),
 }));
+
+// 当前组织详情：账本查询闸门的判定依据（建账态 / 组织删除锁）
+vi.mock("@/lib/api/organizations", () => ({
+	organizationsApi: {
+		list: vi.fn(),
+		current: vi.fn(),
+		create: vi.fn(),
+	},
+	membersApi: {
+		leave: vi.fn(),
+	},
+}));
+
+type OrganizationCurrent = Awaited<ReturnType<typeof organizationsApi.current>>;
+
+/** 让当前组织详情解析为给定状态的组织（id 跟随 store 的当前选择） */
+function mockCurrentOrganization(
+	overrides: Partial<OrganizationCurrent> = {},
+) {
+	vi.mocked(organizationsApi.current).mockImplementation(async () => ({
+		id: useOrganizationStore.getState().activeOrganizationId ?? "org-test",
+		name: "测试组织",
+		role: "OWNER",
+		capabilities: {},
+		onboardingCompleted: true,
+		baseCurrency: "CNY",
+		ledgerStartedAt: "2026-01-01T00:00:00.000Z",
+		dataRequestLock: { active: false, type: null },
+		...overrides,
+	}));
+}
+
+/** 等所有已发起的异步查询落定（断言「零请求」前必须等到底） */
+async function settle() {
+	await act(async () => {
+		await Promise.resolve();
+		await Promise.resolve();
+	});
+}
 
 /** 新用户（未完成设置；分流至 /onboarding 建账向导，onboarding-rework 口径） */
 const onboardingIncompleteState: HomeState = {
@@ -125,26 +167,49 @@ const createWrapper = () => {
 	);
 };
 
+/** 同上，但同时暴露 QueryClient（断言缓存键形态用） */
+const createWrapperWithClient = () => {
+	const queryClient = new QueryClient({
+		defaultOptions: {
+			queries: { retry: false },
+			mutations: { retry: false },
+		},
+	});
+	const Wrapper = ({ children }: { children: React.ReactNode }) => (
+		<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+	);
+	return { queryClient, Wrapper };
+};
+
 describe("useHomeState", () => {
 	beforeEach(() => {
-		// ToB W20：业务查询按组织门控（enabled: orgId !== null）——测试统一选中组织
+		// ToB W20：业务查询按组织门控（enabled: orgId !== null）——测试统一选中组织；
+		// W28 起还要过账本查询闸门：组织详情解析为「已建账、无锁」
 		useOrganizationStore.setState({ activeOrganizationId: "org-test" });
+		mockCurrentOrganization();
 		vi.clearAllMocks();
 		// 默认 portfolio 成功；仅 portfolio 降级场景的用例内覆盖
 		vi.mocked(fetchHomePortfolio).mockResolvedValue(portfolioData);
 	});
 
-	it("加载中应返回 isLoading=true 且 state 为空", () => {
+	it("组织详情在途：isLoading=true、state 为空且零首页请求；放行后 state 首次请求进行中", async () => {
 		vi.mocked(homeApi.getState).mockReturnValue(new Promise(() => {}));
 
 		const { result } = renderHook(() => useHomeState(), {
 			wrapper: createWrapper(),
 		});
 
+		// 闸门未开：建账态与锁态未知，不发 /home/state 与 /home/portfolio
+		await waitFor(() => expect(organizationsApi.current).toHaveBeenCalledOnce());
 		expect(result.current.isLoading).toBe(true);
 		expect(result.current.isError).toBe(false);
 		expect(result.current.state).toBeUndefined();
-		expect(homeApi.getState).toHaveBeenCalledOnce();
+		expect(homeApi.getState).not.toHaveBeenCalled();
+
+		// 放行后请求发出
+		await waitFor(() => expect(homeApi.getState).toHaveBeenCalledOnce());
+		expect(result.current.isLoading).toBe(true);
+		expect(result.current.state).toBeUndefined();
 	});
 
 	it("请求失败应返回 isError=true，refetch 可调用并恢复成功", async () => {
@@ -168,17 +233,22 @@ describe("useHomeState", () => {
 		expect(result.current.isError).toBe(false);
 	});
 
-	it("onboardingCompleted=false 应原样返回（分流跳 /onboarding 由页面消费）", async () => {
+	it("组织详情读取失败时的回落：/home/state 自报 onboardingCompleted=false 原样返回，needsOnboarding 同步为 true", async () => {
+		// 闸门只是降噪优化：判定依据拿不到时放行，分流回落到首页状态自己的建账布尔
+		mockCurrentOrganization();
+		vi.mocked(organizationsApi.current).mockRejectedValue(new Error("网络抖动"));
 		vi.mocked(homeApi.getState).mockResolvedValue(onboardingIncompleteState);
 
 		const { result } = renderHook(() => useHomeState(), {
 			wrapper: createWrapper(),
 		});
 
-		await waitFor(() => expect(result.current.isLoading).toBe(false));
+		await waitFor(() => expect(result.current.state).toBeDefined());
 
 		expect(result.current.isError).toBe(false);
-		expect(result.current.state?.onboardingCompleted).toBe(false);
+		expect(result.current.state).toEqual(onboardingIncompleteState);
+		expect(result.current.needsOnboarding).toBe(true);
+		expect(result.current.gate).toBe("ready");
 	});
 
 	it("空账本（三布尔中 completed=true 且无账户无计划）应返回空状态分支所需数据", async () => {
@@ -188,7 +258,7 @@ describe("useHomeState", () => {
 			wrapper: createWrapper(),
 		});
 
-		await waitFor(() => expect(result.current.isLoading).toBe(false));
+		await waitFor(() => expect(result.current.state).toBeDefined());
 
 		expect(result.current.state).toEqual({
 			onboardingCompleted: true,
@@ -208,7 +278,7 @@ describe("useHomeState", () => {
 			wrapper: createWrapper(),
 		});
 
-		await waitFor(() => expect(result.current.isLoading).toBe(false));
+		await waitFor(() => expect(result.current.state).toBeDefined());
 
 		expect(result.current.state).toEqual(dataState);
 		expect(result.current.state?.hasAccounts).toBe(true);
@@ -222,9 +292,126 @@ describe("useHomeState", () => {
 	});
 });
 
+describe("useHomeState - 账本查询闸门（查询降噪，技术方案 §10.3）", () => {
+	beforeEach(() => {
+		useOrganizationStore.setState({ activeOrganizationId: "org-test" });
+		mockCurrentOrganization();
+		vi.clearAllMocks();
+		vi.mocked(homeApi.getState).mockResolvedValue(dataState);
+		vi.mocked(fetchHomePortfolio).mockResolvedValue(portfolioData);
+	});
+
+	it("DEBT-06：未建账组织零 /home/state、零 /home/portfolio 请求；needsOnboarding 直接取自组织详情", async () => {
+		mockCurrentOrganization({
+			onboardingCompleted: false,
+			baseCurrency: null,
+			ledgerStartedAt: null,
+		});
+		const { result } = renderHook(() => useHomeState(), {
+			wrapper: createWrapper(),
+		});
+
+		await waitFor(() => expect(result.current.needsOnboarding).toBe(true));
+		await settle();
+		expect(homeApi.getState).not.toHaveBeenCalled();
+		expect(fetchHomePortfolio).not.toHaveBeenCalled();
+		// 不是「加载中」：页面据此分流去建账向导，而不是停在骨架屏
+		expect(result.current.isLoading).toBe(false);
+		expect(result.current.isError).toBe(false);
+		expect(result.current.gate).toBe("not-onboarded");
+		expect(result.current.dashboard).toBeNull();
+	});
+
+	it("组织删除处理中零首页请求（否则必然 403）；页面据 isDeletionLocked 主动去进度页", async () => {
+		mockCurrentOrganization({
+			dataRequestLock: { active: true, type: "DELETION" },
+		});
+		const { result } = renderHook(() => useHomeState(), {
+			wrapper: createWrapper(),
+		});
+
+		await waitFor(() => expect(result.current.isDeletionLocked).toBe(true));
+		await settle();
+		expect(homeApi.getState).not.toHaveBeenCalled();
+		expect(fetchHomePortfolio).not.toHaveBeenCalled();
+		expect(result.current.isLoading).toBe(false);
+		expect(result.current.gate).toBe("deletion-locked");
+		expect(result.current.needsOnboarding).toBe(false);
+	});
+
+	it("删除锁下 refetch 不发请求：refetch 会绕过 enabled，错误态的重试不能打出一个必然的 403", async () => {
+		mockCurrentOrganization({
+			dataRequestLock: { active: true, type: "DELETION" },
+		});
+		const { result } = renderHook(() => useHomeState(), {
+			wrapper: createWrapper(),
+		});
+		await waitFor(() => expect(result.current.isDeletionLocked).toBe(true));
+
+		await act(async () => {
+			await result.current.refetch();
+		});
+		expect(homeApi.getState).not.toHaveBeenCalled();
+	});
+
+	it("未选组织零首页请求（未建账 / 锁态也无从谈起）", async () => {
+		useOrganizationStore.setState({ activeOrganizationId: null });
+		const { result } = renderHook(() => useHomeState(), {
+			wrapper: createWrapper(),
+		});
+		await settle();
+		expect(organizationsApi.current).not.toHaveBeenCalled();
+		expect(homeApi.getState).not.toHaveBeenCalled();
+		expect(fetchHomePortfolio).not.toHaveBeenCalled();
+		expect(result.current.gate).toBe("no-organization");
+		expect(result.current.isLoading).toBe(false);
+	});
+
+	it("CLEAR 锁不拦读：清空冷静期内首页照常加载（写操作由后端 403 引导去进度页）", async () => {
+		mockCurrentOrganization({
+			dataRequestLock: { active: true, type: "CLEAR" },
+		});
+		const { result } = renderHook(() => useHomeState(), {
+			wrapper: createWrapper(),
+		});
+		await waitFor(() => expect(result.current.state).toEqual(dataState));
+		expect(homeApi.getState).toHaveBeenCalledOnce();
+		expect(result.current.isDeletionLocked).toBe(false);
+		expect(result.current.needsOnboarding).toBe(false);
+	});
+
+	it("组织详情读取失败时闸门放行：/home/state 照常请求，失败照常进错误态并可重试", async () => {
+		vi.mocked(organizationsApi.current).mockRejectedValue(new Error("网络抖动"));
+		vi.mocked(homeApi.getState)
+			.mockRejectedValueOnce(new Error("网络失败"))
+			.mockResolvedValueOnce(dataState);
+		const { result } = renderHook(() => useHomeState(), {
+			wrapper: createWrapper(),
+		});
+
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		expect(result.current.gate).toBe("ready");
+		const refetchResult = await result.current.refetch();
+		expect(refetchResult.isSuccess).toBe(true);
+		await waitFor(() => expect(result.current.state).toEqual(dataState));
+	});
+
+	it("放行后两个请求都按组织分桶键缓存（切换组织不沿用上一个组织的首页数据）", async () => {
+		const { queryClient, Wrapper } = createWrapperWithClient();
+		const { result } = renderHook(() => useHomeState(), { wrapper: Wrapper });
+		await waitFor(() => expect(result.current.state).toEqual(dataState));
+		expect(
+			queryClient.getQueryData(withOrgScope("org-test", HOME_STATE_QUERY_KEY)),
+		).toEqual(dataState);
+		expect(queryClient.getQueryData(HOME_STATE_QUERY_KEY)).toBeUndefined();
+	});
+});
+
 describe("useHomeState - dashboard 派生（home-dashboard 数据层）", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		useOrganizationStore.setState({ activeOrganizationId: "org-test" });
+		mockCurrentOrganization();
 		// 默认 portfolio 成功；仅 portfolio 降级场景的用例内覆盖
 		vi.mocked(fetchHomePortfolio).mockResolvedValue(portfolioData);
 	});
@@ -377,7 +564,7 @@ describe("useHomeState - dashboard 派生（home-dashboard 数据层）", () => 
 			wrapper: createWrapper(),
 		});
 
-		await waitFor(() => expect(result.current.isLoading).toBe(false));
+		await waitFor(() => expect(result.current.state).toBeDefined());
 
 		expect(result.current.state?.hasInitialHoldings).toBe(false);
 		expect(result.current.dashboard?.hasInitialHoldings).toBe(false);
@@ -393,7 +580,7 @@ describe("useHomeState - dashboard 派生（home-dashboard 数据层）", () => 
 			wrapper: createWrapper(),
 		});
 
-		await waitFor(() => expect(result.current.isLoading).toBe(false));
+		await waitFor(() => expect(result.current.state).toBeDefined());
 
 		// state 照常返回，页面错误态不被 portfolio 拖累
 		expect(result.current.isError).toBe(false);
@@ -430,7 +617,7 @@ describe("useHomeState - dashboard 派生（home-dashboard 数据层）", () => 
 			wrapper: createWrapper(),
 		});
 
-		await waitFor(() => expect(result.current.isLoading).toBe(false));
+		await waitFor(() => expect(result.current.state).toBeDefined());
 
 		expect(result.current.dashboard?.focusPlan).toBeNull();
 		// 其余字段照常派生

@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Suspense, useEffect } from "react";
 import { toast } from "sonner";
 import {
@@ -10,6 +11,7 @@ import {
 	TransactionForm,
 } from "@/components/business/transaction";
 import { Button } from "@/components/ui/button";
+import { PageLoading, PermissionNotice } from "@/components/base";
 import type { CreateTransactionReq } from "@/lib/api/contract";
 import { onboardingApi } from "@/lib/api/onboarding";
 import {
@@ -19,6 +21,7 @@ import {
 } from "@/lib/api/query-keys";
 import { transactionsApi } from "@/lib/api/transactions";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 import { useHomeState } from "@/lib/hooks/use-home-state";
 import {
 	findCurrency,
@@ -37,8 +40,32 @@ import {
  * URL 预填（换汇计划详情页「录入买入」入口）：?planId=…&currency=… 自动关联计划
  * 并预填买入币种（默认选好、仍可修改）；参数无效时静默降级为空白表单。
  * useSearchParams 需 Suspense 边界（Next.js App Router 静态渲染要求）。
+ *
+ * 能力门控（Goal #3B W28）：录入买入需 transaction.create（Operator / Viewer 无）。
+ * 无权时整页换成只读提示，表单不挂载——不替一个注定 403 的用户去取报价、查首页状态。
  */
 export default function NewTransactionPage() {
+	const { can, isLoading } = useOrganizationCapabilities();
+
+	if (isLoading) {
+		return <PageLoading />;
+	}
+
+	if (!can("transaction.create")) {
+		return (
+			<PermissionNotice
+				testId="transaction-create-no-permission"
+				title="当前角色无权录入买入"
+				description="当前角色无权录入买入记录：记账（买入、使用、更正）需财务及以上角色。请联系组织所有者、管理员或财务。"
+				action={
+					<Button variant="outline" className="bg-white" asChild>
+						<Link href="/home">返回首页</Link>
+					</Button>
+				}
+			/>
+		);
+	}
+
 	return (
 		<Suspense fallback={null}>
 			<NewTransactionPageContent />

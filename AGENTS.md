@@ -26,6 +26,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │     ├─ corrections/            #     更正与日志（new/ 更正页，targetType/targetId 由查询参数进入）
 │  │     ├─ organization/           #     ToB R1：组织信息/成员与邀请/审计分页
 │  │     ├─ invitations/[token]/    #     ToB R1：受邀摘要与接受/拒绝（登录后回跳）
+│  │     ├─ data-requests/          #     数据请求进度页（个人 + 当前组织双域分区；不依赖组织上下文的豁免路由）
 │  │     └─ projects/               #     示例业务页
 │  ├─ components/
 │  │  ├─ ui/                        # shadcn 原语
@@ -33,7 +34,8 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  └─ business/<domain>/         # 业务组件（按领域分目录）
 │  ├─ hooks/                        # 自定义 hooks
 │  ├─ lib/
-│  │  ├─ api/                       # 后端 API 客户端
+│  │  ├─ api/                       # 后端 API 客户端（个人域请求带 skipOrganizationScope，不注入组织头）
+│  │  ├─ hooks/                     # 数据 hooks（组织上下文 / 权限消费 / 查询闸门；页面与组件不裸写 useEffect）
 │  │  ├─ auth/                      # 会话上下文重置、回跳地址白名单与跳转、token cookie
 │  │  ├─ dev-log/                   # 本地开发错误采集（@sentry/browser → dev-log-server）
 │  │  ├─ stores/                    # zustand 状态
@@ -51,13 +53,13 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  ├─ app.controller.ts          # health / hello 探针
 │  │  ├─ auth/                      # L1：JWT 认证
 │  │  ├─ organization/              # ToB R1：组织、成员、邀请、组织设置与默认组织回填
-│  │  ├─ authorization/             # ToB R1：ActorContext、纯函数权限策略、组织上下文/权限 Guard
+│  │  ├─ authorization/             # ToB R1：ActorContext、纯函数权限策略、组织上下文/权限/双锁 Guard 与白名单装饰器
 │  │  ├─ audit/                     # ToB R1：审计同事务 writer 与只读分页查询（无 update/delete 接口）
 │  │  ├─ account/                   # 账户与分配只读视图
 │  │  ├─ ai/                        # AI 助手（会话、配额、汇率工具）
 │  │  ├─ correction/                # 更正与账本重放（FIFO）
 │  │  ├─ currency/                  # 币种清单下发
-│  │  ├─ data-request/              # 数据请求与全局锁（导出/清空/注销）
+│  │  ├─ data-request/              # 数据请求与双锁判定实现（个人账号锁 / 组织数据锁；导出/清空/注销）
 │  │  ├─ home/                      # 首页聚合
 │  │  ├─ onboarding/                # 首次建账向导（初始持仓）
 │  │  ├─ plan/                      # 换汇计划（排期、分配、变更日志）
@@ -137,17 +139,34 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | E2E 用例         | `e2e/modules/<编号>-<模块>.spec.ts`                                       |
 | ToB 组织工作台与 Agent 规划 | `changes/tob-agent-workspace/` |
 | ToB R1 后端新模块（组织/成员/邀请/设置、权限策略与 Guard、审计） | `services/chat/src/{organization,authorization,audit}/`，在 `app.module.ts` 唯一注册；`authorization/` 仅纯函数与类型（IO 在 Guard/Service 层） |
+| 双域数据请求与双锁守卫 | `services/chat/src/data-request/`：个人域 `/api/data-requests/*`（`DataRequestController`，仅 `JwtAuthGuard`）+ 组织域 `/api/organizations/current/data-requests/*`（`OrganizationDataRequestController`，类级 `@SkipOrganizationLock()`，`JwtAuthGuard → OrganizationContextGuard → OrganizationLockGuard → PermissionGuard`）；`PersonalAccountLockGuard`（全局 `APP_GUARD`，未挂组织锁守卫的路由走个人域单查）/ `OrganizationLockGuard`（**横切守卫，契约与实现分离**：守卫 + `ORGANIZATION_LOCK_RESOLVER` 契约在 `services/chat/src/authorization/guards/organization-lock.guard.ts`，真实判定在 `data-request/organization-lock-resolver.ts`，经全局 `DataRequestModule` 导出后注入——`authorization/` 与 `audit/` 均禁止引入业务记账模块）；双锁白名单装饰器统一在 `services/chat/src/authorization/guards/data-lock.decorators.ts` |
+| 组织锁守卫挂载顺序铁律 | `@UseGuards(OrganizationContextGuard \| BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)`——先解析 `actor.organizationId`、再检锁、最后检权限；放前则无 actor 绕过、放后则 403 先于锁原因返回。**唯一例外**：`PATCH /api/settings` 因按字段分权（`personal` 的 region/locale 放行全部成员 vs `organization` 的 prepPreference/reminderEnabled 需 `settings.update`）未挂类/方法级 `PermissionGuard`，改在 `SettingsService` 持组织锁（`lockOrganizationForActor`）后按字段内联校验角色并写审计（成功同事务 SUCCESS，失败回滚后写 DENIED）——新增按字段分权的端点须照此办理，不得擅自跳过内联校验 |
+| 锁查询不变量（每请求至多 1 条 `data_requests` SELECT） | 组织上下文端点由 `OrganizationLockGuard` 发**一条合并查询**（`scope=PERSONAL` 本人注销 ∪ `scope=ORGANIZATION` 当前组织 `CLEAR`/`DELETION`），同时判定两把锁；`PersonalAccountLockGuard` 读到路由 `__guards__` 含 `OrganizationLockGuard` 时直接放行（不再单独查库）；未挂组织锁守卫的路由由个人锁守卫单查个人域。锁判定失败一律 fail-closed（500），白名单端点仅 log warn |
+| 双锁错误码 | `ACCOUNT_PENDING_DELETION`（**本人**账号注销处理中，只锁本人）/ `ORGANIZATION_DATA_LOCKED`（**当前组织**账本清空/删除处理中，只锁当前组织）——两者严格区分，互不误判、互不触发对方语义 |
 | 组织工作台前端页面 | `clients/chat-web/app/(protected)/organization/`（信息/成员/审计）、`clients/chat-web/app/(protected)/invitations/[token]/` |
 | 组织/审计业务组件 | `clients/chat-web/components/business/{organization,audit}/`，带 index.ts 桶文件 |
 | 组织上下文前端状态 | `clients/chat-web/lib/stores/organization-store.ts`（仅存 `activeOrganizationId`，严禁持久化 role/capabilities） |
-| 组织数据的查询作用域 | 键一律 `withOrgScope(orgId, …)` 且 `enabled: orgId !== null`（`useActiveOrgId()`）；失效走 `invalidateBusinessKey`；受保护区业务区整体包在 `OrganizationScopeBoundary` 内（切组织按 key 重新挂载——`removeQueries` 不通知挂载态的观察者，单靠清缓存页面会冻结在旧组织数据） |
-| 不依赖组织上下文的受保护路由 | `isOrglessRouteAllowed`（`clients/chat-web/lib/hooks/use-organizations.ts`）：路由分流免检、业务区边界传 `bypass` 不重挂载，两处共用同一判定；这类页面自己切换组织，重挂载会清掉页面内的结果态 |
+| 组织数据的查询作用域 | 键一律 `withOrgScope(orgId, …)` 且 `enabled: orgId !== null`（`useActiveOrgId()`）；失效走 `invalidateBusinessKey`；受保护区业务区整体包在 `OrganizationScopeBoundary` 内（切组织按 key 重新挂载——`removeQueries` 不通知挂载态的观察者，单靠清缓存页面会冻结在旧组织数据）。账本类 GET（`/settings`、`/reminders`、`/home/*`）另受账本查询闸门约束（见「账本查询闸门」行） |
+| 不依赖组织上下文的受保护路由 | `isOrglessRouteAllowed`（`clients/chat-web/lib/hooks/use-organizations.ts`）：路由分流免检、业务区边界传 `bypass` 不重挂载，两处共用同一判定；`/invitations/*` 自己切换组织、重挂载会清掉页面内的结果态；`/data-requests` 承载**个人域**进度，0 组织 / 多组织未选 / 账号注销锁定的用户都必须进得去（403 账号锁的跳转目的地，页内组织分区自行按 `key={orgId ?? "none"}` 重挂载） |
+| 组织权限消费（按钮显隐 / 只读态） | `clients/chat-web/lib/hooks/use-organization-capabilities.ts`：`useOrganizationCapabilities()` 实时读后端 `capabilities`，`can(permission)` **fail-closed**（未选组织 / 加载中 / 加载失败 / 键缺失一律 false，权限点键以后端 `permission-policy.ts` 为真源）；**严禁**把 `role` / `capabilities` 写入 localStorage / sessionStorage / organization-store，也严禁按 `role` 在前端推断权限；capabilities 只控制显示，后端始终强制 `@RequiresPermission` |
+| 账本查询闸门（查询降噪，§10.3 / DEBT-06） | `useLedgerQueryGate()`（同上文件，纯函数 `resolveLedgerQueryGate`）：未选组织 / 组织详情在途 / 未建账 / 组织删除处理中一律不发账本类 GET；消费方不得各写一份门控——`/settings` 只经 `useOrganizationSettings()`（`lib/hooks/use-organization-settings.ts`）、`/reminders` 经 `useReminders()`、`/home/*` 经 `useHomeState()`。CLEAR 冷静期不拦读（写由后端 403 引导）；组织详情读取失败时闸门放行、由业务端点自身裁决 |
+| 设置页两域 | `components/business/settings/preferences-form.tsx`：个人展示偏好（`GET/PATCH /settings/personal`，任何登录用户可改，键 `queryKeys.settings.personal()` 独立词根 + `skipOrganizationScope`）与组织账本设置（`GET/PATCH /settings`，键 `withOrgScope(orgId, settings.detail())`，无 `settings.update` 只读）各自暂存、页面级**单个** `settings-save` 分别提交；草稿是受控初始态（编辑器以服务端值为 key 重新挂载），不写 `useEffect` |
+| 数据权利请求前端双域 | `lib/api/data-requests.ts` + `lib/hooks/use-data-request.ts`：个人域（`/data-requests/*`，`skipOrganizationScope` 不带组织头、不依赖 `orgId` 门控、键 `queryKeys.dataRequests.personalCurrent()` 不加前缀）与组织域（`/organizations/current/data-requests/*` + `DELETE /organizations/current`，键经 `withOrgScope` 分桶）端点与 hook 成对命名（`*Personal` / `*Organization`），**禁止混用**；请求体 `scope` 固定为所在域字面量；提交 / 撤回后统一 `invalidateAfterDataRequestMutation`（两域 + 当前组织详情的锁摘要） |
+| 双锁 403 的前端处理 | `consumeDataRequestLock`（`lib/api/client.ts`，`apiClient` 与 SSE 封装共用）：两把锁都整页跳**纯** `/data-requests`（禁拼 `?scope=`——E2E 按精确 URL 匹配），且**不清空** `activeOrganizationId`（组织锁只锁当前组织，侧栏仍可切到其他组织）；`isExpectedControlFlowApiError` 完整包含 `ONBOARDING_NOT_COMPLETED` / `ORGANIZATION_DATA_LOCKED` / `ACCOUNT_PENDING_DELETION` / `PERMISSION_DENIED` / `ORGANIZATION_REQUIRED` / `ORGANIZATION_NOT_FOUND`（状态码与错误码须同时匹配） |
+| 数据权利 UI 分区 | `components/business/account-data/`：设置页 `AccountDataSection` = 「个人账号与数据」（退出登录 / 导出个人数据 / 注销个人账号）+「当前组织数据」（导出 / 清空 / 删除组织）；进度页 `request-panels.tsx` = 个人分区 + 组织分区（后者以 `key={orgId ?? "none"}` 重挂载，个人进度不随切换丢失）；`RequestProgress` 按视图 `scope` 选端点，组织域撤回 / 下载按钮按能力显隐；既有 testid 保留（`account-data-export` / `account-data-clear` / `account-data-delete` / `settings-logout` / `request-progress*`），新增组织区 testid 以 `organization-` 为前缀 |
+| 只读 / 无权限提示 | `components/base/permission-notice.tsx`：`PermissionNotice`（整卡，页面主体依赖该权限时）与 `PermissionHint`（行内，内容可读仅写被锁）；权限判定不在此——调用方先 `can(...)` 再渲染 |
+| 受保护页能力门控 | 写按钮显隐一律 `useOrganizationCapabilities().can(...)`：Onboarding / 补录初始持仓 `settings.update`；Plan 新建 `plan.create`，调整 / 完成 / 取消 / 重新开启 `plan.adjust` 且叠加服务端 `canXxx`，记录使用 `usage.create`，录入买入 `transaction.create`；更正入口与提交 `correction.apply`，更正页预演 `correction.preview`；组织数据 导出 `data.export`、清空 `data.clear && onboardingCompleted`、删除 `organization.delete`。组织详情未返回前不渲染写按钮（防权限闪烁） |
+| 退出登录出口 | `useLogoutAndRedirect()`（`lib/query/hooks/use-auth.ts`）：侧栏、设置页、`OrganizationPicker`、`OrganizationRoutingError` 共用（后两者整屏渲染没有侧栏）；页面不得各自拼接「登出 + 清用户态 + 跳转」 |
 | 切换组织类回调里的后续动作 | hook 级回调同步改组织选择会让布局卸载调用方组件，`mutate(…, { onSuccess })` 的调用点回调不再派发——导航等后续动作用 `mutateAsync().then(…)` 或写进 hook 级回调，不依赖挂载态 |
 | 外部中止当前流 | 一律调 `abortActiveStream()`（`clients/chat-web/lib/stores/chat-store.ts`，同时重置聊天运行时态）；`use-chat` 收尾以句柄归属决定是否清理，只中止不重置会永久锁死输入框 |
 | 默认组织（个人工作台）判定 | `services/chat/src/authorization/default-organization.ts`：用户创建的最早组织；建组织必须嵌套写入（组织与首位成员同事务创建）；回填 / 核对 SQL 的 `defaults` CTE 与之同口径 |
 | 持锁写的操作者资格 | 组织锁内一律经 `lockOrganizationForActor` 重读操作者并以最新角色判定，不得沿用 Guard 放行时的 `actor.role`（等待锁期间可能已被降权 / 移除 / 失去所有权） |
 | 会话上下文重置 | `clients/chat-web/lib/auth/session-reset.ts`：登录 / 注册 / 登出 / 401 的唯一入口；业务代码不单独清组织选择、拒绝集合或聊天运行时态 |
 | 组织 E2E 用例 | `e2e/modules/15-organization.spec.ts`（Goal #3A W21 落盘骨架，人类启服后运行） |
+| 建账后的缓存失效 | `invalidateAfterOnboarding`（`lib/api/query-keys.ts`）必须连带失效 `queryKeys.organizations.all`；向导页 / 补录页导航前须 `await refreshOrganizationDetails(queryClient)`（同文件）——首页分流读组织详情缓存的 `onboardingCompleted`（键不带 org 前缀，`invalidateBusinessKey` 覆盖不到），漏掉即建账后在 `/home` ↔ `/onboarding` 间回弹；回读失败时该函数移除组织域查询再放行，不带着旧的「未建账」详情导航 |
+| E2E Node 侧直连后端 | 一律 `localFetch(buildApiUrl(回环地址, …))`（`e2e/helpers/api-url.ts`），回环地址 = `API_URL.replace("localhost", "127.0.0.1")`；禁止取 LAN IP / `os.networkInterfaces()`（TUN 下命中 utun）；按 IP 频控由 `run-e2e-tests.sh` 的 `OTP_IP_MAX_REQUESTS` 放大 |
+| E2E 组织管理端点造数 | `api(path, { headers: { "X-Organization-Id": orgId } })`（`e2e/helpers/api-seeder.ts`）——`/organizations/current/*` 的成员 / 邀请 / 所有权端点挂严格守卫，缺头 400（单组织回落只在业务端点）；所有权转交 = `POST /api/organizations/current/transfer-ownership` |
+| E2E 本地测试库钩子 | 均在**同一函数内**校验回环 PostgreSQL 并拒绝 `?host=` 覆盖，再经 `createRequire` 用后端 Prisma 客户端：`correction-db.ts`（改记账起点须同时改 `OrganizationSettings` 与 `UserSettings`）、`correction-quote-db.ts`、`rate-cache-db.ts`（外呼取价 `RATE_UNAVAILABLE` 时插入已确认 frankfurter 缓存行，`latestConfirmedAt=now` + `canonicalWriteId`，重试后立即按 id 清理；并导出库名闸门 `assertRateCacheTestDatabase`——会写 `exchange_rates` 的钩子共用：显式 `FXPLANNER_E2E_QUOTE_DATABASE` 须等于库名，未注入时库名以 `_local` / `_test` 结尾才放行，脚本从 `services/chat/.env.local` 解析库名注入）；直插账本行须落 `organizationId`（`seedInitialHolding` 可选参数，查不到 OWNER 组织回落兼容窗口 NULL 行） |
 | MVP-F0 汇率回补与缓存迁移底稿 | `changes/realtime-rate/` |
 | 汇率缓存迁移完成记录与行归属 DDL | `services/chat/prisma/migrations/20261120090000_rate_cache_migration_receipt/` |
 | 汇率回源方向标记 DDL | `services/chat/prisma/migrations/20261120091000_rate_cache_canonical_write/` |

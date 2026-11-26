@@ -10,8 +10,10 @@ import {
 } from "@/components/business/correction";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageLoading, PermissionNotice } from "@/components/base";
 import type { CorrectionTargetType } from "@/lib/api/contract";
 import { useCorrectionForm } from "@/lib/hooks/use-correction-form";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 
 /**
  * 更正页（corrections 技术方案 §6：/corrections/new）
@@ -19,6 +21,12 @@ import { useCorrectionForm } from "@/lib/hooks/use-correction-form";
  * targetType/targetId 由查询参数进入；按类型渲染对应表单段（原因必填）→
  * 「查看影响」只读预览（blockers 非空禁用确认）→「确认更正」事务提交 →
  * 成功后跳回目标详情。认证守卫在 (protected)/layout.tsx（勿在此重复）。
+ *
+ * 能力门控（Goal #3B W28）：预演需 correction.preview、提交需 correction.apply
+ * （后端对两个接口各自 @RequiresPermission 强制）。
+ * - 两者都没有（Operator / Viewer）：整页只读提示，目标内容与表单都不加载；
+ * - 只能预演不能提交：可查看影响，「确认更正」禁用并说明原因——
+ *   不发必然 403 的请求。组织详情未返回前先加载，按钮不闪现。
  */
 
 const TARGET_TYPES: CorrectionTargetType[] = [
@@ -46,6 +54,46 @@ function targetDetailPath(
 }
 
 export default function CorrectionNewPage() {
+	const { can, isLoading } = useOrganizationCapabilities();
+	const canPreview = can("correction.preview");
+	const canApply = can("correction.apply");
+
+	if (isLoading) {
+		return (
+			<PageShell>
+				<PageLoading className="min-h-64" />
+			</PageShell>
+		);
+	}
+
+	if (!canPreview && !canApply) {
+		return (
+			<PageShell>
+				<PermissionNotice
+					testId="correction-no-permission"
+					className="py-16"
+					title="当前角色无权发起更正"
+					description="当前角色无权发起更正：更正会改写组织的账本记录，需要财务及以上角色。如需更正，请联系组织所有者、管理员或财务。"
+					action={
+						<Button variant="outline" className="bg-white" asChild>
+							<Link href="/home">返回首页</Link>
+						</Button>
+					}
+				/>
+			</PageShell>
+		);
+	}
+
+	return <CorrectionEditor canPreview={canPreview} canApply={canApply} />;
+}
+
+function CorrectionEditor({
+	canPreview,
+	canApply,
+}: {
+	canPreview: boolean;
+	canApply: boolean;
+}) {
 	const params = useSearchParams();
 	const rawType = params.get("targetType");
 	const targetId = params.get("targetId");
@@ -115,9 +163,15 @@ export default function CorrectionNewPage() {
 	);
 	const hasBlockers = (form.preview?.blockers.length ?? 0) > 0;
 	const canSubmit =
-		form.preview !== null && !hasBlockers && !form.applying && !form.previewing;
+		canApply &&
+		form.preview !== null &&
+		!hasBlockers &&
+		!form.applying &&
+		!form.previewing;
 
 	const onConfirm = async () => {
+		// 按钮已按 canApply 禁用；这里再拦一道，保证无权时不会触达提交接口
+		if (!canApply) return;
 		const result = await form.confirm();
 		if (result) {
 			// 成功 → 跳回目标详情（版本历史在详情页可见）
@@ -185,11 +239,20 @@ export default function CorrectionNewPage() {
 					</p>
 				) : null}
 
+				{!canApply && (
+					<p
+						data-testid="correction-readonly-note"
+						className="flex items-center gap-2 rounded-xl border border-dashed border-border px-4 py-3 text-xs leading-5 text-muted-foreground"
+					>
+						当前角色只能查看更正影响，无权提交更正；如需提交，请联系组织所有者、管理员或财务。
+					</p>
+				)}
+
 				<div className="flex items-center gap-3 pb-10">
 					<Button
 						variant="outline"
 						onClick={() => void form.runPreview()}
-						disabled={form.previewing || form.applying}
+						disabled={!canPreview || form.previewing || form.applying}
 						data-testid="correction-preview-button"
 					>
 						{form.previewing ? "正在计算影响…" : "查看影响"}

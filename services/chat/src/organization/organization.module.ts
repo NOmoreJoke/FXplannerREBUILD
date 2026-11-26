@@ -3,6 +3,7 @@ import { PrismaModule } from "../prisma/prisma.module";
 import { AuthModule } from "../auth/auth.module";
 import { AuditModule } from "../audit/audit.module";
 import { AuthorizationModule } from "../authorization/authorization.module";
+import { DataRequestModule } from "../data-request/data-request.module";
 import { OrganizationController } from "./organization.controller";
 import { OrganizationService } from "./organization.service";
 import { MemberController } from "./member.controller";
@@ -16,7 +17,14 @@ import { InvitationService } from "./invitation.service";
  * W17 组织 CRUD / W19 成员与邀请全生命周期。
  */
 @Module({
-	imports: [PrismaModule, AuthModule, AuditModule, AuthorizationModule],
+	imports: [
+		PrismaModule,
+		AuthModule,
+		AuditModule,
+		AuthorizationModule,
+		// DELETE /organizations/current 发起组织删除（组织域数据请求编排）
+		DataRequestModule,
+	],
 	controllers: [OrganizationController, MemberController, InvitationController],
 	providers: [OrganizationService, MemberService, InvitationService],
 	exports: [OrganizationService],

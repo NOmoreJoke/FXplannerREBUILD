@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { compatReadWhere, type ReadScope } from "./organization-scope";
 
 type DefaultOrganizationReader = Pick<Prisma.TransactionClient, "$queryRaw">;
 
@@ -55,4 +56,67 @@ export async function resolveDefaultOrganizationId(
 		ORDER BY m.joined_at ASC, m.created_at ASC, m.id ASC
 		LIMIT 1`;
 	return earliest?.organizationId ?? null;
+}
+
+/**
+ * 解析一个组织的「默认工作台创建者」userId（I-2 双账户行防护）：
+ * 1. 先找出该组织的创建者成员（m.created_at = o.created_at 且无更早成员）；
+ * 2. 再验证该创建者的默认组织恰好就是本 organizationId（防止用户新建的第 2 个
+ *    组织误认或吞并该用户在默认组织下的 organization_id IS NULL 存量行）。
+ *
+ * 仅当两条件同时成立时返回 creatorUserId，否则返回 null。
+ */
+export async function resolveDefaultOrganizationCreatorUserId(
+	db: DefaultOrganizationReader,
+	organizationId: string,
+): Promise<string | null> {
+	const [creator] = await db.$queryRaw<Array<{ userId: string }>>`
+		SELECT m.user_id AS "userId"
+		FROM memberships m
+		JOIN organizations o ON o.id = m.organization_id
+		WHERE m.organization_id = ${organizationId}
+			AND m.created_at = o.created_at
+			AND NOT EXISTS (
+				SELECT 1 FROM memberships earlier
+				WHERE earlier.organization_id = m.organization_id
+					AND (earlier.created_at, earlier.id) < (m.created_at, m.id)
+			)
+		ORDER BY m.created_at ASC, m.id ASC
+		LIMIT 1`;
+	if (!creator?.userId) return null;
+	const creatorDefaultOrgId = await resolveDefaultOrganizationId(
+		db,
+		creator.userId,
+	);
+	return creatorDefaultOrgId === organizationId ? creator.userId : null;
+}
+
+/**
+ * 计划占用汇总的组织作用域条件（R2-I1 预约对称性）：
+ * 在 compatReadWhere(scope) 之上补充「默认组织创建者尚未迁入组织的 organizationId: null
+ * 存量计划」，确保受邀成员与创建者在计算未分配余额 / caps / 账户已分配汇总时看到
+ * 完全对称的计划占用，消除受邀成员绕过存量计划超额分配。
+ */
+export async function planReservationWhere(
+	db: DefaultOrganizationReader,
+	scope: ReadScope,
+): Promise<ReturnType<typeof compatReadWhere>> {
+	const defaultOwnerUserId = await resolveDefaultOrganizationCreatorUserId(
+		db,
+		scope.organizationId,
+	);
+	if (!defaultOwnerUserId) {
+		return compatReadWhere(scope);
+	}
+	const branches: ReturnType<typeof compatReadWhere>["OR"] = [
+		{ organizationId: scope.organizationId },
+		{ organizationId: null, userId: defaultOwnerUserId },
+	];
+	if (
+		scope.isDefaultOrganization === true &&
+		scope.userId !== defaultOwnerUserId
+	) {
+		branches.push({ organizationId: null, userId: scope.userId });
+	}
+	return { OR: branches };
 }

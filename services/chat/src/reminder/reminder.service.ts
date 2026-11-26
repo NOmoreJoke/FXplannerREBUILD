@@ -134,38 +134,94 @@ export class ReminderService {
 	}
 
 	/**
-	 * 单条已读（POST /api/reminders/:id/read，§7.2）：归属双保险（id + userId）；
-	 * 行不存在或非本人均 404 REMINDER_NOT_FOUND；重复调用幂等返回既有 readAt。
+	 * 单条已读（POST /api/reminders/:id/read，§7.2 + LEDGER-03 成员级已读）：
+	 *
+	 * 目标提醒按「当前组织作用域 + id」校验（compatReadWhere(actor)）：
+	 * 不存在或跨组织一律 404 REMINDER_NOT_FOUND（不泄露存在性；未受邀 / 已被移除
+	 * 的成员由 BusinessOrgScopeGuard 在进入服务前即返回 404）。
+	 *
+	 * 已读态落在**成员级** ReminderRead(reminderId, userId)：一名成员标已读
+	 * **严禁**写入或修改共享的 Reminder.readAt（否则行主一读即替同组织全体成员
+	 * 清除未读，评审 I-11 的复发）。重复调用幂等：既有成员级已读行直接返回其
+	 * readAt，不改写时刻。
 	 */
-	async markRead(userId: string, id: string): Promise<ReminderReadResultDto> {
+	async markRead(scope: ReadScope, id: string): Promise<ReminderReadResultDto> {
 		const row = await this.prisma.reminder.findFirst({
-			where: { id, userId },
+			where: { id, ...compatReadWhere(scope) },
+			select: { id: true },
 		});
 		if (!row) {
 			throw new ReminderNotFoundException();
 		}
-		if (row.readAt !== null) {
-			return { id: row.id, readAt: row.readAt.toISOString() };
-		}
-		const updated = await this.prisma.reminder.update({
-			where: { id },
-			data: { readAt: new Date() },
+		const existing = await this.prisma.reminderRead.findUnique({
+			where: {
+				reminderId_userId: { reminderId: id, userId: scope.userId },
+			},
+			select: { readAt: true },
 		});
-		return {
-			id: updated.id,
-			readAt: (updated.readAt ?? new Date()).toISOString(),
-		};
+		if (existing) {
+			return { id, readAt: existing.readAt.toISOString() };
+		}
+		const now = new Date();
+		const upserted = await this.prisma.reminderRead.upsert({
+			where: {
+				reminderId_userId: { reminderId: id, userId: scope.userId },
+			},
+			update: { readAt: now },
+			create: { reminderId: id, userId: scope.userId, readAt: now },
+			select: { readAt: true },
+		});
+		return { id, readAt: upserted.readAt.toISOString() };
 	}
 
 	/**
-	 * 全部已读（POST /api/reminders/read-all，§7.3）：updateMany 仅命中当前用户未读行，
-	 * 天然幂等（再次调用 updatedCount = 0）。
+	 * 全部已读（POST /api/reminders/read-all，§7.3 + LEDGER-03）：
+	 *
+	 * 目标集合 = 当前组织作用域（compatReadWhere(actor)）内**当前成员尚未读过**的
+	 * 提醒行：成员级 ReminderRead 无对应行即未读；行主本人遗留的行内 readAt
+	 * （MIG-B 前的存量个人读态）视为已读，不重复计入。
+	 *
+	 * 落库只写当前成员自己的 ReminderRead（事务内 createMany + skipDuplicates：
+	 * 并发重复调用不撞唯一键），**严禁**修改任何 Reminder.readAt。天然幂等：
+	 * 再次调用无可插入行 → updatedCount = 0。
 	 */
-	async markAllRead(userId: string): Promise<ReminderReadAllResultDto> {
-		const result = await this.prisma.reminder.updateMany({
-			where: { userId, readAt: null },
-			data: { readAt: new Date() },
+	async markAllRead(scope: ReadScope): Promise<ReminderReadAllResultDto> {
+		const candidates = await this.prisma.reminder.findMany({
+			where: { ...compatReadWhere(scope) },
+			select: { id: true, userId: true, readAt: true },
 		});
+		if (candidates.length === 0) {
+			return { updatedCount: 0 };
+		}
+		const memberReads = await this.prisma.reminderRead.findMany({
+			where: {
+				userId: scope.userId,
+				reminderId: { in: candidates.map((row) => row.id) },
+			},
+			select: { reminderId: true },
+		});
+		const readReminderIds = new Set(
+			memberReads.map((read) => read.reminderId),
+		);
+		const pending = candidates.filter(
+			(row) =>
+				!readReminderIds.has(row.id) &&
+				!(row.userId === scope.userId && row.readAt !== null),
+		);
+		if (pending.length === 0) {
+			return { updatedCount: 0 };
+		}
+		const now = new Date();
+		const result = await this.prisma.$transaction(async (tx) =>
+			tx.reminderRead.createMany({
+				data: pending.map((row) => ({
+					reminderId: row.id,
+					userId: scope.userId,
+					readAt: now,
+				})),
+				skipDuplicates: true,
+			}),
+		);
 		return { updatedCount: result.count };
 	}
 
@@ -173,12 +229,13 @@ export class ReminderService {
 
 	/**
 	 * 读时懒生成：读 ACTIVE 计划 + 分配 + 排期 + 已有行（批量）→ 纯函数判定（只算今天）
-	 * → createMany skipDuplicates（唯一键 [userId, dedupKey, scheduledFor] 兜底并发）。
+	 * → createMany skipDuplicates（唯一键 [organizationId, dedupKey, scheduledFor] 兜底并发）。
 	 *
 	 * 评审 I-11：只在**当前组织作用域**内生成（compatReadWhere）。此前按 userId 全量
 	 * 扫描该用户在所有组织的 ACTIVE 计划并写入 organizationId IS NULL 的行——读任意
 	 * 组织都会把别的组织的提醒以 NULL 行生成出来。现在行的 userId/organizationId
-	 * 随父计划（父子同组织，§5.3.2）；同组织任一成员的读取都会为其组织补齐到期提醒。
+	 * 随父计划与当前组织落库（organizationId 恒为当前组织，父子同组织，§5.3.2）；
+	 * 同组织任一成员的读取都会为其组织补齐到期提醒。
 	 */
 	private async generateDueReminders(scope: ReadScope): Promise<void> {
 		const plans = await this.prisma.plan.findMany({
@@ -233,14 +290,18 @@ export class ReminderService {
 			return;
 		}
 		await this.prisma.reminder.createMany({
-			// 行的归属随父计划：userId = 计划创建者（唯一键与存量一致，保证幂等），
-			// organizationId = 计划所属组织（NULL 计划保持 NULL，仅在默认组织可见）
+			// 行的归属：userId = 计划创建者（行主语义：存量行内 readAt 回退仅对行主生效），
+			// organizationId = **当前组织**（W25：严格写入 actor.organizationId，遵守
+			// W22 的 @@unique([organizationId, dedupKey, scheduledFor])——同组织多成员
+			// 读取同一计划时命中同一唯一键，createMany skipDuplicates 天然去重；
+			// 父计划尚为存量 organizationId IS NULL 时（默认组织上下文）新行仍归属当前
+			// 组织，不再产生新的 NULL 行）。
 			data: drafts.map((draft) => {
 				const owner = ownerByPlanId.get(draft.planId);
 				return {
 					...draft,
 					userId: owner?.userId ?? scope.userId,
-					organizationId: owner?.organizationId ?? null,
+					organizationId: scope.organizationId,
 				};
 			}),
 			skipDuplicates: true,

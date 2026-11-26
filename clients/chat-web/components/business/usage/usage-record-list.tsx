@@ -9,6 +9,7 @@ import {
 	CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import type { UsageRecord, UsageListResp } from "@/lib/api/contract";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 
 /**
  * 使用记录列表（usage-recording 技术方案 §5.2 / 需求 §6.5）
@@ -17,6 +18,9 @@ import type { UsageRecord, UsageListResp } from "@/lib/api/contract";
  * 更正入口与该笔使用的更正历史。
  * 数据已由服务端按 usedAt 倒序、同刻录入先后倒序排列；空状态显示
  * 「还没有使用记录」（记录使用入口由页面另行保留）。
+ *
+ * 能力门控（Goal #3B W28）：「更正」入口需 correction.apply（Operator / Viewer 不显示；
+ * 后端仍强制校验）。「更正历史」是只读内容，对所有可读角色照常展示。
  */
 
 /** 展示用金额（去尾零） */
@@ -36,6 +40,8 @@ export function UsageRecordList({
 	currencyCode: string;
 }) {
 	const items: UsageRecord[] = ledger.items;
+	const { can } = useOrganizationCapabilities();
+	const canCorrect = can("correction.apply");
 
 	if (items.length === 0) {
 		return (
@@ -68,15 +74,17 @@ export function UsageRecordList({
 										{displayAmount(item.cost)}
 									</p>
 								</div>
-								<Link
-									href={`/corrections/new?targetType=USAGE&targetId=${item.id}`}
-									data-testid="usage-correction-entry"
-									aria-label={`更正使用记录 ${item.usedAt.slice(0, 10)}`}
-									className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-								>
-									<PencilLine className="size-3" aria-hidden />
-									更正
-								</Link>
+								{canCorrect ? (
+									<Link
+										href={`/corrections/new?targetType=USAGE&targetId=${item.id}`}
+										data-testid="usage-correction-entry"
+										aria-label={`更正使用记录 ${item.usedAt.slice(0, 10)}`}
+										className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+									>
+										<PencilLine className="size-3" aria-hidden />
+										更正
+									</Link>
+								) : null}
 								<CollapsibleTrigger
 									className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground [&[data-state=open]>svg]:rotate-180"
 									aria-label={`更正历史 ${item.usedAt.slice(0, 10)} ${displayAmount(item.amount)} ${currencyCode}`}

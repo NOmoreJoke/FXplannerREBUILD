@@ -84,7 +84,18 @@ export const queryKeys = {
 	},
 	settings: {
 		all: ["settings"] as const,
+		/**
+		 * 组织账本设置（GET/PATCH /settings；技术方案 §10.2）：必须经
+		 * withOrgScope(orgId, …) 按组织分桶——不同组织的准备偏好/提醒开关各不相同。
+		 */
 		detail: () => ["settings"] as const,
+		/**
+		 * 个人展示偏好（GET/PATCH /settings/personal；与组织无关）。
+		 * 用独立词根而不是 ["settings", "personal"]：invalidateBusinessKey 是前缀匹配，
+		 * 以 "settings" 开头的键会被组织设置的失效连带命中。独立词根保证「失效个人设置
+		 * 只命中个人设置」，且切换组织时不清除（不在 UNSCOPED_ORG_DATA_KEYS 内）。
+		 */
+		personal: () => ["personal-settings"] as const,
 	},
 	reports: {
 		all: ["reports"] as const,
@@ -92,10 +103,20 @@ export const queryKeys = {
 			["reports", "plans", status ?? "all", currencyCode ?? "all"] as const,
 		plan: (planId: string) => ["reports", "plan", planId] as const,
 	},
+	/**
+	 * 数据权利请求双域键（技术方案 §9.1–§9.2；Goal #3B W28）：
+	 * - 个人域：不依赖组织（0 组织 / 多组织未选 / 个人注销锁定均可读），键不加组织前缀，
+	 *   切换组织时保留——个人进度不因换组织而丢失；
+	 * - 组织域：必须经 withOrgScope(orgId, …) 按组织分桶，随组织切换清除。
+	 * 两域词根不同，互不构成前缀，失效互不波及。
+	 */
 	dataRequests: {
-		all: ["data-request"] as const,
-		current: () => ["data-request", "current"] as const,
-		impact: () => ["data-request", "impact"] as const,
+		personalStem: ["personal-data-request"] as const,
+		personalCurrent: () => ["personal-data-request", "current"] as const,
+		organizationCurrent: () =>
+			["data-request", "organization", "current"] as const,
+		organizationImpact: () =>
+			["data-request", "organization", "impact"] as const,
 	},
 	ai: {
 		all: ["ai"] as const,
@@ -186,7 +207,14 @@ export function invalidateBusinessKey(
 	void queryClient.invalidateQueries({ predicate });
 }
 
-/** 首次建账完成后统一失效缓存，确保首页、顶栏铃铛、设置与账户立即反映已建账态 */
+/**
+ * 首次建账完成后统一失效缓存，确保首页、顶栏铃铛、设置与账户立即反映已建账态。
+ *
+ * 组织域必须一并失效：首页分流（useHomeState 的 needsOnboarding）读的是组织详情缓存的
+ * onboardingCompleted，键形 ["organizations", "current", <id>] 不带 org 前缀，
+ * invalidateBusinessKey 的业务键匹配覆盖不到——漏掉它，首页在 staleTime 窗口内读到
+ * 旧的「未建账」详情会立刻 replace 回 /onboarding。
+ */
 export function invalidateAfterOnboarding(queryClient: QueryClient): void {
 	invalidateBusinessKey(queryClient, queryKeys.onboarding.status());
 	invalidateBusinessKey(queryClient, queryKeys.home.state());
@@ -194,6 +222,40 @@ export function invalidateAfterOnboarding(queryClient: QueryClient): void {
 	invalidateBusinessKey(queryClient, queryKeys.settings.all);
 	invalidateBusinessKey(queryClient, queryKeys.reminders.all);
 	invalidateBusinessKey(queryClient, queryKeys.accounts.all);
+	void queryClient.invalidateQueries({ queryKey: queryKeys.organizations.all });
+}
+
+/**
+ * 建账 / 补录后导航回首页前调用：回读组织域查询（详情 + 列表）并等到 refetch 结束。
+ *
+ * 首页分流读的是组织详情缓存的 onboardingCompleted。invalidateAfterOnboarding 只标失效
+ * 不等待——不等就跳，/home 会读到旧的「未建账」详情而立刻 replace 回向导页。
+ *
+ * 回读失败（refetch 报错，或 invalidateQueries 意外抛错）时把组织域查询整体移除再放行：
+ * 缓存里不留旧的「未建账」详情，/home 重新拉取（闸门先 loading、再按新结果分流），
+ * 而不是拿旧数据分流回向导页，在两页之间来回跳。失败不上抛：导航照常，由首页自身处理。
+ */
+export async function refreshOrganizationDetails(
+	queryClient: QueryClient,
+): Promise<void> {
+	let refreshFailed = false;
+	try {
+		await queryClient.invalidateQueries({
+			queryKey: queryKeys.organizations.all,
+		});
+	} catch {
+		// invalidateQueries 会吞掉 refetch 错误，能抛到这里只可能是意外异常：与回读失败同样处理
+		refreshFailed = true;
+	}
+	const organizationQueries = queryClient
+		.getQueryCache()
+		.findAll({ queryKey: queryKeys.organizations.all });
+	if (
+		refreshFailed ||
+		organizationQueries.some((query) => query.state.status === "error")
+	) {
+		queryClient.removeQueries({ queryKey: queryKeys.organizations.all });
+	}
 }
 
 /**
@@ -217,19 +279,37 @@ export function invalidateAfterLedgerMutation(
 	invalidateBusinessKey(queryClient, queryKeys.reminders.all);
 }
 
-/** 数据权利请求提交/撤回后统一失效当前请求与影响快照 */
+/**
+ * 数据权利请求提交/撤回后统一失效（个人域 + 组织域）：
+ * - 个人域：按精确键失效（不经 invalidateBusinessKey 的前缀匹配，不波及组织域）；
+ * - 组织域：当前请求与清空影响快照的全形态（无前缀 + 任意组织前缀）；
+ * - 当前组织详情：组织锁摘要（dataRequestLock）随请求状态变化，回读后各页面的
+ *   锁门控（设置/提醒/首页）才会切换。
+ */
 export function invalidateAfterDataRequestMutation(
 	queryClient: QueryClient,
 ): void {
-	invalidateBusinessKey(queryClient, queryKeys.dataRequests.all);
+	void queryClient.invalidateQueries({
+		queryKey: queryKeys.dataRequests.personalCurrent(),
+	});
+	invalidateBusinessKey(
+		queryClient,
+		queryKeys.dataRequests.organizationCurrent(),
+	);
+	invalidateBusinessKey(
+		queryClient,
+		queryKeys.dataRequests.organizationImpact(),
+	);
+	invalidateBusinessKey(queryClient, queryKeys.organizations.currentStem);
 }
 
 /**
  * 随当前组织变化、但仍以**无前缀**形态缓存的键（评审 R2-I07 起业务查询已逐个迁到
  * withOrgScope；此处保留给按设计不加前缀的域与迁移前的残留形态），切换时必须显式移除。
- * 数据权利请求（EXPORT/CLEAR/DELETION）是个人端点（Goal #3B 拆分组织 scope），键按
- * 设计不加组织前缀，但其进度视图仍随当前组织上下文请求——切组织后不得残留上一个
- * 组织上下文下的缓存。
+ * 不在此列（与组织无关、切换时保留）：个人展示偏好（settings.personal）与个人域数据
+ * 请求（dataRequests.personal*）——后者此前按无前缀形态随组织上下文请求，W28 双域拆分后
+ * 走不带组织头的个人端点，切组织不得丢个人进度；组织域请求键已带组织前缀，由
+ * isOrgScopedKey 统一清除。
  */
 const UNSCOPED_ORG_DATA_KEYS: readonly QueryKey[] = [
 	queryKeys.home.all,
@@ -249,7 +329,6 @@ const UNSCOPED_ORG_DATA_KEYS: readonly QueryKey[] = [
 	queryKeys.organizations.currentStem,
 	// 建账状态自 ToB R1 起按组织解析（组织偏好决定是否已建账），不再是公共缓存
 	queryKeys.onboarding.all,
-	queryKeys.dataRequests.all,
 ];
 
 /**

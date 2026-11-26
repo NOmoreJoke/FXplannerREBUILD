@@ -417,3 +417,129 @@ describe("replayCurrencyLedger 边界", () => {
 		expect(result.violations).toHaveLength(0);
 	});
 });
+
+// ───────────────────── ToB R1 W24：组织共享账本下的批次归属 ─────────────────────
+//
+// 账本属于组织：成员 A 买入的批次由成员 B 发起更正后重建，仍必须归 A（兼容列
+// CostLot.userId = 批次创建者）。重放引擎以来源事件的 ownerUserId 原样带出归属，
+// 不参与排序与分摊——下面同时锁定「归属守恒」与「归属不影响 FIFO」两面。
+describe("replayCurrencyLedger 批次归属（ToB R1 W24：组织共享账本，不因更正者易主）", () => {
+	const at = "2026-09-01T02:00:00Z";
+
+	/** 多成员账本：建账人 owner 的初始持仓 + 成员 financeA、financeB 的两笔买入 + 成员 financeB 的使用 */
+	function sharedLedgerEvents(): LedgerEvent[] {
+		return [
+			{
+				...initial("i1", at, "2026-09-01T01:00:00Z", "300", "7", "2100"),
+				ownerUserId: "user-owner",
+			},
+			{
+				...purchase("p1", at, "2026-09-01T03:00:00Z", "1000", "7800"),
+				ownerUserId: "user-finance-a",
+			},
+			{
+				...purchase(
+					"p2",
+					"2026-09-02T02:00:00Z",
+					"2026-09-02T02:00:00Z",
+					"1000",
+					"8000",
+				),
+				ownerUserId: "user-finance-b",
+			},
+			usage("u1", "2026-09-03T02:00:00Z", "2026-09-03T02:00:00Z", "1200"),
+		];
+	}
+
+	it("跨成员账本：重放后每个批次仍归其来源记录的创建者", () => {
+		const result = replayCurrencyLedger(sharedLedgerEvents());
+
+		expect(
+			result.lots.map((lot) => [lot.sourceId, lot.ownerUserId]),
+		).toEqual([
+			["i1", "user-owner"],
+			["p1", "user-finance-a"],
+			["p2", "user-finance-b"],
+		]);
+		// FIFO 照常跨成员消耗：初始 300 → 成员 A 的批次 900
+		expect(result.usageAllocations).toEqual([
+			{
+				usageId: "u1",
+				lotSourceId: "i1",
+				quantity: d("300"),
+				cost: d("2100"),
+			},
+			{
+				usageId: "u1",
+				lotSourceId: "p1",
+				quantity: d("900"),
+				cost: d("7020"),
+			},
+		]);
+		expect(result.lots.map((lot) => lot.remainingQty)).toEqual([
+			d("0"),
+			d("100"),
+			d("1000"),
+		]);
+	});
+
+	it("归属不影响 FIFO：同一账本换任意创建者（或不提供），分摊片、成本、余额与批次时刻逐项不变", () => {
+		const stripOwner = (event: LedgerEvent): LedgerEvent => {
+			const { ownerUserId, ...rest } = event;
+			void ownerUserId;
+			return rest;
+		};
+		const baseline = replayCurrencyLedger(sharedLedgerEvents().map(stripOwner));
+		const reassigned = replayCurrencyLedger(
+			sharedLedgerEvents().map((event, index) => ({
+				...event,
+				ownerUserId: `reassigned-${index % 2}`,
+			})),
+		);
+
+		type Replay = ReturnType<typeof replayCurrencyLedger>;
+		const shape = (result: Replay) => ({
+			lots: result.lots.map(
+				({
+					sourceType,
+					sourceId,
+					quantity,
+					remainingQty,
+					unitCost,
+					totalCost,
+					acquiredAt,
+				}) => ({
+					sourceType,
+					sourceId,
+					quantity: quantity.toFixed(4),
+					remainingQty: remainingQty.toFixed(4),
+					unitCost: unitCost.toFixed(8),
+					totalCost: totalCost.toFixed(4),
+					acquiredAt: acquiredAt.toISOString(),
+				}),
+			),
+			allocations: result.usageAllocations.map((slice) => ({
+				usageId: slice.usageId,
+				lotSourceId: slice.lotSourceId,
+				quantity: slice.quantity.toFixed(4),
+				cost: slice.cost.toFixed(4),
+			})),
+			costs: [...result.usageCosts].map(([id, cost]) => [id, cost.toFixed(4)]),
+			finalBalance: result.finalBalance.toFixed(4),
+			violations: result.violations.length,
+		});
+		expect(shape(reassigned)).toEqual(shape(baseline));
+		// 未提供归属的调用方（存量单测 / 纯计算场景）得到 undefined，由落库方拒绝写入
+		expect(baseline.lots.every((lot) => lot.ownerUserId === undefined)).toBe(true);
+	});
+
+	it("流入事件数量为 0 时不生成批次，归属随之不落（INITIAL 改 0 路径）", () => {
+		const result = replayCurrencyLedger([
+			{
+				...initial("i1", at, at, "0", "7", "0"),
+				ownerUserId: "user-owner",
+			},
+		]);
+		expect(result.lots).toHaveLength(0);
+	});
+});

@@ -23,7 +23,7 @@
 
 - **Git 自治边界（D7）**：仅在 `feat/tob-r1-c-migration-cutover-exit` 内完成 W29–W32，push 特性分支并创建 **Draft PR** → `dev`。**严禁** push/merge `dev`/`main`、**严禁**转 Ready、**严禁**在生产环境直接跑迁移（仅本地与测试/备份库演练）。
 - **服务禁令**：按 `AGENTS.md` 禁止启动 dev 服务；W31 编写的 `e2e/modules/15-organization.spec.ts` 由人类启动前后端后运行，取证完清理 `e2e/test-results/`。
-- **不可逆操作保护**：`MIG-E` 收紧 `NOT NULL` 与切唯一约束前，**必须先跑通 `MIG-C` §12.3 零差异核对脚本与父子 `organizationId` 一致性断言**；任何 1 条异常行未处理禁止强行上收紧迁移。
+- **不可逆操作保护**：`MIG-E` 收紧 `NOT NULL` 与清理过渡部分唯一索引（唯一约束已在 Goal #3B W22 提前切至组织维度）前，**必须先跑通 `MIG-C` §12.3 零差异核对脚本与父子 `organizationId` 一致性断言**；任何 1 条异常行未处理禁止强行上收紧迁移。
 
 ---
 
@@ -58,12 +58,9 @@
   2. Prisma Schema + 两步清晰迁移（或按 `MIG-E` / `MIG-F` 分两份独立可审 Migration SQL）：
      - **Migration `MIG-E`（`<ts>_tob_r1_mig_e_tighten_constraints`）**：
        - 将 10 张业务表（`accounts`, `transactions`, `initial_holdings`, `cost_lots`, `plans`, `plan_change_logs`, `usage_records`, `corrections`, `reminders`, `ai_conversations`）与 `data_requests` 对应字段收紧：`organization_id SET NOT NULL`（`data_requests.organization_id` 保持由 `CHECK` 控制的可空）；
-       - 替换唯一约束与复合外键/索引：
-         - `Account`：`@@unique([userId, currencyCode])` → `@@unique([organizationId, currencyCode])`，删除旧 `userId` 唯一下标/索引；
-         - `InitialHolding`：`@@unique([userId, currencyCode])` → `@@unique([organizationId, currencyCode])`；
-         - `Reminder`：`@@unique([userId, dedupKey, scheduledFor])` → `@@unique([organizationId, dedupKey, scheduledFor])`；
-         - 收紧 `created_by_id` / `actor_user_id` 外键为 **`ON DELETE SET NULL`**，并**移除 `User` 与上述组织共享业务表之间原有的 `onDelete: Cascade` 外键**（改为 `Account`/`Plan`/`Transaction`/`InitialHolding`/`CostLot`/`UsageRecord`/`Correction`/`Reminder` 等直连 `Organization` `onDelete: Restrict` 或显式事务删组织清理，`PlanChangeLog` 等保留 `Plan` CASCADE；`OtpIdentity`、`TermsConsent`、`UserSettings`、`PERSONAL` `DataRequest`、`ReminderRead`、`AiConversation` 保留随个人适当清理策略）；
-         - 注意 `Account.userId`、`Plan.userId` 等旧 `userId` 列先确认零生产引用后再进 `MIG-F` 删除。
+       - **唯一约束与过渡索引收口说明**：`Account`、`InitialHolding`、`Reminder` 的组织维度唯一约束（`@@unique([organizationId, currencyCode])`、`@@unique([organizationId, dedupKey, scheduledFor])`）已在 Goal #3B W22（`20261125094500_tob_r1_mig_c_org_unique_indexes`）提前切换；本步 `MIG-E` 使用 `DROP INDEX IF EXISTS` 清理过渡期部分唯一索引（`accounts_legacy_user_currency_uidx`、`initial_holdings_legacy_user_currency_uidx`、`reminders_legacy_user_dedup_scheduled_uidx`）与冗余非唯一 `(user_id, ...)` 查找索引（`accounts_user_id_currency_code_idx`、`initial_holdings_user_id_currency_code_idx`、`reminders_user_id_dedup_key_scheduled_for_idx`）；
+       - 收紧 `created_by_id` / `actor_user_id` 外键为 **`ON DELETE SET NULL`**，并**移除 `User` 与上述组织共享业务表之间原有的 `onDelete: Cascade` 外键**（改为 `Account`/`Plan`/`Transaction`/`InitialHolding`/`CostLot`/`UsageRecord`/`Correction`/`Reminder` 等直连 `Organization` `onDelete: Restrict` 或显式事务删组织清理，`PlanChangeLog` 等保留 `Plan` CASCADE；`OtpIdentity`、`TermsConsent`、`UserSettings`、`PERSONAL` `DataRequest`、`ReminderRead`、`AiConversation` 保留随个人适当清理策略）；
+       - 注意 `Account.userId`、`Plan.userId` 等旧 `userId` 列先确认零生产引用后再进 `MIG-F` 删除。
      - **Migration `MIG-F`（`<ts>_tob_r1_mig_f_drop_legacy_columns`）**：
        - 删除已迁空且静态确认零生产引用的旧列：`UserSettings.{baseCurrency, prepPreference, reminderEnabled, ledgerStartedAt}`、`Reminder.readAt`、以及业务共享表上确认不再保留的冗余 `userId`（`Account`/`InitialHolding`/`Transaction`/`CostLot`/`Plan`/`UsageRecord`/`Correction`/`Reminder` 等——以 `createdById`/`actorUserId` 为唯一作者列，`Membership` 移除与个人注销永不级联删企业账本；`DataRequest` 的原 `userId` 重命名/明确为 `requesterUserId` 保留 `ON DELETE SET NULL` 或按 `PERSONAL`/`ORGANIZATION` 约束处理）。
   3. **性能回归与索引实测（§14.5）**：

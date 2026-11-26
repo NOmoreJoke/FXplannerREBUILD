@@ -6,10 +6,16 @@
  * 录入买入（可含未知手续费）→ 建计划分配 → 记录使用（写侧自动分摊）→
  * 完成/取消计划 → 报告读侧即可见分摊事实。
  *
- * 「M7 未上线时 E2E 阶段 4 执行」的前提已解除：本文件不直连数据库。
+ * 「M7 未上线时 E2E 阶段 4 执行」的前提已解除：造数不直连数据库。
+ * 唯一例外是 seedInitialHoldings 的取价兜底（外呼汇率不可用时经 rate-cache-db 向本地测试库
+ * 插一条测试汇率缓存行，重试后立即按 id 清理）——Prisma 连接与库校验都在该 helper 内。
  */
 
 import { api } from "./api-seeder";
+import {
+	injectFreshRateCacheRows,
+	removeRateCacheRows,
+} from "./rate-cache-db";
 
 /**
  * 带退避重试的造数请求：dev 后端刚就绪/并行脚本重启窗口期偶发 fetch failed
@@ -145,14 +151,70 @@ export async function seedCancelPlan(
 	await apiWithRetry(`/api/plans/${planId}/cancel`, { method: "POST", token });
 }
 
-/** 补录初始持仓（POST /api/onboarding/initial-holdings；初始批次按记账起点汇率入账） */
-export async function seedInitialHoldings(
+/** POST /api/onboarding/initial-holdings（带网络层重试；业务错误原样抛出） */
+function postInitialHoldings(
 	token: string,
 	holdings: { currencyCode: string; amount: string }[],
-): Promise<void> {
-	await apiWithRetry("/api/onboarding/initial-holdings", {
+): Promise<unknown> {
+	return apiWithRetry("/api/onboarding/initial-holdings", {
 		method: "POST",
 		token,
 		body: { holdings },
 	});
+}
+
+/** 是否为取价失败（400 RATE_UNAVAILABLE；api() 把响应码拼进错误消息） */
+function isRateUnavailable(error: unknown): boolean {
+	return (
+		error instanceof Error && /\bRATE_UNAVAILABLE\b/.test(error.message)
+	);
+}
+
+function describeError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 补录初始持仓（POST /api/onboarding/initial-holdings；初始批次按记账起点汇率入账）。
+ *
+ * 取价兜底：该接口入账取价会外呼实时汇率，本机代理 / TUN 不稳定时报 400 RATE_UNAVAILABLE。
+ * 本函数在 beforeAll 造数链上，一旦失败会拖垮整个 describe（含不依赖初始持仓的用例），
+ * 所以仅当首提返回 RATE_UNAVAILABLE 时兜底一次：向本地测试库为各外币种插入一条新鲜的
+ * frankfurter 汇率缓存行（rate-cache-db；后端入账取价命中新鲜缓存后不再外呼），重试一次；
+ * 重试返回后立即按 id 清理，合成报价不会留给后续入账取价。其他错误不兜底、原样抛出。
+ *
+ * baseCurrency 须与该用户建账时的本位币一致（缓存行方向：base = 本位币、quote = 外币）。
+ */
+export async function seedInitialHoldings(
+	token: string,
+	holdings: { currencyCode: string; amount: string }[],
+	baseCurrency = "CNY",
+): Promise<void> {
+	let rateError: unknown;
+	try {
+		await postInitialHoldings(token, holdings);
+		return;
+	} catch (error) {
+		if (!isRateUnavailable(error)) throw error;
+		rateError = error;
+	}
+
+	let injected: Awaited<ReturnType<typeof injectFreshRateCacheRows>>;
+	try {
+		injected = await injectFreshRateCacheRows(
+			baseCurrency,
+			holdings.map((holding) => holding.currencyCode),
+		);
+	} catch (injectionError) {
+		throw new Error(
+			`补录初始持仓取价失败（${describeError(rateError)}），且汇率缓存兜底未能写入本地测试库` +
+				`（${describeError(injectionError)}）。请检查本机代理 / TUN 是否稳定，以及 ` +
+				"services/chat/.env.local 的 DATABASE_URL 是否指向回环主机上的本地测试库。",
+		);
+	}
+	try {
+		await postInitialHoldings(token, holdings);
+	} finally {
+		await removeRateCacheRows(injected.map((row) => row.id));
+	}
 }

@@ -12,6 +12,7 @@ import {
 	compatReadWhere,
 	type ReadScope,
 } from "../authorization/organization-scope";
+import { planReservationWhere } from "../authorization/default-organization";
 import { resolveOrganizationPreferences } from "../organization/organization-preferences";
 import {
 	computeRemainingCost,
@@ -337,8 +338,9 @@ export class AccountService {
 	private async sumAllocatedByCurrencyForUser(
 		scope: ReadScope,
 	): Promise<Map<string, Prisma.Decimal>> {
+		const reservationOwner = await planReservationWhere(this.prisma, scope);
 		const plans = await this.prisma.plan.findMany({
-			where: compatReadWhere(scope),
+			where: reservationOwner,
 			select: { id: true, targetCurrency: true },
 		});
 		const allocations =

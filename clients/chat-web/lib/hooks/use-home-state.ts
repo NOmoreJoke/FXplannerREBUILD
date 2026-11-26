@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type QueryObserverResult } from "@tanstack/react-query";
 import { differenceInCalendarDays, parseISO } from "date-fns";
 import Decimal from "decimal.js";
 import { fetchHomePortfolio, homeApi } from "@/lib/api/home";
@@ -7,6 +7,7 @@ import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import type { HomePortfolioData } from "@/lib/api/home";
 import type { HomeState, PlanSummary } from "@/lib/api/contract";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
+import { useLedgerQueryGate } from "@/lib/hooks/use-organization-capabilities";
 
 /**
  * 首页状态查询 Key
@@ -167,23 +168,36 @@ function deriveDashboard(
  *   不进入页面错误态。
  *
  * 归一返回：
- * - isLoading：state 首次请求进行中
+ * - isLoading：组织详情未返回，或放行后 state 首次请求进行中
  * - isError / refetch：state 请求失败与重试（页面错误态消费，不跳转不误判）
  * - state：state 成功时的数据（分流三布尔 + 账户/计划列表 + 最新汇率观测时间）
  * - dashboard：state 成功时的仪表盘数据（state 失败/加载中 → null；portfolio
  *   未成功时仅成本字段降级 null）
+ * - gate：账本查询闸门（见下）
+ * - needsOnboarding：当前组织未建账（页面分流到 /onboarding）
+ * - isDeletionLocked：组织删除处理中（页面分流到 /data-requests）
+ *
+ * 查询降噪（技术方案 §10.3；Goal #3B W28）：两个请求都挂在组织锁守卫上，受账本查询
+ * 闸门（useLedgerQueryGate）约束——未选组织 / 组织详情未返回 / 未建账 / 组织删除处理中
+ * 一律不发。建账分流改读当前组织详情的 onboardingCompleted（与 /home/state 的
+ * onboardingCompleted 在后端是同一判定：组织偏好是否存在），未建账组织不再为此请求
+ * /home/state 与 /home/portfolio；组织删除处理中两者必然 403，页面据 isDeletionLocked
+ * 主动去进度页，不靠 403 硬跳转。
  *
  * 分流决策表（changes/home-state-routing/技术方案.md §3.1 + onboarding-rework 口径）：
  * !onboardingCompleted → /onboarding 建账向导；!hasAccounts && !hasPlans → 空状态；
  * 其余 → 正常首页；!hasInitialHoldings → 叠加补录初始持仓引导卡。
  */
 export function useHomeState() {
-	// ToB W20：组织作用域缓存键 + 未选组织不发业务请求（需求 15.1.3 切组织隔离）
+	// 组织作用域缓存键 + 账本查询闸门（需求 15.1.3 切组织隔离）
 	const orgId = useActiveOrgId();
+	const gate = useLedgerQueryGate();
+	const ledgerEnabled = gate === "ready";
+
 	const stateQuery = useQuery<HomeState>({
 		queryKey: withOrgScope(orgId, HOME_STATE_QUERY_KEY),
 		queryFn: homeApi.getState,
-		enabled: orgId !== null,
+		enabled: ledgerEnabled,
 		staleTime: 5 * 60 * 1000, // 与全局默认一致；纯只读数据，允许秒级陈旧（方案 §2）
 		retry: false, // 401 由 apiClient 统一跳登录，其余失败直接交给页面错误态
 	});
@@ -191,7 +205,7 @@ export function useHomeState() {
 	const portfolioQuery = useQuery<HomePortfolioData>({
 		queryKey: withOrgScope(orgId, HOME_PORTFOLIO_QUERY_KEY),
 		queryFn: fetchHomePortfolio,
-		enabled: orgId !== null,
+		enabled: ledgerEnabled,
 		staleTime: 5 * 60 * 1000, // 与 state 同策略；纯只读聚合数据
 		retry: false, // 失败静默降级（见 deriveDashboard），不进入页面错误态
 	});
@@ -204,11 +218,24 @@ export function useHomeState() {
 		[stateQuery.data, portfolioQuery.data],
 	);
 
+	/**
+	 * 重试只在闸门放行时才真的发请求：React Query 的 refetch 会绕过 enabled，
+	 * 组织未建账 / 删除锁下若沿用缓存的错误态点重试，就会打出一个必然的 409 / 403。
+	 */
+	const refetch = (): Promise<QueryObserverResult<HomeState, Error>> =>
+		ledgerEnabled ? stateQuery.refetch() : Promise.resolve(stateQuery);
+
 	return {
-		isLoading: stateQuery.isLoading,
+		isLoading: gate === "loading" || stateQuery.isLoading,
 		isError: stateQuery.isError,
-		refetch: stateQuery.refetch,
+		refetch,
 		state: stateQuery.data,
 		dashboard,
+		gate,
+		// 闸门判定优先；组织详情读取失败时闸门放行、回落到首页状态自报的建账态
+		needsOnboarding:
+			gate === "not-onboarded" ||
+			stateQuery.data?.onboardingCompleted === false,
+		isDeletionLocked: gate === "deletion-locked",
 	};
 }

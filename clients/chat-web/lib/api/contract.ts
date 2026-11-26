@@ -68,6 +68,12 @@ export type SettingsView = Schemas["SettingsViewDto"];
 /** 更新设置入参（PATCH /settings；全可选至少一项，DTO 不含 baseCurrency——白名单拒绝） */
 export type UpdateSettingsReq = Schemas["UpdateSettingsDto"];
 
+/** 个人展示偏好视图（GET/PATCH /settings/personal 的 data；邮箱/地区/语言，不依赖组织或建账） */
+export type PersonalSettingsView = Schemas["PersonalSettingsViewDto"];
+
+/** 更新个人展示偏好入参（PATCH /settings/personal；全可选至少一项，DTO 不含任何组织字段） */
+export type UpdatePersonalSettingsReq = Schemas["UpdatePersonalSettingsDto"];
+
 /** 设置模块错误码（400 SETTINGS_UPDATE_EMPTY 等） */
 export type SettingsErrorCode = Schemas["SettingsErrorDto"]["code"];
 
@@ -262,6 +268,9 @@ export type CorrectionDiffItem = Schemas["CorrectionDiffItemDto"];
 /** 数据请求类型（后端 CreateDataRequestDto.type） */
 export type DataRequestType = Schemas["CreateDataRequestDto"]["type"];
 
+/** 数据域：PERSONAL = 个人身份与个人数据；ORGANIZATION = 组织账本与组织数据 */
+export type DataRequestScope = Schemas["DataRequestViewDto"]["scope"];
+
 /** 数据请求视图（后端 DataRequestViewDto，进度页/设置页统一展示模型） */
 export type DataRequestView = Schemas["DataRequestViewDto"];
 
@@ -280,3 +289,15 @@ export type DataRequestVerifyResult = Schemas["VerifyResultDto"];
 
 /** 数据操作验证用途（LOGIN 不放行数据请求） */
 export type DataRequestPurpose = Schemas["VerifyDataRequestDto"]["purpose"];
+
+/** 撤回数据请求入参（POST …/data-requests/:id/cancel；DELETION 撤回必带已消费的验证凭证） */
+export type CancelDataRequestReq = Schemas["CancelDataRequestDto"];
+
+/** 阻塞个人注销的组织（本人仍是唯一所有者，须先转移所有权或删除该组织） */
+export type BlockingOrganization = Schemas["BlockingOrganizationDto"];
+
+/** 最后 Owner 保护错误体（409 LAST_OWNER_REQUIRED；data.blockingOrganizations 供 UI 渲染处置入口） */
+export type LastOwnerRequiredBody = Schemas["LastOwnerRequiredBodyDto"];
+
+/** 发起删除当前组织入参（DELETE /organizations/current；携带 DELETION 用途的已消费验证凭证） */
+export type OrganizationDeletionRequest = Schemas["OrganizationDeletionRequestDto"];

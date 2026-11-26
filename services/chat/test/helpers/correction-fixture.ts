@@ -120,6 +120,10 @@ export async function seedPlanWithAllocationRow(
 /**
  * 直插初始持仓 + INITIAL 成本批次 + 账户（绕开 onboarding 取价链路）：
  * 报价三元组显式给定（金额更正「沿用原报价」断言依赖确定的原值）。
+ *
+ * organizationId（ToB R1 租户列，可选）：传入时持仓 / 批次 / 账户三行一并落组织并记
+ * createdById，与 onboarding 写侧同口径；不传保持兼容窗口的 NULL 行（仅默认组织
+ * 创建者本人在默认组织上下文可见，compatReadWhere）。
  */
 export async function seedInitialHolding(
 	prisma: Prisma.TransactionClient,
@@ -132,12 +136,17 @@ export async function seedInitialHolding(
 		confirmedAt: Date;
 		/** 批次取得时刻（onboarding 写侧口径 = 账本起点日）；缺省 = confirmedAt */
 		acquiredAt?: Date;
+		/** ToB R1 租户列；缺省不写（兼容窗口 NULL 行） */
+		organizationId?: string;
 	},
 ): Promise<{ holdingId: string }> {
 	const amount = new Prisma.Decimal(input.amount);
+	const organizationId = input.organizationId;
 	const holding = await prisma.initialHolding.create({
 		data: {
 			userId: input.userId,
+			organizationId,
+			createdById: organizationId === undefined ? undefined : input.userId,
 			currencyCode: input.currencyCode,
 			amount,
 			rate: new Prisma.Decimal(input.rate),
@@ -151,6 +160,7 @@ export async function seedInitialHolding(
 	await prisma.costLot.create({
 		data: {
 			userId: input.userId,
+			organizationId,
 			currencyCode: input.currencyCode,
 			sourceType: "INITIAL",
 			sourceId: holding.id,
@@ -161,19 +171,30 @@ export async function seedInitialHolding(
 			acquiredAt: input.acquiredAt ?? input.confirmedAt,
 		},
 	});
-	await prisma.account.upsert({
-		where: {
-			userId_currencyCode: {
-				userId: input.userId,
-				currencyCode: input.currencyCode,
-			},
-		},
-		create: {
-			userId: input.userId,
-			currencyCode: input.currencyCode,
-			balance: amount,
-		},
-		update: { balance: { increment: amount } },
+	// 组织账户唯一约束为 (organizationId, currencyCode)：同组织同币种只保留一行，按组织查找；
+	// NULL 行（唯一约束视 NULL 互不相等）沿用按用户查找
+	const existingAccount = await prisma.account.findFirst({
+		where:
+			organizationId === undefined
+				? { userId: input.userId, currencyCode: input.currencyCode }
+				: { organizationId, currencyCode: input.currencyCode },
+		select: { id: true },
 	});
+	if (existingAccount) {
+		await prisma.account.update({
+			where: { id: existingAccount.id },
+			data: { balance: { increment: amount } },
+		});
+	} else {
+		await prisma.account.create({
+			data: {
+				userId: input.userId,
+				organizationId,
+				createdById: organizationId === undefined ? undefined : input.userId,
+				currencyCode: input.currencyCode,
+				balance: amount,
+			},
+		});
+	}
 	return { holdingId: holding.id };
 }

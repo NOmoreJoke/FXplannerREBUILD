@@ -18,7 +18,7 @@ import { authApi } from "@/lib/api/auth";
 import { getToken } from "@/lib/auth/token";
 import { redirectToLogin } from "@/lib/auth/redirect-to-login";
 import { useAuthStore } from "@/lib/stores/auth-store";
-import { useLogout } from "@/lib/query/hooks/use-auth";
+import { useLogoutAndRedirect } from "@/lib/query/hooks/use-auth";
 import {
 	isOrglessRouteAllowed,
 	useOrganizationRouting,
@@ -50,8 +50,9 @@ export default function ProtectedLayout({
 	const pathname = usePathname();
 	const user = useAuthStore((s) => s.user);
 	const setUser = useAuthStore((s) => s.setUser);
+	// 认证校验失败时清用户态用（与下方登出按钮的完整登出流程是两件事）
 	const clearUser = useAuthStore((s) => s.clearUser);
-	const logout = useLogout();
+	const logout = useLogoutAndRedirect();
 	const verifiedRef = useRef(false);
 
 	// 仅在 authStore 无用户时校验一次；之后由内存中的 user 状态兜底，站内导航零开销
@@ -86,9 +87,12 @@ export default function ProtectedLayout({
 	// 组织上下文未就绪前业务页面不渲染（hooks enabled 门控 + 缓存清理双保险）。
 	// 就绪后业务区包在 OrganizationScopeBoundary 内：切换组织 = 重新挂载，不依赖
 	// 各页面是否订阅组织 store（评审 R2-I07：removeQueries 不会通知挂载态的观察者）。
-	// 豁免路由：/invitations/*（受邀者可能尚无任何组织，接受流程为个人端点）——
-	// 既不做路由分流，也不随组织变化重挂载（评审 R3-I01：接受邀请会切换组织，
-	// 重挂载会清掉页面内的「已加入组织」结果态）。
+	// 豁免路由（isOrglessRouteAllowed）——既不做路由分流，也不随组织变化重挂载：
+	// - /invitations/*（评审 R3-I01）：受邀者可能尚无任何组织，接受流程为个人端点；
+	//   接受邀请会切换组织，重挂载会清掉页面内的「已加入组织」结果态；
+	// - /data-requests（Goal #3B W28）：个人数据请求进度。403 ACCOUNT_PENDING_DELETION
+	//   的跳转目的地就是它——0 组织 / 多组织未选 / 账号注销锁定的用户都必须进得来；
+	//   个人进度不随切换组织丢失，页内的组织进度分区自行按组织 key 重挂载。
 	const routing = useOrganizationRouting({ enabled: Boolean(user) });
 
 	if (!user) {
@@ -111,12 +115,6 @@ export default function ProtectedLayout({
 
 	const displayName = user.name || user.email || "已认证用户";
 	const initial = (user.name || user.email || "?").charAt(0).toUpperCase();
-
-	const handleLogout = () => {
-		logout();
-		clearUser();
-		redirectToLogin("/");
-	};
 
 	return (
 		<div className="flex min-h-screen bg-background">
@@ -184,7 +182,7 @@ export default function ProtectedLayout({
 					</div>
 					<button
 						type="button"
-						onClick={handleLogout}
+						onClick={logout}
 						aria-label="退出登录"
 						title="退出登录"
 						className="shrink-0 rounded-md p-1.5 text-ink-500 transition-colors hover:bg-muted hover:text-foreground"

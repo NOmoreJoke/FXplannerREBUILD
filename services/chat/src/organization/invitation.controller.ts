@@ -47,6 +47,7 @@ import {
 	InvitationSummaryDto,
 	InvitationViewDto,
 } from "./dto/member.dto";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /** 邀请 token 路径段约束（base64url，43 字符） */
 const TOKEN_PARAM = {
@@ -90,7 +91,7 @@ export class InvitationController {
 
 	@Post("organizations/current/invitations")
 	@OrganizationRoute()
-	@UseGuards(OrganizationContextGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("member.invite")
 	@ApiOperation({
 		summary: "创建邀请（原始 token 仅本次响应出现；同事务审计）",
@@ -114,7 +115,7 @@ export class InvitationController {
 
 	@Get("organizations/current/invitations")
 	@OrganizationRoute()
-	@UseGuards(OrganizationContextGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("member.read")
 	@ApiOperation({
 		summary: "当前组织邀请列表（不回吐 tokenHash）",
@@ -128,7 +129,7 @@ export class InvitationController {
 
 	@Delete("organizations/current/invitations/:id")
 	@OrganizationRoute()
-	@UseGuards(OrganizationContextGuard, PermissionGuard)
+	@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("member.invite")
 	@ApiOperation({
 		summary: "撤回有效邀请（同事务审计）",

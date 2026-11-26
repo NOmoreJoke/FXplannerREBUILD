@@ -12,6 +12,8 @@ type Db = Pick<
  */
 export const PERSONAL_DEFAULT_LOCALE = "zh-CN";
 export const PERSONAL_DEFAULT_REGION = "CN";
+/** 个人偏好占位本位币（PATCH /settings/personal 仅建个人行时使用，绝不视作组织已建账） */
+export const PERSONAL_PLACEHOLDER_BASE_CURRENCY = "";
 
 /**
  * 组织偏好（LEDGER-02：本位币/准备节奏/提醒开关/记账起点属于组织）。
@@ -75,7 +77,7 @@ export async function resolveOrganizationPreferences(
 	const legacy = await db.userSettings.findUnique({
 		where: { userId: owner.userId },
 	});
-	if (!legacy) return null;
+	if (!legacy || !legacy.baseCurrency) return null;
 	return {
 		baseCurrency: legacy.baseCurrency,
 		prepPreference: legacy.prepPreference,

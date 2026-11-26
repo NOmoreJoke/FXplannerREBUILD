@@ -1,5 +1,9 @@
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
-import { PrismaClient } from "@prisma/client";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { PrismaClient, type Prisma, type PrismaPromise } from "@prisma/client";
+import { resolveDefaultOrganizationId } from "../src/authorization/default-organization";
 
 const prisma = new PrismaClient();
 
@@ -591,6 +595,618 @@ describe("数据库基础设施测试", () => {
 				"ai_conversations_organization_id_last_message_at_idx",
 				"reminder_reads_user_id_idx",
 			]);
+		});
+	});
+
+	describe("ToB R1 组织维度唯一索引与过渡存量部分唯一索引（W22 提前切出 MIG-E 项）", () => {
+		const migCOrgIds: string[] = [];
+		const migCUserIds: string[] = [];
+
+		afterAll(async () => {
+			await prisma.reminder.deleteMany({
+				where: { userId: { in: migCUserIds } },
+			});
+			await prisma.initialHolding.deleteMany({
+				where: { userId: { in: migCUserIds } },
+			});
+			await prisma.account.deleteMany({
+				where: { userId: { in: migCUserIds } },
+			});
+			await prisma.organization.deleteMany({
+				where: { id: { in: migCOrgIds } },
+			});
+			await prisma.user.deleteMany({
+				where: { id: { in: migCUserIds } },
+			});
+		});
+
+		test("Account / InitialHolding / Reminder 按组织唯一（同用户跨组织同币种/同 dedupKey 共存，同组织重复 P2002，legacy NULL 仍受部分唯一索引约束）", async () => {
+			const owner = await prisma.user.create({
+				data: {
+					email: `migc-owner-${Date.now()}@example.com`,
+					passwordHash: "test-hash",
+				},
+			});
+			const orgA = await prisma.organization.create({
+				data: { name: "MIG-C Org A" },
+			});
+			const orgB = await prisma.organization.create({
+				data: { name: "MIG-C Org B" },
+			});
+			migCUserIds.push(owner.id);
+			migCOrgIds.push(orgA.id, orgB.id);
+
+			// 1. Account: 同用户跨组织同币种共存，同组织重复冲突
+			await prisma.account.create({
+				data: { userId: owner.id, organizationId: orgA.id, currencyCode: "M1C", balance: "10" },
+			});
+			await expect(
+				prisma.account.create({
+					data: { userId: owner.id, organizationId: orgB.id, currencyCode: "M1C", balance: "20" },
+				}),
+			).resolves.toBeDefined();
+			await expect(
+				prisma.account.create({
+					data: { userId: owner.id, organizationId: orgA.id, currencyCode: "M1C", balance: "30" },
+				}),
+			).rejects.toMatchObject({ code: "P2002" });
+
+			// 2. InitialHolding: 同用户跨组织同币种共存，同组织重复 P2002，legacy NULL 部分唯一索引 P2002
+			const holdingBase = {
+				userId: owner.id,
+				currencyCode: "M1C",
+				amount: "100",
+				rate: "7.0",
+				rawRate: "7.0",
+				rateSource: "er-api",
+				rateObservedAt: observedAt,
+				cost: "700",
+				confirmedAt: observedAt,
+			};
+			await prisma.initialHolding.create({
+				data: { ...holdingBase, organizationId: orgA.id },
+			});
+			await expect(
+				prisma.initialHolding.create({
+					data: { ...holdingBase, organizationId: orgB.id },
+				}),
+			).resolves.toBeDefined();
+			await expect(
+				prisma.initialHolding.create({
+					data: { ...holdingBase, organizationId: orgA.id },
+				}),
+			).rejects.toMatchObject({ code: "P2002" });
+			await prisma.initialHolding.create({
+				data: { ...holdingBase, organizationId: null },
+			});
+			await expect(
+				prisma.initialHolding.create({
+					data: { ...holdingBase, organizationId: null },
+				}),
+			).rejects.toThrow();
+
+			// 3. Reminder: (organizationId, dedupKey, scheduledFor) 唯一 + legacy 部分唯一索引
+			const dedupKey = `migc-dedup-${Date.now()}`;
+			await prisma.reminder.create({
+				data: {
+					userId: owner.id,
+					organizationId: orgA.id,
+					type: "PLAN_DUE",
+					dedupKey,
+					scheduledFor: observedAt,
+				},
+			});
+			await expect(
+				prisma.reminder.create({
+					data: {
+						userId: owner.id,
+						organizationId: orgB.id,
+						type: "PLAN_DUE",
+						dedupKey,
+						scheduledFor: observedAt,
+					},
+				}),
+			).resolves.toBeDefined();
+			await expect(
+				prisma.reminder.create({
+					data: {
+						userId: owner.id,
+						organizationId: orgA.id,
+						type: "PLAN_DUE",
+						dedupKey,
+						scheduledFor: observedAt,
+					},
+				}),
+			).rejects.toMatchObject({ code: "P2002" });
+			await prisma.reminder.create({
+				data: {
+					userId: owner.id,
+					organizationId: null,
+					type: "PLAN_DUE",
+					dedupKey,
+					scheduledFor: observedAt,
+				},
+			});
+			await expect(
+				prisma.reminder.create({
+					data: {
+						userId: owner.id,
+						organizationId: null,
+						type: "PLAN_DUE",
+						dedupKey,
+						scheduledFor: observedAt,
+					},
+				}),
+			).rejects.toThrow();
+		});
+	});
+
+	describe("ToB R1 W26 DataRequest 双域拆分：CHECK 约束与迁移规范化", () => {
+		const CHECK_NAME = "data_requests_scope_type_org_check";
+		/** CHECK 违约：Prisma 以底层检查约束冲突抛出，消息含约束名 */
+		const CHECK_VIOLATION = /data_requests_scope_type_org_check/;
+		const W26_T0 = new Date(Date.UTC(2026, 10, 1, 0, 0, 0));
+		const W26_DUE = new Date(Date.UTC(2026, 10, 8, 0, 0, 0));
+		const w26UserIds: string[] = [];
+		const w26OrgIds: string[] = [];
+
+		afterAll(async () => {
+			await prisma.dataRequest.deleteMany({ where: { userId: { in: w26UserIds } } });
+			await prisma.auditLog.deleteMany({ where: { organizationId: { in: w26OrgIds } } });
+			// 成员关系 / 组织设置随组织级联删除
+			await prisma.organization.deleteMany({ where: { id: { in: w26OrgIds } } });
+			await prisma.user.deleteMany({ where: { id: { in: w26UserIds } } });
+		});
+
+		async function createUser(label: string): Promise<string> {
+			const user = await prisma.user.create({
+				data: {
+					email: `w26-check-${label}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`,
+					passwordHash: "test-hash",
+					name: label,
+				},
+				select: { id: true },
+			});
+			w26UserIds.push(user.id);
+			return user.id;
+		}
+
+		/** 默认组织：组织与首位成员同事务创建（memberships.created_at = organizations.created_at） */
+		async function createDefaultOrg(ownerId: string, name: string): Promise<string> {
+			const organization = await prisma.organization.create({
+				data: {
+					name,
+					memberships: { create: { userId: ownerId, role: "OWNER", status: "ACTIVE" } },
+				},
+				select: { id: true },
+			});
+			w26OrgIds.push(organization.id);
+			return organization.id;
+		}
+
+		function requestRow(
+			userId: string,
+			type: "EXPORT" | "CLEAR" | "DELETION",
+			extra: Record<string, unknown> = {},
+		) {
+			return { userId, type, requestedAt: W26_T0, dueAt: W26_DUE, ...extra };
+		}
+
+		test("约束已落库且通过校验（convalidated），定义覆盖 PERSONAL / ORGANIZATION 两个分支", async () => {
+			const rows = await prisma.$queryRaw<
+				Array<{ convalidated: boolean; definition: string }>
+			>`
+				SELECT convalidated, pg_get_constraintdef(oid) AS definition
+				FROM pg_constraint WHERE conname = ${CHECK_NAME}`;
+			expect(rows).toHaveLength(1);
+			expect(rows[0]!.convalidated).toBe(true);
+			const definition = rows[0]!.definition;
+			// PERSONAL 分支：仅 EXPORT / DELETION 且 organization_id IS NULL
+			expect(definition).toContain("scope = 'PERSONAL'::text");
+			expect(definition).toContain("organization_id IS NULL");
+			// ORGANIZATION 分支：EXPORT / CLEAR / DELETION 且 organization_id IS NOT NULL
+			expect(definition).toContain("scope = 'ORGANIZATION'::text");
+			expect(definition).toContain("organization_id IS NOT NULL");
+			expect(definition).toContain("'CLEAR'::text");
+		});
+
+		test("正向：5 种合法组合全部可写（PERSONAL EXPORT/DELETION 不挂组织；ORGANIZATION EXPORT/CLEAR/DELETION 必挂组织）", async () => {
+			const userId = await createUser("valid");
+			const organizationId = await createDefaultOrg(userId, "W26 合法组合组织");
+			for (const type of ["EXPORT", "DELETION"] as const) {
+				await expect(
+					prisma.dataRequest.create({ data: requestRow(userId, type, { scope: "PERSONAL" }) }),
+				).resolves.toBeDefined();
+			}
+			for (const type of ["EXPORT", "CLEAR", "DELETION"] as const) {
+				await expect(
+					prisma.dataRequest.create({
+						data: requestRow(userId, type, { scope: "ORGANIZATION", organizationId }),
+					}),
+				).resolves.toBeDefined();
+			}
+			const rows = await prisma.dataRequest.findMany({ where: { userId } });
+			expect(rows.map((row) => [row.scope, row.type, row.organizationId === null])).toEqual([
+				["PERSONAL", "EXPORT", true],
+				["PERSONAL", "DELETION", true],
+				["ORGANIZATION", "EXPORT", false],
+				["ORGANIZATION", "CLEAR", false],
+				["ORGANIZATION", "DELETION", false],
+			]);
+		});
+
+		test("反向：PERSONAL+CLEAR、PERSONAL+组织、ORGANIZATION+无组织、未知 type 一律被数据库拒绝", async () => {
+			const userId = await createUser("invalid");
+			const organizationId = await createDefaultOrg(userId, "W26 违约组织");
+			const invalid: Array<[string, Record<string, unknown>]> = [
+				["PERSONAL + CLEAR（个人域不能清空组织账本）", { type: "CLEAR", scope: "PERSONAL" }],
+				["PERSONAL + CLEAR（未显式给 scope，走库列默认值）", { type: "CLEAR" }],
+				["PERSONAL + EXPORT + 组织", { type: "EXPORT", scope: "PERSONAL", organizationId }],
+				["PERSONAL + DELETION + 组织", { type: "DELETION", scope: "PERSONAL", organizationId }],
+				["ORGANIZATION + EXPORT 无组织", { type: "EXPORT", scope: "ORGANIZATION" }],
+				["ORGANIZATION + CLEAR 无组织", { type: "CLEAR", scope: "ORGANIZATION" }],
+				["ORGANIZATION + DELETION 无组织", { type: "DELETION", scope: "ORGANIZATION" }],
+				["ORGANIZATION + 未知 type", { type: "PURGE", scope: "ORGANIZATION", organizationId }],
+			];
+			for (const [label, data] of invalid) {
+				await expect(
+					prisma.dataRequest.create({ data: requestRow(userId, data.type as "EXPORT", data) }),
+					label,
+				).rejects.toThrow(CHECK_VIOLATION);
+			}
+			// 违约写入零落库
+			expect(await prisma.dataRequest.count({ where: { userId } })).toBe(0);
+		});
+
+		test("反向：更新同样受约束——把已挂组织的请求改成 PERSONAL、或把组织域请求的组织置空均被拒绝", async () => {
+			const userId = await createUser("update");
+			const organizationId = await createDefaultOrg(userId, "W26 更新违约组织");
+			const row = await prisma.dataRequest.create({
+				data: requestRow(userId, "CLEAR", { scope: "ORGANIZATION", organizationId }),
+				select: { id: true },
+			});
+			await expect(
+				prisma.dataRequest.update({ where: { id: row.id }, data: { scope: "PERSONAL" } }),
+			).rejects.toThrow(CHECK_VIOLATION);
+			await expect(
+				prisma.dataRequest.update({
+					where: { id: row.id },
+					data: { organizationId: null },
+				}),
+			).rejects.toThrow(CHECK_VIOLATION);
+			await expect(
+				prisma.dataRequest.updateMany({
+					where: { id: row.id },
+					data: { scope: "PERSONAL", organizationId: null, type: "EXPORT" },
+				}),
+			).resolves.toMatchObject({ count: 1 }); // 整体改成合法组合则放行
+		});
+
+		test("迁移规范化 SQL（20261125180000）：历史 CLEAR 无损转为默认组织的 ORGANIZATION 请求，PENDING 锁不解锁，随后 CHECK 可成功添加", async () => {
+			// 执行的 7 条语句与迁移文件逐条相等（空白归一后比对）——相等即保证这里跑的正是迁移内容；
+			// 迁移文件一旦改动，本用例失败并要求同步复核
+			const migrationSql = readFileSync(
+				path.resolve(
+					__dirname,
+					"../prisma/migrations/20261125180000_tob_r1_data_request_scope_check/migration.sql",
+				),
+				"utf8",
+			);
+			const normalize = (sql: string) => sql.replace(/\s+/g, " ").trim();
+			const fileStatements = migrationSql
+				.split("\n")
+				.filter((line) => !line.trimStart().startsWith("--"))
+				.join("\n")
+				.split(";")
+				.map((statement) => normalize(statement))
+				.filter(
+					(statement) => statement.length > 0 && statement !== "BEGIN" && statement !== "COMMIT",
+				);
+			expect(fileStatements).toHaveLength(7);
+
+			/** ① 补建默认组织（尚无默认组织但持有历史 CLEAR 的用户） */
+			const createMissingOrganizations = (tx: Prisma.TransactionClient) =>
+				tx.$executeRaw`
+					WITH first_members AS (
+						SELECT DISTINCT ON (m.organization_id)
+							m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
+						FROM memberships m
+						ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+					),
+					defaults AS (
+						SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+						FROM first_members f
+						JOIN organizations o ON o.id = f.organization_id
+						WHERE f.created_at = o.created_at
+						ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
+					),
+					missing_users AS (
+						SELECT DISTINCT dr.user_id
+						FROM data_requests dr
+						LEFT JOIN defaults d ON d.user_id = dr.user_id
+						WHERE dr.type = 'CLEAR'
+							AND dr.organization_id IS NULL
+							AND d.organization_id IS NULL
+					)
+					INSERT INTO organizations (id, name, created_at, updated_at)
+					SELECT
+						'cdrmig' || substr(md5(mu.user_id), 1, 19),
+						COALESCE(
+							NULLIF(btrim(u.name), ''),
+							NULLIF(btrim(split_part(COALESCE(u.email, ''), '@', 1)), ''),
+							'我的'
+						) || '的工作台',
+						timezone('UTC', now()),
+						timezone('UTC', now())
+					FROM missing_users mu
+					JOIN users u ON u.id = mu.user_id
+					ORDER BY mu.user_id`;
+			/** ② OWNER / ACTIVE 成员关系（created_at 与组织同事务同一值） */
+			const createOwnerMemberships = (tx: Prisma.TransactionClient) =>
+				tx.$executeRaw`
+					INSERT INTO memberships (id, organization_id, user_id, role, status, joined_at, created_at, updated_at)
+					SELECT
+						'cdrmig' || substr(md5('membership:' || legacy.user_id), 1, 19),
+						o.id,
+						legacy.user_id,
+						'OWNER',
+						'ACTIVE',
+						o.created_at,
+						o.created_at,
+						o.created_at
+					FROM (
+						SELECT DISTINCT dr.user_id
+						FROM data_requests dr
+						WHERE dr.type = 'CLEAR' AND dr.organization_id IS NULL
+					) legacy
+					JOIN organizations o
+						ON o.id = 'cdrmig' || substr(md5(legacy.user_id), 1, 19)
+					ON CONFLICT (organization_id, user_id) DO NOTHING`;
+			/** ③ 组织设置：仅复制非空 base_currency 的个人设置 */
+			const copyOrganizationSettings = (tx: Prisma.TransactionClient) =>
+				tx.$executeRaw`
+					INSERT INTO organization_settings (id, organization_id, base_currency, prep_preference, reminder_enabled, ledger_started_at, created_at, updated_at)
+					SELECT
+						'cdrmig' || substr(md5('settings:' || o.id), 1, 19),
+						o.id,
+						s.base_currency,
+						s.prep_preference,
+						s.reminder_enabled,
+						s.ledger_started_at,
+						timezone('UTC', now()),
+						timezone('UTC', now())
+					FROM (
+						SELECT DISTINCT dr.user_id
+						FROM data_requests dr
+						WHERE dr.type = 'CLEAR' AND dr.organization_id IS NULL
+					) legacy
+					JOIN organizations o
+						ON o.id = 'cdrmig' || substr(md5(legacy.user_id), 1, 19)
+					JOIN user_settings s ON s.user_id = legacy.user_id
+					WHERE COALESCE(btrim(s.base_currency), '') <> ''
+					ON CONFLICT (organization_id) DO NOTHING`;
+			/** ④ 未挂组织的 EXPORT / DELETION 一律为 PERSONAL */
+			const rescopePersonal = (tx: Prisma.TransactionClient) =>
+				tx.$executeRaw`
+					UPDATE data_requests
+					SET scope = 'PERSONAL'
+					WHERE organization_id IS NULL
+						AND type IN ('EXPORT', 'DELETION')
+						AND scope <> 'PERSONAL'`;
+			/** ⑤ 历史 CLEAR → 默认组织的 ORGANIZATION 请求 */
+			const rescopeLegacyClear = (tx: Prisma.TransactionClient) =>
+				tx.$executeRaw`
+					WITH first_members AS (
+						SELECT DISTINCT ON (m.organization_id)
+							m.organization_id, m.user_id, m.joined_at, m.created_at, m.id
+						FROM memberships m
+						ORDER BY m.organization_id, m.created_at ASC, m.id ASC
+					),
+					defaults AS (
+						SELECT DISTINCT ON (f.user_id) f.user_id, f.organization_id
+						FROM first_members f
+						JOIN organizations o ON o.id = f.organization_id
+						WHERE f.created_at = o.created_at
+						ORDER BY f.user_id, f.joined_at ASC, f.created_at ASC, f.id ASC
+					)
+					UPDATE data_requests dr
+					SET scope = 'ORGANIZATION', organization_id = d.organization_id
+					FROM defaults d
+					WHERE dr.organization_id IS NULL
+						AND dr.type = 'CLEAR'
+						AND d.user_id = dr.user_id`;
+			/** ⑥ 已挂组织的行一律为 ORGANIZATION */
+			const rescopeBound = (tx: Prisma.TransactionClient) =>
+				tx.$executeRaw`
+					UPDATE data_requests
+					SET scope = 'ORGANIZATION'
+					WHERE organization_id IS NOT NULL
+						AND scope <> 'ORGANIZATION'`;
+			/** ⑦ 加 CHECK（DDL 须用 $executeRawUnsafe：Prisma 的标签模板拒绝 ALTER；语句为静态字面量） */
+			const addCheck = (tx: Prisma.TransactionClient) =>
+				tx.$executeRawUnsafe(
+					'ALTER TABLE "data_requests" ADD CONSTRAINT "data_requests_scope_type_org_check" CHECK (("scope" = \'PERSONAL\' AND "type" IN (\'EXPORT\', \'DELETION\') AND "organization_id" IS NULL) OR ("scope" = \'ORGANIZATION\' AND "type" IN (\'EXPORT\', \'CLEAR\', \'DELETION\') AND "organization_id" IS NOT NULL))',
+				);
+
+			// 先用「记录型假客户端」取出 7 条语句文本（不触达数据库），与迁移文件逐条比对：
+			// 相等即保证下文在事务里执行的正是迁移文件的内容
+			type Step = (tx: Prisma.TransactionClient) => PrismaPromise<number>;
+			const steps: Step[] = [
+				createMissingOrganizations,
+				createOwnerMemberships,
+				copyOrganizationSettings,
+				rescopePersonal,
+				rescopeLegacyClear,
+				rescopeBound,
+				addCheck,
+			];
+			const recorded: string[] = [];
+			const recorder = {
+				$executeRaw: (strings: TemplateStringsArray, ...values: unknown[]) => {
+					expect(values, "迁移语句不应含绑定参数").toHaveLength(0);
+					recorded.push(normalize(strings.join("")));
+					return Promise.resolve(0);
+				},
+				$executeRawUnsafe: (query: string) => {
+					recorded.push(normalize(query));
+					return Promise.resolve(0);
+				},
+			} as unknown as Prisma.TransactionClient;
+			for (const step of steps) {
+				await step(recorder);
+			}
+			expect(recorded).toEqual(fileStatements);
+
+			// 三类历史用户：已有默认组织 / 尚无默认组织（迁移须补建）/ 无默认组织且无个人设置（不虚构本位币）
+			const withDefault = await createUser("已有默认组织");
+			const defaultOrgId = await createDefaultOrg(withDefault, "W26 既有默认组织");
+			const noDefault = await createUser("迁移补建");
+			await prisma.userSettings.create({
+				data: {
+					userId: noDefault,
+					baseCurrency: "USD",
+					locale: "en",
+					region: "HK",
+					prepPreference: "cautious",
+					reminderEnabled: false,
+					ledgerStartedAt: W26_T0,
+				},
+			});
+			const bare = await createUser("无设置用户");
+
+			const migratedOrgId = `cdrmig${createHash("md5").update(noDefault).digest("hex").slice(0, 19)}`;
+			const bareOrgId = `cdrmig${createHash("md5").update(bare).digest("hex").slice(0, 19)}`;
+			w26OrgIds.push(migratedOrgId, bareOrgId);
+
+			const legacyBefore = await prisma.$transaction(async (tx) => {
+				// 迁移在同一事务里「先规范化、后加约束」，约束因此可随本事务临时移除；
+				// 事务无论提交还是回滚，约束都会由第 ⑦ 步或回滚恢复（静态字面量 DDL）
+				await tx.$executeRawUnsafe(
+					'ALTER TABLE "data_requests" DROP CONSTRAINT "data_requests_scope_type_org_check"',
+				);
+
+				// 还原 W26 之前的库形态（违约行此刻可写）
+				const legacy = [
+					requestRow(withDefault, "CLEAR", { status: "PENDING" }),
+					// 两种漂移形态：未挂组织却标了 ORGANIZATION 的导出；已挂组织却标了 PERSONAL 的导出
+					requestRow(withDefault, "EXPORT", { scope: "ORGANIZATION", status: "COMPLETED" }),
+					requestRow(withDefault, "EXPORT", { scope: "PERSONAL", organizationId: defaultOrgId }),
+					requestRow(noDefault, "CLEAR", { status: "PENDING" }),
+					requestRow(noDefault, "CLEAR", { status: "COMPLETED" }),
+					requestRow(noDefault, "CLEAR", { status: "CANCELLED" }),
+					requestRow(bare, "CLEAR", { status: "COMPLETED" }),
+				];
+				const created: Array<{ id: string; updatedAt: Date; createdAt: Date }> = [];
+				for (const data of legacy) {
+					created.push(await tx.dataRequest.create({ data, select: { id: true, createdAt: true, updatedAt: true } }));
+				}
+
+				for (const step of steps) {
+					await step(tx);
+				}
+
+				// ── 迁移后断言 ──
+				const rows = await tx.dataRequest.findMany({
+					where: { userId: { in: [withDefault, noDefault, bare] } },
+				});
+				expect(rows).toHaveLength(legacy.length);
+				// 全部满足 CHECK 形态
+				for (const row of rows) {
+					const valid =
+						(row.scope === "PERSONAL" && row.organizationId === null && ["EXPORT", "DELETION"].includes(row.type)) ||
+						(row.scope === "ORGANIZATION" && row.organizationId !== null);
+					expect(valid, `${row.userId} ${row.type} ${row.scope}`).toBe(true);
+				}
+				// 时间戳一律不改（§12.2.6）；状态机字段不动——PENDING 锁原样保留
+				for (const before of created) {
+					const after = rows.find((row) => row.id === before.id)!;
+					expect([after.createdAt, after.updatedAt, after.requestedAt, after.dueAt]).toEqual([
+						before.createdAt,
+						before.updatedAt,
+						W26_T0,
+						W26_DUE,
+					]);
+				}
+				const byKey = new Map(
+					rows.map((row) => [`${row.userId}|${row.type}|${row.status}`, row]),
+				);
+				// 已有默认组织：历史 CLEAR 挂到默认组织，状态仍为 PENDING
+				expect(byKey.get(`${withDefault}|CLEAR|PENDING`)).toMatchObject({
+					scope: "ORGANIZATION",
+					organizationId: defaultOrgId,
+				});
+				// 漂移纠正：未挂组织 → PERSONAL；已挂组织 → ORGANIZATION（组织不变）
+				expect(byKey.get(`${withDefault}|EXPORT|COMPLETED`)).toMatchObject({
+					scope: "PERSONAL",
+					organizationId: null,
+				});
+				expect(byKey.get(`${withDefault}|EXPORT|PENDING`)).toMatchObject({
+					scope: "ORGANIZATION",
+					organizationId: defaultOrgId,
+				});
+				// 尚无默认组织：三条历史 CLEAR 挂到迁移补建的组织
+				for (const status of ["PENDING", "COMPLETED", "CANCELLED"]) {
+					expect(byKey.get(`${noDefault}|CLEAR|${status}`)).toMatchObject({
+						scope: "ORGANIZATION",
+						organizationId: migratedOrgId,
+						status,
+					});
+				}
+				expect(byKey.get(`${bare}|CLEAR|COMPLETED`)).toMatchObject({
+					scope: "ORGANIZATION",
+					organizationId: bareOrgId,
+				});
+
+				// 补建的组织 = 默认组织识别口径（创建者 = 首个成员且成员关系与组织同事务创建）
+				expect(await resolveDefaultOrganizationId(tx, noDefault)).toBe(migratedOrgId);
+				expect(await resolveDefaultOrganizationId(tx, bare)).toBe(bareOrgId);
+				const membership = await tx.membership.findUniqueOrThrow({
+					where: { organizationId_userId: { organizationId: migratedOrgId, userId: noDefault } },
+				});
+				const organization = await tx.organization.findUniqueOrThrow({ where: { id: migratedOrgId } });
+				expect(membership).toMatchObject({ role: "OWNER", status: "ACTIVE" });
+				expect(membership.createdAt).toEqual(organization.createdAt);
+				expect(membership.joinedAt).toEqual(organization.createdAt);
+				expect(organization.name).toBe("迁移补建的工作台");
+				// 组织设置按个人设置复制；无个人设置的用户不虚构本位币
+				expect(
+					await tx.organizationSettings.findUnique({ where: { organizationId: migratedOrgId } }),
+				).toMatchObject({
+					baseCurrency: "USD",
+					prepPreference: "cautious",
+					reminderEnabled: false,
+					ledgerStartedAt: W26_T0,
+				});
+				expect(
+					await tx.organizationSettings.findUnique({ where: { organizationId: bareOrgId } }),
+				).toBeNull();
+				expect(
+					await tx.membership.count({ where: { organizationId: bareOrgId, userId: bare, role: "OWNER" } }),
+				).toBe(1);
+
+				// 幂等：规范化语句（①–⑥）重跑零变化——不重复建组、不改写任何行
+				const snapshot = JSON.stringify(rows.map((row) => [row.id, row.scope, row.organizationId]));
+				for (const step of steps.slice(0, 6)) await step(tx);
+				expect(
+					JSON.stringify(
+						(await tx.dataRequest.findMany({ where: { userId: { in: [withDefault, noDefault, bare] } } })).map(
+							(row) => [row.id, row.scope, row.organizationId],
+						),
+					),
+				).toBe(snapshot);
+				expect(await tx.organization.count({ where: { id: { in: [migratedOrgId, bareOrgId] } } })).toBe(2);
+				expect(await tx.membership.count({ where: { organizationId: migratedOrgId } })).toBe(1);
+				return created;
+			}, { timeout: 60_000 });
+			expect(legacyBefore).toHaveLength(7);
+
+			// 事务提交后：约束已由第 ⑦ 步恢复并拒绝违约写入
+			const constraint = await prisma.$queryRaw<Array<{ convalidated: boolean }>>`
+				SELECT convalidated FROM pg_constraint WHERE conname = ${CHECK_NAME}`;
+			expect(constraint).toEqual([{ convalidated: true }]);
+			await expect(
+				prisma.dataRequest.create({ data: requestRow(bare, "CLEAR") }),
+			).rejects.toThrow(CHECK_VIOLATION);
 		});
 	});
 });

@@ -2,7 +2,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AuthUser } from "@/lib/api/contract";
 import { authApi } from "@/lib/api/auth";
 import { queryKeys } from "@/lib/api/query-keys";
+import { redirectToLogin } from "@/lib/auth/redirect-to-login";
 import { resetSessionContext } from "@/lib/auth/session-reset";
+import { useAuthStore } from "@/lib/stores/auth-store";
 
 /**
  * 当前用户查询 Key
@@ -37,5 +39,23 @@ export function useLogout() {
 	return () => {
 		authApi.logout();
 		resetSessionContext(queryClient);
+	};
+}
+
+/**
+ * 退出登录并回登录页——侧栏、设置页、组织选择页与组织加载失败页共用的唯一出口：
+ * 登出（内部走 resetSessionContext：清缓存、组织选择、在途流）→ 清用户态 → 整页跳登录页。
+ *
+ * 组织选择页与组织加载失败页是整屏渲染的，没有侧栏：此前那里没有登出入口，
+ * 0 组织或选错账号的用户只能手动清 cookie 才能换账号（Goal #3A §9.6）。
+ */
+export function useLogoutAndRedirect() {
+	const logout = useLogout();
+	const clearUser = useAuthStore((s) => s.clearUser);
+
+	return () => {
+		logout();
+		clearUser();
+		redirectToLogin("/");
 	};
 }

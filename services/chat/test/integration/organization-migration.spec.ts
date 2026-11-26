@@ -254,7 +254,10 @@ async function seedFullUser(): Promise<string> {
 			lastMessageAt: new Date("2026-03-01T00:00:00.000Z"),
 		},
 	});
-	// 数据请求：EXPORT / CLEAR（终态）/ DELETION（终态）
+	// 数据请求：EXPORT（终态）/ DELETION（终态），均为个人域存量行。
+	// W26 起「未挂组织的 CLEAR」被 DB CHECK data_requests_scope_type_org_check 排除，
+	// 历史 CLEAR → 默认组织的映射已由迁移 20261125180000 的规范化 SQL 承接
+	// （见 test/prisma.spec.ts），MIG-B 回填对数据请求恒为 no-op，此处不再构造。
 	await db.dataRequest.createMany({
 		data: [
 			{
@@ -263,13 +266,6 @@ async function seedFullUser(): Promise<string> {
 				status: "COMPLETED",
 				requestedAt: new Date("2026-03-10T00:00:00.000Z"),
 				dueAt: new Date("2026-03-24T00:00:00.000Z"),
-			},
-			{
-				userId: user.id,
-				type: "CLEAR",
-				status: "COMPLETED",
-				requestedAt: new Date("2026-03-11T00:00:00.000Z"),
-				dueAt: new Date("2026-03-25T00:00:00.000Z"),
 			},
 			{
 				userId: user.id,
@@ -471,9 +467,9 @@ describe("MIG-B 默认组织回填与核对", () => {
 
 	test("第 1 次回填：完整用户与无设置用户全量映射；updated_at 逐行不变", async () => {
 		// 回填前快照：9 张带 updated_at 的业务表 + PlanChangeLog(created_at)
-		// + data_requests 的全部行。夹具共 20 行；逐表核对，防止快照静默漏表
+		// + data_requests 的全部行。夹具共 19 行；逐表核对，防止快照静默漏表
 		const before = await snapshotUpdatedAt(fullUserId);
-		expect(before).toHaveLength(20);
+		expect(before).toHaveLength(19);
 		expect([...new Set(before.map(([key]) => key.split(":")[0]))].sort()).toEqual(
 			[...TIMESTAMPED_TABLES, "plan_change_logs", "data_requests"].sort(),
 		);
@@ -546,21 +542,15 @@ describe("MIG-B 默认组织回填与核对", () => {
 		});
 		expect(unread?.readAt).toBeNull();
 
-		// DataRequest 语义映射（§12.2.7）：EXPORT/DELETION→PERSONAL(null org)；
-		// CLEAR→ORGANIZATION(默认组织)；状态机字段一律不动。
-		// 仅未挂组织的存量行计入：EXPORT/DELETION 本就是 PERSONAL → 不计
-		expect(firstRun.dataRequestsRescoped).toBe(1);
+		// DataRequest（§12.2.7；W26 后口径）：个人域存量行 EXPORT/DELETION 保持 PERSONAL
+		// 且不挂组织，状态机字段与时间戳一律不动；回填对数据请求恒为 no-op（0 行）
+		expect(firstRun.dataRequestsRescoped).toBe(0);
 		const exportReq = await db.dataRequest.findFirst({
 			where: { userId: fullUserId, type: "EXPORT" },
 		});
 		expect(exportReq?.scope).toBe("PERSONAL");
 		expect(exportReq?.organizationId).toBeNull();
 		expect(exportReq?.status).toBe("COMPLETED");
-		const clearReq = await db.dataRequest.findFirst({
-			where: { userId: fullUserId, type: "CLEAR" },
-		});
-		expect(clearReq?.scope).toBe("ORGANIZATION");
-		expect(clearReq?.organizationId).toBe(orgId);
 		const deletionReq = await db.dataRequest.findFirst({
 			where: { userId: fullUserId, type: "DELETION" },
 		});
@@ -581,21 +571,21 @@ describe("MIG-B 默认组织回填与核对", () => {
 	test("§12.3 核对：分片模式 0 差异；检查项齐全（防查询写错导致的空过）", async () => {
 		const result = await reconcileMigration(db, { userIds: scopeUserIds() });
 		expect(result.sharded).toBe(true);
-		// 分片模式评估 22 项：默认组织 1 + 行集映射 10 + 可归属不变量 7
-		// + 数据请求 1 + 提醒已读 1 + 设置同构 2。数量写死：任何一项的 SQL
+		// 分片模式评估 25 项：默认组织 1 + 行集映射 10 + 可归属不变量 7
+		// + 数据请求 1 + 提醒已读 1 + 设置同构 2 + 双写冲突 3。数量写死：任何一项的 SQL
 		// 列名写错都会让该项「恒 0」静默通过，数量对不上即暴露。
-		expect(result.checks).toBe(22);
+		expect(result.checks).toBe(25);
 		expect(result.diffs).toEqual([]);
 
 		// 空分片：不评估任何行，同样不得回落到全库
 		const empty = await reconcileMigration(db, { userIds: [] });
-		expect(empty).toMatchObject({ sharded: true, checks: 22, diffs: [] });
+		expect(empty).toMatchObject({ sharded: true, checks: 25, diffs: [] });
 
 		// 全量模式：额外评估 4 类无法归属到用户的孤儿派生行（共享本地库可能有
 		// 其他用例残留，故只断言检查项数量与模式，不断言 0 diffs）
 		const whole = await reconcileMigration(db);
 		expect(whole.sharded).toBe(false);
-		expect(whole.checks).toBe(26);
+		expect(whole.checks).toBe(29);
 	});
 
 	test("第 2 次回填：幂等（无新增组织/无重复记录/零重复回填）", async () => {
@@ -810,19 +800,11 @@ describe("MIG-B 默认组织回填与核对", () => {
 			}),
 			() => db.costLot.deleteMany({ where: { userId: fullUserId, sourceId: `${RUN}-no-txn` } }),
 		);
-		// DataRequest 语义映射
-		await expectDiffWhile(
-			"data_request.scope_mapping",
-			users,
-			() => db.dataRequest.updateMany({
-				where: { userId: fullUserId, type: "CLEAR" },
-				data: { scope: "PERSONAL" },
-			}),
-			() => db.dataRequest.updateMany({
-				where: { userId: fullUserId, type: "CLEAR" },
-				data: { scope: "ORGANIZATION" },
-			}),
-		);
+		// DataRequest 语义映射（W26 后）：合法形态由 DB CHECK data_requests_scope_type_org_check
+		// 兜底，已映射用户的请求无法再经 ORM 改成违约形态 → 本项对已回填用户恒为 0 差异
+		expect(
+			(await reconcileMigration(db, { userIds: users })).diffs.map((diff) => diff.scope),
+		).not.toContain("data_request.scope_mapping");
 		// ReminderRead 对账：已读提醒缺成员级已读行
 		await expectDiffWhile(
 			"reminder_read.parity",
@@ -874,9 +856,10 @@ describe("MIG-B 默认组织回填与核对", () => {
 			data: [
 				{ ...requestBase, type: "CLEAR", scope: "ORGANIZATION", organizationId: orgBId },
 				{ ...requestBase, type: "EXPORT", scope: "ORGANIZATION", organizationId: orgBId },
+				{ ...requestBase, type: "DELETION", scope: "ORGANIZATION", organizationId: orgBId },
 			],
 		});
-		expect(orgScoped.count).toBe(2);
+		expect(orgScoped.count).toBe(3);
 		try {
 			const run = await backfillDefaultOrganizations(db, {
 				userIds: scopeUserIds(),
@@ -889,8 +872,15 @@ describe("MIG-B 默认组织回填与核对", () => {
 			});
 			expect(after.map((r) => [r.type, r.scope])).toEqual([
 				["CLEAR", "ORGANIZATION"],
+				["DELETION", "ORGANIZATION"],
 				["EXPORT", "ORGANIZATION"],
 			]);
+			// W26 双域拆分后核对口径：合法的组织数据请求（EXPORT / CLEAR / DELETION，
+			// 且可落在非默认组织）不是映射差异——此前会按「CLEAR 必在默认组织」误报
+			const reconciled = await reconcileMigration(db, { userIds: scopeUserIds() });
+			expect(reconciled.diffs.map((diff) => diff.scope)).not.toContain(
+				"data_request.scope_mapping",
+			);
 		} finally {
 			await db.dataRequest.deleteMany({
 				where: { userId: fullUserId, organizationId: orgBId },
@@ -899,7 +889,8 @@ describe("MIG-B 默认组织回填与核对", () => {
 	});
 
 	test("评审 I-15：dry-run 估算 = 实际写入；分片事务逐片提交", async () => {
-		// 分片演练用户：存量个人行（2 账户 / 1 计划 / 1 变更日志 / 1 历史 CLEAR 请求），无组织
+		// 分片演练用户：存量个人行（2 账户 / 1 计划 / 1 变更日志），无组织
+		//（历史 CLEAR 请求不再构造：未挂组织的 CLEAR 已被 W26 的 DB CHECK 排除）
 		await db.userSettings.create({
 			data: {
 				userId: chunkUserId, baseCurrency: "USD", locale: "en", region: "HK",
@@ -922,11 +913,6 @@ describe("MIG-B 默认组织回填与核对", () => {
 			data: {
 				planId: plan.id, changeType: "COMPLETED", beforeTarget: "1000.0000", afterTarget: "1000.0000",
 				beforeAlloc: "1000.0000", afterAlloc: "1000.0000", beforeSnapshot: {}, afterSnapshot: {},
-			},
-		});
-		await db.dataRequest.create({
-			data: {
-				userId: chunkUserId, type: "CLEAR", status: "COMPLETED", requestedAt: T0, dueAt: T0,
 			},
 		});
 
@@ -954,7 +940,7 @@ describe("MIG-B 默认组织回填与核对", () => {
 			usersSkippedIdempotent: 0,
 			organizationSettingsCreated: 1,
 			reminderReadsCreated: 0,
-			dataRequestsRescoped: 1,
+			dataRequestsRescoped: 0,
 			chunksCommitted: 0,
 		});
 		expect(dry.rowsBackfilled).toEqual(expectedRows);
@@ -976,7 +962,7 @@ describe("MIG-B 默认组织回填与核对", () => {
 			usersSkippedIdempotent: 3,
 			organizationSettingsCreated: 1,
 			reminderReadsCreated: 0,
-			dataRequestsRescoped: 1,
+			dataRequestsRescoped: 0,
 		});
 		expect(run.rowsBackfilled).toEqual(expectedRows);
 
@@ -985,13 +971,6 @@ describe("MIG-B 默认组织回填与核对", () => {
 			where: { plan: { userId: chunkUserId } },
 		});
 		expect(chunkPlan?.organizationId).toBe(chunkOrgId);
-		const chunkRequest = await db.dataRequest.findFirst({
-			where: { userId: chunkUserId },
-		});
-		expect([chunkRequest?.scope, chunkRequest?.organizationId]).toEqual([
-			"ORGANIZATION",
-			chunkOrgId,
-		]);
 		// 非法 chunkSize 显式报错，不静默回落
 		await expect(
 			backfillDefaultOrganizations(db, { userIds: [chunkUserId], chunkSize: 0 }),
@@ -1223,13 +1202,8 @@ describe("MIG-B 默认组织回填与核对", () => {
 		});
 		const T1 = new Date("2026-03-01T00:00:00.000Z");
 		try {
-			// ① 历史 CLEAR：scope 已是 ORGANIZATION 但尚未挂组织（此前 dry-run 漏计）
-			await db.dataRequest.create({
-				data: {
-					userId: driftUserId, type: "CLEAR", scope: "ORGANIZATION", status: "COMPLETED",
-					requestedAt: T1, dueAt: T1,
-				},
-			});
+			// ①「scope 已是 ORGANIZATION 但尚未挂组织的历史 CLEAR」不再构造：该形态已被
+			//   W26 的 DB CHECK 排除，估算与写入对数据请求恒为 0（见下方 expected）
 			// ② 已读提醒：他人已有已读行、行主本人没有（此前 dry-run 用「无任何已读行」估算 → 漏计）
 			const reminder = await db.reminder.create({
 				data: {
@@ -1247,7 +1221,7 @@ describe("MIG-B 默认组织回填与核对", () => {
 				usersSkippedIdempotent: 0,
 				organizationSettingsCreated: 0,
 				reminderReadsCreated: 1,
-				dataRequestsRescoped: 1,
+				dataRequestsRescoped: 0,
 			};
 			const dry = await backfillDefaultOrganizations(db, { dryRun: true, userIds: [driftUserId] });
 			expect(dry).toMatchObject(expected);
@@ -1356,6 +1330,178 @@ describe("MIG-B 默认组织回填与核对", () => {
 			await db.account.deleteMany({ where: { userId: strayId } });
 			await db.organization.delete({ where: { id: foreignOrg.id } }).catch(() => {});
 			await cleanupUser(db as CleanupDb, strayId);
+		}
+	});
+
+	test("W22 个人占位行（baseCurrency=\"\"）不触发 MIG-B 复制 OrganizationSettings 且核对零误报", async () => {
+		const placeholderUserId = await createUser("placeholder", "个人占位演练用户");
+		try {
+			await db.userSettings.create({
+				data: {
+					userId: placeholderUserId,
+					baseCurrency: "",
+					locale: "en",
+					region: "HK",
+				},
+			});
+
+			const dry = await backfillDefaultOrganizations(db, {
+				dryRun: true,
+				userIds: [placeholderUserId],
+			});
+			expect(dry.organizationSettingsCreated).toBe(0);
+
+			const run = await backfillDefaultOrganizations(db, {
+				userIds: [placeholderUserId],
+			});
+			expect(run.organizationSettingsCreated).toBe(0);
+			const orgId = await resolveDefaultOrganizationId(db, placeholderUserId);
+			expect(orgId).not.toBeNull();
+			expect(
+				await db.organizationSettings.findUnique({
+					where: { organizationId: orgId! },
+				}),
+			).toBeNull();
+
+			const reconcile = await reconcileMigration(db, {
+				userIds: [placeholderUserId],
+			});
+			expect(reconcile.diffs).toEqual([]);
+		} finally {
+			await cleanupUser(db as CleanupDb, placeholderUserId);
+		}
+	});
+
+	test("I-2 双写冲突防护：reconcile 检出 dualAccountRows，backfill 合并双行 Account（保留 updatedAt）、去重 Reminder 并阻断冲突 InitialHolding", async () => {
+		const dualUserId = await createUser("i2-dual", "双写冲突演练用户");
+		const T1 = new Date("2026-04-01T00:00:00.000Z");
+		try {
+			const org = await db.organization.create({
+				data: {
+					name: `双写冲突测试组织 ${RUN}`,
+					memberships: {
+						create: { userId: dualUserId, role: "OWNER", status: "ACTIVE" },
+					},
+				},
+			});
+			const orgAccount = await db.account.create({
+				data: {
+					userId: dualUserId,
+					organizationId: org.id,
+					createdById: dualUserId,
+					currencyCode: "USD",
+					balance: "20.0000",
+				},
+			});
+			// 存量 NULL 同币种账户 + 独立 EUR NULL 账户
+			await db.account.createMany({
+				data: [
+					{ userId: dualUserId, currencyCode: "USD", balance: "50.0000" },
+					{ userId: dualUserId, currencyCode: "EUR", balance: "15.0000" },
+				],
+			});
+			// 冲突 Reminder：组织行与 NULL 行同 (dedupKey, scheduledFor)，NULL 行已读
+			const orgReminder = await db.reminder.create({
+				data: {
+					userId: dualUserId,
+					organizationId: org.id,
+					type: "PLAN_DUE",
+					dedupKey: `${RUN}-dual-rem`,
+					scheduledFor: T1,
+				},
+			});
+			await db.reminder.create({
+				data: {
+					userId: dualUserId,
+					type: "PLAN_DUE",
+					dedupKey: `${RUN}-dual-rem`,
+					scheduledFor: T1,
+					readAt: T1,
+				},
+			});
+
+			const beforeReconcile = await reconcileMigration(db, {
+				userIds: [dualUserId],
+			});
+			const beforeByScope = Object.fromEntries(
+				beforeReconcile.diffs.map((d) => [d.scope, d.right]),
+			);
+			expect(beforeByScope["dual_rows.accounts"]).toBe(1);
+			expect(beforeByScope["dual_rows.reminders"]).toBe(1);
+
+			const run = await backfillDefaultOrganizations(db, {
+				userIds: [dualUserId],
+			});
+			expect(run.rowsBackfilled.accounts).toBe(2);
+			expect(run.rowsBackfilled.reminders).toBe(1);
+
+			const survivingUsd = await db.account.findUniqueOrThrow({
+				where: { id: orgAccount.id },
+			});
+			expect(survivingUsd.balance.toFixed(4)).toBe("70.0000");
+			expect(survivingUsd.updatedAt.getTime()).toBe(orgAccount.updatedAt.getTime());
+			expect(
+				await db.account.count({
+					where: { userId: dualUserId, organizationId: null },
+				}),
+			).toBe(0);
+			// 冲突提醒删除后，原 NULL 行已读态保留至存活组织提醒
+			expect(
+				await db.reminderRead.findUnique({
+					where: {
+						reminderId_userId: {
+							reminderId: orgReminder.id,
+							userId: dualUserId,
+						},
+					},
+				}),
+			).not.toBeNull();
+
+			const afterReconcile = await reconcileMigration(db, {
+				userIds: [dualUserId],
+			});
+			expect(afterReconcile.diffs).toEqual([]);
+
+			// 冲突 InitialHolding：必须 fail-closed 抛 BackfillAnomalyError 阻断
+			await db.initialHolding.create({
+				data: {
+					userId: dualUserId,
+					organizationId: org.id,
+					createdById: dualUserId,
+					currencyCode: "USD",
+					amount: "10.0000",
+					rate: "7.2000000000",
+					rawRate: "7.2000000000",
+					rateSource: "identity",
+					rateObservedAt: T1,
+					cost: "72.0000",
+					confirmedAt: T1,
+				},
+			});
+			await db.initialHolding.create({
+				data: {
+					userId: dualUserId,
+					currencyCode: "USD",
+					amount: "20.0000",
+					rate: "7.2000000000",
+					rawRate: "7.2000000000",
+					rateSource: "identity",
+					rateObservedAt: T1,
+					cost: "144.0000",
+					confirmedAt: T1,
+				},
+			});
+			const ihReconcile = await reconcileMigration(db, {
+				userIds: [dualUserId],
+			});
+			expect(
+				ihReconcile.diffs.find((d) => d.scope === "dual_rows.initial_holdings")?.right,
+			).toBe(1);
+			await expect(
+				backfillDefaultOrganizations(db, { userIds: [dualUserId] }),
+			).rejects.toThrow(BackfillAnomalyError);
+		} finally {
+			await cleanupUser(db as CleanupDb, dualUserId);
 		}
 	});
 });

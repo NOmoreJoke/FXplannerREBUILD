@@ -201,8 +201,8 @@ async function assertMirror(
 		);
 	}
 	// 余额镜像：重放终态 == 账户余额（全量守恒）
-	const account = await prisma.account.findUniqueOrThrow({
-		where: { userId_currencyCode: { userId, currencyCode } },
+	const account = await prisma.account.findFirstOrThrow({
+		where: { userId, currencyCode },
 	});
 	expect(replay.finalBalance.toFixed(4)).toBe(account.balance.toFixed(4));
 	// 跨日数据下重放不得产生历史时点缺口（BE-02 误报已根治）
@@ -450,17 +450,24 @@ describe("FIFO 口径镜像（增量 ≡ 重放，BE-01/BE-02 回归）", () => 
 					createdAt: new Date(instant.getTime() + lotDelayMs),
 				},
 			});
-			await prisma.account.upsert({
-				where: {
-					userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-				},
-				create: {
-					userId: user.userId,
-					currencyCode: "USD",
-					balance: new Prisma.Decimal(quantity),
-				},
-				update: { balance: { increment: new Prisma.Decimal(quantity) } },
+			const existingAccount = await prisma.account.findFirst({
+				where: { userId: user.userId, currencyCode: "USD" },
+				select: { id: true },
 			});
+			if (existingAccount) {
+				await prisma.account.update({
+					where: { id: existingAccount.id },
+					data: { balance: { increment: new Prisma.Decimal(quantity) } },
+				});
+			} else {
+				await prisma.account.create({
+					data: {
+						userId: user.userId,
+						currencyCode: "USD",
+						balance: new Prisma.Decimal(quantity),
+					},
+				});
+			}
 		}
 		const planId = await seedPlanWithAllocation(prisma, user.userId, {
 			targetCurrency: "USD",

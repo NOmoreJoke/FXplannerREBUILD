@@ -1,1 +1,1 @@
-export { PreferencesForm, SETTINGS_QUERY_KEY } from "./preferences-form";
+export { PreferencesForm } from "./preferences-form";

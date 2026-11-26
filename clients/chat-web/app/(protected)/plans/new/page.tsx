@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { toast } from "sonner";
@@ -9,6 +10,7 @@ import {
 	SchedulePreviewCard,
 } from "@/components/business/plan";
 import { Button } from "@/components/ui/button";
+import { PageLoading, PermissionNotice } from "@/components/base";
 import type { CreatePlanReq } from "@/lib/api/contract";
 import { onboardingApi } from "@/lib/api/onboarding";
 import { plansApi } from "@/lib/api/plans";
@@ -18,6 +20,7 @@ import {
 	withOrgScope,
 } from "@/lib/api/query-keys";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 import { toPacePreference, usePlanForm } from "@/lib/hooks/use-plan-form";
 import { useSchedulePreview } from "@/lib/hooks/use-schedule-preview";
 
@@ -27,8 +30,37 @@ import { useSchedulePreview } from "@/lib/hooks/use-schedule-preview";
  * 认证守卫在 (protected)/layout.tsx（勿在此重复）。
  * 装配：usePlanForm（表单状态与校验）+ useSchedulePreview（防抖预览）+
  * react-query 取 onboarding 偏好回填默认节奏 + createMutation 提交。
+ *
+ * 能力门控（Goal #3B W28）：创建计划需 plan.create（Viewer 无）。无权时整页换成
+ * 只读提示与返回入口，表单根本不挂载——否则防抖预览会替一个注定 403 的用户
+ * 持续请求排期接口。组织详情未返回前先加载，不闪现表单再收回。
  */
 export default function NewPlanPage() {
+	const { can, isLoading } = useOrganizationCapabilities();
+
+	if (isLoading) {
+		return <PageLoading />;
+	}
+
+	if (!can("plan.create")) {
+		return (
+			<PermissionNotice
+				testId="plan-create-no-permission"
+				title="当前角色无权创建换汇计划"
+				description="当前角色无权创建换汇计划。如需新建目标，请联系组织所有者、管理员或财务。"
+				action={
+					<Button variant="outline" className="bg-white" asChild>
+						<Link href="/plans">返回计划列表</Link>
+					</Button>
+				}
+			/>
+		);
+	}
+
+	return <NewPlanForm />;
+}
+
+function NewPlanForm() {
 	const router = useRouter();
 	const queryClient = useQueryClient();
 	const form = usePlanForm();

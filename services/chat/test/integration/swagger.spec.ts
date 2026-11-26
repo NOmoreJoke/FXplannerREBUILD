@@ -2,6 +2,7 @@ import type { INestApplication } from "@nestjs/common";
 import { SwaggerModule } from "@nestjs/swagger";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSwaggerConfig } from "../../src/config/swagger";
+import { DataRequestLastOwnerRequiredException } from "../../src/data-request/dto/data-request.dto";
 import { createTestApp } from "../helpers/test-app";
 
 type DocumentedOperation = {
@@ -64,7 +65,13 @@ describe("Swagger 接口说明", () => {
 		// + ToB R1 W19 成员/邀请 11 端点：GET/PATCH/DELETE /members、POST /members/leave、
 		//   POST /transfer-ownership、POST/GET/DELETE /invitations、
 		//   GET /organization-invitations/:token、POST accept/decline = 72
-		expect(operations).toHaveLength(72);
+		// + ToB R1 W22 个人/组织设置分离 2 端点：GET/PATCH /api/settings/personal
+		//   （W24 同步本计数：W22 新增两端点后此处仍停在 72，导致该用例在分支上一直失败）
+		//   = 74。W24 只扩充既有端点的说明与出参，未新增端点。
+		// + ToB R1 W27 双域数据请求物理拆分：个人域 5 端点（原 6 端点去掉 /impact）
+		//   + 组织域 6 端点（/api/organizations/current/data-requests/*）
+		//   + DELETE /api/organizations/current（发起组织删除）= 74 - 1 + 6 + 1 = 80。
+		expect(operations).toHaveLength(80);
 		for (const { path, method, operation } of operations) {
 			expect(
 				operation.summary,
@@ -115,5 +122,32 @@ describe("Swagger 接口说明", () => {
 				schema: expect.objectContaining({ type: "string" }),
 			}),
 		]);
+	});
+
+	it("LAST_OWNER_REQUIRED：文档响应体与运行时包体同构（阻塞组织列表在 data 下）", () => {
+		// 前端按 OpenAPI 契约读取 409 包体；此前文档把列表标在顶层、运行时放在 data 下，
+		// 前端恒读到空列表。两侧字段逐一对照，任一侧挪动字段都会在这里失败
+		const document = SwaggerModule.createDocument(app, createSwaggerConfig());
+		const schemas = document.components?.schemas ?? {};
+
+		// 运行时包体直接取异常实例的 getResponse()，不手写期望值
+		const runtimeBody = new DataRequestLastOwnerRequiredException([
+			{ organizationId: "org-a", organizationName: "组织 A", role: "OWNER" },
+		]).getResponse() as Record<string, unknown>;
+		const runtimeData = runtimeBody.data as Record<string, unknown>;
+		expect(Object.keys(runtimeData)).toEqual(["blockingOrganizations"]);
+
+		const propertyNames = (name: string) =>
+			Object.keys(
+				(schemas[name] as { properties?: Record<string, unknown> } | undefined)
+					?.properties ?? {},
+			).sort();
+
+		expect(propertyNames("LastOwnerRequiredBodyDto")).toEqual(
+			Object.keys(runtimeBody).sort(),
+		);
+		expect(propertyNames("LastOwnerRequiredDataDto")).toEqual(
+			Object.keys(runtimeData).sort(),
+		);
 	});
 });

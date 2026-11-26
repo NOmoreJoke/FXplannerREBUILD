@@ -11,7 +11,7 @@
 import type { INestApplication } from "@nestjs/common";
 import { Prisma, PrismaClient } from "@prisma/client";
 import request, { type Response } from "supertest";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	bearer,
 	cleanupUser,
@@ -21,6 +21,15 @@ import {
 	type TestUser,
 } from "../helpers/test-app";
 import { ensureOnboarded } from "../helpers/onboarding-helper";
+import { closeTestApps } from "../helpers/test-http";
+import { raceBehindAdvisoryLock } from "../helpers/postgres-lock-barrier";
+import {
+	cleanupOrgLedgers,
+	createOrgLedger,
+	orgHeaders,
+	type OrgLedger,
+	purchaseBody,
+} from "../helpers/organization-ledger-test-helper";
 import {
 	seedInitialHolding,
 	seedPlanWithAllocationRow,
@@ -326,10 +335,8 @@ describe("更正重放一致性（集成）", () => {
 		});
 		expect(allocations).toHaveLength(2);
 		// 两不变式：balance = Σ剩余分配 + 未分配；重建分摊 = 理论成本（初始 1,000@7.248 + 买入一 1,000@7.8 = 15,048）
-		const account = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const account = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		expect(account.balance.toFixed(4)).toBe("1000.0000");
 		const totalAllocCost = (
@@ -347,7 +354,7 @@ describe("更正重放一致性（集成）", () => {
 			return Promise.all([
 				prisma.usageRecord.findUniqueOrThrow({ where: { id: usageId } }),
 				prisma.planAllocation.findUniqueOrThrow({ where: { planId } }),
-				prisma.account.findUniqueOrThrow({ where: { userId_currencyCode: accountKey } }),
+				prisma.account.findFirstOrThrow({ where: accountKey }),
 				prisma.costLot.findMany({ where: accountKey, orderBy: { id: "asc" } }),
 				prisma.usageLotAllocation.findMany({ where: { usageId }, orderBy: { id: "asc" } }),
 			]);
@@ -428,10 +435,8 @@ describe("更正重放一致性（集成）", () => {
 				where: { userId: user.userId, currencyCode: "USD" },
 				orderBy: { unitCost: "asc" },
 			}),
-			account: await ctx.prisma.account.findUniqueOrThrow({
-				where: {
-					userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-				},
+			account: await ctx.prisma.account.findFirstOrThrow({
+				where: { userId: user.userId, currencyCode: "USD" },
 			}),
 		};
 
@@ -453,10 +458,8 @@ describe("更正重放一致性（集成）", () => {
 				where: { userId: user.userId, currencyCode: "USD" },
 				orderBy: { unitCost: "asc" },
 			}),
-			account: await ctx.prisma.account.findUniqueOrThrow({
-				where: {
-					userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-				},
+			account: await ctx.prisma.account.findFirstOrThrow({
+				where: { userId: user.userId, currencyCode: "USD" },
 			}),
 		};
 		expect(snapshotAfterSecond.transaction).toEqual(
@@ -538,10 +541,8 @@ describe("更正重放一致性（集成）", () => {
 
 		// 若更正因「买入已先落库但版本无关」成功，最终状态必须满足不变式
 		await assertInvariants(ctx.prisma, user.userId);
-		const balance = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const balance = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		// 终态余额 = 初始 1,000 + 三笔买入 3,000 − 使用 1,200（与批次 Σremaining 严格一致）
 		expect(balance.balance.toFixed(4)).toBe("2800.0000");
@@ -834,10 +835,8 @@ describe("更正重放一致性（集成）", () => {
 		});
 		expect(allocation.usedAmount.toFixed(4)).toBe("1100.0000");
 		expect(allocation.amount.toFixed(4)).toBe("1100.0000");
-		const account = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const account = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		expect(account.balance.toFixed(4)).toBe("1900.0000");
 		await assertInvariants(ctx.prisma, user.userId);
@@ -914,10 +913,8 @@ describe("更正重放一致性（集成）", () => {
 		});
 		expect(allocation.usedAmount.toFixed(4)).toBe("1100.0000");
 		expect(allocation.amount.toFixed(4)).toBe("1100.0000");
-		const account = await ctx.prisma.account.findUniqueOrThrow({
-			where: {
-				userId_currencyCode: { userId: user.userId, currencyCode: "USD" },
-			},
+		const account = await ctx.prisma.account.findFirstOrThrow({
+			where: { userId: user.userId, currencyCode: "USD" },
 		});
 		expect(account.balance.toFixed(4)).toBe("1900.0000");
 		await assertInvariants(ctx.prisma, user.userId);
@@ -927,4 +924,126 @@ describe("更正重放一致性（集成）", () => {
 		expect(corrections).toHaveLength(1);
 		expect(corrections[0]).toMatchObject({ targetId: usageId, status: "APPLIED" });
 	});
+});
+
+/**
+ * ToB R1 W24：两名成员并发更正同一目标（LEDGER-04.2「预览后若其他成员修改了同一记录，
+ * 提交者不得覆盖后者」）。屏障先持组织锁（membership:${orgId}），确认两个请求都已通过
+ * Guard 并阻塞在锁上后再同时放行：事务内重读目标比对 baseVersion，先到者 201，后到者
+ * 必 409 CORRECTION_TARGET_CHANGED——败因只取决于锁内的版本复核，不取决于谁先发出。
+ */
+describe("W24 并发更正同一目标（组织锁串行化 + 锁内 baseVersion 复核）", () => {
+	let ctx: TestContext;
+	let app: INestApplication;
+	const orgs: OrgLedger[] = [];
+
+	beforeAll(async () => {
+		ctx = await createTestApp();
+		app = ctx.app;
+	}, 30_000);
+
+	afterEach(async () => {
+		if (orgs.length > 0) {
+			await cleanupOrgLedgers(ctx.prisma, ...orgs.splice(0));
+		}
+	});
+
+	afterAll(async () => {
+		await closeTestApps(app);
+	});
+
+	it("W24-REPLAY-1 两名成员并发更正同一笔买入（手续费 10 vs 20）：一个 201、一个 409 CORRECTION_TARGET_CHANGED，版本只前进一次", async () => {
+		const org = await createOrgLedger(app, ctx.prisma, "w24-replay-race", [
+			"FINANCE",
+			"FINANCE",
+		]);
+		orgs.push(org);
+		const [finance1, finance2] = org.members;
+		const purchaseId = (
+			await request(app.getHttpServer())
+				.post("/api/transactions")
+				.set(orgHeaders(finance1, org.orgId))
+				.send(purchaseBody("USD", "1000", "7.8", daysAgo(3)))
+				.expect(201)
+		).body.data.id as string;
+		const payload = (fee: string) => ({
+			targetType: "TRANSACTION",
+			targetId: purchaseId,
+			baseVersion: 1,
+			reason: `并发更正：手续费记为 ${fee}`,
+			changes: { feeAmount: fee },
+		});
+		const post = (user: TestUser, fee: string, requestId: string) =>
+			request(app.getHttpServer())
+				.post("/api/corrections")
+				.set(orgHeaders(user, org.orgId, requestId))
+				.send(payload(fee));
+		const requestIds = [`req-w24-race-1-${Date.now()}`, `req-w24-race-2-${Date.now()}`];
+
+		const [first, second] = await raceBehindAdvisoryLock(
+			ctx.prisma,
+			`membership:${org.orgId}`,
+			[
+				() => post(finance1, "10", requestIds[0]),
+				() => post(finance2, "20", requestIds[1]),
+			],
+		);
+
+		// 一胜一负：败者被版本复核拦下，提示重新查看影响
+		expect([first.status, second.status].sort()).toEqual([201, 409]);
+		const [winner, loser] = first.status === 201 ? [first, second] : [second, first];
+		const winnerFee = winner === first ? "10" : "20";
+		const winnerActor = winner === first ? finance1 : finance2;
+		const winnerRequestId = winner === first ? requestIds[0] : requestIds[1];
+		expect(loser.body.code).toBe("CORRECTION_TARGET_CHANGED");
+
+		// 版本只前进一次，内容是胜出那一次的更正
+		const transaction = await ctx.prisma.transaction.findUniqueOrThrow({
+			where: { id: purchaseId },
+		});
+		expect(transaction.version).toBe(2);
+		expect(transaction.feeAmount!.toFixed(4)).toBe(`${winnerFee}.0000`);
+		expect(winner.body.data).toMatchObject({
+			status: "APPLIED",
+			targetVersion: 2,
+		});
+		// 只留一条 APPLIED（操作者 = 胜者）与一条 SUCCESS 审计（requestId = 胜者的）；败者不留 FAILED
+		expect(
+			await ctx.prisma.correction.findMany({ where: { targetId: purchaseId } }),
+		).toEqual([
+			expect.objectContaining({
+				id: winner.body.data.correctionId,
+				status: "APPLIED",
+				organizationId: org.orgId,
+				actorUserId: winnerActor.userId,
+			}),
+		]);
+		expect(
+			await ctx.prisma.auditLog.findMany({
+				where: { organizationId: org.orgId, action: "correction.apply" },
+			}),
+		).toEqual([
+			expect.objectContaining({
+				actorUserId: winnerActor.userId,
+				result: "SUCCESS",
+				requestId: winnerRequestId,
+			}),
+		]);
+		// 批次只按胜出的更正重建一次：(7,800 + 手续费) ÷ 1,000；余额不受手续费影响
+		const lots = await ctx.prisma.costLot.findMany({
+			where: { organizationId: org.orgId },
+		});
+		expect(lots).toHaveLength(1);
+		expect(lots[0].unitCost.toFixed(8)).toBe(
+			new Prisma.Decimal("7800").add(winnerFee).div("1000").toFixed(8),
+		);
+		expect(
+			(
+				await ctx.prisma.account.findFirstOrThrow({
+					where: { organizationId: org.orgId, currencyCode: "USD" },
+				})
+			).balance.toFixed(4),
+		).toBe("1000.0000");
+		await assertInvariants(ctx.prisma, finance1.userId);
+	}, 30_000);
 });

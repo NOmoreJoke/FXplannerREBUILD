@@ -26,6 +26,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	isOrglessRouteAllowed,
+	matchesRouteSegment,
 	useCreateOrganization,
 	useCurrentOrganization,
 	useLeaveOrganization,
@@ -194,9 +195,18 @@ describe("useSwitchOrganization（切换）", () => {
 		queryClient.setQueryData(queryKeys.organizations.current("org-a"), {
 			stale: "current-a",
 		});
-		// 数据权利请求按设计不加组织前缀，但其进度视图随组织上下文请求——切换时同样清除
-		queryClient.setQueryData(queryKeys.dataRequests.current(), {
-			stale: "data-request",
+		// 组织域数据请求带组织前缀：切换时随旧组织一起清除
+		queryClient.setQueryData(
+			withOrgScope("org-a", queryKeys.dataRequests.organizationCurrent()),
+			{ stale: "organization-request" },
+		);
+		// 个人域数据请求与组织无关（W28）：此前按无前缀形态随组织上下文请求、切换即清，
+		// 现在走不带组织头的个人端点——切换组织不得丢掉个人进度
+		queryClient.setQueryData(queryKeys.dataRequests.personalCurrent(), {
+			personal: "request",
+		});
+		queryClient.setQueryData(queryKeys.settings.personal(), {
+			personal: "settings",
 		});
 		queryClient.setQueryData(queryKeys.rates.supported(), { public: true });
 		const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
@@ -215,8 +225,17 @@ describe("useSwitchOrganization（切换）", () => {
 			queryClient.getQueryData(queryKeys.organizations.current("org-a")),
 		).toBeUndefined();
 		expect(
-			queryClient.getQueryData(queryKeys.dataRequests.current()),
+			queryClient.getQueryData(
+				withOrgScope("org-a", queryKeys.dataRequests.organizationCurrent()),
+			),
 		).toBeUndefined();
+		// 个人进度与个人偏好保留
+		expect(queryClient.getQueryData(queryKeys.dataRequests.personalCurrent())).toEqual({
+			personal: "request",
+		});
+		expect(queryClient.getQueryData(queryKeys.settings.personal())).toEqual({
+			personal: "settings",
+		});
 		// 公共缓存保留
 		expect(queryClient.getQueryData(queryKeys.rates.supported())).toBeDefined();
 		expect(invalidateSpy).toHaveBeenCalledWith({
@@ -561,7 +580,7 @@ describe("useCreateOrganization / useLeaveOrganization", () => {
 	});
 });
 
-describe("isOrglessRouteAllowed（评审 R3-I01）", () => {
+describe("isOrglessRouteAllowed（评审 R3-I01；Goal #3B W28 放行 /data-requests）", () => {
 	it("/invitations 与 /invitations/… 豁免；同前缀的其他路径不豁免", () => {
 		expect(isOrglessRouteAllowed("/invitations")).toBe(true);
 		expect(isOrglessRouteAllowed("/invitations/tok_SECRET")).toBe(true);
@@ -571,5 +590,44 @@ describe("isOrglessRouteAllowed（评审 R3-I01）", () => {
 		expect(isOrglessRouteAllowed("/organization/members")).toBe(false);
 		// 原判定 startsWith("/invitations") 会把同前缀路径一并豁免
 		expect(isOrglessRouteAllowed("/invitations-old")).toBe(false);
+	});
+
+	it("/data-requests 豁免：个人数据请求进度与组织无关，无组织 / 未选组织 / 账号锁定的用户都要进得去", () => {
+		expect(isOrglessRouteAllowed("/data-requests")).toBe(true);
+		expect(isOrglessRouteAllowed("/data-requests/")).toBe(true);
+		// 按路径段匹配，同前缀的其他路径不误豁免
+		expect(isOrglessRouteAllowed("/data-requests-v2")).toBe(false);
+		expect(isOrglessRouteAllowed("/data-requests-old/page")).toBe(false);
+		// （「403 账号锁的跳转目的地恰好是这条被豁免的路由」在 client.spec 里用真实常量对照）
+	});
+
+	it("除上述两条外，其余受保护路由仍要求组织上下文", () => {
+		for (const path of [
+			"/home",
+			"/settings",
+			"/plans",
+			"/plans/new",
+			"/transactions/new",
+			"/corrections/new",
+			"/onboarding",
+			"/organization",
+			"/organization/members",
+			"/reminders",
+			"/market",
+			"/chat",
+		]) {
+			expect(isOrglessRouteAllowed(path), path).toBe(false);
+		}
+	});
+});
+
+describe("matchesRouteSegment（路径段匹配：本段或其子路径）", () => {
+	it("命中本段与子路径，不命中同前缀的其他路径、空串与其他段", () => {
+		expect(matchesRouteSegment("/data-requests", "/data-requests")).toBe(true);
+		expect(matchesRouteSegment("/data-requests/detail", "/data-requests")).toBe(true);
+		expect(matchesRouteSegment("/data-requests-v2", "/data-requests")).toBe(false);
+		expect(matchesRouteSegment("/data", "/data-requests")).toBe(false);
+		expect(matchesRouteSegment("", "/data-requests")).toBe(false);
+		expect(matchesRouteSegment("/x/data-requests", "/data-requests")).toBe(false);
 	});
 });

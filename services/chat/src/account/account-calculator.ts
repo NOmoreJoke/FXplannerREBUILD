@@ -87,6 +87,9 @@ export function buildPurchaseLot(
 	const totalCost = transaction.principalAmount.add(transaction.feeAmount ?? 0);
 	return {
 		user: { connect: { id: transaction.userId } },
+		...(transaction.organizationId != null
+			? { organizationId: transaction.organizationId }
+			: {}),
 		currencyCode: transaction.currencyCode,
 		sourceType: "PURCHASE",
 		sourceId: transaction.id,

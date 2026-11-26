@@ -6,10 +6,14 @@ import {
 	Logger,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
-import { AuditService } from "../../audit/audit.service";
+import {
+	AuditService,
+	recordDeniedAuditBestEffort,
+} from "../../audit/audit.service";
 import type { RequestWithActor } from "./organization-context.guard";
 import { REQUIRES_PERMISSION_KEY } from "../decorators/requires-permission.decorator";
 import { can } from "../permission-policy";
+import { extractRequestId } from "../request-id";
 import type { Permission } from "../authorization.types";
 import { PermissionDeniedException } from "../authorization.errors";
 
@@ -53,26 +57,12 @@ export class PermissionGuard implements CanActivate {
 		}
 
 		// DENIED 审计（尽力而为：审计异常不掩盖 403；仅纯读拒绝场景，独立写）
-		const rawRequestId = request.headers["x-request-id"];
-		const requestId =
-			typeof rawRequestId === "string" && rawRequestId.trim().length > 0
-				? rawRequestId.trim()
-				: null;
-		try {
-			await this.auditService.recordStandalone({
-				organizationId: actor.organizationId,
-				actorUserId: actor.userId,
-				actorType: "USER",
-				action: `permission.denied.${required}`,
-				result: "DENIED",
-				requestId,
-				detail: { required, role: actor.role },
-			});
-		} catch (error) {
-			this.logger.warn(
-				`DENIED 审计写入失败（不影响 403 返回）: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
+		await recordDeniedAuditBestEffort(this.auditService, this.logger, {
+			actor,
+			role: actor.role,
+			required,
+			requestId: extractRequestId(request),
+		});
 		throw new PermissionDeniedException();
 	}
 }

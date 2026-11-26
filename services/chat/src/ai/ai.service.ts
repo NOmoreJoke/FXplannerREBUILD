@@ -83,33 +83,24 @@ export class AiService {
 	}
 
 	/**
-	 * 越权与不存在统一 404（防枚举，§4）；scope 可选：读路径传入时叠加组织隔离
-	 * （会话个人所有 + 组织绑定，技术方案 §8.4），写路径不传保持原语义。
+	 * 越权与不存在统一 404（防枚举，§4）+ 组织隔离（Goal #3B W25 收口 §6.4）。
 	 *
-	 * 兼容窗口（Goal #3B W25 之前）——这里的 `organizationId IS NULL` 分支**有意不**
-	 * 锚定默认组织（区别于 compatReadWhere，评审 I-08）：建会话/追问/删除的写路径
-	 * 尚未接入组织作用域，新会话一律落 NULL。若读侧单独锚定，用户在非默认组织里
-	 * 发出的会话会在该组织中不可见、也无法打开消息。因此在 W25 完成「全部 /ai/*
-	 * 端点按 (id, userId, organizationId) 校验 + 建会话写入 organizationId」之前，
-	 * AI 会话是**个人级**资源：仅本人可见（userId 隔离不变），但不按组织分区。
+	 * 会话边界 = **本人** 且 **当前组织**：
+	 * - `userId = actor.userId`（会话个人所有，跨成员不可见）；
+	 * - 组织维度：默认组织上下文（actor.isDefaultOrganization === true）允许本人
+	 *   存量 `organizationId IS NULL` 会话（兼容窗口存量行，逻辑上属默认组织）；
+	 *   其他组织上下文**严格**等于当前组织——Org B 绝不看到 Org A 迁移前的 NULL 会话。
+	 *
+	 * 跨组织访问、成员被移出组织（DISABLED，由守卫先行 404）一律 404，无写入副作用。
 	 */
 	async assertOwned(
 		conversationId: string,
-		userId: string,
-		scope?: ReadScope,
+		scope: ReadScope,
 	): Promise<{ id: string; title: string }> {
 		const conversation = await this.prisma.aiConversation.findFirst({
 			where: {
 				id: conversationId,
-				userId,
-				...(scope
-					? {
-							OR: [
-								{ organizationId: scope.organizationId },
-								{ organizationId: null },
-							],
-						}
-					: {}),
+				AND: [{ userId: scope.userId }, this.conversationOrgWhere(scope)],
 			},
 			select: { id: true, title: true },
 		});
@@ -117,16 +108,30 @@ export class AiService {
 		return conversation;
 	}
 
+	/**
+	 * 会话的组织维度 where 片段（列表 / 详情 / 追问 / 删除共用同一口径）：
+	 * 默认组织上下文附带存量 NULL 会话分支；其他组织严格等于当前组织。
+	 */
+	private conversationOrgWhere(scope: ReadScope): {
+		OR: Array<{ organizationId: string | null }>;
+	} {
+		if (scope.isDefaultOrganization === true) {
+			return {
+				OR: [
+					{ organizationId: scope.organizationId },
+					{ organizationId: null },
+				],
+			};
+		}
+		return { OR: [{ organizationId: scope.organizationId }] };
+	}
+
 	async listConversations(scope: ReadScope, limit?: number) {
 		const effective = limit ?? 50;
 		this.assertListLimit(effective, AI_LIST_LIMIT_CAPS.conversations);
 		const rows = await this.prisma.aiConversation.findMany({
 			where: {
-				userId: scope.userId,
-				OR: [
-					{ organizationId: scope.organizationId },
-					{ organizationId: null },
-				],
+				AND: [{ userId: scope.userId }, this.conversationOrgWhere(scope)],
 			},
 			orderBy: { lastMessageAt: "desc" },
 			take: effective,
@@ -147,8 +152,8 @@ export class AiService {
 		scope: ReadScope,
 		limit?: number,
 	) {
-		// 归属校验（404 防枚举）先行于参数校验（§8.2 行 8 顺序）；叠加组织隔离
-		await this.assertOwned(conversationId, scope.userId, scope);
+		// 归属校验（404 防枚举 + 组织隔离）先行于参数校验（§8.2 行 8 顺序）
+		await this.assertOwned(conversationId, scope);
 		// DTO 默认值在 esbuild 转译的测试环境不生效，service 层兜底默认值
 		const effective = limit ?? 200;
 		this.assertListLimit(effective, AI_LIST_LIMIT_CAPS.messages);
@@ -169,8 +174,11 @@ export class AiService {
 	}
 
 	/** 物理删除（规格：删除后所有入口不可见）；流进行中 409 拒绝（§4） */
-	async deleteConversation(conversationId: string, userId: string): Promise<void> {
-		await this.assertOwned(conversationId, userId);
+	async deleteConversation(
+		conversationId: string,
+		scope: ReadScope,
+	): Promise<void> {
+		await this.assertOwned(conversationId, scope);
 		if (this.busyConversations.has(conversationId)) {
 			throw new AiConversationBusyException("会话正在回复中，请稍后再删除");
 		}
@@ -212,7 +220,7 @@ export class AiService {
 	 * 调用方必须在流结束后调 finishStream() 释放（含异常路径）。
 	 */
 	async prepareChat(params: {
-		userId: string;
+		scope: ReadScope;
 		content: string;
 		conversationId?: string;
 		modelKey?: string;
@@ -230,12 +238,12 @@ export class AiService {
 		}
 		const content = params.content.trim();
 
-		// 追问：归属校验先行（404 不消耗配额/并发额度）
+		// 追问：归属校验先行（404 不消耗配额/并发额度；含组织隔离）
 		const existing = params.conversationId
-			? await this.assertOwned(params.conversationId, params.userId)
+			? await this.assertOwned(params.conversationId, params.scope)
 			: undefined;
 
-		this.checkAndIncrQuota(params.userId);
+		this.checkAndIncrQuota(params.scope.userId);
 		if (!this.semaphore.tryAcquire()) throw new AiBusyException();
 
 		// 先标忙碌再落用户消息（无并发窗口；重复发送 409）
@@ -257,10 +265,12 @@ export class AiService {
 			if (existing) {
 				conversation = existing;
 			} else {
-				// 会话由服务端创建：title = content 前 20 字（§2 辅助决策）
+				// 会话由服务端创建：title = content 前 20 字（§2 辅助决策）；
+				// organizationId 绑定当前组织（W25：会话按组织分区，禁止再落 NULL 行）
 				conversation = await this.prisma.aiConversation.create({
 					data: {
-						userId: params.userId,
+						userId: params.scope.userId,
+						organizationId: params.scope.organizationId,
 						title: content.slice(0, AI_TITLE_MAX_LENGTH),
 					},
 					select: { id: true, title: true },

@@ -39,6 +39,7 @@ import {
 	AccountPlanAllocationListDto,
 } from "./dto/account.dto";
 import { AccountService } from "./account.service";
+import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
 
 /**
  * 外汇账户（account-module 技术方案 §4 + 阶段5 §2）：四个只读端点，全部需登录。
@@ -111,7 +112,7 @@ export class AccountController {
 			},
 		},
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("account.read")
 	async listAccounts(
 		@CurrentUser() user: User,
@@ -147,7 +148,7 @@ export class AccountController {
 		description: "该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND）",
 		type: AccountErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("account.read")
 	async getAccount(
 		@CurrentUser() user: User,
@@ -194,7 +195,7 @@ export class AccountController {
 		description: "该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND）",
 		type: AccountErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("account.read")
 	async getAllocations(
 		@CurrentUser() user: User,
@@ -234,7 +235,7 @@ export class AccountController {
 		description: "该币种未建账户，含他人账户（ACCOUNT_NOT_FOUND）",
 		type: AccountErrorDto,
 	})
-	@UseGuards(BusinessOrgScopeGuard, PermissionGuard)
+	@UseGuards(BusinessOrgScopeGuard, OrganizationLockGuard, PermissionGuard)
 	@RequiresPermission("account.read")
 	async getLedger(
 		@CurrentUser() user: User,
