@@ -18,7 +18,7 @@
 - **账号与数据**：个人（导出 ZIP+CSV / 账号注销）与当前组织（导出 / 清空 / 删除组织）物理双域拆分与双锁防护（7 自然日冷静期）
 - **组织工作台（ToB R1）**：默认个人工作台兜底迁移、多组织创建/切换与 `X-Organization-Id` 强隔离、邮件邀请与五角色 RBAC（`OWNER`/`ADMIN`/`FINANCE`/`OPERATOR`/`VIEWER`）、同事务/拒绝 `AuditLog` 只读审计
 - **汇率**：多源 Provider 抽象 + 5 分钟缓存时效，历史汇率查询，定时刷新 cron；汇率行情页与图表
-- **AI 助手**：按组织与成员归属的 ReAct Agent + 汇率查询工具（最新价/历史区间），流式输出，会话持久化；AI 模型白名单管控
+- **AI 助手与可控组织 Agent（ToB R2）**：按组织与成员归属的 ReAct Agent + 公共汇率与 4 个只读组织工具（账户/敞口/成本/待办）+ 只读预览 `draft_fx_plan` 草稿与 `/plans/new` 人工确认联动（`agentRunId` 串联 `AuditLog`），工具级实时重查双锁与 Membership 权限，支持 `AI_ORG_TOOLS_ENABLED` 独立降级；AI 模型白名单管控
 
 ## 技术栈
 
@@ -33,7 +33,7 @@ Bun + Turbo Monorepo：Next.js（App Router）前端 / NestJS + Prisma + Postgre
 │                                #   prisma schema + migrations + MIG-B/E/F & perf CLI，三层测试在 test/
 ├─ packages/money/              # 跨端共享精度计算纯函数库（15 币种小数位、汇率 8 位、Decimal 舍入规则）
 ├─ packages/                    # dev-log-server / eslint-config / typescript-config
-├─ e2e/                         # Playwright E2E（20 个 spec，107 条用例，含 15-organization 多租户 R1 全量验收）
+├─ e2e/                         # Playwright E2E（21 个 spec，112 条用例，含 15-organization R1 与 16-agent-organization R2 全量验收）
 ├─ infra/compose/               # Docker 镜像 + 生产部署编排（deploy.sh）
 ├─ changes/                     # 变更文档（需求/方案/验收，按功能分目录）——进度事实来源
 └─ docs/                        # 长期规范：VERIFY.md / FEATURE-MAP.md / ITERATION-REFACTOR-ROADMAP / handoff 交接文档
