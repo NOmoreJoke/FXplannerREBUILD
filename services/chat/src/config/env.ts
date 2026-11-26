@@ -92,6 +92,10 @@ const schema = z
 		// 全部模型密钥缺失 → 全部 AI 端点 503 AI_NOT_CONFIGURED（运行时快照检查，不 fail-fast）
 		// 总开关：false → 端点 503 AI_DISABLED（紧急止血一键关停整模块）
 		AI_CHAT_ENABLED: z.enum(["true", "false"]).default("true"),
+		// 组织 Agent 工具独立降级开关：false → 仅禁用组织账本/草稿工具，保留公共汇率对话与账本正常读写（技术方案 §15.4）
+		AI_ORG_TOOLS_ENABLED: z.enum(["true", "false"]).default("true"),
+		// 发消息限流上限（次/分钟/IP，ai.controller @Throttle；默认 5，E2E 运行时放大）
+		AI_SEND_THROTTLE_LIMIT: z.coerce.number().int().positive().optional(),
 		// 上下文窗口条数（最近 N 条历史 + 本次消息组装进 agent 输入）
 		AI_CHAT_HISTORY_WINDOW: z.coerce.number().int().positive().default(20),
 		// 进程内流式并发上限（超 → 429 AI_BUSY；集成测试设 1 以复现）
