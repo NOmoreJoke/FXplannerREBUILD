@@ -15,9 +15,10 @@
 - **更正与日志**：交易、初始持仓和使用记录更正均支持原因必填、影响预览、版本历史和账本重放（FIFO 共享内核，改小差额回未分配、改大自动补分配并留痕）。初始持仓币种更正按原时点取价。修改使用记录已于 MVP-F0-3 闭环（`T-CORR-004` 恢复，L3 待人工起服复跑）。
 - **提醒**：准备日/最晚日/逾期/使用日等七类场景，同计划同日合并、逾期不重发，可关闭
 - **报告**：计划/账户成本摘要（FIFO 分摊、费用未明确提示），初始持仓排除收益比较（占位枚举，算法定稿后填数值）
-- **账号与数据**：数据导出（ZIP+CSV，24h 下载期限）、清空业务记录、注销（7 自然日撤回期）
+- **账号与数据**：个人（导出 ZIP+CSV / 账号注销）与当前组织（导出 / 清空 / 删除组织）物理双域拆分与双锁防护（7 自然日冷静期）
+- **组织工作台（ToB R1）**：默认个人工作台兜底迁移、多组织创建/切换与 `X-Organization-Id` 强隔离、邮件邀请与五角色 RBAC（`OWNER`/`ADMIN`/`FINANCE`/`OPERATOR`/`VIEWER`）、同事务/拒绝 `AuditLog` 只读审计
 - **汇率**：多源 Provider 抽象 + 5 分钟缓存时效，历史汇率查询，定时刷新 cron；汇率行情页与图表
-- **AI 助手**：ReAct Agent + 汇率查询工具（最新价/历史区间），流式输出，会话持久化；AI 模型白名单管控
+- **AI 助手**：按组织与成员归属的 ReAct Agent + 汇率查询工具（最新价/历史区间），流式输出，会话持久化；AI 模型白名单管控
 
 ## 技术栈
 
@@ -26,16 +27,16 @@ Bun + Turbo Monorepo：Next.js（App Router）前端 / NestJS + Prisma + Postgre
 ## 目录结构（权威定义见 AGENTS.md）
 
 ```
-├─ clients/chat-web/            # Next.js 前端（登录/建账向导/首页/计划/交易/账户/更正/提醒/报告/行情/AI 助手）
-├─ services/chat/               # NestJS 后端（auth/onboarding/plan/transaction/usage/correction/
-│                                #   reminder/report/rate/ai/account/data-request/home/settings/currency）
-│                                #   prisma schema + migrations + seed，三层测试在 test/
+├─ clients/chat-web/            # Next.js 前端（登录/建账/首页/计划/交易/账户/更正/提醒/报告/组织工作台/设置/数据请求/AI 助手）
+├─ services/chat/               # NestJS 后端（auth/organization/authorization/audit/onboarding/plan/transaction/usage/
+│                                #   correction/reminder/report/rate/ai/account/data-request/home/settings/currency）
+│                                #   prisma schema + migrations + MIG-B/E/F & perf CLI，三层测试在 test/
 ├─ packages/money/              # 跨端共享精度计算纯函数库（15 币种小数位、汇率 8 位、Decimal 舍入规则）
 ├─ packages/                    # dev-log-server / eslint-config / typescript-config
-├─ e2e/                         # Playwright E2E（17 个 spec，含 07-plan-lifecycle 生命周期）+ run-e2e-tests.sh 统一编排
+├─ e2e/                         # Playwright E2E（20 个 spec，107 条用例，含 15-organization 多租户 R1 全量验收）
 ├─ infra/compose/               # Docker 镜像 + 生产部署编排（deploy.sh）
 ├─ changes/                     # 变更文档（需求/方案/验收，按功能分目录）——进度事实来源
-└─ docs/                        # 长期规范：MVP 功能模块与业务逻辑（15 份）+ 开发计划（含 2026-11-03 审计勾选）
+└─ docs/                        # 长期规范：VERIFY.md / FEATURE-MAP.md / ITERATION-REFACTOR-ROADMAP / handoff 交接文档
 ```
 
 ## 快速开始

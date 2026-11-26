@@ -101,7 +101,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 ├─ infra/compose/                   # Docker Compose + Dockerfile
 ├─ scripts/                         # 工程脚本（init / test / worktree / check-structure / check-org-scope / lint-observe）+ __tests__/（bun test：工具链与跨包一致性对照）
 ├─ changes/                         # ⛔ 变更文档唯一位置（需求/方案/验收），按功能名称分目录
-│  ├─ tob-agent-workspace/          # ToB 组织工作台与 Agent 需求和技术方案
+│  ├─ tob-agent-workspace/          # ToB 组织工作台与 Agent 需求、技术方案与 R1 验收记录（验收记录.md）
 │  └─ realtime-rate/                # MVP-F0 汇率回补与缓存迁移实施底稿（Goal #1 任务 B/C 执行口径）
 ├─ docs/                            # 长期规范文档
 │  ├─ VERIFY.md                     # 验证驱动、属性/差分测试与 Diff 触发防回归规范
