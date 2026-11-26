@@ -26,7 +26,7 @@ export function ChatWorkspace() {
 	const deleteMutation = useDeleteConversation();
 	const chat = useChat();
 	const streamingIds = useChatStore((s) => s.streamingIds);
-	const { data: currentOrg } = useCurrentOrganization();
+	const { data: currentOrg, isError: orgError } = useCurrentOrganization();
 	const { can, isLoading: capabilitiesLoading } = useOrganizationCapabilities();
 	const { data: modelsData } = useModels();
 
@@ -55,13 +55,17 @@ export function ChatWorkspace() {
 	const orgToolsStatusText =
 		modelsData?.orgToolsEnabled === false
 			? "组织工具已临时关闭（仅公共汇率可用）"
-			: !currentOrg || capabilitiesLoading
-				? "组织工具检查中…"
-				: !currentOrg.onboardingCompleted
-					? "当前组织未建账（可查公共汇率）"
-					: can("agent.draft")
-						? "组织只读与草稿工具已就绪"
-						: "组织只读工具已就绪（无草稿保存权限）";
+			: orgError
+				? "组织上下文加载失败"
+				: !currentOrg || capabilitiesLoading
+					? "组织工具检查中…"
+					: !currentOrg.onboardingCompleted
+						? "当前组织未建账（可查公共汇率）"
+						: can("agent.draft")
+							? "组织只读与草稿工具已就绪"
+							: can("agent.business_read")
+								? "组织只读工具已就绪（无草稿保存权限）"
+								: "当前角色仅可用公共汇率查询";
 
 	return (
 		<div data-testid="chat-page" className="flex h-[calc(100dvh-3.5rem)]">

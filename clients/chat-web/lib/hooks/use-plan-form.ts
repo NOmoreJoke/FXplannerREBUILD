@@ -182,10 +182,12 @@ export interface ParsedPlanDraftQuery {
 
 /**
  * 解析来自 AI 计划草稿卡片的 URL 查询参数（ToB R2 P8）。
+ * 严格校验 sourceOrgId === activeOrgId（防止在 /plans/new 切换组织后旧组织草稿参数及 agentRunId 串入新组织）；
  * 所有参数做格式与白名单校验，非法值安全忽略，不影响页面正常填表。
  */
 export function parsePlanDraftQuery(
 	params: Pick<URLSearchParams, "get"> | Record<string, string | undefined>,
+	activeOrgId?: string | null,
 ): ParsedPlanDraftQuery {
 	const readParam = (key: string): string | undefined => {
 		if (typeof (params as Pick<URLSearchParams, "get">).get === "function") {
@@ -196,7 +198,8 @@ export function parsePlanDraftQuery(
 	};
 
 	const fromDraft = readParam("fromDraft") === "1";
-	if (!fromDraft) {
+	const sourceOrgId = readParam("sourceOrgId")?.trim();
+	if (!fromDraft || !sourceOrgId || !activeOrgId || sourceOrgId !== activeOrgId) {
 		return { fromDraft: false, agentRunId: null, initialValues: {} };
 	}
 

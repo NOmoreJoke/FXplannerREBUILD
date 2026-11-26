@@ -71,9 +71,10 @@ export default function NewPlanPage() {
 
 function NewPlanFormWithDraft() {
 	const searchParams = useSearchParams();
+	const activeOrgId = useActiveOrgId();
 	const draftContext = useMemo(
-		() => parsePlanDraftQuery(searchParams),
-		[searchParams],
+		() => parsePlanDraftQuery(searchParams, activeOrgId),
+		[searchParams, activeOrgId],
 	);
 	// 草稿参数或无草稿模式切换时按 key 重新挂载受控初始态（无需额外 useEffect 同步）
 	const formKey = draftContext.fromDraft

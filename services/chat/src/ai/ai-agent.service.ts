@@ -187,6 +187,7 @@ export class AiAgentService {
 					break;
 			}
 		}
+		if (params.signal.aborted) return;
 		while (pendingDrafts.length > 0) {
 			const draft = pendingDrafts.shift()!;
 			yield { type: "draft", draft };

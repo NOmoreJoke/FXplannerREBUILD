@@ -6,6 +6,7 @@ import { ArrowRight, FileCheck2 } from "lucide-react";
 import { PermissionHint } from "@/components/base";
 import { Button } from "@/components/ui/button";
 import type { AiPlanDraft } from "@/lib/api/chat";
+import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 
 const PACE_LABELS: Record<AiPlanDraft["pacePreference"], string> = {
@@ -14,7 +15,10 @@ const PACE_LABELS: Record<AiPlanDraft["pacePreference"], string> = {
 	aggressive: "主动 · 首批 20%",
 };
 
-function buildConfirmHref(draft: AiPlanDraft): string {
+function buildConfirmHref(
+	draft: AiPlanDraft,
+	sourceOrgId: string | null,
+): string {
 	const params = new URLSearchParams({
 		fromDraft: "1",
 		agentRunId: draft.agentRunId,
@@ -25,6 +29,9 @@ function buildConfirmHref(draft: AiPlanDraft): string {
 		pacePreference: draft.pacePreference,
 		allocatedAmount: draft.allocatedAmount,
 	});
+	if (sourceOrgId) {
+		params.set("sourceOrgId", sourceOrgId);
+	}
 	if (draft.name) {
 		params.set("name", draft.name);
 	}
@@ -45,6 +52,7 @@ export interface PlanDraftCardProps {
  *   无权限（如 Viewer）仅渲染 PermissionHint 只读说明。
  */
 export function PlanDraftCard({ draft }: PlanDraftCardProps) {
+	const activeOrgId = useActiveOrgId();
 	const { can, isLoading } = useOrganizationCapabilities();
 	const [dismissed, setDismissed] = useState(false);
 
@@ -134,7 +142,7 @@ export function PlanDraftCard({ draft }: PlanDraftCardProps) {
 							asChild
 						>
 							<Link
-								href={buildConfirmHref(draft)}
+								href={buildConfirmHref(draft, activeOrgId)}
 								data-testid="plan-draft-confirm-link"
 							>
 								<span>去确认并保存</span>
