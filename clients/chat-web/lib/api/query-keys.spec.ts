@@ -84,14 +84,29 @@ describe("queryKeys factory", () => {
 		]);
 		expect(queryKeys.reminders.list()).toEqual(["reminders", "list"]);
 		expect(queryKeys.settings.detail()).toEqual(["settings"]);
+		// W28：个人展示偏好用独立词根（不随组织设置失效、切换组织时保留）
+		expect(queryKeys.settings.personal()).toEqual(["personal-settings"]);
 		expect(queryKeys.reports.plans()).toEqual(["reports", "plans", "all", "all"]);
 		expect(queryKeys.reports.plan("plan-1")).toEqual([
 			"reports",
 			"plan",
 			"plan-1",
 		]);
-		expect(queryKeys.dataRequests.current()).toEqual(["data-request", "current"]);
-		expect(queryKeys.dataRequests.impact()).toEqual(["data-request", "impact"]);
+		// W28：数据请求双域键——个人域不加组织前缀，组织域经 withOrgScope 分桶
+		expect(queryKeys.dataRequests.personalCurrent()).toEqual([
+			"personal-data-request",
+			"current",
+		]);
+		expect(queryKeys.dataRequests.organizationCurrent()).toEqual([
+			"data-request",
+			"organization",
+			"current",
+		]);
+		expect(queryKeys.dataRequests.organizationImpact()).toEqual([
+			"data-request",
+			"organization",
+			"impact",
+		]);
 		expect(queryKeys.ai.conversations()).toEqual(["ai", "conversations"]);
 		expect(queryKeys.ai.messages("conv-1")).toEqual(["ai", "messages", "conv-1"]);
 		expect(queryKeys.ai.models()).toEqual(["ai", "models"]);
@@ -197,15 +212,84 @@ describe("组织感知失效：同时命中无前缀键与任意组织前缀键"
 		}
 	});
 
-	it("invalidateAfterDataRequestMutation：数据请求域全形态失效", () => {
+	it("invalidateAfterDataRequestMutation：个人域 + 组织域（任意组织前缀）+ 组织锁摘要所在的组织详情全部失效", () => {
 		const keys: QueryKey[] = [
-			queryKeys.dataRequests.current(),
-			queryKeys.dataRequests.impact(),
-			withOrgScope("org-a", queryKeys.dataRequests.current()),
+			queryKeys.dataRequests.personalCurrent(),
+			queryKeys.dataRequests.organizationCurrent(),
+			queryKeys.dataRequests.organizationImpact(),
+			withOrgScope("org-a", queryKeys.dataRequests.organizationCurrent()),
+			withOrgScope("org-b", queryKeys.dataRequests.organizationImpact()),
+			// 组织锁摘要随请求状态变化：详情不回读，各页面的锁门控就不会切换
+			queryKeys.organizations.current("org-a"),
 		];
 		const qc = seedAndRun(keys, invalidateAfterDataRequestMutation);
 		for (const key of keys) {
-			expect(isInvalidated(qc, key)).toBe(true);
+			expect(isInvalidated(qc, key), `应失效：${JSON.stringify(key)}`).toBe(true);
+		}
+	});
+
+	it("invalidateAfterDataRequestMutation 不波及无关缓存：公共汇率、组织列表、组织设置、个人设置", () => {
+		const unrelated: QueryKey[] = [
+			queryKeys.rates.supported(),
+			queryKeys.organizations.list(),
+			queryKeys.settings.detail(),
+			withOrgScope("org-a", queryKeys.settings.detail()),
+			queryKeys.settings.personal(),
+		];
+		const qc = seedAndRun(
+			[...unrelated, queryKeys.dataRequests.personalCurrent()],
+			invalidateAfterDataRequestMutation,
+		);
+		for (const key of unrelated) {
+			expect(isInvalidated(qc, key), `不应失效：${JSON.stringify(key)}`).toBe(false);
+		}
+	});
+
+	it("个人设置键不以 settings 开头：失效组织设置不连带失效个人设置（个人偏好与组织无关）", () => {
+		// 前缀匹配是 invalidateBusinessKey 的命中方式——键形若是 ["settings","personal"] 就会被连带
+		expect(
+			matchesBusinessKey(queryKeys.settings.personal(), queryKeys.settings.all),
+		).toBe(false);
+		expect(
+			matchesBusinessKey(
+				withOrgScope("org-a", queryKeys.settings.personal()),
+				queryKeys.settings.all,
+			),
+		).toBe(false);
+
+		const qc = seedAndRun(
+			[
+				queryKeys.settings.personal(),
+				queryKeys.settings.detail(),
+				withOrgScope("org-a", queryKeys.settings.detail()),
+			],
+			(client) => invalidateBusinessKey(client, queryKeys.settings.all),
+		);
+		expect(isInvalidated(qc, queryKeys.settings.personal())).toBe(false);
+		expect(isInvalidated(qc, queryKeys.settings.detail())).toBe(true);
+		expect(
+			isInvalidated(qc, withOrgScope("org-a", queryKeys.settings.detail())),
+		).toBe(true);
+
+		// 建账后的统一失效同样只动组织设置
+		const afterOnboarding = seedAndRun(
+			[queryKeys.settings.personal(), queryKeys.settings.detail()],
+			invalidateAfterOnboarding,
+		);
+		expect(isInvalidated(afterOnboarding, queryKeys.settings.personal())).toBe(false);
+		expect(isInvalidated(afterOnboarding, queryKeys.settings.detail())).toBe(true);
+	});
+
+	it("个人数据请求键与组织数据请求键互不构成前缀：任一域的失效都波及不到另一域", () => {
+		const personal = queryKeys.dataRequests.personalCurrent();
+		const organization = [
+			queryKeys.dataRequests.organizationCurrent(),
+			queryKeys.dataRequests.organizationImpact(),
+			withOrgScope("org-a", queryKeys.dataRequests.organizationCurrent()),
+		];
+		for (const key of organization) {
+			expect(matchesBusinessKey(personal, key), JSON.stringify(key)).toBe(false);
+			expect(matchesBusinessKey(key, personal), JSON.stringify(key)).toBe(false);
 		}
 	});
 
@@ -267,6 +351,9 @@ describe("ToB W20：组织作用域键与切换清理", () => {
 			withOrgScope("org-a", queryKeys.home.state()),
 			withOrgScope("org-z", queryKeys.plans.list()),
 			withOrgScope("org-a", queryKeys.ai.messages("conv-1")),
+			// 组织域数据请求：带组织前缀，随组织清除
+			withOrgScope("org-a", queryKeys.dataRequests.organizationCurrent()),
+			withOrgScope("org-z", queryKeys.dataRequests.organizationImpact()),
 			// 组织详情（任意组织的分桶键）
 			queryKeys.organizations.current("org-a"),
 		];
@@ -275,6 +362,9 @@ describe("ToB W20：组织作用域键与切换清理", () => {
 			queryKeys.auth.me(),
 			queryKeys.organizations.list(),
 			queryKeys.ai.models(),
+			// 与组织无关的个人数据（W28）：切换组织不得清掉个人进度与个人偏好
+			queryKeys.dataRequests.personalCurrent(),
+			queryKeys.settings.personal(),
 		];
 		for (const key of [...removed, ...kept]) {
 			qc.setQueryData(key, { v: 1 });
@@ -303,6 +393,12 @@ describe("ToB W20：组织作用域键与切换清理", () => {
 		expect(matches(withOrgScope("org-a", queryKeys.home.state()))).toBe(true);
 		expect(matches(queryKeys.home.state())).toBe(true);
 		expect(matches(queryKeys.organizations.current("org-a"))).toBe(true);
+		expect(
+			matches(withOrgScope("org-a", queryKeys.dataRequests.organizationCurrent())),
+		).toBe(true);
+		// 个人域请求不随组织取消：它根本不带组织头
+		expect(matches(queryKeys.dataRequests.personalCurrent())).toBe(false);
+		expect(matches(queryKeys.settings.personal())).toBe(false);
 		expect(matches(queryKeys.rates.supported())).toBe(false);
 		expect(matches(queryKeys.auth.me())).toBe(false);
 		expect(matches(queryKeys.organizations.list())).toBe(false);

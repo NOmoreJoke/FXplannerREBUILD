@@ -1,18 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
 import { BellOff, CircleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ReminderCard } from "@/components/business/reminder";
-import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
-import { settingsApi } from "@/lib/api/settings";
-import { useActiveOrgId } from "@/lib/hooks/use-active-org";
+import { DATA_REQUESTS_PAGE_PATH } from "@/lib/api/client";
 import {
 	useMarkAllRemindersRead,
 	useReminders,
 } from "@/lib/hooks/use-reminders";
+import { useOrganizationSettings } from "@/lib/hooks/use-organization-settings";
 
 /**
  * 提醒中心页（reminders 技术方案 §8；需求 §7.2）。
@@ -22,25 +20,24 @@ import {
  * - 「全部标为已读」仅在有未读时显示；
  * - 空态「暂无提醒」；开关关闭显示关闭说明与设置入口（settings 查询失败按开启态
  *   降级为普通列表，不误报「已关闭」）；
- * - GET 失败（401 已由 apiClient 统一处理）→ 整页错误态 + 重试。
+ * - GET 失败（401 已由 apiClient 统一处理）→ 整页错误态 + 重试；
+ * - 组织未建账 / 组织删除处理中（账本查询闸门未放行）：不发任何设置与提醒请求，
+ *   如实提示原因——未建账时这两个请求必然 409（查询降噪，Goal #3B W28）。
  */
 export default function RemindersPage() {
 	const markAllRead = useMarkAllRemindersRead();
-	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
-	const orgId = useActiveOrgId();
-	const settingsQuery = useQuery({
-		queryKey: withOrgScope(orgId, queryKeys.settings.detail()),
-		queryFn: settingsApi.getSettings,
-		enabled: orgId !== null,
-		retry: false,
-	});
+	const settings = useOrganizationSettings();
 
-	const reminderEnabled = settingsQuery.data?.reminderEnabled === true;
-	const settingsLoading = settingsQuery.isPending;
-	// settings 查询失败（含未建账 409）→ 按开启态降级，不误报「已关闭」
-	const reminderDisabled = settingsQuery.data ? !reminderEnabled : false;
+	const reminderEnabled = settings.data?.reminderEnabled === true;
+	const settingsLoading = settings.isLoading || settings.gate === "loading";
+	// 闸门未放行的两种「有明确原因」状态（未建账 / 组织删除锁），与「加载失败」区分开
+	const deletionLocked = settings.gate === "deletion-locked";
+	const gateBlocked = deletionLocked || settings.gate === "not-onboarded";
+	// settings 查询失败（闸门放行但没拿到数据）→ 按开启态降级，不误报「已关闭」
+	const reminderDisabled = settings.data ? !reminderEnabled : false;
 	const { items, unreadCount, isLoading, isError, refetch } = useReminders({
-		enabled: !settingsLoading && !reminderDisabled,
+		enabled:
+			settings.gate === "ready" && !settingsLoading && !reminderDisabled,
 	});
 
 	return (
@@ -66,7 +63,30 @@ export default function RemindersPage() {
 				)}
 			</header>
 
-			{settingsLoading || isLoading ? (
+			{gateBlocked ? (
+				<div
+					data-testid="reminders-gate-blocked"
+					className="rounded-2xl border border-dashed border-border bg-white px-8 py-14 text-center"
+				>
+					<BellOff className="mx-auto size-8 text-cream-300" />
+					<h2 className="mt-4 text-base font-bold text-foreground">
+						{deletionLocked ? "组织正在删除处理中" : "当前组织尚未完成建账"}
+					</h2>
+					<p className="mt-2 text-sm text-muted-foreground">
+						{deletionLocked
+							? "账本数据暂不可查看，可在数据请求进度页查看处理状态或撤回。"
+							: "完成建账后，到了准备日或使用日，提醒会出现在这里。"}
+					</p>
+					{deletionLocked && (
+						<Button
+							className="mt-6 bg-mint-700 text-white hover:bg-mint-700/90"
+							asChild
+						>
+							<Link href={DATA_REQUESTS_PAGE_PATH}>查看处理进度</Link>
+						</Button>
+					)}
+				</div>
+			) : settingsLoading || isLoading ? (
 				<div className="space-y-3">
 					<Skeleton className="h-24 w-full rounded-xl" />
 					<Skeleton className="h-24 w-full rounded-xl" />

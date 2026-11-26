@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { transactionsApi } from "@/lib/api/transactions";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 
 /**
  * 交易详情页（changes/transaction-entry/技术方案.md §5.2）
@@ -18,10 +19,12 @@ import { useActiveOrgId } from "@/lib/hooks/use-active-org";
  * 瘦壳：按路由 id 查询 GET /transactions/:id 并挂详情卡。
  * 404（不存在或不属于本人，不泄露存在性）→ 整页提示态；
  * 认证守卫在 (protected)/layout.tsx（勿在此重复）。
+ * 「再记一笔」入口按 transaction.create 能力显隐（后端仍强制校验）。
  */
 export default function TransactionDetailPage() {
 	const params = useParams<{ id: string }>();
 	const id = params?.id;
+	const { can } = useOrganizationCapabilities();
 	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
 	const orgId = useActiveOrgId();
 
@@ -78,12 +81,14 @@ export default function TransactionDetailPage() {
 		<div className="mx-auto max-w-3xl px-8 py-6">
 			<header className="mb-6 flex items-center justify-between">
 				<h1 className="text-xl font-bold text-foreground">交易详情</h1>
-				<Link
-					href="/transactions/new"
-					className="text-sm text-mint-700 hover:underline"
-				>
-					再记一笔
-				</Link>
+				{can("transaction.create") ? (
+					<Link
+						href="/transactions/new"
+						className="text-sm text-mint-700 hover:underline"
+					>
+						再记一笔
+					</Link>
+				) : null}
 			</header>
 			<TransactionDetail detail={query.data} />
 		</div>

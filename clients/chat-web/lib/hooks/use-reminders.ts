@@ -1,11 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { onboardingApi } from "@/lib/api/onboarding";
 import { remindersApi } from "@/lib/api/reminders";
 import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
-import { settingsApi } from "@/lib/api/settings";
 import type { ReminderItem } from "@/lib/api/contract";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
-import { isOrglessRouteAllowed } from "@/lib/hooks/use-organizations";
+import {
+	isOrglessRouteAllowed,
+	matchesRouteSegment,
+} from "@/lib/hooks/use-organizations";
+import { useLedgerQueryGate } from "@/lib/hooks/use-organization-capabilities";
+import { useOrganizationSettings } from "@/lib/hooks/use-organization-settings";
 import { useOrganizationStore } from "@/lib/stores/organization-store";
 
 /**
@@ -14,6 +17,11 @@ import { useOrganizationStore } from "@/lib/stores/organization-store";
  * staleTime 30s：首页铃铛/今日提醒区/提醒中心页共享同一 Key 缓存，
  * 避免同一次会话内重复触发生成（读时懒生成的入口即本查询）；
  * 已读 mutation 成功后 invalidateQueries 精确刷新。
+ *
+ * 查询降噪（技术方案 §10.3、DEBT-06；Goal #3B W28）：GET /reminders 内置懒生成且
+ * 依赖已建账的组织账本，未建账必然 409。请求受账本查询闸门（useLedgerQueryGate）
+ * 约束——未选组织 / 组织详情未返回 / 未建账 / 组织删除处理中一律不发，
+ * 所有消费方（铃铛、首页提醒区、提醒中心）经 useReminders 自动获得这道门控。
  */
 
 /** 提醒列表查询 Key（[domain, action] 约定） */
@@ -28,7 +36,10 @@ function remindersScopedKey(): readonly unknown[] {
 }
 
 export interface UseRemindersOptions {
-	/** 是否允许触发查询（未建账 / 数据锁路由 / 提醒关闭时传 false 避免无效请求） */
+	/**
+	 * 是否允许触发查询（调用方的业务条件，如提醒开关关闭、路由豁免时传 false）。
+	 * 与账本查询闸门是「与」的关系：两者同时为真才发请求。
+	 */
 	enabled?: boolean;
 }
 
@@ -37,9 +48,9 @@ export interface UseRemindersResult {
 	items: ReminderItem[];
 	/** 未读数（未读且事项成立且计划进行中的行数） */
 	unreadCount: number;
-	/** 首次请求进行中 */
+	/** 首次请求进行中（闸门未放行时为 false——不是加载中，是不该发） */
 	isLoading: boolean;
-	/** 请求失败（401 由 apiClient 统一跳登录；409/其余交给消费方静默或错误态） */
+	/** 请求失败（401 由 apiClient 统一跳登录；其余交给消费方静默或错误态） */
 	isError: boolean;
 	/** 重试 */
 	refetch: () => void;
@@ -50,12 +61,13 @@ export function useReminders(
 	options?: UseRemindersOptions,
 ): UseRemindersResult {
 	const enabled = options?.enabled ?? true;
-	// ToB W20：组织作用域缓存键 + 未选组织不发业务请求
+	// 组织作用域缓存键 + 账本查询闸门（未选组织 / 未建账 / 组织删除锁不发请求）
 	const orgId = useActiveOrgId();
+	const gate = useLedgerQueryGate();
 	const query = useQuery({
 		queryKey: withOrgScope(orgId, REMINDERS_QUERY_KEY),
 		queryFn: remindersApi.list,
-		enabled: enabled && orgId !== null,
+		enabled: enabled && gate === "ready",
 		staleTime: 30 * 1000, // 容忍秒级陈旧；写操作后由已读 mutation invalidate 精确刷新
 		retry: false, // 401 由 apiClient 统一处理；消费方（首页区块）静默降级
 	});
@@ -99,16 +111,12 @@ export function useMarkAllRemindersRead() {
 }
 
 /**
- * 受控拦截路由：这些路由上顶栏提醒铃铛禁止触发任何业务请求。
+ * 受控拦截路由：这些路由上顶栏提醒铃铛禁止触发任何设置 / 提醒请求。
  * - /onboarding、/data-requests：建账向导与数据权利进度页本身是拦截态；
  * - /invitations（评审 I-18）：受邀者可能尚无组织、或多组织但未选择——铃铛的
- *   onboarding/settings/reminders 请求会收到 400 ORGANIZATION_REQUIRED，
+ *   settings/reminders 请求会收到 400 ORGANIZATION_REQUIRED，
  *   此前会把人从邀请页重定向走，邀请流程对新用户直接断掉。
  */
-function matchesRouteSegment(path: string, prefix: string): boolean {
-	return path === prefix || path.startsWith(`${prefix}/`);
-}
-
 export function isReminderBypassRoute(pathname: string | null | undefined): boolean {
 	if (!pathname) return false;
 	const path = pathname.split(/[?#]/, 1)[0] ?? "";
@@ -121,40 +129,27 @@ export function isReminderBypassRoute(pathname: string | null | undefined): bool
 
 /**
  * 顶栏提醒门控（F1-3 / DEBT-06）：
- * - /onboarding 与 /data-requests 路由直接静默跳过所有请求（0 409 / 0 403）；
- * - 其余路由先读取无 409 的 onboarding/status，仅 completed=true 时请求 /settings；
- * - 仅 completed=true 且 reminderEnabled=true 时请求 /reminders。
+ * - 拦截路由直接跳过所有请求（0 409 / 0 403）；
+ * - 其余路由先等账本查询闸门放行（当前组织已建账且未处于组织删除锁，依据是当前
+ *   组织详情的 onboardingCompleted / dataRequestLock），仅此时请求 /settings；
+ * - 仅 reminderEnabled=true 时请求 /reminders。
  */
 export function useReminderGate(pathname: string | null | undefined) {
 	const isBypassed = isReminderBypassRoute(pathname);
-	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07 / R2-I10）
-	const orgId = useActiveOrgId();
-
-	const onboardingStatusQuery = useQuery({
-		queryKey: withOrgScope(orgId, queryKeys.onboarding.status()),
-		queryFn: onboardingApi.getStatus,
-		enabled: !isBypassed && orgId !== null,
-		staleTime: 5 * 60 * 1000,
-		retry: false,
-	});
-	const isOnboarded = onboardingStatusQuery.data?.completed === true;
-
-	const settingsQuery = useQuery({
-		queryKey: withOrgScope(orgId, queryKeys.settings.detail()),
-		queryFn: settingsApi.getSettings,
-		enabled: !isBypassed && orgId !== null && isOnboarded,
-		retry: false,
-	});
-	const reminderEnabled = settingsQuery.data?.reminderEnabled === true;
+	const settings = useOrganizationSettings({ enabled: !isBypassed });
+	const reminderEnabled = settings.data?.reminderEnabled === true;
 
 	const reminders = useReminders({
-		enabled: !isBypassed && isOnboarded && reminderEnabled,
+		enabled: !isBypassed && reminderEnabled,
 	});
 
 	return {
+		/** 本路由豁免：不发起任何设置 / 提醒请求 */
 		isBypassed,
-		isOnboarded,
-		settingsQuery,
+		/** 账本查询闸门当前状态 */
+		gate: settings.gate,
+		/** 铃铛可展示：闸门放行（已建账且未处于组织删除锁） */
+		isOpen: settings.gate === "ready",
 		reminderEnabled,
 		...reminders,
 	};

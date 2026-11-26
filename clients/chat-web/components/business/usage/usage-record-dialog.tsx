@@ -8,6 +8,7 @@ import { ApiError } from "@/lib/api/client";
 import type { PlanDetail } from "@/lib/api/contract";
 import { utc8TodayYmd } from "@/lib/hooks/use-transaction-form";
 import { invalidateAfterLedgerMutation } from "@/lib/api/query-keys";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -28,6 +29,9 @@ import { Label } from "@/components/ui/label";
  * 不扣减任何金额（需求 §6.1）。409 分配不足时内联展示当前剩余
  * （data.remainingAllocation）。确认按钮 pending 置为处理中，处理期间
  * 不能再次提交（需求 §7 重复操作）。
+ *
+ * 能力门控（Goal #3B W28）：提交需 usage.create。入口按钮已在计划详情页按能力显隐，
+ * 这里是第二道：无权时禁用提交并说明原因，不发必然 403 的请求（后端仍强制校验）。
  */
 
 /** 金额校验（与后端 INVALID_USAGE_PARAMS 口径一致的前端预检） */
@@ -87,6 +91,8 @@ export function UsageRecordDialog({
 	onSuccess,
 }: UsageRecordDialogProps) {
 	const queryClient = useQueryClient();
+	const { can } = useOrganizationCapabilities();
+	const canRecord = can("usage.create");
 	const [amount, setAmount] = useState("");
 	const [usedAt, setUsedAt] = useState(utc8TodayYmd());
 	const [remark, setRemark] = useState("");
@@ -279,6 +285,15 @@ export function UsageRecordDialog({
 				</div>
 
 				<DialogFooter>
+					{!canRecord && (
+						<p
+							role="alert"
+							data-testid="usage-record-no-permission"
+							className="flex-1 text-xs leading-5 text-muted-foreground"
+						>
+							当前角色无权记录资金使用，请联系组织所有者、管理员或财务。
+						</p>
+					)}
 					<Button
 						variant="outline"
 						className="bg-white"
@@ -292,7 +307,7 @@ export function UsageRecordDialog({
 					</Button>
 					<Button
 						className="bg-mint-700 text-white hover:bg-mint-700/90"
-						disabled={mutation.isPending}
+						disabled={mutation.isPending || !canRecord}
 						onClick={handleSubmit}
 					>
 						{mutation.isPending ? "记录中…" : "确认记录"}

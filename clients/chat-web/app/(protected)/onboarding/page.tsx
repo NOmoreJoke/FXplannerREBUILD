@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { CircleAlert } from "lucide-react";
@@ -18,7 +19,8 @@ import {
 } from "@/lib/api/query-keys";
 import { ApiError } from "@/lib/api/client";
 import { safeRedirectPath } from "@/lib/auth/safe-redirect-path";
-import { PageLoading } from "@/components/base";
+import { PageLoading, PermissionNotice } from "@/components/base";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 import type { InitialHoldingItem } from "@/lib/api/contract";
 
 /**
@@ -34,13 +36,52 @@ import type { InitialHoldingItem } from "@/lib/api/contract";
  * 向导无草稿（规格 2.3-2）：状态全部在内存，中断即丢弃、无任何持久化。
  * 改本位币重核（需求场景 3）：返回第一步改币后再进第二步，金额保留、
  * 核对区按新本位币重新取价（wizard-step-holdings 取价签名含 baseCurrency）。
+ *
+ * 能力门控（Goal #3B W28）：完成建账与补录初始持仓都需 settings.update
+ * （后端 @RequiresPermission 强制）。无权角色（Finance / Operator / Viewer）看到的是
+ * 只读提示，向导根本不挂载——否则一挂载就去查状态、取报价，对一个注定 403 的用户
+ * 毫无意义。组织详情未返回前先加载，不闪现向导再收回。
  */
 export default function OnboardingPage() {
 	// useSearchParams 需要 Suspense 边界（Next.js App Router 要求）
 	return (
 		<Suspense fallback={<PageLoading />}>
-			<OnboardingWizard />
+			<OnboardingGate />
 		</Suspense>
+	);
+}
+
+/** 建账权限闸门：有 settings.update 才挂载向导 */
+function OnboardingGate() {
+	const { can, isLoading, onboardingCompleted } = useOrganizationCapabilities();
+
+	if (isLoading) {
+		return <PageLoading />;
+	}
+
+	if (can("settings.update")) {
+		return <OnboardingWizard />;
+	}
+
+	return (
+		<PermissionNotice
+			testId="onboarding-no-permission"
+			title="当前角色无权完成建账"
+			description="当前角色无权完成建账或补录初始持仓，请联系组织所有者或管理员。"
+			action={
+				// 组织已建账：回首页即可；尚未建账：首页会再次分流回本页，改为去成员页
+				// 找到所有者 / 管理员（那里也能看到自己该联系谁）
+				onboardingCompleted ? (
+					<Button variant="outline" className="bg-white" asChild>
+						<Link href="/home">返回首页</Link>
+					</Button>
+				) : (
+					<Button variant="outline" className="bg-white" asChild>
+						<Link href="/organization/members">前往组织成员页</Link>
+					</Button>
+				)
+			}
+		/>
 	);
 }
 

@@ -26,6 +26,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │     ├─ corrections/            #     更正与日志（new/ 更正页，targetType/targetId 由查询参数进入）
 │  │     ├─ organization/           #     ToB R1：组织信息/成员与邀请/审计分页
 │  │     ├─ invitations/[token]/    #     ToB R1：受邀摘要与接受/拒绝（登录后回跳）
+│  │     ├─ data-requests/          #     数据请求进度页（个人 + 当前组织双域分区；不依赖组织上下文的豁免路由）
 │  │     └─ projects/               #     示例业务页
 │  ├─ components/
 │  │  ├─ ui/                        # shadcn 原语
@@ -33,7 +34,8 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  └─ business/<domain>/         # 业务组件（按领域分目录）
 │  ├─ hooks/                        # 自定义 hooks
 │  ├─ lib/
-│  │  ├─ api/                       # 后端 API 客户端
+│  │  ├─ api/                       # 后端 API 客户端（个人域请求带 skipOrganizationScope，不注入组织头）
+│  │  ├─ hooks/                     # 数据 hooks（组织上下文 / 权限消费 / 查询闸门；页面与组件不裸写 useEffect）
 │  │  ├─ auth/                      # 会话上下文重置、回跳地址白名单与跳转、token cookie
 │  │  ├─ dev-log/                   # 本地开发错误采集（@sentry/browser → dev-log-server）
 │  │  ├─ stores/                    # zustand 状态
@@ -144,8 +146,17 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | 组织工作台前端页面 | `clients/chat-web/app/(protected)/organization/`（信息/成员/审计）、`clients/chat-web/app/(protected)/invitations/[token]/` |
 | 组织/审计业务组件 | `clients/chat-web/components/business/{organization,audit}/`，带 index.ts 桶文件 |
 | 组织上下文前端状态 | `clients/chat-web/lib/stores/organization-store.ts`（仅存 `activeOrganizationId`，严禁持久化 role/capabilities） |
-| 组织数据的查询作用域 | 键一律 `withOrgScope(orgId, …)` 且 `enabled: orgId !== null`（`useActiveOrgId()`）；失效走 `invalidateBusinessKey`；受保护区业务区整体包在 `OrganizationScopeBoundary` 内（切组织按 key 重新挂载——`removeQueries` 不通知挂载态的观察者，单靠清缓存页面会冻结在旧组织数据） |
-| 不依赖组织上下文的受保护路由 | `isOrglessRouteAllowed`（`clients/chat-web/lib/hooks/use-organizations.ts`）：路由分流免检、业务区边界传 `bypass` 不重挂载，两处共用同一判定；这类页面自己切换组织，重挂载会清掉页面内的结果态 |
+| 组织数据的查询作用域 | 键一律 `withOrgScope(orgId, …)` 且 `enabled: orgId !== null`（`useActiveOrgId()`）；失效走 `invalidateBusinessKey`；受保护区业务区整体包在 `OrganizationScopeBoundary` 内（切组织按 key 重新挂载——`removeQueries` 不通知挂载态的观察者，单靠清缓存页面会冻结在旧组织数据）。账本类 GET（`/settings`、`/reminders`、`/home/*`）另受账本查询闸门约束（见「账本查询闸门」行） |
+| 不依赖组织上下文的受保护路由 | `isOrglessRouteAllowed`（`clients/chat-web/lib/hooks/use-organizations.ts`）：路由分流免检、业务区边界传 `bypass` 不重挂载，两处共用同一判定；`/invitations/*` 自己切换组织、重挂载会清掉页面内的结果态；`/data-requests` 承载**个人域**进度，0 组织 / 多组织未选 / 账号注销锁定的用户都必须进得去（403 账号锁的跳转目的地，页内组织分区自行按 `key={orgId ?? "none"}` 重挂载） |
+| 组织权限消费（按钮显隐 / 只读态） | `clients/chat-web/lib/hooks/use-organization-capabilities.ts`：`useOrganizationCapabilities()` 实时读后端 `capabilities`，`can(permission)` **fail-closed**（未选组织 / 加载中 / 加载失败 / 键缺失一律 false，权限点键以后端 `permission-policy.ts` 为真源）；**严禁**把 `role` / `capabilities` 写入 localStorage / sessionStorage / organization-store，也严禁按 `role` 在前端推断权限；capabilities 只控制显示，后端始终强制 `@RequiresPermission` |
+| 账本查询闸门（查询降噪，§10.3 / DEBT-06） | `useLedgerQueryGate()`（同上文件，纯函数 `resolveLedgerQueryGate`）：未选组织 / 组织详情在途 / 未建账 / 组织删除处理中一律不发账本类 GET；消费方不得各写一份门控——`/settings` 只经 `useOrganizationSettings()`（`lib/hooks/use-organization-settings.ts`）、`/reminders` 经 `useReminders()`、`/home/*` 经 `useHomeState()`。CLEAR 冷静期不拦读（写由后端 403 引导）；组织详情读取失败时闸门放行、由业务端点自身裁决 |
+| 设置页两域 | `components/business/settings/preferences-form.tsx`：个人展示偏好（`GET/PATCH /settings/personal`，任何登录用户可改，键 `queryKeys.settings.personal()` 独立词根 + `skipOrganizationScope`）与组织账本设置（`GET/PATCH /settings`，键 `withOrgScope(orgId, settings.detail())`，无 `settings.update` 只读）各自暂存、页面级**单个** `settings-save` 分别提交；草稿是受控初始态（编辑器以服务端值为 key 重新挂载），不写 `useEffect` |
+| 数据权利请求前端双域 | `lib/api/data-requests.ts` + `lib/hooks/use-data-request.ts`：个人域（`/data-requests/*`，`skipOrganizationScope` 不带组织头、不依赖 `orgId` 门控、键 `queryKeys.dataRequests.personalCurrent()` 不加前缀）与组织域（`/organizations/current/data-requests/*` + `DELETE /organizations/current`，键经 `withOrgScope` 分桶）端点与 hook 成对命名（`*Personal` / `*Organization`），**禁止混用**；请求体 `scope` 固定为所在域字面量；提交 / 撤回后统一 `invalidateAfterDataRequestMutation`（两域 + 当前组织详情的锁摘要） |
+| 双锁 403 的前端处理 | `consumeDataRequestLock`（`lib/api/client.ts`，`apiClient` 与 SSE 封装共用）：两把锁都整页跳**纯** `/data-requests`（禁拼 `?scope=`——E2E 按精确 URL 匹配），且**不清空** `activeOrganizationId`（组织锁只锁当前组织，侧栏仍可切到其他组织）；`isExpectedControlFlowApiError` 完整包含 `ONBOARDING_NOT_COMPLETED` / `ORGANIZATION_DATA_LOCKED` / `ACCOUNT_PENDING_DELETION` / `PERMISSION_DENIED` / `ORGANIZATION_REQUIRED` / `ORGANIZATION_NOT_FOUND`（状态码与错误码须同时匹配） |
+| 数据权利 UI 分区 | `components/business/account-data/`：设置页 `AccountDataSection` = 「个人账号与数据」（退出登录 / 导出个人数据 / 注销个人账号）+「当前组织数据」（导出 / 清空 / 删除组织）；进度页 `request-panels.tsx` = 个人分区 + 组织分区（后者以 `key={orgId ?? "none"}` 重挂载，个人进度不随切换丢失）；`RequestProgress` 按视图 `scope` 选端点，组织域撤回 / 下载按钮按能力显隐；既有 testid 保留（`account-data-export` / `account-data-clear` / `account-data-delete` / `settings-logout` / `request-progress*`），新增组织区 testid 以 `organization-` 为前缀 |
+| 只读 / 无权限提示 | `components/base/permission-notice.tsx`：`PermissionNotice`（整卡，页面主体依赖该权限时）与 `PermissionHint`（行内，内容可读仅写被锁）；权限判定不在此——调用方先 `can(...)` 再渲染 |
+| 受保护页能力门控 | 写按钮显隐一律 `useOrganizationCapabilities().can(...)`：Onboarding / 补录初始持仓 `settings.update`；Plan 新建 `plan.create`，调整 / 完成 / 取消 / 重新开启 `plan.adjust` 且叠加服务端 `canXxx`，记录使用 `usage.create`，录入买入 `transaction.create`；更正入口与提交 `correction.apply`，更正页预演 `correction.preview`；组织数据 导出 `data.export`、清空 `data.clear && onboardingCompleted`、删除 `organization.delete`。组织详情未返回前不渲染写按钮（防权限闪烁） |
+| 退出登录出口 | `useLogoutAndRedirect()`（`lib/query/hooks/use-auth.ts`）：侧栏、设置页、`OrganizationPicker`、`OrganizationRoutingError` 共用（后两者整屏渲染没有侧栏）；页面不得各自拼接「登出 + 清用户态 + 跳转」 |
 | 切换组织类回调里的后续动作 | hook 级回调同步改组织选择会让布局卸载调用方组件，`mutate(…, { onSuccess })` 的调用点回调不再派发——导航等后续动作用 `mutateAsync().then(…)` 或写进 hook 级回调，不依赖挂载态 |
 | 外部中止当前流 | 一律调 `abortActiveStream()`（`clients/chat-web/lib/stores/chat-store.ts`，同时重置聊天运行时态）；`use-chat` 收尾以句柄归属决定是否清理，只中止不重置会永久锁死输入框 |
 | 默认组织（个人工作台）判定 | `services/chat/src/authorization/default-organization.ts`：用户创建的最早组织；建组织必须嵌套写入（组织与首位成员同事务创建）；回填 / 核对 SQL 的 `defaults` CTE 与之同口径 |

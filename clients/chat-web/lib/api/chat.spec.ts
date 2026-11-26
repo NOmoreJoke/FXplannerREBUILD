@@ -5,6 +5,7 @@ import {
 	type AiStreamEvent,
 } from "@/lib/api/chat";
 import {
+	consumeDataRequestLock,
 	consumeOrganizationContextError,
 	getActiveOrganizationId,
 	ApiError,
@@ -15,8 +16,9 @@ import { captureApiError } from "@/lib/dev-log/monitor";
 // 真实 client.ts 顶层校验 NEXT_PUBLIC_API_BASE_URL（测试环境不存在），mock 掉；
 // 类定义须置于工厂内（vi.mock 被提升），被测模块与本文件拿到的 ApiError
 // 即同一 mock 类，instanceof 断言成立。构造签名与真实类一致。
-// 地址构造 / 组织上下文失效 / 401 的真实逻辑在 client.spec 覆盖；这里保持协议形状：
-// handleUnauthorized 复刻「清 token」一侧（401 用例据此断言）。
+// 地址构造 / 组织上下文失效 / 401 / 双锁跳转的真实逻辑在 client.spec 覆盖；这里保持协议形状：
+// handleUnauthorized 复刻「清 token」一侧（401 用例据此断言），
+// consumeDataRequestLock 复刻「命中锁 → 纯 /data-requests」一侧（本文件只验证 chat.ts 的接线）。
 vi.mock("@/lib/api/client", async () => {
 	class MockApiError extends Error {
 		constructor(
@@ -40,11 +42,32 @@ vi.mock("@/lib/api/client", async () => {
 		handleUnauthorized: vi.fn(() => {
 			clearToken();
 		}),
+		// Goal #3B W28：与 apiClient 共用的双锁处理（组织数据锁 / 个人账号锁）
+		consumeDataRequestLock: vi.fn(async (response: Response) => {
+			if (response.status !== 403) return false;
+			const body = (await response
+				.clone()
+				.json()
+				.catch(() => ({}))) as { code?: string };
+			if (
+				body.code !== "DATA_REQUEST_LOCKED" &&
+				body.code !== "ACCOUNT_PENDING_DELETION" &&
+				body.code !== "ORGANIZATION_DATA_LOCKED"
+			) {
+				return false;
+			}
+			if (!window.location.pathname.startsWith("/data-requests")) {
+				window.location.href = "/data-requests";
+			}
+			return true;
+		}),
 		isExpectedControlFlowApiError: (status: number, code?: string) =>
 			(status === 409 && code === "ONBOARDING_NOT_COMPLETED") ||
 			(status === 403 &&
 				(code === "DATA_REQUEST_LOCKED" ||
-					code === "ACCOUNT_PENDING_DELETION")),
+					code === "ACCOUNT_PENDING_DELETION" ||
+					code === "ORGANIZATION_DATA_LOCKED" ||
+					code === "PERMISSION_DENIED")),
 	};
 });
 
@@ -457,6 +480,50 @@ describe("streamMessage（fetch + 响应校验协议）", () => {
 			streamMessage({ conversationId: "conv-1", content: "追问" }),
 		).rejects.toBeInstanceOf(ApiError);
 		expect(window.location.href).toBe("/data-requests");
+		expect(captureApiError).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["ORGANIZATION_DATA_LOCKED", "当前组织账本清空 / 删除处理中"],
+		["ACCOUNT_PENDING_DELETION", "本人账号注销处理中"],
+	])(
+		"W28：403 %s 走与 apiClient 共用的 consumeDataRequestLock，跳纯 /data-requests 并抛 ApiError",
+		async (code, message) => {
+			fetchMock.mockResolvedValue(
+				mockResponse({
+					status: 403,
+					contentType: "application/json",
+					jsonBody: { code, message },
+				}),
+			);
+
+			await expect(
+				streamMessage({ conversationId: "conv-1", content: "追问" }),
+			).rejects.toMatchObject({ name: "ApiError", status: 403, code });
+
+			// 交给共用处理的正是这次响应：SSE 与 apiClient 只有一份锁语义
+			expect(consumeDataRequestLock).toHaveBeenCalledTimes(1);
+			const handled = vi.mocked(consumeDataRequestLock).mock.calls[0]?.[0];
+			expect(handled?.status).toBe(403);
+			// 纯路径（不拼 ?scope=），与 apiClient 的跳转目的地一致
+			expect(window.location.href).toBe("/data-requests");
+			// 锁是预期控制流，不进本地错误日志
+			expect(captureApiError).not.toHaveBeenCalled();
+		},
+	);
+
+	it("W28：403 PERMISSION_DENIED 不是锁——不跳转，按预期控制流静默", async () => {
+		fetchMock.mockResolvedValue(
+			mockResponse({
+				status: 403,
+				contentType: "application/json",
+				jsonBody: { code: "PERMISSION_DENIED", message: "无权限" },
+			}),
+		);
+		await expect(
+			streamMessage({ conversationId: "conv-1", content: "追问" }),
+		).rejects.toMatchObject({ status: 403, code: "PERMISSION_DENIED" });
+		expect(window.location.href).toBe("");
 		expect(captureApiError).not.toHaveBeenCalled();
 	});
 

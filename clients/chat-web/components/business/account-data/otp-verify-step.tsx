@@ -9,22 +9,34 @@ import { Input } from "@/components/ui/input";
 import { authApi } from "@/lib/api/auth";
 import { dataRequestsApi } from "@/lib/api/data-requests";
 import { useOtpCountdown } from "@/lib/hooks/use-otp-countdown";
-import type { DataRequestPurpose } from "@/lib/api/contract";
+import type { DataRequestPurpose, DataRequestScope } from "@/lib/api/contract";
+import { purposeText } from "./request-copy";
 
 /**
  * 数据操作验证码步骤（account-data 技术方案 §8）：发码 → 倒计时 → 输码 → verify。
  * purpose 透传实现用途隔离（登录码不能顶用）；dev 模式 devCode 自动填充
  * （与登录表单同款，生产无 devCode 流程不变）。
+ *
+ * scope 决定校验走哪个域的 verify 端点（Goal #3B W27 双域物理拆分后两者不通用）：
+ * 个人数据操作走 /data-requests/verify，组织数据操作走
+ * /organizations/current/data-requests/verify。发码本身是个人端点，与组织无关。
  */
 
 export interface OtpVerifyStepProps {
 	target: string;
 	purpose: DataRequestPurpose;
+	/** 数据域：个人域导出 / 注销，或组织域导出 / 清空 / 删除 */
+	scope: DataRequestScope;
 	/** 验证成功回调：携带确认凭证与 10 分钟确认截止 */
 	onVerified: (challengeId: string, confirmDeadline: string) => void;
 }
 
-export function OtpVerifyStep({ target, purpose, onVerified }: OtpVerifyStepProps) {
+export function OtpVerifyStep({
+	target,
+	purpose,
+	scope,
+	onVerified,
+}: OtpVerifyStepProps) {
 	const [challengeId, setChallengeId] = useState<string | null>(null);
 	const [code, setCode] = useState("");
 	const countdown = useOtpCountdown();
@@ -48,11 +60,10 @@ export function OtpVerifyStep({ target, purpose, onVerified }: OtpVerifyStepProp
 	const verifyMutation = useMutation({
 		mutationFn: () => {
 			if (!challengeId) throw new Error("请先获取验证码");
-			return dataRequestsApi.verify({
-				challengeId,
-				code,
-				purpose,
-			});
+			const input = { challengeId, code, purpose };
+			return scope === "ORGANIZATION"
+				? dataRequestsApi.verifyOrganization(input)
+				: dataRequestsApi.verifyPersonal(input);
 		},
 		onSuccess: (result) => {
 			toast.success("验证成功，请在 10 分钟内完成确认");
@@ -67,12 +78,9 @@ export function OtpVerifyStep({ target, purpose, onVerified }: OtpVerifyStepProp
 	return (
 		<div className="space-y-4" data-testid={`otp-verify-${purpose.toLowerCase()}`}>
 			<p className="text-sm text-muted-foreground">
-				验证码将发送至 <span className="font-medium text-foreground">{target}</span>
-				，用于本次
-				{purpose === "EXPORT" && "导出数据"}
-				{purpose === "CLEAR" && "清空业务记录"}
-				{purpose === "DELETION" && "注销账号"}
-				操作确认。
+				验证码将发送至{" "}
+				<span className="font-medium text-foreground">{target}</span>
+				，用于本次「{purposeText(scope, purpose)}」操作确认。
 			</p>
 			<Button
 				type="button"

@@ -48,6 +48,12 @@ export function buildApiUrl(endpoint: string): string {
 
 interface RequestConfig extends RequestInit {
 	skipAuth?: boolean;
+	/**
+	 * 个人域端点（/settings/personal、/data-requests/*）：不注入 X-Organization-Id。
+	 * 个人数据权利与组织无关——0 组织 / 多组织未选 / 个人注销锁定用户都必须可达，
+	 * 请求不得依赖组织选择；组织上下文失效处理也随之跳过（个人端点不解析组织）。
+	 */
+	skipOrganizationScope?: boolean;
 }
 
 interface ApiResponse<T> {
@@ -83,29 +89,73 @@ export class ApiError extends Error {
 }
 
 /**
- * 预期业务控制流 HTTP 响应不记为 dev-log 错误事件（DEBT-06）：
+ * 数据请求进度页地址（双锁重定向的**唯一**目的地）。
+ * 必须保持纯路径：不得拼接 ?scope= 之类的查询参数——E2E（12-account-data）按
+ * `${BASE_URL}/data-requests` 精确匹配，且个人/组织两个进度分区同页展示、无需参数分流。
+ */
+export const DATA_REQUESTS_PAGE_PATH = "/data-requests";
+
+/**
+ * 数据请求锁错误码（W27 双锁守卫）：
+ * - ORGANIZATION_DATA_LOCKED：当前组织账本清空/删除处理中（只锁当前组织）；
+ * - ACCOUNT_PENDING_DELETION：本人账号注销处理中（只锁本人）；
+ * - DATA_REQUEST_LOCKED：W27 之前单一守卫的合并锁码，后端已不再产出，仅为兼容保留。
+ */
+export function isDataRequestLockCode(code: string | undefined): boolean {
+	return (
+		code === "ORGANIZATION_DATA_LOCKED" ||
+		code === "ACCOUNT_PENDING_DELETION" ||
+		code === "DATA_REQUEST_LOCKED"
+	);
+}
+
+/**
+ * 数据请求锁的统一处理（apiClient 与 SSE 封装共用，二者只应有一份语义）：
+ * 命中锁错误码且当前不在进度页 → 整页跳转纯 /data-requests。
+ *
+ * 两把锁的差别不在跳转目标，而在组织选择的去留（W28）：
+ * - ACCOUNT_PENDING_DELETION：个人域进度不依赖组织，/data-requests 对 0 组织 /
+ *   多组织未选同样放行（isOrglessRouteAllowed），随时可查看与撤回个人注销；
+ * - ORGANIZATION_DATA_LOCKED：**不清空** activeOrganizationId——锁只针对当前组织，
+ *   保留选择后侧栏切换器仍可切到未锁定的其他组织。
+ * 本函数因此不触碰 organization-store。
+ *
+ * @returns 是否命中数据请求锁（未命中时响应体未被消费，调用方照常走错误解析）
+ */
+export async function consumeDataRequestLock(
+	response: Response,
+): Promise<boolean> {
+	if (response.status !== 403 || typeof window === "undefined") return false;
+	const body = await response
+		.clone()
+		.json()
+		.catch(() => ({}) as ApiErrorBody);
+	if (!isDataRequestLockCode(body.code)) return false;
+	if (!window.location.pathname.startsWith(DATA_REQUESTS_PAGE_PATH)) {
+		window.location.href = DATA_REQUESTS_PAGE_PATH;
+	}
+	return true;
+}
+
+/**
+ * 预期业务控制流 HTTP 响应不记为 dev-log 错误事件（DEBT-06）——六种语义，状态码与
+ * 错误码须同时匹配（同码配错的状态码不算预期控制流，照常上报）：
  * - 409 ONBOARDING_NOT_COMPLETED：首次建账前门控/降级语义
  * - 403 ORGANIZATION_DATA_LOCKED / ACCOUNT_PENDING_DELETION：双锁守卫重定向进度页语义
  *   （ORGANIZATION_DATA_LOCKED = 当前组织账本清空/删除处理中；ACCOUNT_PENDING_DELETION = 本人账号注销处理中）
- * - 400 ORGANIZATION_REQUIRED / 404 ORGANIZATION_NOT_FOUND / 403 PERMISSION_DENIED：
- *   ToB 组织上下文语义（选择失效/权限变化由组织路由层接管，W20）
+ * - 403 PERMISSION_DENIED：角色无对应权限点（后端拒绝了一次越权写，前端门控的兜底）
+ * - 400 ORGANIZATION_REQUIRED / 404 ORGANIZATION_NOT_FOUND：ToB 组织上下文语义
+ *   （选择失效/权限变化由组织路由层接管，W20）
  */
 export function isExpectedControlFlowApiError(
 	status: number,
 	code?: string,
 ): boolean {
 	if (status === 409 && code === "ONBOARDING_NOT_COMPLETED") return true;
-	if (
-		status === 403 &&
-		(code === "ORGANIZATION_DATA_LOCKED" ||
-			code === "ACCOUNT_PENDING_DELETION" ||
-			code === "DATA_REQUEST_LOCKED")
-	) {
-		return true;
-	}
+	if (status === 403 && isDataRequestLockCode(code)) return true;
+	if (status === 403 && code === "PERMISSION_DENIED") return true;
 	if (status === 400 && code === "ORGANIZATION_REQUIRED") return true;
 	if (status === 404 && code === "ORGANIZATION_NOT_FOUND") return true;
-	if (status === 403 && code === "PERMISSION_DENIED") return true;
 	return false;
 }
 
@@ -171,7 +221,11 @@ export async function apiClient<T>(
 	endpoint: string,
 	config: RequestConfig = {},
 ): Promise<T> {
-	const { skipAuth = false, ...fetchConfig } = config;
+	const {
+		skipAuth = false,
+		skipOrganizationScope = false,
+		...fetchConfig
+	} = config;
 
 	// endpoint 只允许站内相对路径：拒绝绝对 URL 与协议相对 URL，
 	// 防止调用方把请求转发到外部主机（CWE-918 整改；校验在 buildApiUrl 内）。
@@ -192,11 +246,15 @@ export async function apiClient<T>(
 		if (token) {
 			headers["Authorization"] = `Bearer ${token}`;
 		}
-		// 组织上下文头（ToB W20）：已有选中组织时对全部业务请求注入；
-		// 个人端点（/auth、/organizations、邀请 token 端点）后端不读此头，注入无害
-		sentOrganizationId = getActiveOrganizationId();
-		if (sentOrganizationId) {
-			headers["X-Organization-Id"] = sentOrganizationId;
+		// 组织上下文头（ToB W20）：已有选中组织时对业务请求注入；
+		// 个人域端点显式 skipOrganizationScope——请求不带组织头，也不参与组织上下文失效处理
+		// （个人数据权利不得依赖组织选择，W28）。其余个人端点（/auth、/organizations、
+		// 邀请 token 端点）后端不读此头，沿用注入
+		if (!skipOrganizationScope) {
+			sentOrganizationId = getActiveOrganizationId();
+			if (sentOrganizationId) {
+				headers["X-Organization-Id"] = sentOrganizationId;
+			}
 		}
 	}
 
@@ -235,24 +293,9 @@ export async function apiClient<T>(
 	}
 
 	// 处理数据请求锁（account-data 技术方案 §8）：注销/清空处理中访问业务端点
-	// → 统一跳转进度页，实现「登录只进进度页」与强制下线体验
-	if (
-		response.status === 403 &&
-		typeof window !== "undefined" &&
-		!window.location.pathname.startsWith("/data-requests")
-	) {
-		const lockError = await response
-			.clone()
-			.json()
-			.catch(() => ({}) as ApiErrorBody);
-		if (
-			lockError.code === "ORGANIZATION_DATA_LOCKED" ||
-			lockError.code === "ACCOUNT_PENDING_DELETION" ||
-			lockError.code === "DATA_REQUEST_LOCKED"
-		) {
-			window.location.href = "/data-requests";
-		}
-	}
+	// → 统一跳转进度页，实现「登录只进进度页」与强制下线体验。
+	// 组织锁不清空组织选择（保留切换到其他组织的能力），语义见 consumeDataRequestLock
+	await consumeDataRequestLock(response);
 
 	if (!response.ok) {
 		const error = await response

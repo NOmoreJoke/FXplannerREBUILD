@@ -2,8 +2,9 @@
 
 import { Wallet } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { ComplianceDisclaimer } from "@/components/base";
+import { ComplianceDisclaimer, PermissionHint } from "@/components/base";
 import { Button } from "@/components/ui/button";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 
 const STEPS = [
 	"建立本币与外币账户",
@@ -16,9 +17,13 @@ const STEPS = [
  *
  * 「创建第一个目标」跳转 /plans/new 创建页（技术方案 §6）；
  * 「录入已有持仓」暂未开放，禁用态 + 可见灰字提示。
+ *
+ * 能力门控（Goal #3B W28）：创建计划需 plan.create 权限。Viewer 不渲染「创建第一个目标」，
+ * 改为一行只读提示——否则点进去只会看到无权限页。首页只在组织详情就绪后才渲染本组件。
  */
 export function HomeEmptyState() {
 	const router = useRouter();
+	const { can } = useOrganizationCapabilities();
 
 	return (
 		<div className="mx-auto max-w-5xl px-8 py-6">
@@ -44,19 +49,29 @@ export function HomeEmptyState() {
 					<p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
 						先准备好你的账户与换汇目标数据，一切从零开始、没有历史包袱；所有数据仅做记录与展示，不会自动发起任何实际操作。
 					</p>
-					<div className="mt-6 flex items-center gap-3">
-						<Button
-							className="bg-mint-700 text-white hover:bg-mint-700/90"
-							onClick={() => router.push("/plans/new")}
-						>
-							创建第一个目标
-						</Button>
-						<div className="flex flex-col items-center gap-1">
-							<Button variant="outline" className="bg-white" disabled>
-								录入已有持仓
-							</Button>
-							<span className="text-xs text-muted-foreground">功能开发中</span>
+					<div className="mt-6 flex flex-col items-center gap-3">
+						<div className="flex items-center gap-3">
+							{can("plan.create") && (
+								<Button
+									data-testid="home-empty-create-plan"
+									className="bg-mint-700 text-white hover:bg-mint-700/90"
+									onClick={() => router.push("/plans/new")}
+								>
+									创建第一个目标
+								</Button>
+							)}
+							<div className="flex flex-col items-center gap-1">
+								<Button variant="outline" className="bg-white" disabled>
+									录入已有持仓
+								</Button>
+								<span className="text-xs text-muted-foreground">功能开发中</span>
+							</div>
 						</div>
+						{!can("plan.create") && (
+							<PermissionHint testId="home-empty-plan-readonly-note">
+								当前角色无权创建换汇计划，请联系组织所有者或管理员
+							</PermissionHint>
+						)}
 					</div>
 				</section>
 

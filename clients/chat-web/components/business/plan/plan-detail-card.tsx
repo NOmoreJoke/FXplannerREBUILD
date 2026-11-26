@@ -10,6 +10,7 @@ import {
 	formatDisplayAmount,
 	formatDisplayDate,
 } from "@/components/business/plan/schedule-preview-card";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 
 /**
  * 换汇计划详情卡（changes/plan-management/技术方案.md §5.2 + usage-recording §3.4 双进度修正）
@@ -231,9 +232,14 @@ function AmountCell({
 	);
 }
 
-/** 完成确认入口的就绪提示（详情页按 canComplete 显隐按钮时复用文案） */
+/**
+ * 完成确认入口的就绪提示（详情页按 canComplete 显隐按钮时复用文案）。
+ * 服务端 canComplete 只按数据计算、不含角色：无 plan.adjust 权限的角色看不到
+ * 「可进行完成确认」的按钮，这句提示也一并收起，免得提示能做、按钮却没有。
+ */
 export function PlanCompleteHint({ plan }: { plan: PlanDetail }) {
-	if (!plan.canComplete) {
+	const { can } = useOrganizationCapabilities();
+	if (!plan.canComplete || !can("plan.adjust")) {
 		return null;
 	}
 	return (

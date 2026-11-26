@@ -127,14 +127,32 @@ export interface OrganizationRouting {
 	retry: () => void;
 }
 
+/** 按路径段匹配：命中前缀本身或其子路径，不含同前缀的其他路径（/data-requests-v2 不算） */
+export function matchesRouteSegment(pathname: string, segment: string): boolean {
+	return pathname === segment || pathname.startsWith(`${segment}/`);
+}
+
 /**
- * 不依赖组织上下文的受保护路由（评审 R3-I01）：/invitations/*——受邀者可能尚无任何
- * 组织，接受流程走个人端点。受保护区布局对它免做组织路由分流，业务区边界对它不随
- * 组织变化重挂载；两处共用本判定，不各写一份。按路径段匹配 /invitations 与
- * /invitations/…，不含 /invitations-xxx 这类同前缀路径。
+ * 不依赖组织上下文的受保护路由（评审 R3-I01）：业务页面不得在无组织上下文时渲染，
+ * 这些路由例外——受保护区布局对它们免做组织路由分流，业务区边界对它们不随组织变化
+ * 重挂载；两处共用本判定，不各写一份。
+ *
+ * - /invitations、/invitations/…：受邀者可能尚无任何组织，接受流程走个人端点；
+ * - /data-requests、/data-requests/…（W28）：数据请求进度页承载**个人域**进度。
+ *   个人数据权利与组织无关——0 组织、多组织未选、个人注销锁定的用户都必须能查看
+ *   进度并撤回注销。403 ACCOUNT_PENDING_DELETION 的跳转目的地正是这里，若照常做
+ *   组织路由分流，无组织用户会被挡在选择页外，落进「403 → 跳进度页 → 进不去」的死胡同。
+ *   页面内的组织进度分区自行按 orgId 门控并按组织 key 重挂载，个人进度不受切换影响。
+ *
+ * 路径字面量与 lib/api/client.ts 的 DATA_REQUESTS_PAGE_PATH（403 锁跳转的目的地）必须
+ * 一致；client.spec 有对照断言。这里不直接引该常量：client.ts 在模块求值期校验
+ * API 地址环境变量，hook 层引入它会让不关心网络地址的纯 hook 测试依赖该环境变量。
  */
 export function isOrglessRouteAllowed(pathname: string): boolean {
-	return pathname === "/invitations" || pathname.startsWith("/invitations/");
+	return (
+		matchesRouteSegment(pathname, "/invitations") ||
+		matchesRouteSegment(pathname, "/data-requests")
+	);
 }
 
 /**

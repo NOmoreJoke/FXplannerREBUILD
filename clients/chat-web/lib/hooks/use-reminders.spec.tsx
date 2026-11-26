@@ -8,7 +8,7 @@ vi.hoisted(() => {
 	const dom = (
 		globalThis as { jsdom?: { window: Window & { localStorage?: Storage } } }
 	).jsdom;
-	const jsdomStorage = dom?.window?.localStorage;
+	const jsdomStorage = dom?.window.localStorage;
 	if (!jsdomStorage) return;
 	const globals = [globalThis, globalThis.window] as Array<
 		Record<string, unknown>
@@ -29,6 +29,7 @@ import { act } from "@testing-library/react";
 import { useOrganizationStore } from "@/lib/stores/organization-store";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { organizationsApi } from "@/lib/api/organizations";
 import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import {
 	isReminderBypassRoute,
@@ -36,7 +37,6 @@ import {
 	useReminderGate,
 	useReminders,
 } from "./use-reminders";
-import { onboardingApi } from "@/lib/api/onboarding";
 import { remindersApi } from "@/lib/api/reminders";
 import { settingsApi } from "@/lib/api/settings";
 import type { RemindersView } from "@/lib/api/contract";
@@ -51,17 +51,25 @@ vi.mock("@/lib/api/reminders", () => ({
 	},
 }));
 
-vi.mock("@/lib/api/onboarding", () => ({
-	onboardingApi: {
-		getStatus: vi.fn(),
-	},
-}));
-
 vi.mock("@/lib/api/settings", () => ({
 	settingsApi: {
 		getSettings: vi.fn(),
 	},
 }));
+
+// 当前组织详情：账本查询闸门的判定依据（建账态 / 组织锁）
+vi.mock("@/lib/api/organizations", () => ({
+	organizationsApi: {
+		list: vi.fn(),
+		current: vi.fn(),
+		create: vi.fn(),
+	},
+	membersApi: {
+		leave: vi.fn(),
+	},
+}));
+
+type OrganizationCurrent = Awaited<ReturnType<typeof organizationsApi.current>>;
 
 /** 一条未读 PREP_DUE 提醒（契约字段取自 schema.gen，示例值对齐接口测试 #3） */
 const unreadItem = {
@@ -108,6 +116,34 @@ const viewData: RemindersView = {
 
 const emptyData: RemindersView = { items: [], unreadCount: 0 };
 
+/** 组织设置视图（提醒开关默认开启） */
+const settingsView = {
+	email: "u@example.com",
+	region: "CN",
+	locale: "zh-CN",
+	baseCurrency: "CNY",
+	prepPreference: "balanced" as const,
+	reminderEnabled: true,
+	ledgerStartedAt: "2026-01-01T00:00:00.000Z",
+};
+
+/** 让当前组织详情解析为给定状态的组织（id 跟随 store 的当前选择） */
+function mockCurrentOrganization(
+	overrides: Partial<OrganizationCurrent> = {},
+) {
+	vi.mocked(organizationsApi.current).mockImplementation(async () => ({
+		id: useOrganizationStore.getState().activeOrganizationId ?? "org-test",
+		name: "测试组织",
+		role: "OWNER",
+		capabilities: {},
+		onboardingCompleted: true,
+		baseCurrency: "CNY",
+		ledgerStartedAt: "2026-01-01T00:00:00.000Z",
+		dataRequestLock: { active: false, type: null },
+		...overrides,
+	}));
+}
+
 const createWrapper = () => {
 	const queryClient = new QueryClient({
 		defaultOptions: {
@@ -134,21 +170,37 @@ const createWrapperWithClient = () => {
 	return { queryClient, Wrapper };
 };
 
+/** 等所有已发起的异步查询落定（断言「零请求」前必须等到底） */
+async function settle() {
+	await act(async () => {
+		await Promise.resolve();
+		await Promise.resolve();
+	});
+}
+
 describe("useReminders", () => {
 	beforeEach(() => {
 		// ToB W20：业务查询按组织门控（enabled: orgId !== null）——测试统一选中组织
 		useOrganizationStore.setState({ activeOrganizationId: "org-test" });
+		mockCurrentOrganization();
+		vi.mocked(settingsApi.getSettings).mockResolvedValue(settingsView);
 		vi.clearAllMocks();
 	});
 
-	it("加载中应返回 isLoading=true 且 items/unreadCount 为空值", () => {
+	it("闸门放行后首次请求进行中：isLoading=true，items/unreadCount 为空值（此前不该有请求）", async () => {
 		vi.mocked(remindersApi.list).mockReturnValue(new Promise(() => {}));
 
 		const { result } = renderHook(() => useReminders(), {
 			wrapper: createWrapper(),
 		});
 
-		expect(result.current.isLoading).toBe(true);
+		// 组织详情未返回前闸门关闭：既不加载也不请求
+		expect(result.current.isLoading).toBe(false);
+		expect(remindersApi.list).not.toHaveBeenCalled();
+
+		// 放行后请求发出，进入加载态
+		await waitFor(() => expect(result.current.isLoading).toBe(true));
+		expect(remindersApi.list).toHaveBeenCalledOnce();
 		expect(result.current.isError).toBe(false);
 		expect(result.current.items).toEqual([]);
 		expect(result.current.unreadCount).toBe(0);
@@ -161,8 +213,9 @@ describe("useReminders", () => {
 			wrapper: createWrapper(),
 		});
 
-		await waitFor(() => expect(result.current.isLoading).toBe(false));
-		expect(result.current.items).toEqual(viewData.items);
+		// 闸门未放行时 isLoading 本就是 false：要等的是数据到达，不是「加载结束」
+		await waitFor(() => expect(result.current.items).toEqual(viewData.items));
+		expect(result.current.isLoading).toBe(false);
 		expect(result.current.unreadCount).toBe(1);
 		expect(result.current.isError).toBe(false);
 	});
@@ -187,10 +240,11 @@ describe("useReminders", () => {
 
 		const wrapper = createWrapper();
 		const first = renderHook(() => useReminders(), { wrapper });
-		await waitFor(() => expect(first.result.current.isLoading).toBe(false));
+		await waitFor(() => expect(first.result.current.items).toEqual(emptyData.items));
+		await waitFor(() => expect(remindersApi.list).toHaveBeenCalledOnce());
 
 		const second = renderHook(() => useReminders(), { wrapper });
-		await waitFor(() => expect(second.result.current.isLoading).toBe(false));
+		await waitFor(() => expect(second.result.current.items).toEqual(emptyData.items));
 
 		expect(remindersApi.list).toHaveBeenCalledTimes(1);
 	});
@@ -198,6 +252,44 @@ describe("useReminders", () => {
 	it("查询 Key 应符合项目 [domain, action] 约定", async () => {
 		const { REMINDERS_QUERY_KEY } = await import("./use-reminders");
 		expect(REMINDERS_QUERY_KEY).toEqual(["reminders", "list"]);
+	});
+
+	it.each([
+		["未选组织", null, {}],
+		["未建账组织", "org-test", { onboardingCompleted: false }],
+		[
+			"组织删除处理中",
+			"org-test",
+			{ dataRequestLock: { active: true, type: "DELETION" } },
+		],
+	] as const)(
+		"查询降噪：%s：即使调用方传 enabled=true 也零 GET /reminders",
+		async (_label, activeOrganizationId, overrides) => {
+			useOrganizationStore.setState({ activeOrganizationId });
+			mockCurrentOrganization(overrides as Partial<OrganizationCurrent>);
+			const { result } = renderHook(() => useReminders(), {
+				wrapper: createWrapper(),
+			});
+			if (activeOrganizationId !== null) {
+				await waitFor(() => expect(organizationsApi.current).toHaveBeenCalledOnce());
+			}
+			await settle();
+			expect(remindersApi.list).not.toHaveBeenCalled();
+			expect(result.current.items).toEqual([]);
+			expect(result.current.isLoading).toBe(false);
+		},
+	);
+
+	it("CLEAR 锁不拦读：清空冷静期内 GET 放行，照常拉取（写操作由后端 403 引导）", async () => {
+		mockCurrentOrganization({
+			dataRequestLock: { active: true, type: "CLEAR" },
+		});
+		vi.mocked(remindersApi.list).mockResolvedValue(viewData);
+		const { result } = renderHook(() => useReminders(), {
+			wrapper: createWrapper(),
+		});
+		await waitFor(() => expect(result.current.unreadCount).toBe(1));
+		expect(remindersApi.list).toHaveBeenCalledOnce();
 	});
 });
 
@@ -257,7 +349,7 @@ describe("useMarkReminderRead", () => {
 	});
 });
 
-describe("useReminderGate（未建账与锁定期请求门控，F1-3 / DEBT-06）", () => {
+describe("useReminderGate（顶栏铃铛：路由豁免 + 账本查询闸门）", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		// 门控查询按组织门控且键按组织分桶（评审 R2-I07 / R2-I10）——显式选中组织，
@@ -267,60 +359,11 @@ describe("useReminderGate（未建账与锁定期请求门控，F1-3 / DEBT-06�
 			activeOrganizationSetAt: 0,
 			rejectedOrganizationIds: [],
 		});
+		mockCurrentOrganization();
+		vi.mocked(settingsApi.getSettings).mockResolvedValue(settingsView);
 	});
 
-	it("R2-I10：未选组织时零 onboarding / settings / reminders 请求（铃铛不得抢发无组织头的请求）", async () => {
-		useOrganizationStore.setState({ activeOrganizationId: null });
-		const { result } = renderHook(() => useReminderGate("/home"), {
-			wrapper: createWrapper(),
-		});
-		await act(async () => {
-			await Promise.resolve();
-		});
-		expect(onboardingApi.getStatus).not.toHaveBeenCalled();
-		expect(settingsApi.getSettings).not.toHaveBeenCalled();
-		expect(remindersApi.list).not.toHaveBeenCalled();
-		expect(result.current.isOnboarded).toBe(false);
-	});
-
-	it("R2-I07：门控查询键按组织分桶——切换组织后 onboarding/settings 重新拉取，不沿用上一个组织的缓存", async () => {
-		vi.mocked(onboardingApi.getStatus).mockResolvedValue({
-			completed: false,
-			requiredConsentsMet: true,
-			settings: null,
-			currentTermsVersion: "2026-01",
-		});
-		const { queryClient, Wrapper } = createWrapperWithClient();
-		const { rerender } = renderHook(() => useReminderGate("/home"), {
-			wrapper: Wrapper,
-		});
-		await waitFor(() => expect(onboardingApi.getStatus).toHaveBeenCalledTimes(1));
-		// 键不含组织时，这里读到的是无前缀键（上一个组织的缓存会被沿用）
-		expect(
-			queryClient.getQueryData(
-				withOrgScope("org-test", queryKeys.onboarding.status()),
-			),
-		).toMatchObject({ completed: false });
-
-		// 切到另一组织：门控按新组织键重新拉取建账状态（不同组织建账态不同）
-		act(() => {
-			useOrganizationStore.setState({ activeOrganizationId: "org-other" });
-		});
-		rerender();
-		await waitFor(() => expect(onboardingApi.getStatus).toHaveBeenCalledTimes(2));
-	});
-
-	it("useReminders({ enabled: false }) 不触发 GET /reminders", () => {
-		const { result } = renderHook(() => useReminders({ enabled: false }), {
-			wrapper: createWrapper(),
-		});
-
-		expect(result.current.items).toEqual([]);
-		expect(result.current.unreadCount).toBe(0);
-		expect(remindersApi.list).not.toHaveBeenCalled();
-	});
-
-	it("/onboarding、/data-requests、/invitations 路由：零 onboarding / settings / reminders 请求", () => {
+	it("拦截路由：零 settings 与 reminders 请求，铃铛不展示", () => {
 		expect(isReminderBypassRoute("/onboarding")).toBe(true);
 		expect(isReminderBypassRoute("/onboarding?backfill=1")).toBe(true);
 		expect(isReminderBypassRoute("/data-requests")).toBe(true);
@@ -339,73 +382,173 @@ describe("useReminderGate（未建账与锁定期请求门控，F1-3 / DEBT-06�
 				wrapper: createWrapper(),
 			});
 			expect(result.current.isBypassed).toBe(true);
+			expect(result.current.isOpen).toBe(false);
 		}
-		expect(onboardingApi.getStatus).not.toHaveBeenCalled();
 		expect(settingsApi.getSettings).not.toHaveBeenCalled();
 		expect(remindersApi.list).not.toHaveBeenCalled();
 	});
 
-	it("未建账用户（completed=false）：只查 onboarding/status，零 settings 与 reminders 请求", async () => {
-		vi.mocked(onboardingApi.getStatus).mockResolvedValue({
-			completed: false,
-			requiredConsentsMet: true,
-			settings: null,
-			currentTermsVersion: "2026-01",
+	it("R2-I10：未选组织时零 settings / reminders 请求（铃铛不得抢发无组织头的请求）", async () => {
+		useOrganizationStore.setState({ activeOrganizationId: null });
+		const { result } = renderHook(() => useReminderGate("/home"), {
+			wrapper: createWrapper(),
+		});
+		await settle();
+		expect(organizationsApi.current).not.toHaveBeenCalled();
+		expect(settingsApi.getSettings).not.toHaveBeenCalled();
+		expect(remindersApi.list).not.toHaveBeenCalled();
+		expect(result.current.gate).toBe("no-organization");
+		expect(result.current.isOpen).toBe(false);
+		expect(result.current.reminderEnabled).toBe(false);
+	});
+
+	it("R2-I07：设置键按组织分桶——切换组织后按新组织键重新拉取，不沿用上一个组织的缓存", async () => {
+		vi.mocked(remindersApi.list).mockResolvedValue(viewData);
+		const { queryClient, Wrapper } = createWrapperWithClient();
+		const { result } = renderHook(() => useReminderGate("/home"), {
+			wrapper: Wrapper,
+		});
+		await waitFor(() => expect(result.current.reminderEnabled).toBe(true));
+		expect(
+			queryClient.getQueryData(
+				withOrgScope("org-test", queryKeys.settings.detail()),
+			),
+		).toEqual(settingsView);
+
+		// 切到另一组织：提醒开关是组织级的，按新组织键重新拉取
+		mockCurrentOrganization({
+			name: "另一个组织",
+			ledgerStartedAt: "2026-02-01T00:00:00.000Z",
+		});
+		vi.mocked(settingsApi.getSettings).mockResolvedValue({
+			...settingsView,
+			reminderEnabled: false,
+		});
+		act(() => {
+			useOrganizationStore.setState({ activeOrganizationId: "org-other" });
+		});
+		// 等的是新组织的设置真正落进它自己的键（新键上 data 为 undefined 时 reminderEnabled
+		// 本就是 false，不能拿它当「已切换」的信号）
+		await waitFor(() =>
+			expect(
+				queryClient.getQueryData(
+					withOrgScope("org-other", queryKeys.settings.detail()),
+				),
+			).toMatchObject({ reminderEnabled: false }),
+		);
+		expect(settingsApi.getSettings).toHaveBeenCalledTimes(2);
+		expect(result.current.reminderEnabled).toBe(false);
+		// 键含组织 id：两个组织的设置缓存互不覆盖
+		expect(
+			queryClient.getQueryData(
+				withOrgScope("org-other", queryKeys.settings.detail()),
+			),
+		).toMatchObject({ reminderEnabled: false });
+		expect(
+			queryClient.getQueryData(
+				withOrgScope("org-test", queryKeys.settings.detail()),
+			),
+		).toMatchObject({ reminderEnabled: true });
+	});
+
+	it("useReminders({ enabled: false }) 不触发 GET /reminders", () => {
+		const { result } = renderHook(() => useReminders({ enabled: false }), {
+			wrapper: createWrapper(),
 		});
 
+		expect(result.current.items).toEqual([]);
+		expect(result.current.unreadCount).toBe(0);
+		expect(remindersApi.list).not.toHaveBeenCalled();
+	});
+
+	it("DEBT-06：未建账组织零 settings、零 reminders 请求（此前铃铛每次都吃一个 409）", async () => {
+		mockCurrentOrganization({ onboardingCompleted: false });
 		const { result } = renderHook(() => useReminderGate("/home"), {
 			wrapper: createWrapper(),
 		});
 
-		await waitFor(() => expect(onboardingApi.getStatus).toHaveBeenCalledTimes(1));
-		expect(result.current.isOnboarded).toBe(false);
+		await waitFor(() => expect(result.current.gate).toBe("not-onboarded"));
+		await settle();
+		expect(organizationsApi.current).toHaveBeenCalledOnce();
 		expect(settingsApi.getSettings).not.toHaveBeenCalled();
 		expect(remindersApi.list).not.toHaveBeenCalled();
+		expect(result.current.isOpen).toBe(false);
+	});
+
+	it("组织删除处理中：零 settings、零 reminders 请求（否则必然 403 并被跳转）", async () => {
+		mockCurrentOrganization({
+			dataRequestLock: { active: true, type: "DELETION" },
+		});
+		const { result } = renderHook(() => useReminderGate("/home"), {
+			wrapper: createWrapper(),
+		});
+
+		await waitFor(() => expect(result.current.gate).toBe("deletion-locked"));
+		await settle();
+		expect(settingsApi.getSettings).not.toHaveBeenCalled();
+		expect(remindersApi.list).not.toHaveBeenCalled();
+		expect(result.current.isOpen).toBe(false);
+	});
+
+	it("组织详情在途：闸门先关着（零请求），放行后才查 settings", async () => {
+		let release: (value: OrganizationCurrent) => void = () => {};
+		vi.mocked(organizationsApi.current).mockReturnValueOnce(
+			new Promise<OrganizationCurrent>((resolve) => {
+				release = resolve;
+			}),
+		);
+		const { result } = renderHook(() => useReminderGate("/home"), {
+			wrapper: createWrapper(),
+		});
+		await waitFor(() => expect(organizationsApi.current).toHaveBeenCalledOnce());
+		await settle();
+		expect(result.current.gate).toBe("loading");
+		expect(result.current.isOpen).toBe(false);
+		expect(settingsApi.getSettings).not.toHaveBeenCalled();
+
+		release({
+			id: "org-test",
+			name: "测试组织",
+			role: "OWNER",
+			capabilities: {},
+			onboardingCompleted: true,
+			baseCurrency: "CNY",
+			ledgerStartedAt: "2026-01-01T00:00:00.000Z",
+			dataRequestLock: { active: false, type: null },
+		});
+		await waitFor(() => expect(result.current.gate).toBe("ready"));
+		await waitFor(() => expect(result.current.reminderEnabled).toBe(true));
+		expect(settingsApi.getSettings).toHaveBeenCalledOnce();
+	});
+
+	it("组织详情读取失败：闸门回退放行，交给 /settings 自身裁决（不把用户卡在无声的空状态）", async () => {
+		vi.mocked(organizationsApi.current).mockRejectedValue(new Error("网络抖动"));
+		vi.mocked(remindersApi.list).mockResolvedValue(viewData);
+		const { result } = renderHook(() => useReminderGate("/home"), {
+			wrapper: createWrapper(),
+		});
+
+		await waitFor(() => expect(result.current.unreadCount).toBe(1));
+		expect(result.current.gate).toBe("ready");
+		expect(result.current.isOpen).toBe(true);
 	});
 
 	it("已建账但关闭提醒（reminderEnabled=false）：查 settings 但零 reminders 请求", async () => {
-		vi.mocked(onboardingApi.getStatus).mockResolvedValue({
-			completed: true,
-			requiredConsentsMet: true,
-			settings: null,
-			currentTermsVersion: "2026-01",
-		});
 		vi.mocked(settingsApi.getSettings).mockResolvedValue({
-			email: "u@example.com",
-			region: "CN",
-			locale: "zh-CN",
-			baseCurrency: "CNY",
-			prepPreference: "balanced",
+			...settingsView,
 			reminderEnabled: false,
-			ledgerStartedAt: "2026-01-01T00:00:00.000Z",
 		});
-
 		const { result } = renderHook(() => useReminderGate("/home"), {
 			wrapper: createWrapper(),
 		});
 
-		await waitFor(() => expect(settingsApi.getSettings).toHaveBeenCalledTimes(1));
-		expect(result.current.isOnboarded).toBe(true);
-		expect(result.current.reminderEnabled).toBe(false);
+		await waitFor(() => expect(settingsApi.getSettings).toHaveBeenCalledOnce());
+		await waitFor(() => expect(result.current.reminderEnabled).toBe(false));
+		expect(result.current.isOpen).toBe(true);
 		expect(remindersApi.list).not.toHaveBeenCalled();
 	});
 
 	it("已建账且开启提醒（reminderEnabled=true）：正常拉取未读数", async () => {
-		vi.mocked(onboardingApi.getStatus).mockResolvedValue({
-			completed: true,
-			requiredConsentsMet: true,
-			settings: null,
-			currentTermsVersion: "2026-01",
-		});
-		vi.mocked(settingsApi.getSettings).mockResolvedValue({
-			email: "u@example.com",
-			region: "CN",
-			locale: "zh-CN",
-			baseCurrency: "CNY",
-			prepPreference: "balanced",
-			reminderEnabled: true,
-			ledgerStartedAt: "2026-01-01T00:00:00.000Z",
-		});
 		vi.mocked(remindersApi.list).mockResolvedValue(viewData);
 
 		const { result } = renderHook(() => useReminderGate("/home"), {
@@ -414,5 +557,19 @@ describe("useReminderGate（未建账与锁定期请求门控，F1-3 / DEBT-06�
 
 		await waitFor(() => expect(result.current.unreadCount).toBe(1));
 		expect(remindersApi.list).toHaveBeenCalledTimes(1);
+		expect(result.current.isOpen).toBe(true);
+	});
+
+	it("拦截路由与闸门是「与」的关系：拦截路由上即便组织已建账也不发请求", async () => {
+		vi.mocked(remindersApi.list).mockResolvedValue(viewData);
+		const { result } = renderHook(() => useReminderGate("/data-requests"), {
+			wrapper: createWrapper(),
+		});
+		// 闸门本身照常解析（页面上别的组件需要），但铃铛不查设置、不查提醒
+		await waitFor(() => expect(result.current.gate).toBe("ready"));
+		await settle();
+		expect(settingsApi.getSettings).not.toHaveBeenCalled();
+		expect(remindersApi.list).not.toHaveBeenCalled();
+		expect(result.current.isBypassed).toBe(true);
 	});
 });
