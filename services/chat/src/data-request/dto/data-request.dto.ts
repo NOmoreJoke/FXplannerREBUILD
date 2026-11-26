@@ -298,13 +298,26 @@ function ApiPropertyOneOf() {
 	});
 }
 
-/** 409 LAST_OWNER_REQUIRED 响应体（个人注销：须先处理阻塞组织） */
-export class LastOwnerRequiredBodyDto extends DataRequestErrorDto {
+/** 409 LAST_OWNER_REQUIRED 的 data：阻塞注销的组织列表（个人注销：须先处理阻塞组织） */
+export class LastOwnerRequiredDataDto {
 	@ApiProperty({
 		type: [BlockingOrganizationDto],
 		description: "阻塞注销的组织列表（需先转移所有权或删除这些组织）",
 	})
 	blockingOrganizations!: BlockingOrganizationDto[];
+}
+
+/**
+ * 409 LAST_OWNER_REQUIRED 响应体（个人注销：须先处理阻塞组织）。
+ * 字段位置必须与 DataRequestLastOwnerRequiredException 的运行时包体一致：列表在 data 下。
+ * 此前误标在顶层，前端按契约读顶层恒取到空列表，阻塞组织与处置入口渲染不出来。
+ */
+export class LastOwnerRequiredBodyDto extends DataRequestErrorDto {
+	@ApiProperty({
+		type: LastOwnerRequiredDataDto,
+		description: "最后所有者阻塞详情",
+	})
+	data!: LastOwnerRequiredDataDto;
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -87,7 +87,7 @@ export function useVerifyPersonalDataRequest() {
 
 /**
  * 提交个人请求（EXPORT / DELETION）。失败时 ApiError 原样抛出：
- * 409 LAST_OWNER_REQUIRED 的阻塞组织列表取自 error.body.blockingOrganizations
+ * 409 LAST_OWNER_REQUIRED 的阻塞组织列表取自 error.body.data.blockingOrganizations
  * （见 data-requests.ts 的 getBlockingOrganizations），UI 据此渲染处置入口。
  */
 export function useCreatePersonalDataRequest() {

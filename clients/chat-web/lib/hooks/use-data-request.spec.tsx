@@ -36,6 +36,7 @@ import { useOrganizationStore } from "@/lib/stores/organization-store";
 import type {
 	DataRequestView,
 	ImpactView,
+	LastOwnerRequiredBody,
 } from "@/lib/api/contract";
 import {
 	ORGANIZATION_IMPACT_QUERY_KEY,
@@ -372,15 +373,23 @@ describe("use-data-request（个人域：不依赖组织）", () => {
 		expect(isInvalidated(queryClient, keys.personalSettings)).toBe(false);
 	});
 
-	it("提交被 409 LAST_OWNER_REQUIRED 拒绝：ApiError 原样抛出，blockingOrganizations 保留在 error.body 上供 UI 渲染", async () => {
+	it("提交被 409 LAST_OWNER_REQUIRED 拒绝：ApiError 原样抛出，UI 层能从 error.body.data 取出阻塞组织", async () => {
 		const blockingOrganizations = [
 			{ organizationId: "org-a", organizationName: "组织 A", role: "OWNER" },
 		];
+		// 后端 DataRequestLastOwnerRequiredException 的运行时包体：列表在 data 下
+		// （以 OpenAPI 契约类型约束，契约与运行时包体错位会先在类型检查暴露）
+		const lastOwnerBody: LastOwnerRequiredBody = {
+			success: false,
+			code: "LAST_OWNER_REQUIRED",
+			message: "你仍是以下组织的唯一所有者，须先转移所有权或删除组织后才能注销账号",
+			data: { blockingOrganizations },
+		};
 		const lastOwnerError = new ApiError(
-			"你仍是某组织的唯一所有者",
+			lastOwnerBody.message,
 			409,
 			"LAST_OWNER_REQUIRED",
-			{ success: false, code: "LAST_OWNER_REQUIRED", blockingOrganizations },
+			lastOwnerBody,
 		);
 		vi.mocked(dataRequestsApi.createPersonal).mockRejectedValue(lastOwnerError);
 		const { Wrapper } = createWrapper();
@@ -394,12 +403,15 @@ describe("use-data-request（个人域：不依赖组织）", () => {
 			challengeId: "ch-del",
 		});
 		await waitFor(() => expect(result.current.isError).toBe(true));
-		// 同一个错误实例：hook 不吞错、不改写，UI 层用 getBlockingOrganizations 取列表
+		// 同一个错误实例：hook 不吞错、不改写
 		const error = result.current.error;
 		expect(error).toBe(lastOwnerError);
 		expect(error).toBeInstanceOf(ApiError);
-		const body = error instanceof ApiError ? error.body : undefined;
-		expect(body?.blockingOrganizations).toEqual(blockingOrganizations);
+		// UI 层据此渲染处置入口：本文件 mock 了 API 模块，这里取真实实现走一遍提取
+		const { getBlockingOrganizations } = await vi.importActual<
+			typeof import("@/lib/api/data-requests")
+		>("@/lib/api/data-requests");
+		expect(getBlockingOrganizations(error)).toEqual(blockingOrganizations);
 	});
 
 	it("useCancelPersonalDataRequest 撤回个人请求：走个人端点，注销撤回携带 DELETION 验证凭证", async () => {

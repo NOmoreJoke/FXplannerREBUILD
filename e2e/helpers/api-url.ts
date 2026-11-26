@@ -40,8 +40,7 @@ export function buildApiUrl(base: string, path: string): string {
  * SSRF 面；本函数在 fetch 前于**同一函数内**显式校验协议与回环主机，使污点分析
  * 能看到「URL → 校验 → fetch」链路（生产代码请勿模仿——生产侧应拒绝环回/私网
  * 地址，方向与此相反）。裸 `fetch(...)` 一律改走本函数（Mimosa gate 误报治理，
- * 见 docs/handoff/MIMOSA-GATE-20261105.md）；已知例外：12-account-data 的
- * lanApiUrl()（LAN IP 限流分桶）保留直连 fetch。
+ * 见 docs/handoff/MIMOSA-GATE-20261105.md）。
  */
 export async function localFetch(
 	rawUrl: string,

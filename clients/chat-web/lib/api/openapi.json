@@ -8497,6 +8497,21 @@
           "role"
         ]
       },
+      "LastOwnerRequiredDataDto": {
+        "type": "object",
+        "properties": {
+          "blockingOrganizations": {
+            "description": "阻塞注销的组织列表（需先转移所有权或删除这些组织）",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockingOrganizationDto"
+            }
+          }
+        },
+        "required": [
+          "blockingOrganizations"
+        ]
+      },
       "LastOwnerRequiredBodyDto": {
         "type": "object",
         "properties": {
@@ -8512,19 +8527,20 @@
             "type": "string",
             "description": "人类可读信息"
           },
-          "blockingOrganizations": {
-            "description": "阻塞注销的组织列表（需先转移所有权或删除这些组织）",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BlockingOrganizationDto"
-            }
+          "data": {
+            "description": "最后所有者阻塞详情",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LastOwnerRequiredDataDto"
+              }
+            ]
           }
         },
         "required": [
           "success",
           "code",
           "message",
-          "blockingOrganizations"
+          "data"
         ]
       },
       "ImpactTotalsDto": {

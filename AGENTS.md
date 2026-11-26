@@ -163,6 +163,10 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | 持锁写的操作者资格 | 组织锁内一律经 `lockOrganizationForActor` 重读操作者并以最新角色判定，不得沿用 Guard 放行时的 `actor.role`（等待锁期间可能已被降权 / 移除 / 失去所有权） |
 | 会话上下文重置 | `clients/chat-web/lib/auth/session-reset.ts`：登录 / 注册 / 登出 / 401 的唯一入口；业务代码不单独清组织选择、拒绝集合或聊天运行时态 |
 | 组织 E2E 用例 | `e2e/modules/15-organization.spec.ts`（Goal #3A W21 落盘骨架，人类启服后运行） |
+| 建账后的缓存失效 | `invalidateAfterOnboarding`（`lib/api/query-keys.ts`）必须连带失效 `queryKeys.organizations.all`；向导页 / 补录页导航前须 `await refreshOrganizationDetails(queryClient)`（同文件）——首页分流读组织详情缓存的 `onboardingCompleted`（键不带 org 前缀，`invalidateBusinessKey` 覆盖不到），漏掉即建账后在 `/home` ↔ `/onboarding` 间回弹；回读失败时该函数移除组织域查询再放行，不带着旧的「未建账」详情导航 |
+| E2E Node 侧直连后端 | 一律 `localFetch(buildApiUrl(回环地址, …))`（`e2e/helpers/api-url.ts`），回环地址 = `API_URL.replace("localhost", "127.0.0.1")`；禁止取 LAN IP / `os.networkInterfaces()`（TUN 下命中 utun）；按 IP 频控由 `run-e2e-tests.sh` 的 `OTP_IP_MAX_REQUESTS` 放大 |
+| E2E 组织管理端点造数 | `api(path, { headers: { "X-Organization-Id": orgId } })`（`e2e/helpers/api-seeder.ts`）——`/organizations/current/*` 的成员 / 邀请 / 所有权端点挂严格守卫，缺头 400（单组织回落只在业务端点）；所有权转交 = `POST /api/organizations/current/transfer-ownership` |
+| E2E 本地测试库钩子 | 均在**同一函数内**校验回环 PostgreSQL 并拒绝 `?host=` 覆盖，再经 `createRequire` 用后端 Prisma 客户端：`correction-db.ts`（改记账起点须同时改 `OrganizationSettings` 与 `UserSettings`）、`correction-quote-db.ts`、`rate-cache-db.ts`（外呼取价 `RATE_UNAVAILABLE` 时插入已确认 frankfurter 缓存行，`latestConfirmedAt=now` + `canonicalWriteId`，重试后立即按 id 清理；并导出库名闸门 `assertRateCacheTestDatabase`——会写 `exchange_rates` 的钩子共用：显式 `FXPLANNER_E2E_QUOTE_DATABASE` 须等于库名，未注入时库名以 `_local` / `_test` 结尾才放行，脚本从 `services/chat/.env.local` 解析库名注入）；直插账本行须落 `organizationId`（`seedInitialHolding` 可选参数，查不到 OWNER 组织回落兼容窗口 NULL 行） |
 | MVP-F0 汇率回补与缓存迁移底稿 | `changes/realtime-rate/` |
 | 汇率缓存迁移完成记录与行归属 DDL | `services/chat/prisma/migrations/20261120090000_rate_cache_migration_receipt/` |
 | 汇率回源方向标记 DDL | `services/chat/prisma/migrations/20261120091000_rate_cache_canonical_write/` |

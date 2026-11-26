@@ -93,6 +93,17 @@ async function sendMessage(page: Page, content: string): Promise<void> {
 	await page.getByTestId("chat-send").click();
 }
 
+/**
+ * 等一轮流式回复完全结束（刷新 / 断言落库前的前置）：光标出现 → 消失 → 发送钮回来。
+ * 助手消息只在流式成功后才落库（done 帧之后流式态才清）：只等到「助手气泡出现」
+ * 就刷新，会打断仍在进行的 SSE，这条回复刷新后就不在了。
+ */
+async function awaitStreamSettled(page: Page): Promise<void> {
+	await expect(page.locator(CARET).first()).toBeVisible();
+	await expect(page.locator(CARET)).toHaveCount(0);
+	await expect(page.getByTestId("chat-send")).toBeVisible();
+}
+
 // ── 用例 ───────────────────────────────────────────────────────────────────
 
 test.describe("【AI 助手】菜单 / 流式 / 持久化 / 会话管理 / XSS 与停止", () => {
@@ -156,7 +167,7 @@ test.describe("【AI 助手】菜单 / 流式 / 持久化 / 会话管理 / XSS �
 
 		await openChat(page, seed.accessToken);
 
-		sendMessage(page, "你好");
+		await sendMessage(page, "你好");
 
 		// 用户气泡立即出现（乐观插入，先于助手回复）
 		await expect(page.getByTestId("message-user")).toHaveText("你好");
@@ -209,10 +220,16 @@ test.describe("【AI 助手】菜单 / 流式 / 持久化 / 会话管理 / XSS �
 		await saveScreenshot(page, "14-ai-chat", "T-AI-003-01-restored");
 
 		// 多轮追问（假模型回复固定 → 断言消息序列而非内容；上下文窗口归 §8.2 集成测试）
-		sendMessage(page, "第二轮追问：请继续");
+		await sendMessage(page, "第二轮追问：请继续");
 		await expect(page.getByTestId("message-user")).toHaveCount(2);
-		await expect(page.locator(CARET)).toHaveCount(0);
+		// 等这轮流式回复完全结束再往下走：流式中「助手气泡」是流式气泡，一出现就刷新
+		// 会打断仍在进行的 SSE，这条回复不落库，下面的刷新断言就只剩 1 条助手消息
+		await awaitStreamSettled(page);
 		await expect(page.getByTestId("message-assistant")).toHaveCount(2);
+		// toContainText（非全文相等）：assistant 气泡内含模型角标后缀（§5.2 message-bubble）
+		await expect(page.getByTestId("message-assistant").last()).toContainText(
+			E2E_FAKE_REPLY,
+		);
 		await saveScreenshot(page, "14-ai-chat", "T-AI-003-02-follow-up");
 
 		// 落库闭环：再次刷新后 4 条消息全在
@@ -239,9 +256,9 @@ test.describe("【AI 助手】菜单 / 流式 / 持久化 / 会话管理 / XSS �
 		await expect(page.getByTestId("message-empty")).toBeVisible();
 
 		// 发长消息建会话 B：标题 = 首条消息前 20 字（服务端截断）
-		sendMessage(page, LONG);
+		await sendMessage(page, LONG);
 		await expect(page.getByTestId("message-user")).toHaveText(LONG);
-		await expect(page.locator(CARET)).toHaveCount(0);
+		await awaitStreamSettled(page);
 		// toContainText（非全文相等）：assistant 气泡内含模型角标后缀（§5.2 message-bubble）
 		await expect(page.getByTestId("message-assistant").last()).toContainText(
 			E2E_FAKE_REPLY,
@@ -293,7 +310,7 @@ test.describe("【AI 助手】菜单 / 流式 / 持久化 / 会话管理 / XSS �
 		// XSS 载荷（赋值表达式而非 alert，避免 dialog 挂起；< 2000 字上限）
 		const xssPayload =
 			'<img src=x onerror="window.__e2eXss=1"><script>window.__e2eXss=2</script>';
-		sendMessage(page, xssPayload);
+		await sendMessage(page, xssPayload);
 
 		// 用户消息按纯文本渲染（React 转义）：气泡文本 = 原文
 		await expect(page.getByTestId("message-user")).toHaveText(xssPayload);
@@ -367,6 +384,8 @@ test.describe("【AI 助手】菜单 / 流式 / 持久化 / 会话管理 / XSS �
 			.click();
 		await expect(trigger).toHaveText(/GPT-5\.5/);
 		await sendMessage(page, "追问：这条消息应该使用 GPT-5.5 回答");
+		// 先等这轮流式回复完全结束（刷新前的前置，见 awaitStreamSettled）
+		await awaitStreamSettled(page);
 		await expect(
 			page
 				.getByTestId("message-assistant")

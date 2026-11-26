@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import {
 	clearOrganizationScopedQueries,
@@ -9,6 +9,7 @@ import {
 	isOrgScopedKey,
 	matchesBusinessKey,
 	queryKeys,
+	refreshOrganizationDetails,
 	withOrgScope,
 } from "./query-keys";
 
@@ -196,7 +197,7 @@ describe("组织感知失效：同时命中无前缀键与任意组织前缀键"
 		}
 	});
 
-	it("invalidateAfterOnboarding：首页/提醒/设置/账户/建账态的全形态失效", () => {
+	it("invalidateAfterOnboarding：首页/提醒/设置/账户/建账态的全形态失效 + 组织详情与组织列表", () => {
 		const keys: QueryKey[] = [
 			queryKeys.onboarding.status(),
 			queryKeys.home.state(),
@@ -206,8 +207,18 @@ describe("组织感知失效：同时命中无前缀键与任意组织前缀键"
 			queryKeys.accounts.list(),
 		];
 		const allForms = keys.flatMap((key) => [key, withOrgScope("org-a", key)]);
-		const qc = seedAndRun(allForms, invalidateAfterOnboarding);
-		for (const key of allForms) {
+		// 回归要点：首页分流读组织详情缓存的 onboardingCompleted（W28）。键形
+		// ["organizations", …] 不带 org 前缀，业务键匹配覆盖不到——此前漏失效，
+		// 建账后跳 /home 读到旧的「未建账」详情会立刻 replace 回 /onboarding
+		const organizationKeys: QueryKey[] = [
+			queryKeys.organizations.current("org-a"),
+			queryKeys.organizations.list(),
+		];
+		const qc = seedAndRun(
+			[...allForms, ...organizationKeys],
+			invalidateAfterOnboarding,
+		);
+		for (const key of [...allForms, ...organizationKeys]) {
 			expect(isInvalidated(qc, key), `应失效：${JSON.stringify(key)}`).toBe(true);
 		}
 	});
@@ -402,5 +413,85 @@ describe("ToB W20：组织作用域键与切换清理", () => {
 		expect(matches(queryKeys.rates.supported())).toBe(false);
 		expect(matches(queryKeys.auth.me())).toBe(false);
 		expect(matches(queryKeys.organizations.list())).toBe(false);
+	});
+});
+
+describe("建账后导航前回读组织详情：refreshOrganizationDetails", () => {
+	const ORG_DETAIL: QueryKey = queryKeys.organizations.current("org-a");
+
+	/**
+	 * 挂一个观察者让查询处于 active（invalidate 才会真的 refetch；无观察者只标失效）。
+	 * staleTime: Infinity 挡掉挂载时的自动拉取——回读只可能由被测函数触发。
+	 */
+	function observe(
+		qc: QueryClient,
+		queryFn: () => Promise<unknown>,
+	): () => void {
+		const observer = new QueryObserver(qc, {
+			queryKey: ORG_DETAIL,
+			queryFn,
+			retry: false,
+			staleTime: Infinity,
+		});
+		return observer.subscribe(vi.fn());
+	}
+
+	it("回读成功：组织详情换成新值并留在缓存里", async () => {
+		const qc = new QueryClient();
+		qc.setQueryData(ORG_DETAIL, { onboardingCompleted: false });
+		const unsubscribe = observe(qc, async () => ({
+			onboardingCompleted: true,
+		}));
+
+		await refreshOrganizationDetails(qc);
+
+		expect(qc.getQueryData(ORG_DETAIL)).toEqual({ onboardingCompleted: true });
+		expect(qc.getQueryState(ORG_DETAIL)?.status).toBe("success");
+		unsubscribe();
+	});
+
+	it("回读失败：移除组织域查询——不带着旧的「未建账」详情去导航", async () => {
+		const qc = new QueryClient();
+		qc.setQueryData(ORG_DETAIL, { onboardingCompleted: false });
+		// 同域的组织列表（此处无观察者）一并移除
+		qc.setQueryData(queryKeys.organizations.list(), [{ id: "org-a" }]);
+		const unsubscribe = observe(qc, async () => {
+			throw new Error("network");
+		});
+
+		await refreshOrganizationDetails(qc);
+
+		// 不移除的话这里会是 status=error 且 data 仍是旧的 { onboardingCompleted: false }
+		expect(qc.getQueryState(ORG_DETAIL)).toBeUndefined();
+		expect(qc.getQueryData(queryKeys.organizations.list())).toBeUndefined();
+		unsubscribe();
+	});
+
+	it("invalidateQueries 意外抛错：同样移除组织域查询，且不上抛（导航照常）", async () => {
+		const qc = new QueryClient();
+		qc.setQueryData(ORG_DETAIL, { onboardingCompleted: false });
+		vi.spyOn(qc, "invalidateQueries").mockRejectedValue(
+			new Error("unexpected"),
+		);
+
+		await expect(refreshOrganizationDetails(qc)).resolves.toBeUndefined();
+
+		expect(qc.getQueryState(ORG_DETAIL)).toBeUndefined();
+	});
+
+	it("只动组织域：首页等无关缓存不受波及", async () => {
+		const qc = new QueryClient();
+		const homeState: QueryKey = queryKeys.home.state();
+		qc.setQueryData(ORG_DETAIL, { onboardingCompleted: false });
+		qc.setQueryData(homeState, { hasAccounts: false });
+		const unsubscribe = observe(qc, async () => {
+			throw new Error("network");
+		});
+
+		await refreshOrganizationDetails(qc);
+
+		expect(qc.getQueryState(ORG_DETAIL)).toBeUndefined();
+		expect(qc.getQueryData(homeState)).toEqual({ hasAccounts: false });
+		unsubscribe();
 	});
 });

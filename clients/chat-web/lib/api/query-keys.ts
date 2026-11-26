@@ -207,7 +207,14 @@ export function invalidateBusinessKey(
 	void queryClient.invalidateQueries({ predicate });
 }
 
-/** 首次建账完成后统一失效缓存，确保首页、顶栏铃铛、设置与账户立即反映已建账态 */
+/**
+ * 首次建账完成后统一失效缓存，确保首页、顶栏铃铛、设置与账户立即反映已建账态。
+ *
+ * 组织域必须一并失效：首页分流（useHomeState 的 needsOnboarding）读的是组织详情缓存的
+ * onboardingCompleted，键形 ["organizations", "current", <id>] 不带 org 前缀，
+ * invalidateBusinessKey 的业务键匹配覆盖不到——漏掉它，首页在 staleTime 窗口内读到
+ * 旧的「未建账」详情会立刻 replace 回 /onboarding。
+ */
 export function invalidateAfterOnboarding(queryClient: QueryClient): void {
 	invalidateBusinessKey(queryClient, queryKeys.onboarding.status());
 	invalidateBusinessKey(queryClient, queryKeys.home.state());
@@ -215,6 +222,40 @@ export function invalidateAfterOnboarding(queryClient: QueryClient): void {
 	invalidateBusinessKey(queryClient, queryKeys.settings.all);
 	invalidateBusinessKey(queryClient, queryKeys.reminders.all);
 	invalidateBusinessKey(queryClient, queryKeys.accounts.all);
+	void queryClient.invalidateQueries({ queryKey: queryKeys.organizations.all });
+}
+
+/**
+ * 建账 / 补录后导航回首页前调用：回读组织域查询（详情 + 列表）并等到 refetch 结束。
+ *
+ * 首页分流读的是组织详情缓存的 onboardingCompleted。invalidateAfterOnboarding 只标失效
+ * 不等待——不等就跳，/home 会读到旧的「未建账」详情而立刻 replace 回向导页。
+ *
+ * 回读失败（refetch 报错，或 invalidateQueries 意外抛错）时把组织域查询整体移除再放行：
+ * 缓存里不留旧的「未建账」详情，/home 重新拉取（闸门先 loading、再按新结果分流），
+ * 而不是拿旧数据分流回向导页，在两页之间来回跳。失败不上抛：导航照常，由首页自身处理。
+ */
+export async function refreshOrganizationDetails(
+	queryClient: QueryClient,
+): Promise<void> {
+	let refreshFailed = false;
+	try {
+		await queryClient.invalidateQueries({
+			queryKey: queryKeys.organizations.all,
+		});
+	} catch {
+		// invalidateQueries 会吞掉 refetch 错误，能抛到这里只可能是意外异常：与回读失败同样处理
+		refreshFailed = true;
+	}
+	const organizationQueries = queryClient
+		.getQueryCache()
+		.findAll({ queryKey: queryKeys.organizations.all });
+	if (
+		refreshFailed ||
+		organizationQueries.some((query) => query.state.status === "error")
+	) {
+		queryClient.removeQueries({ queryKey: queryKeys.organizations.all });
+	}
 }
 
 /**

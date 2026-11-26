@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { seedInitialHolding } from "../../services/chat/test/helpers/correction-fixture";
 import { readEnvFile } from "./env-local";
+import { assertRateCacheTestDatabase } from "./rate-cache-db";
 
 type LedgerDb = Parameters<typeof seedInitialHolding>[0];
 type QuoteDb = LedgerDb & {
@@ -36,9 +37,8 @@ export async function withHistoricalCorrectionQuote(
 		throw new Error("报价更正 E2E 仅允许本地 PostgreSQL 测试库");
 	}
 	const database = decodeURIComponent(url.pathname.slice(1));
-	if (!database || process.env.FXPLANNER_E2E_QUOTE_DATABASE !== database) {
-		throw new Error("报价更正 E2E 会写全局报价。请用 FXPLANNER_E2E_QUOTE_DATABASE 指定候选专用测试库。");
-	}
+	// 本用例会写全局报价表 exchange_rates：库名闸门与汇率缓存兜底共用同一把（rate-cache-db）
+	assertRateCacheTestDatabase(database);
 
 	const chatRequire = createRequire(path.join(chatRoot, "package.json"));
 	const { PrismaClient } = chatRequire("@prisma/client") as {
@@ -52,11 +52,24 @@ export async function withHistoricalCorrectionQuote(
 				where: { id: user.userId, email: user.email },
 				select: { id: true },
 			});
+			// ToB R1：账本行按组织隔离。造数行与 onboarding 写侧同口径落组织（持仓 / 批次 /
+			// 账户三行一并），取该用户的 OWNER 组织——注册即建的个人工作台（E2E 用户只有它）。
+			// 查不到则不传：保持兼容窗口的 NULL 行，仅默认组织创建者本人在默认组织上下文可见。
+			const organization = await tx.organization.findFirst({
+				where: {
+					memberships: {
+						some: { userId: user.userId, role: "OWNER", status: "ACTIVE" },
+					},
+				},
+				orderBy: { createdAt: "asc" },
+				select: { id: true },
+			});
 			// 测试报价是全局记录，放在常用历史窗口以外，避免被当期行情或持仓选中。
 			const confirmedAt = new Date(Date.now() - 20 * 365 * 86_400_000);
 			const observedAt = new Date(confirmedAt.getTime() - 1000);
 			const holding = await seedInitialHolding(tx, {
 				userId: user.userId,
+				...(organization && { organizationId: organization.id }),
 				currencyCode: "USD",
 				amount: "1000",
 				rate: "7.248",

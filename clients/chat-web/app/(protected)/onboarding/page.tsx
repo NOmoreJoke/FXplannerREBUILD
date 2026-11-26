@@ -16,6 +16,7 @@ import { onboardingApi } from "@/lib/api/onboarding";
 import {
 	invalidateAfterLedgerMutation,
 	invalidateAfterOnboarding,
+	refreshOrganizationDetails,
 } from "@/lib/api/query-keys";
 import { ApiError } from "@/lib/api/client";
 import { safeRedirectPath } from "@/lib/auth/safe-redirect-path";
@@ -156,6 +157,10 @@ function OnboardingWizard() {
 			});
 			toast.success("建账完成");
 			refreshAfterOnboarding();
+			// 回首页前等组织详情回读到位：首页分流读它的 onboardingCompleted，不等就跳会读到
+			// 旧的「未建账」详情而立刻 replace 回本页（E2E T-OBW-002）。回读失败时该函数先移除
+			// 组织域查询再放行——/home 重新拉取，而不是拿旧数据分流回本页来回跳
+			await refreshOrganizationDetails(queryClient);
 			// 与上方「已建账」分支同口径：回登录前来源页（如 /invitations/<token>）。
 			// 此前硬编码 /home——未建账的受邀者建账完成后就丢失了邀请页（评审 R2-I11）
 			router.replace(safeRedirectPath(redirect) ?? "/home");
@@ -178,6 +183,8 @@ function OnboardingWizard() {
 			await onboardingApi.saveInitialHoldings({ holdings });
 			toast.success("初始持仓已入账");
 			refreshAfterBackfill();
+			// 同上：首页分流读组织详情，导航前先回读到位
+			await refreshOrganizationDetails(queryClient);
 			router.replace("/home");
 		} catch (error) {
 			toast.error(

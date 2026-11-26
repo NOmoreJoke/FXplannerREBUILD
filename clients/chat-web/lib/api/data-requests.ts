@@ -194,7 +194,7 @@ export const dataRequestsApi = {
 	/**
 	 * 提交个人请求：EXPORT 同步生成即完成；DELETION 进入 7 日撤回期。
 	 * 本人仍是某组织唯一所有者时注销被拒：409 LAST_OWNER_REQUIRED，
-	 * ApiError.body.blockingOrganizations 为阻塞组织列表（见 getBlockingOrganizations）。
+	 * ApiError.body.data.blockingOrganizations 为阻塞组织列表（见 getBlockingOrganizations）。
 	 */
 	async createPersonal(
 		input: CreatePersonalRequestInput,
@@ -316,6 +316,10 @@ function isBlockingOrganization(value: unknown): value is BlockingOrganization {
  * 取出 409 LAST_OWNER_REQUIRED 的阻塞组织列表（个人注销被拒：本人仍是这些组织的唯一
  * 所有者，须先转移所有权或删除组织）。非该错误返回 null，UI 据此渲染处置入口；
  * 列表字段逐项校验，不把未校验的响应体直接渲染成链接。
+ *
+ * 列表在包体的 data 下：与后端 DataRequestLastOwnerRequiredException 的运行时包体、
+ * OpenAPI 契约 LastOwnerRequiredBodyDto 同口径。此前读顶层字段恒取到空列表，
+ * 对话框只能显示「服务端未返回具体的组织」。
  */
 export function getBlockingOrganizations(
 	error: unknown,
@@ -327,7 +331,11 @@ export function getBlockingOrganizations(
 	) {
 		return null;
 	}
-	const list: unknown = error.body?.blockingOrganizations;
+	const data: unknown = error.body?.data;
+	const list: unknown =
+		typeof data === "object" && data !== null
+			? (data as Record<string, unknown>).blockingOrganizations
+			: undefined;
 	if (!Array.isArray(list)) return [];
 	return list.filter(isBlockingOrganization);
 }

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LastOwnerRequiredBody } from "./contract";
 
 // localStorage 回填（Node ≥26 原生 getter 遮蔽 jsdom localStorage，vitest#8757；
 // client.spec 先例——请求头注入经 organization-store 读取当前组织）
@@ -395,12 +396,32 @@ describe("dataRequestsApi.download / cancel（路径段 id 白名单）", () => 
 	});
 });
 
+/**
+ * 后端 DataRequestLastOwnerRequiredException 的运行时包体：阻塞组织列表在 data 下
+ * （services/chat/test/api/data-request.spec 的接口断言为运行时依据）。
+ * 包体以 OpenAPI 契约类型（schema.gen 的 LastOwnerRequiredBodyDto，由后端 DTO 生成）约束——
+ * 契约若再与运行时包体错位，这里先在类型检查暴露，而不是等 UI 渲染出空列表。
+ */
+function lastOwnerRequiredBody(
+	blockingOrganizations: LastOwnerRequiredBody["data"]["blockingOrganizations"],
+): LastOwnerRequiredBody {
+	return {
+		success: false,
+		code: "LAST_OWNER_REQUIRED",
+		message: "你仍是以下组织的唯一所有者，须先转移所有权或删除组织后才能注销账号",
+		data: { blockingOrganizations },
+	};
+}
+
 describe("getBlockingOrganizations（409 LAST_OWNER_REQUIRED 的阻塞组织列表）", () => {
+	const fetchMock = vi.fn();
 	let api: DataRequestsModule;
 	let ApiError: ClientModule["ApiError"];
 
 	beforeEach(async () => {
 		vi.stubEnv("NEXT_PUBLIC_API_BASE_URL", API_BASE);
+		vi.stubGlobal("fetch", fetchMock);
+		fetchMock.mockReset();
 		const modules = await loadModules();
 		api = modules.api;
 		ApiError = modules.client.ApiError;
@@ -408,6 +429,32 @@ describe("getBlockingOrganizations（409 LAST_OWNER_REQUIRED 的阻塞组织列�
 
 	afterEach(() => {
 		vi.unstubAllEnvs();
+		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
+	});
+
+	it("真实链路：409 响应的后端包体 → apiClient 构造的 ApiError → 取出 data 下的阻塞组织", async () => {
+		const blockingOrganizations = [
+			{ organizationId: "org-a", organizationName: "组织 A", role: "OWNER" },
+		];
+		// 每次调用给新 Response：body 单次消费（apiClient 之后若再发请求不能复用同一实例）
+		fetchMock.mockImplementation(
+			async () =>
+				Response.json(lastOwnerRequiredBody(blockingOrganizations), {
+					status: 409,
+				}),
+		);
+
+		const error: unknown = await api.dataRequestsApi
+			.createPersonal({
+				type: "DELETION",
+				scope: "PERSONAL",
+				challengeId: "ch-1",
+			})
+			.catch((caught: unknown) => caught);
+
+		expect(error).toBeInstanceOf(ApiError);
+		expect(api.getBlockingOrganizations(error)).toEqual(blockingOrganizations);
 	});
 
 	it("命中 409 LAST_OWNER_REQUIRED：返回服务端列出的阻塞组织", () => {
@@ -415,9 +462,8 @@ describe("getBlockingOrganizations（409 LAST_OWNER_REQUIRED 的阻塞组织列�
 			{ organizationId: "org-a", organizationName: "组织 A", role: "OWNER" },
 			{ organizationId: "org-c", organizationName: "组织 C", role: "NONE" },
 		];
-		const error = new ApiError("仍是唯一所有者", 409, "LAST_OWNER_REQUIRED", {
-			blockingOrganizations,
-		});
+		const body = lastOwnerRequiredBody(blockingOrganizations);
+		const error = new ApiError(body.message, 409, "LAST_OWNER_REQUIRED", body);
 		expect(api.getBlockingOrganizations(error)).toEqual(blockingOrganizations);
 	});
 
@@ -436,13 +482,47 @@ describe("getBlockingOrganizations（409 LAST_OWNER_REQUIRED 的阻塞组织列�
 		expect(api.getBlockingOrganizations(undefined)).toBeNull();
 	});
 
-	it("响应体缺列表或不是数组：返回空数组（UI 显示「未返回具体组织」而不是崩溃）", () => {
+	it("列表不在 data 下或不是数组：返回空数组（UI 显示「未返回具体组织」而不是崩溃）", () => {
 		const withoutBody = new ApiError("x", 409, "LAST_OWNER_REQUIRED");
-		const malformedBody = new ApiError("x", 409, "LAST_OWNER_REQUIRED", {
-			blockingOrganizations: { organizationId: "org-a" },
+		const withoutData = new ApiError("x", 409, "LAST_OWNER_REQUIRED", {
+			success: false,
+			code: "LAST_OWNER_REQUIRED",
+			message: "x",
 		});
-		expect(api.getBlockingOrganizations(withoutBody)).toEqual([]);
-		expect(api.getBlockingOrganizations(malformedBody)).toEqual([]);
+		const dataNotObject = new ApiError("x", 409, "LAST_OWNER_REQUIRED", {
+			success: false,
+			code: "LAST_OWNER_REQUIRED",
+			message: "x",
+			data: null,
+		});
+		const listNotArray = new ApiError("x", 409, "LAST_OWNER_REQUIRED", {
+			success: false,
+			code: "LAST_OWNER_REQUIRED",
+			message: "x",
+			data: { blockingOrganizations: { organizationId: "org-a" } },
+		});
+		// 回归要点：旧 Swagger 契约把列表误标在顶层，而后端从未这样返回过——
+		// 顶层有列表不算数，不能再按顶层读取
+		const topLevelOnly = new ApiError("x", 409, "LAST_OWNER_REQUIRED", {
+			success: false,
+			code: "LAST_OWNER_REQUIRED",
+			message: "x",
+			blockingOrganizations: [
+				{ organizationId: "org-a", organizationName: "组织 A", role: "OWNER" },
+			],
+		});
+		for (const error of [
+			withoutBody,
+			withoutData,
+			dataNotObject,
+			listNotArray,
+			topLevelOnly,
+		]) {
+			expect(
+				api.getBlockingOrganizations(error),
+				JSON.stringify(error.body),
+			).toEqual([]);
+		}
 	});
 
 	it("列表逐项校验：缺字段或类型不符的项被丢弃，不把未校验的数据渲染成链接", () => {
@@ -452,13 +532,18 @@ describe("getBlockingOrganizations（409 LAST_OWNER_REQUIRED 的阻塞组织列�
 			role: "OWNER",
 		};
 		const error = new ApiError("x", 409, "LAST_OWNER_REQUIRED", {
-			blockingOrganizations: [
-				valid,
-				{ organizationId: 42, organizationName: "坏数据", role: "OWNER" },
-				{ organizationId: "org-b" },
-				null,
-				"organization-c",
-			],
+			success: false,
+			code: "LAST_OWNER_REQUIRED",
+			message: "x",
+			data: {
+				blockingOrganizations: [
+					valid,
+					{ organizationId: 42, organizationName: "坏数据", role: "OWNER" },
+					{ organizationId: "org-b" },
+					null,
+					"organization-c",
+				],
+			},
 		});
 		expect(api.getBlockingOrganizations(error)).toEqual([valid]);
 	});

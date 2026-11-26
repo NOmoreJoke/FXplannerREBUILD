@@ -1,9 +1,13 @@
-import os from "node:os";
 import { test, expect } from "../fixtures/auto-screenshot";
 import { TestLogger } from "../helpers/logger";
 import { saveScreenshot } from "../helpers/save-screenshot";
-import { buildApiUrl, resolveApiBase } from "../helpers/api-url";
 import {
+	buildApiUrl,
+	localFetch,
+	resolveApiBase,
+} from "../helpers/api-url";
+import {
+	api,
 	injectLoginCookie,
 	seedOnboarding,
 	seedRegisterAndLogin,
@@ -22,11 +26,13 @@ import {
  *
  * 覆盖（grep T-DATA）：
  * - T-DATA-001 入口启用：三按钮可点击，无「即将上线」
- * - T-DATA-002 导出全流程：说明→验证（mock devCode）→提交→下载入口；重复提交同一请求
+ * - T-DATA-002 导出全流程（个人域）→ 下载入口；重复提交同一请求；另先核对组织导出
+ *   弹窗如实说明账本字段（W26/W28 双域拆分：个人导出不含账本，「币种」只在组织导出里）
  * - T-DATA-003 清空警示：记录数量 + 不可恢复警示 + 可先导出
  * - T-DATA-004 清空撤回：撤回后账本数据仍在、可正常记账
  * - T-DATA-005 清空完成：到期推进（DB 钩子）→ 空账本、本位币不变、新买入以新起点成功
- * - T-DATA-006 注销与撤回：提交→进度页→撤回期内验证撤回→账号恢复
+ * - T-DATA-006 注销与撤回：唯一所有者被 409 LAST_OWNER_REQUIRED 阻断；转移所有权后
+ *   提交→进度页→撤回期内验证撤回→账号恢复
  * - T-DATA-007 用途隔离：导出验证中填登录用途验证码 → 被拒（UI 层）+ 登录用途
  *   challenge 提交导出验证 → 403 VERIFICATION_PURPOSE_MISMATCH（API 层，用途先行校验）
  * - T-DATA-008 锁写体验：清空请求期间保存偏好 → 被引导至进度页
@@ -36,21 +42,23 @@ import {
 
 const BASE_URL = process.env.CORS_ORIGIN || "http://localhost:3001";
 const API_URL = resolveApiBase(process.env.API_URL, "http://localhost:4001");
-
 /**
- * 后端局域网地址：OTP_IP 频控按来源 IP 分桶（默认 5 次/60s），
- * 取 LOGIN 码走 LAN IP 与页面 127.0.0.1 分桶，避免共用窗口互相挤爆。
+ * Node 侧直连后端用的回环地址（替代此前的 LAN IP 取址）。改用 127.0.0.1 是为了绕开
+ * TUN / 虚拟网卡：os.networkInterfaces() 的首个非回环 IPv4 在开着 TUN 时是 utun 的
+ * 198.18.0.1，连上去直接 SocketError；127.0.0.1 永不经过虚拟网卡。
+ * 页面请求与这里的请求可能落在同一个 OTP_IP 频控桶：同 IP 上限的放宽依赖
+ * e2e/scripts/run-e2e-tests.sh 注入的 OTP_IP_MAX_REQUESTS=200（不经脚本单跑时是默认值）。
  */
-function lanApiUrl(): string {
-	if (!API_URL.includes("localhost")) return API_URL;
-	for (const list of Object.values(os.networkInterfaces())) {
-		for (const net of list ?? []) {
-			if (net.family === "IPv4" && !net.internal) {
-				return API_URL.replace("localhost", net.address);
-			}
-		}
-	}
-	return API_URL;
+const LOOPBACK_API_URL = API_URL.replace("localhost", "127.0.0.1");
+
+/** 个人域请求创建（POST /api/data-requests）的响应匹配器 */
+function isPersonalDataRequestCreate(
+	response: import("@playwright/test").Response,
+): boolean {
+	return (
+		response.request().method() === "POST" &&
+		new URL(response.url()).pathname === "/api/data-requests"
+	);
 }
 
 /** 走后端 API 直接发验证码（用途隔离用例取 LOGIN 用途 devCode） */
@@ -58,11 +66,14 @@ async function fetchDevCode(
 	email: string,
 	purpose?: string,
 ): Promise<{ challengeId: string; devCode?: string }> {
-	const res = await fetch(buildApiUrl(lanApiUrl(), "/api/auth/otp/send-code"), {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ channel: "email", target: email, purpose }),
-	});
+	const res = await localFetch(
+		buildApiUrl(LOOPBACK_API_URL, "/api/auth/otp/send-code"),
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ channel: "email", target: email, purpose }),
+		},
+	);
 	const json = (await res.json()) as {
 		data: { challengeId: string; devCode?: string };
 	};
@@ -90,7 +101,102 @@ async function seedFullUser(label: string) {
 			await new Promise((resolve) => setTimeout(resolve, 30_000));
 		}
 	}
-	throw lastError;
+		throw lastError;
+}
+
+/** 服务端 id（cuid）与邀请 token（base64url）进路径 / 请求体前的形状白名单 */
+const SERVER_ID_SHAPE = /^[A-Za-z0-9]{1,64}$/;
+const INVITATION_TOKEN_SHAPE = /^[A-Za-z0-9_-]{20,128}$/;
+
+function assertShape(value: string, pattern: RegExp, label: string): string {
+	if (!pattern.test(value)) {
+		throw new Error(`${label} 形状非法：${value}`);
+	}
+	return value;
+}
+
+/**
+ * 把 owner 在其唯一组织里的所有权转给 successor（T-DATA-006 前置，全部走真实组织 API）：
+ * 邀请（一次性 token 仅创建响应出现）→ 受邀者接受（返回其 Membership id）→ 转交所有权
+ * （原 Owner 降为 ADMIN）。组织管理端点挂严格守卫，必须带 X-Organization-Id——
+ * 造数 api() 缺省不带头，故显式传入。
+ *
+ * 可重入（Playwright 重试复用同一批用户）：已转交（原 Owner 已是 ADMIN）直接返回；
+ * 上次中断在「已邀请未接受」→ 撤回旧邀请重建（reused=true 不重发 token）；
+ * 中断在「已接受未转交」→ 受邀者已是有效成员，跳过邀请与接受。
+ */
+async function handOverOwnership(
+	owner: Awaited<ReturnType<typeof seedRegisterAndLogin>>,
+	successor: Awaited<ReturnType<typeof seedRegisterAndLogin>>,
+): Promise<void> {
+	const organizations = await api<{ id: string; role: string }[]>(
+		"/api/organizations",
+		{ method: "GET", token: owner.accessToken },
+	);
+	// owner 刚注册：名下只有注册兜底建的那个组织（恰好一个，无需挑选）
+	expect(organizations).toHaveLength(1);
+	const organization = organizations[0];
+	if (!organization) throw new Error("handOverOwnership：owner 名下没有组织");
+	if (organization.role !== "OWNER") return;
+	const headers = {
+		"X-Organization-Id": assertShape(
+			organization.id,
+			SERVER_ID_SHAPE,
+			"组织 id",
+		),
+	};
+	const members = await api<{ id: string; userId: string; status: string }[]>(
+		"/api/organizations/current/members",
+		{ method: "GET", token: owner.accessToken, headers },
+	);
+	const activeMembership = members.find(
+		(member) => member.userId === successor.userId && member.status === "ACTIVE",
+	);
+	let targetMembershipId = activeMembership?.id;
+	if (!targetMembershipId) {
+		const createInvitation = () =>
+			api<{ id: string; token: string }>(
+				"/api/organizations/current/invitations",
+				{
+					method: "POST",
+					token: owner.accessToken,
+					headers,
+					body: { email: successor.email, role: "ADMIN" },
+				},
+			);
+		let invitation = await createInvitation();
+		if (!invitation.token) {
+			await api(
+				`/api/organizations/current/invitations/${assertShape(invitation.id, SERVER_ID_SHAPE, "邀请 id")}`,
+				{ method: "DELETE", token: owner.accessToken, headers },
+			);
+			invitation = await createInvitation();
+		}
+		const token = assertShape(
+			invitation.token,
+			INVITATION_TOKEN_SHAPE,
+			"邀请 token",
+		);
+		const accepted = await api<{ membershipId: string }>(
+			`/api/organization-invitations/${token}/accept`,
+			{ method: "POST", token: successor.accessToken },
+		);
+		targetMembershipId = accepted.membershipId;
+	}
+	// 路径与前端 organizations.ts transferOwnership、openapi.json 一致
+	// （member.controller：@Controller("organizations") + @Post("current/transfer-ownership")）
+	await api("/api/organizations/current/transfer-ownership", {
+		method: "POST",
+		token: owner.accessToken,
+		headers,
+		body: {
+			targetMembershipId: assertShape(
+				targetMembershipId,
+				SERVER_ID_SHAPE,
+				"成员关系 id",
+			),
+		},
+	});
 }
 
 test.describe("【账号与数据】导出/清空/注销", () => {
@@ -164,7 +270,7 @@ test.describe("【账号与数据】导出/清空/注销", () => {
 		logger.log("action", "info", "✓ 三入口已启用，无禁用占位");
 	});
 
-	test("T-DATA-002: 导出全流程 → 下载入口；重复提交返回同一请求", async ({
+	test("T-DATA-002: 组织导出说明如实列账本字段；个人导出全流程 → 下载入口；重复提交返回同一请求", async ({
 		page,
 	}) => {
 		logger.log("action", "info", "开始：导出全流程");
@@ -174,12 +280,36 @@ test.describe("【账号与数据】导出/清空/注销", () => {
 		await page.goto(`${BASE_URL}/settings`);
 		await page.waitForLoadState("networkidle");
 
-		// 导出：说明 → 验证 → 确认提交
+		// W26/W28 双域拆分：账本字段（「币种」）只属于组织账本导出。先核对组织导出弹窗
+		// 如实说明账本字段（入口按 data.export 能力显隐；owner 可见）
+		await page.click('[data-testid="organization-data-export"]');
+		await page.waitForSelector('[data-testid="export-flow-dialog"]');
+		const organizationIntro = page.locator('[data-testid="export-intro"]');
+		await expect(organizationIntro.getByText("币种")).toBeVisible();
+		await expect(
+			organizationIntro.getByText("导出包将包含当前组织的以下数据："),
+		).toBeVisible();
+		await saveScreenshot(
+			page,
+			"12-account-data",
+			"T-DATA-002-00-organization-intro",
+		);
+		// 取消：这一步只核对说明文案，不提交组织导出
+		await page
+			.locator('[data-testid="export-flow-dialog"]')
+			.getByRole("button", { name: "取消", exact: true })
+			.click();
+		await expect(page.locator('[data-testid="export-flow-dialog"]')).toHaveCount(
+			0,
+		);
+
+		// 个人导出：说明 → 验证 → 确认提交（个人数据副本，不含任何组织的账本明细）
 		await page.click('[data-testid="account-data-export"]');
 		await page.waitForSelector('[data-testid="export-flow-dialog"]');
-		await expect(
-			page.locator('[data-testid="export-intro"]').getByText("币种"),
-		).toBeVisible();
+		const personalIntro = page.locator('[data-testid="export-intro"]');
+		await expect(personalIntro.getByText("账号资料")).toBeVisible();
+		// 个人导出不包含账本字段
+		await expect(personalIntro.getByText("币种")).toHaveCount(0);
 		await saveScreenshot(page, "12-account-data", "T-DATA-002-01-intro");
 		await page.click('[data-testid="export-start-verify"]');
 		await page.click('[data-testid="otp-send-export"]');
@@ -204,7 +334,7 @@ test.describe("【账号与数据】导出/清空/注销", () => {
 		).toBeVisible();
 		await saveScreenshot(page, "12-account-data", "T-DATA-002-03-completed");
 
-		// 下载请求返回 200（ZIP）
+		// 个人域端点（不带组织头）：当前请求与下载均返回 200（ZIP）
 		const downloadResp = await page.evaluate(async (apiUrl) => {
 			const token = document.cookie
 				.split("; ")
@@ -216,19 +346,20 @@ test.describe("【账号与数据】导出/清空/注销", () => {
 			const body = (await res.json()) as {
 				data: { id: string } | null;
 			};
-			if (!body.data) return { status: 500, viewUrl: "" };
+			if (!body.data) return { currentStatus: res.status, status: 500, viewUrl: "" };
 			// 路径参数先过形状白名单再拼接（服务端 id 为 cuid；防路径注入，静态
 			// 污点分析也据此认可「校验 → 拼 URL」链路）
 			const requestId = body.data.id;
 			if (!/^[A-Za-z0-9_-]+$/.test(requestId)) {
-				return { status: 500, viewUrl: "" };
+				return { currentStatus: res.status, status: 500, viewUrl: "" };
 			}
 			const dl = await fetch(
 				`${apiUrl}/api/data-requests/${requestId}/download`,
 				{ headers: { Authorization: `Bearer ${token}` } },
 			);
-			return { status: dl.status, viewUrl: requestId };
+			return { currentStatus: res.status, status: dl.status, viewUrl: requestId };
 		}, API_URL);
+		expect(downloadResp.currentStatus).toBe(200);
 		expect(downloadResp.status).toBe(200);
 
 		// 重复提交导出（新验证码再走一次）→ 后端幂等返回原请求，进度卡仍单个
@@ -374,11 +505,72 @@ test.describe("【账号与数据】导出/清空/注销", () => {
 		logger.log("action", "info", "✓ 空账本、本位币不变、新起点可记账");
 	});
 
-	test("T-DATA-006: 注销提交 → 进度页；撤回期内验证撤回 → 账号恢复", async ({
+	test("T-DATA-006: 唯一所有者注销被阻断；转移所有权后注销提交 → 进度页；撤回期内验证撤回 → 账号恢复", async ({
 		page,
+		browser,
 	}) => {
 		logger.log("action", "info", "开始：注销与撤回");
 		const { seed: s } = await seedFullUser("delete");
+
+		// ① 唯一所有者保护（W26）：本人仍是某组织唯一所有者时，个人注销被后端 409
+		// LAST_OWNER_REQUIRED 拒绝，对话框内列出阻塞组织与处置入口。用独立用户验证，
+		// 不占用 s 的同邮箱 60s 发码窗口（主流程随后还要发码）
+		const sole = await seedRegisterAndLogin("delete-blocked");
+		await seedOnboarding(sole.accessToken, "CNY");
+		const soleContext = await browser.newContext();
+		const solePage = await soleContext.newPage();
+		try {
+			await setupPage(solePage, sole.accessToken);
+			await solePage.goto(`${BASE_URL}/settings`);
+			await solePage.waitForLoadState("networkidle");
+			await solePage.click('[data-testid="account-data-delete"]');
+			await solePage.waitForSelector('[data-testid="deletion-flow-dialog"]');
+			await solePage.click('[data-testid="deletion-start-verify"]');
+			await solePage.click('[data-testid="otp-send-deletion"]');
+			await expect(solePage.locator('[data-testid="otp-code-input"]')).toHaveValue(
+				/^\d{6}$/,
+				{ timeout: 15000 },
+			);
+			await solePage.click('[data-testid="otp-verify-submit"]');
+			await solePage.waitForSelector('[data-testid="deletion-confirm-submit"]');
+			const [rejected] = await Promise.all([
+				solePage.waitForResponse(isPersonalDataRequestCreate),
+				solePage.click('[data-testid="deletion-confirm-submit"]'),
+			]);
+			expect(rejected.status()).toBe(409);
+			expect(await rejected.json()).toMatchObject({
+				code: "LAST_OWNER_REQUIRED",
+			});
+			const blockedPanel = solePage.locator('[data-testid="deletion-blocked"]');
+			await expect(blockedPanel).toBeVisible();
+			await expect(blockedPanel).toContainText("暂时无法注销账号");
+			// 阻塞组织与直达处置入口：唯一所有者的个人工作台，恰好 1 个
+			await expect(
+				solePage.locator('[data-testid="blocking-organization-row"]'),
+			).toHaveCount(1);
+			await expect(
+				solePage.locator('[data-testid="blocking-organization-link"]'),
+			).toBeVisible();
+			await saveScreenshot(
+				solePage,
+				"12-account-data",
+				"T-DATA-006-00-sole-owner-blocked",
+			);
+			logger.log("action", "info", "✓ 唯一所有者注销被 409 阻断并列出处置入口");
+		} finally {
+			await soleContext.close();
+		}
+
+		// ② 解除主用户的唯一所有者阻塞：邀请第二名用户加入并把所有权转交出去（真实组织
+		// API）。s 降为 ADMIN——仍是成员、共享账本不受影响，但不再是唯一所有者
+		const successor = await seedRegisterAndLogin("delete-successor");
+		await handOverOwnership(s, successor);
+		const [organizationAfter] = await api<{ role: string }[]>(
+			"/api/organizations",
+			{ method: "GET", token: s.accessToken },
+		);
+		expect(organizationAfter?.role).toBe("ADMIN");
+
 		await setupPage(page, s.accessToken);
 
 		await page.goto(`${BASE_URL}/settings`);
@@ -424,11 +616,11 @@ test.describe("【账号与数据】导出/清空/注销", () => {
 		);
 		await saveScreenshot(page, "12-account-data", "T-DATA-006-02-restored");
 
-		// 账号恢复：业务端点放行
+		// 账号恢复：业务端点放行；组织的共享账本 777 USD 原样（注销个人账号不触碰组织账本）
 		await page.goto(`${BASE_URL}/accounts`);
 		await page.waitForLoadState("networkidle");
 		await expect(page.getByText("777").first()).toBeVisible();
-		logger.log("action", "info", "✓ 注销撤回，账号恢复可用");
+		logger.log("action", "info", "✓ 注销撤回，账号恢复可用，共享账本完好");
 	});
 
 	test("T-DATA-007: 用途隔离——导出验证填登录用途验证码 → 提示无效", async ({
@@ -474,18 +666,21 @@ test.describe("【账号与数据】导出/清空/注销", () => {
 
 		// API 层：用途隔离精确语义。LOGIN challenge 直接提交导出验证 →
 		// 用途先行校验（不消费、不累计尝试）→ 403 VERIFICATION_PURPOSE_MISMATCH。
-		const verifyRes = await fetch(buildApiUrl(lanApiUrl(), "/api/data-requests/verify"), {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${s.accessToken}`,
+		const verifyRes = await localFetch(
+			buildApiUrl(LOOPBACK_API_URL, "/api/data-requests/verify"),
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${s.accessToken}`,
+				},
+				body: JSON.stringify({
+					challengeId: loginCode.challengeId,
+					purpose: "EXPORT",
+					code: loginCode.devCode ?? "",
+				}),
 			},
-			body: JSON.stringify({
-				challengeId: loginCode.challengeId,
-				purpose: "EXPORT",
-				code: loginCode.devCode ?? "",
-			}),
-		});
+		);
 		const verifyJson = (await verifyRes.json()) as {
 			code?: string;
 			message?: string;

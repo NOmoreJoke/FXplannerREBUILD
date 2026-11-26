@@ -74,9 +74,12 @@ async function seedMainUser() {
 async function seedInitialOnlyUser() {
 	const seed = await seedRegisterAndLogin("rpt-initial");
 	await seedOnboarding(seed.accessToken, "CNY");
-	await seedInitialHoldings(seed.accessToken, [
-		{ currencyCode: "USD", amount: "1000" },
-	]);
+	// 本位币显式传入：外呼取价不可用时，helper 按「base = 本位币、quote = 外币」兜底写测试汇率缓存行
+	await seedInitialHoldings(
+		seed.accessToken,
+		[{ currencyCode: "USD", amount: "1000" }],
+		"CNY",
+	);
 	const planD = await seedPlan(seed.accessToken, {
 		targetCurrency: "USD",
 		targetAmount: "800",

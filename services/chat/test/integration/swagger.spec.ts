@@ -2,6 +2,7 @@ import type { INestApplication } from "@nestjs/common";
 import { SwaggerModule } from "@nestjs/swagger";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSwaggerConfig } from "../../src/config/swagger";
+import { DataRequestLastOwnerRequiredException } from "../../src/data-request/dto/data-request.dto";
 import { createTestApp } from "../helpers/test-app";
 
 type DocumentedOperation = {
@@ -121,5 +122,32 @@ describe("Swagger 接口说明", () => {
 				schema: expect.objectContaining({ type: "string" }),
 			}),
 		]);
+	});
+
+	it("LAST_OWNER_REQUIRED：文档响应体与运行时包体同构（阻塞组织列表在 data 下）", () => {
+		// 前端按 OpenAPI 契约读取 409 包体；此前文档把列表标在顶层、运行时放在 data 下，
+		// 前端恒读到空列表。两侧字段逐一对照，任一侧挪动字段都会在这里失败
+		const document = SwaggerModule.createDocument(app, createSwaggerConfig());
+		const schemas = document.components?.schemas ?? {};
+
+		// 运行时包体直接取异常实例的 getResponse()，不手写期望值
+		const runtimeBody = new DataRequestLastOwnerRequiredException([
+			{ organizationId: "org-a", organizationName: "组织 A", role: "OWNER" },
+		]).getResponse() as Record<string, unknown>;
+		const runtimeData = runtimeBody.data as Record<string, unknown>;
+		expect(Object.keys(runtimeData)).toEqual(["blockingOrganizations"]);
+
+		const propertyNames = (name: string) =>
+			Object.keys(
+				(schemas[name] as { properties?: Record<string, unknown> } | undefined)
+					?.properties ?? {},
+			).sort();
+
+		expect(propertyNames("LastOwnerRequiredBodyDto")).toEqual(
+			Object.keys(runtimeBody).sort(),
+		);
+		expect(propertyNames("LastOwnerRequiredDataDto")).toEqual(
+			Object.keys(runtimeData).sort(),
+		);
 	});
 });

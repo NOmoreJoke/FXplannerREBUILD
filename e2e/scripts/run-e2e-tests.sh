@@ -85,6 +85,9 @@ export OTP_EMAIL_MOCK=true
 # E2E 集中造数会触发限流（auth 5/10 次每分、全局 10 次每分）→ 测试运行时放大（生产默认不变）
 export AUTH_THROTTLE_LIMIT=200
 export AUTH_OTP_THROTTLE_LIMIT=200
+# 发码接口另有按 IP 的频控（默认 5 次/分；otp.service 读 OTP_IP_MAX_REQUESTS 覆盖）。
+# 同一回环 IP 上集中造数 / 页面内多次发码同样会撞上，与上面两项一起放大
+export OTP_IP_MAX_REQUESTS=200
 export THROTTLE_GLOBAL_LIMIT=500
 # 行情 E2E（changes/rate-chart §5.3）：RATE_SOURCE=frankfurter 单源降级开关——
 # 未被用例网络层 stub 拦截的汇率外呼一律单源走 frankfurter，避免 E2E 真实外呼农行 ABC 源
@@ -102,6 +105,61 @@ export AI_E2E_FAKE_INTERVAL_MS=80
 # 重跑；RUN_ID 单次运行内稳定使重试复用同一种子用户，避免依赖跨用例状态的
 # 模块（AI 会话链）级联失败。跨调用间自动更换，保持运行间隔离。
 export E2E_SEED_RUN_ID="${E2E_SEED_RUN_ID:-$(date +%s)}"
+
+# 报价更正 E2E（T-CORR-005）会写全局报价表 exchange_rates：helper 以 FXPLANNER_E2E_QUOTE_DATABASE
+# 为安全闸门，值必须等于后端实际连接的库名（此前靠人工导出，漏导即整条用例失败）。
+# 后端 DATABASE_URL 取自 services/chat/.env.local（回退 .env，与 services/chat/src/config/env.ts
+# 同序），这里解析库名后注入；已从外部显式传入时沿用外部值。
+# 仅回环主机（localhost / 127.0.0.1 / ::1）才注入——非本机库不注入，闸门保持关闭。
+read_chat_database_url() {
+	local file line value
+	for file in services/chat/.env.local services/chat/.env; do
+		[ -f "${file}" ] || continue
+		line="$(grep -E '^DATABASE_URL=' "${file}" | head -1 || true)"
+		value="${line#DATABASE_URL=}"
+		# dotenv 语义：剥掉包裹引号（单/双）
+		if [ "${#value}" -ge 2 ]; then
+			case "${value}" in
+				\"*\") value="${value%\"}"; value="${value#\"}" ;;
+				\'*\') value="${value%\'}"; value="${value#\'}" ;;
+			esac
+		fi
+		if [ -n "${value}" ]; then
+			printf '%s' "${value}"
+			return 0
+		fi
+	done
+	return 1
+}
+LOCAL_DB_NAME=""
+LOCAL_DB_HOST=""
+if CHAT_DATABASE_URL="$(read_chat_database_url)"; then
+	url_rest="${CHAT_DATABASE_URL#*://}" # 去协议
+	url_rest="${url_rest%%\?*}"          # 去查询参数
+	url_hostport="${url_rest%%/*}"       # host[:port]（可能带 userinfo）
+	url_hostport="${url_hostport##*@}"   # 去 userinfo
+	case "${url_hostport}" in
+		\[*)
+			LOCAL_DB_HOST="${url_hostport%%\]*}"
+			LOCAL_DB_HOST="${LOCAL_DB_HOST#[}"
+			;;
+		*)
+			LOCAL_DB_HOST="${url_hostport%%:*}"
+			;;
+	esac
+	LOCAL_DB_NAME="${url_rest#*/}"
+fi
+case "${LOCAL_DB_HOST}" in
+	localhost | 127.0.0.1 | ::1)
+		export FXPLANNER_E2E_QUOTE_DATABASE="${FXPLANNER_E2E_QUOTE_DATABASE:-$LOCAL_DB_NAME}"
+		print_info "报价更正 E2E 闸门：FXPLANNER_E2E_QUOTE_DATABASE=${FXPLANNER_E2E_QUOTE_DATABASE}"
+		;;
+	*)
+		if [ -z "${FXPLANNER_E2E_QUOTE_DATABASE:-}" ]; then
+			print_warning "DATABASE_URL 非回环主机或无法解析（host='${LOCAL_DB_HOST}'），未注入 FXPLANNER_E2E_QUOTE_DATABASE：T-CORR-005 会被安全闸门拒绝"
+		fi
+		;;
+esac
 
 # ============================================================================
 # 2. 清理端口 → 启动服务

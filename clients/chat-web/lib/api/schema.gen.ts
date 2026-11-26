@@ -4008,6 +4008,10 @@ export interface components {
              */
             role: string;
         };
+        LastOwnerRequiredDataDto: {
+            /** @description 阻塞注销的组织列表（需先转移所有权或删除这些组织） */
+            blockingOrganizations: components["schemas"]["BlockingOrganizationDto"][];
+        };
         LastOwnerRequiredBodyDto: {
             /** @description success 恒为 false */
             success: boolean;
@@ -4015,8 +4019,8 @@ export interface components {
             code: string;
             /** @description 人类可读信息 */
             message: string;
-            /** @description 阻塞注销的组织列表（需先转移所有权或删除这些组织） */
-            blockingOrganizations: components["schemas"]["BlockingOrganizationDto"][];
+            /** @description 最后所有者阻塞详情 */
+            data: components["schemas"]["LastOwnerRequiredDataDto"];
         };
         ImpactTotalsDto: {
             /**

@@ -296,7 +296,7 @@ export type CancelDataRequestReq = Schemas["CancelDataRequestDto"];
 /** 阻塞个人注销的组织（本人仍是唯一所有者，须先转移所有权或删除该组织） */
 export type BlockingOrganization = Schemas["BlockingOrganizationDto"];
 
-/** 最后 Owner 保护错误体（409 LAST_OWNER_REQUIRED；blockingOrganizations 供 UI 渲染处置入口） */
+/** 最后 Owner 保护错误体（409 LAST_OWNER_REQUIRED；data.blockingOrganizations 供 UI 渲染处置入口） */
 export type LastOwnerRequiredBody = Schemas["LastOwnerRequiredBodyDto"];
 
 /** 发起删除当前组织入参（DELETE /organizations/current；携带 DELETION 用途的已消费验证凭证） */

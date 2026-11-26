@@ -28,6 +28,7 @@
 | **W27** | `PersonalAccountLockGuard` 与横切 `OrganizationLockGuard` 物理拆分、合并 `<=1` 锁查询、`OrganizationDataRequestController`、导出下载降权/跨组织实时复验与 `DELETE /organizations/current` | **MiniMax Code**（`M3.1-Flash high`） | **ZCode**（`GLM-5.4 高`） | R1→R3 | **ZCode R3 `0 [Important] PASS`**：R1 拦 4 项（合并单条 `findMany <= 1` SELECT、类级 `@SkipOrganizationLock` 统一 `409 DATA_REQUEST_CONFLICT`、允许未建账删组织解死锁、下载复验），R2 拦 `R2-I1`（`wrongOrg` 用例未把 `finance` 在原组织复原为 `ACTIVE FINANCE`）；修复后完成变异自证，重命名 `CombinedLockResolution` 消同名冲突，补全 `OrganizationLockGuard` 401 分支、`I-4` 未建账死锁闭环、`GET /organizations/current` `findMany=1/findFirst=0` 与未到期请求非空断言；`N-7`（前端组织进度卡）明确归 W28 收口，个人注销期锁本人组织撤回归 `P-1` backlog。 | Step B `check:structure`/`lint`/`typecheck`(4/4) 全绿；OpenAPI(80 ops / 67 paths) 双跑零 diff；后端 9 套件 **179/179** + `-t` 定点全过；前端 34 套件 **328/328**；`pa_orphans=0 / ula_orphans=0 / orphan_orgs=2156` | `9ab05af` |
 | **W28** | 前端权限自适应账本交互（`useOrganizationCapabilities` / `resolveLedgerQueryGate`）、设置双域拆分、数据权利双域 UI、`Picker` 退出闭环与查询降噪 | **ZCode**（`GLM-5.4 高`） | **MiniMax Code**（`M3.1-Flash high`） | R1（1 轮即过） | **MiniMax Code R1 `0 [Important] PASS`**：权限真源仅内存实时读取、`can(...)` fail-closed；`Personal`/`Org` 设置与数据权利双域彻底分流；`/data-requests` 兼容纯 URL（不拼 `?scope=`）且闭合 W27 `N-7`；`409 LAST_OWNER_REQUIRED` 展示阻塞组织并提供 `/organization` 引导；5 领域写入口全部能力门控、零新裸 `useEffect`/定时器/`@ts-ignore`/影子 DTO；`Nit`（测试矩阵夹具、2 处未消费导出、`preferences-form` 分段 key、组织详情失败时下载入口）均不阻断。 | Step B `check:structure`/`lint`/`typecheck`(4/4) 全绿；前端 **35 套件 / 422 passed**（净增 94 条）；`next build` exit 0（21 页面） | `be4277b` |
 | **D6 修复** | `I-1` 个人注销收口保护存活默认组织未回填 `NULL` 账本行、`I-2` CSV 公式注入中和、`I-3` 组织删除错误提示与凭证重置、`I-4` `legacyOnly` 回退回归、对齐 `N1`/`N3` | **MiniMax Code**（`M3.1-Flash high`） | **ZCode**（`GLM-5.4 高`） | D6 R1→R2 | **ZCode D6-R2 `0 [Important] PASS`**：`collectSharedOrganizationIds` 纳入持 `NULL` 行或依赖 `OWNER_LEGACY` 的默认组织；`executePersonalDeletion` 在锁内固化设置、按 `membership -> lockOrgLedgerAccounts` 锁序原生 SQL 收口 9 表再过户并保留 `usageRecord -> legacy Plan`；`escapeCsvField` 中和 `/^[=+\-@\t\r]/`（豁免纯负数）；`OrganizationDeletionFlow` 补 `onError`；`organization-read-isolation` 钉住 `{ legacyOnly: true }`。 | Final Gate：L1（`unit` 46/717, `web` 35/422, `money` 4/64, `dev-log` 4/31, `scripts` 8/8）+ L2（`api` 21/440, `integration` 18/146, `infra` 1/24）+ `build` exit 0 + `generate:api` 零 diff + DB `0/0/2156/0` | `795a428` |
+| **E2E 回归修复** | `T-OBW-002` 建账后失效并刷新组织缓存（`refreshOrganizationDetails`）、统一 `409 LAST_OWNER_REQUIRED` 嵌套 `data.blockingOrganizations` DTO 与前端提取、同步修复 7 处 E2E 造数/脚本/流等待（`15-organization` 本轮已先全绿） | **ZCode**（`GLM-5.4 高`） | **MiniMax Code**（`M3.1-Flash high`） | R1→R2 | **MiniMax Code R2 `0 [Important] PASS`**：R1 拦截 `I-1` 所有权转交路由误写及 `I-2` `LastOwnerRequiredBodyDto`/前端 `getBlockingOrganizations` 与运行时 `data` 包装错配；R2 复核两者及 `swagger.spec.ts:127`、DB 钩子 `?host=`/`assertRateCacheTestDatabase` 与回读失败降级全部闭合。 | `generate:api` 零 diff；`check:structure`/`lint`/`typecheck` 全绿；`unit` 46/717、`web` 35/427、`money` 4/64、`dev-log` 4/31、`scripts` 8/8；`api` 440、`integration` 147、`infra` 24；`build` exit 0 | 待本轮提交后推送 |
 
 ### W22 详述
 - **Schema & 迁移（提前切出 `MIG-E` 唯一索引项，保留已应用迁移校验和）**：`services/chat/prisma/migrations/20261125094500_tob_r1_mig_c_org_unique_indexes/migration.sql` 将原属 `技术方案.md` `MIG-E` 的 `Account` / `InitialHolding` / `Reminder` 唯一索引提前在 W22 切换至组织维度（`@@unique([organizationId, ...])`），以使 W22/W24 多组织同币种独立建账与记账不撞 `P2002`；同时保留 `WHERE "organization_id" IS NULL` 部分唯一索引（`accounts_legacy_user_currency_uidx`、`initial_holdings_legacy_user_currency_uidx`、`reminders_legacy_user_dedup_scheduled_uidx`）及非唯一 `(user_id, ...)` 查找索引兼容存量/未迁移写路径。`organization_id SET NOT NULL`、`User` `ON DELETE CASCADE` 解绑及清理过渡部分唯一索引（`DROP INDEX IF EXISTS`）已同步对齐至 `Goal #3C` W30 `MIG-E`（该范围调整经 Orchestrator 审批并显式记录于 `GOAL-3B` 与 `GOAL-3C`）。
@@ -45,13 +46,13 @@
 - **静态门禁**：`bun run check:structure`、`bun run lint`、`bun run typecheck`（4/4 packages + 2 Prisma CLI configs）全部 exit 0；`lint-observe` 分支改动门禁 0 违规。
 - **L1（5 套件全绿）**：
   - `unit`：`Test Files 46 passed (46)`，`Tests 717 passed | 1 todo (718)`（`1 todo` 为 `correction-calculator.spec.ts` 存量）
-  - `web`：`Test Files 35 passed (35)`，`Tests 422 passed (422)`
+  - `web`：`Test Files 35 passed (35)`，`Tests 427 passed (427)`（含 E2E 修复后新增 `query-keys` / `data-requests` 回归用例）
   - `money`：`Test Files 4 passed (4)`，`Tests 64 passed (64)`（`fast-check` 属性测试）
   - `dev-log`：`Test Files 4 passed (4)`，`Tests 31 passed (31)`
   - `scripts`：`8 pass / 0 fail`
 - **L2（3 套件全绿，真实 PostgreSQL `fxplanner_new_db_local`）**：
   - `api`：`Test Files 21 passed (21)`，`Tests 440 passed (440)`
-  - `integration`：`Test Files 18 passed (18)`，`Tests 146 passed (146)`
+  - `integration`：`Test Files 18 passed (18)`，`Tests 147 passed (147)`（含 `swagger.spec.ts:127` 运行时异常 vs OpenAPI 契约一致性断言）
   - `infra`（`test/prisma.spec.ts`）：`Test Files 1 passed (1)`，`Tests 24 passed (24)`
 - **全端构建**：`turbo run build` exit 0（NestJS + Next.js 16.2.3 Turbopack 21 路由）。
 - **数据库一致性 SQL 复核**：`pa_orphans = 0`、`ula_orphans = 0`、`orphan_orgs = 2156`、`dr_violations = 0`。
@@ -83,11 +84,14 @@
 
 AI 遵守禁令未启动 `dev`/`compose up`/E2E，以下用例需人类在启动服务后实跑验收：
 
-1. `e2e/modules/15-organization.spec.ts`（ToB R1 基础与角色视图回归）
-2. `e2e/modules/12-account-data.spec.ts`（**预期有 2 条需同步更新 E2E 用例口径**）：
-   - `T-DATA-002`：原断言个人导出文案含「币种」，W26 后个人导出不含账本金额，应改断言 `organization-data-export` 面板说明；
-   - `T-DATA-006`：种子用户为默认组织唯一 Owner，现按 W26 规范被后端 `409 LAST_OWNER_REQUIRED` 拦截并展示阻塞组织引导，需先添加第二 Owner 或删除组织后再验个人注销。
-3. 账本写路径与防呆专项：`e2e/modules/08-onboarding-wizard.spec.ts`、`09-ledger-writes*`、`10-initial-backfill.spec.ts`、`11-correction.spec.ts`、`11-reminders.spec.ts`、`14-ai-chat.spec.ts`。
+1. `e2e/modules/15-organization.spec.ts`：已由人类启服跑通；
+2. 人类首轮实跑失败的 **8 条用例**已于本轮完成根因定位与代码/契约/脚本修复（待人类二次复跑确认）：
+   - `T-OBW-002`（`clients/chat-web/lib/api/query-keys.ts` `refreshOrganizationDetails` + `clients/chat-web/app/(protected)/onboarding/page.tsx` 失效并刷新组织详情）；
+   - `T-CORR-005`（`e2e/scripts/run-e2e-tests.sh` 注入 `FXPLANNER_E2E_QUOTE_DATABASE` + `rate-cache-db.ts` 共用测试库闸门 + 组织持仓造数适配）；
+   - `W6-09`（`e2e/helpers/correction-db.ts` 同步更新 `OrganizationSettings` 与 `UserSettings`）；
+   - `T-RPT-001`（`e2e/helpers/rate-cache-db.ts` 在外呼 `RATE_UNAVAILABLE` 时兜底注入并事后清理）；
+   - `T-DATA-002/006/007`（对齐个人/组织导出、`LAST_OWNER_REQUIRED` `data.blockingOrganizations` 契约修复、所有权转交后再注销、及 `localFetch` 直连 `127.0.0.1` + `OTP_IP_MAX_REQUESTS=200`）；
+   - `T-AI-003`（`e2e/modules/14-ai-chat.spec.ts` `await sendMessage` + `awaitStreamSettled` 完整流落库后再刷新）。
 
 ---
 
