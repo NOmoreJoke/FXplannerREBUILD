@@ -138,6 +138,96 @@ describe("export-builder 基础格式化", () => {
 	});
 });
 
+describe("export-builder CSV 公式注入中和（R1 I-2）", () => {
+	it("危险前缀（= + - @ TAB CR）一律加单引号前缀并整体加双引号", () => {
+		expect(escapeCsvField("=HYPERLINK(\"http://x\",\"y\")")).toBe(
+			`"'=HYPERLINK(""http://x"",""y"")"`,
+		);
+		expect(escapeCsvField("=cmd|'/C calc'!A0")).toBe(`"'=cmd|'/C calc'!A0"`);
+		expect(escapeCsvField("+1+1")).toBe(`"'+1+1"`);
+		expect(escapeCsvField("@SUM(1,2)")).toBe(`"'@SUM(1,2)"`);
+		expect(escapeCsvField("\tcmd")).toBe(`"'\tcmd"`);
+		expect(escapeCsvField("\rcmd")).toBe(`"'\rcmd"`);
+		// 含逗号的组合：前缀 + RFC 4180 双引号同时生效
+		expect(escapeCsvField("=a,b")).toBe(`"'=a,b"`);
+		// 内部引号翻倍（RFC 4180）
+		expect(escapeCsvField(`=a"b`)).toBe(`"'=a""b"`);
+	});
+
+	it("纯负数豁免：合法负数值不得被单引号前缀破坏", () => {
+		expect(escapeCsvField("-123.45")).toBe("-123.45");
+		expect(escapeCsvField("-123")).toBe("-123");
+		expect(escapeCsvField("-0.00")).toBe("-0.00");
+		// 非纯负数的「-」开头仍须中和
+		expect(escapeCsvField("-USD 100")).toBe(`"'-USD 100"`);
+		expect(escapeCsvField("-1,234.56")).toBe(`"'-1,234.56"`);
+	});
+
+	it("普通字段不受影响（回归）", () => {
+		expect(escapeCsvField("plain")).toBe("plain");
+		expect(escapeCsvField("a,b")).toBe(`"a,b"`);
+		expect(escapeCsvField("2026-06-01T08:30:00.000Z")).toBe("2026-06-01T08:30:00.000Z");
+		expect(escapeCsvField("日本计划,JPY")).toBe(`"日本计划,JPY"`);
+	});
+
+	it("组织导出：危险组织名与计划名在 CSV 中被中和", () => {
+		const entries = buildOrganizationExportEntries(
+			bundleData({
+				organization: {
+					id: "org-9",
+					name: "=cmd|'/C calc'!A0",
+					createdAt: T0,
+				},
+				plans: [
+					{
+						id: "plan-1",
+						name: "@SUM(1,2)",
+						pacePreference: "balanced",
+						targetCurrency: "USD",
+						targetAmount: "1000.0000",
+						expectUseDate: T0,
+						prepLeadDays: 3,
+						latestPrepDate: T0,
+						planStartDate: null,
+						status: "ACTIVE",
+						createdAt: T0,
+						updatedAt: T0,
+					},
+				],
+			}),
+		);
+		const organization = entries.find((e) => e.path === "10-organization.csv")!.content;
+		expect(organization).toContain(`"'=cmd|'/C calc'!A0"`);
+		expect(organization).not.toContain(",=cmd|");
+		const plans = entries.find((e) => e.path === "06-plans.csv")!.content;
+		expect(plans).toContain(`"'@SUM(1,2)"`);
+		expect(plans).not.toContain(",@SUM(1,2)");
+	});
+
+	it("个人导出：危险组织名在 CSV 中被中和", () => {
+		const entries = buildPersonalExportEntries({
+			generatedAt: T0,
+			profile: { id: "user-1", email: "kyle@example.com", name: "Kyle", createdAt: T0 },
+			preferences: { locale: "zh-CN", region: "CN" },
+			organizations: [
+				{
+					organizationId: "org-1",
+					organizationName: "=cmd|'/C calc'!A0",
+					role: "ADMIN",
+					status: "ACTIVE",
+					joinedAt: T0,
+				},
+			],
+			conversations: [],
+			termsConsents: [],
+			dataRequests: [],
+		});
+		const organizations = entries.find((e) => e.path === "03-organizations.csv")!.content;
+		expect(organizations).toContain(`"'=cmd|'/C calc'!A0"`);
+		expect(organizations).not.toContain(",=cmd|");
+	});
+});
+
 describe("export-builder CSV 本位币精度（MVP-F0-4）", () => {
 	it("JPY 买入交易 + CNY 本位币：数量 0 位、本金/手续费 2 位（不沿用外币精度）", () => {
 		const data = bundleData({

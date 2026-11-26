@@ -2851,7 +2851,7 @@ export interface components {
         };
         AccountListDto: {
             /**
-             * @description 本位币（成本币种，取 userSettings.baseCurrency）；新用户无设置行时为 null（前端成本列退化为纯金额）
+             * @description 本位币（成本币种，取组织本位币（兼容窗口回落创建者默认设置））；新用户无设置行时为 null（前端成本列退化为纯金额）
              * @example CNY
              */
             baseCurrency: string | null;
@@ -2880,7 +2880,7 @@ export interface components {
              */
             unallocatedAmount: string;
             /**
-             * @description 本位币（成本币种，取 userSettings.baseCurrency）；新用户无设置行时为 null
+             * @description 本位币（成本币种，取组织本位币（兼容窗口回落创建者默认设置））；新用户无设置行时为 null
              * @example CNY
              */
             baseCurrency: string | null;
@@ -2935,7 +2935,7 @@ export interface components {
         };
         AccountLedgerDto: {
             /**
-             * @description 本位币（成本列币种，取 userSettings.baseCurrency）；无设置行时为 null
+             * @description 本位币（成本列币种，取组织本位币（兼容窗口回落创建者默认设置））；无设置行时为 null
              * @example CNY
              */
             baseCurrency: string | null;
@@ -3236,7 +3236,7 @@ export interface components {
         };
         ReportPlanListDto: {
             /**
-             * @description 本位币（成本币种，取 userSettings.baseCurrency）；新用户无设置行时为 null
+             * @description 本位币（成本币种，取组织本位币（兼容窗口回落创建者默认设置））；新用户无设置行时为 null
              * @example CNY
              */
             baseCurrency: string | null;

@@ -26,10 +26,15 @@ import {
 	isOrganizationRole,
 	type OrganizationRole,
 } from "../authorization/authorization.types";
-import { resolveDefaultOrganizationCreatorUserId } from "../authorization/default-organization";
+import {
+	resolveDefaultOrganizationCreatorUserId,
+	resolveDefaultOrganizationId,
+} from "../authorization/default-organization";
 import { can } from "../authorization/permission-policy";
 import type { AuditService } from "../audit/audit.service";
 import { lockOrganizationMembership } from "../organization/default-organization";
+import { materializeLegacyOrganizationSettings } from "../organization/organization-preferences";
+import { lockOrgLedgerAccounts } from "../prisma/ledger-write-lock";
 import {
 	auditActionOf,
 	resolveLastOwnerBlock,
@@ -108,6 +113,17 @@ export async function claimForProcessing(
  * 本人在组织共享业务表中持有行的组织（organization_id 非空）。
  * 不含 ai_conversations：会话是成员个人内容，注销时随账号删除而非过户；
  * 不含 plan_change_logs：该表无 user_id（随父 Plan 存续）。
+ *
+ * 兼容窗口补充（R1 I-1）：MIG-B 回填前的 `organization_id IS NULL` 存量行，逻辑上
+ * 属于其创建者的**默认组织**（organizationLedgerScope / report.service / account.service
+ * 同口径）。这些行既没有 organization_id 可查，也可能已挂上组织级 usage_records
+ * （`organizationId: actor.organizationId` 指向默认组织）——若个人注销把它们当个人域
+ * 行删光，存活默认组织就会丢行并留下悬空引用。故默认组织在下列任一成立时也算
+ * 「本人持有共享行的组织」：
+ * - 本人在 8 张业务账本表中仍有 `organization_id IS NULL` 的存量行；
+ * - 该默认组织尚无 OrganizationSettings，仍靠创建者的 `OWNER_LEGACY` 个人设置承托。
+ * 两者都会让创建阶段 / 锁内的最后 Owner 判定要求用户先转移所有权或删除该组织
+ * （409 LAST_OWNER_REQUIRED），而不是静默删掉别人的账本。
  */
 async function collectSharedOrganizationIds(
 	tx: Tx,
@@ -132,7 +148,68 @@ async function collectSharedOrganizationIds(
 		WHERE user_id = ${userId} AND organization_id IS NOT NULL
 		UNION SELECT organization_id FROM data_requests
 		WHERE user_id = ${userId} AND organization_id IS NOT NULL`;
-	return rows.map((row) => row.organizationId);
+	const organizationIds = rows.map((row) => row.organizationId);
+	const defaultOrgId = await resolveDefaultOrganizationId(tx, userId);
+	if (defaultOrgId === null || organizationIds.includes(defaultOrgId)) {
+		return organizationIds;
+	}
+	const [hasLegacyRows, reliesOnOwnerLegacy] = await Promise.all([
+		hasLegacyLedgerRows(tx, userId),
+		defaultOrgReliesOnOwnerLegacy(tx, defaultOrgId, userId),
+	]);
+	if (hasLegacyRows || reliesOnOwnerLegacy) {
+		organizationIds.push(defaultOrgId);
+	}
+	return organizationIds;
+}
+
+/**
+ * 本人是否仍持有未回填的存量账本行（organization_id IS NULL）——8 张业务账本表。
+ */
+async function hasLegacyLedgerRows(tx: Tx, userId: string): Promise<boolean> {
+	const rows = await tx.$queryRaw<Array<{ n: bigint }>>`
+		SELECT (
+			(SELECT count(*) FROM accounts
+				WHERE user_id = ${userId} AND organization_id IS NULL)
+			+ (SELECT count(*) FROM transactions
+				WHERE user_id = ${userId} AND organization_id IS NULL)
+			+ (SELECT count(*) FROM initial_holdings
+				WHERE user_id = ${userId} AND organization_id IS NULL)
+			+ (SELECT count(*) FROM cost_lots
+				WHERE user_id = ${userId} AND organization_id IS NULL)
+			+ (SELECT count(*) FROM plans
+				WHERE user_id = ${userId} AND organization_id IS NULL)
+			+ (SELECT count(*) FROM usage_records
+				WHERE user_id = ${userId} AND organization_id IS NULL)
+			+ (SELECT count(*) FROM corrections
+				WHERE user_id = ${userId} AND organization_id IS NULL)
+			+ (SELECT count(*) FROM reminders
+				WHERE user_id = ${userId} AND organization_id IS NULL)
+		) AS n`;
+	return Number(rows[0]?.n ?? 0n) > 0;
+}
+
+/**
+ * 该默认组织是否仍靠创建者的个人设置回落承托（`OWNER_LEGACY`）：组织尚无
+ * OrganizationSettings，且创建者的 UserSettings 有非空本位币。
+ */
+async function defaultOrgReliesOnOwnerLegacy(
+	tx: Tx,
+	organizationId: string,
+	creatorUserId: string,
+): Promise<boolean> {
+	const [organizationSettings, legacy] = await Promise.all([
+		tx.organizationSettings.findUnique({
+			where: { organizationId },
+			select: { organizationId: true },
+		}),
+		tx.userSettings.findUnique({
+			where: { userId: creatorUserId },
+			select: { baseCurrency: true },
+		}),
+	]);
+	if (organizationSettings) return false;
+	return Boolean(legacy && legacy.baseCurrency.trim() !== "");
 }
 
 /** 组织范围 where 片段（各业务模型的 WhereInput 均接受这两个字段） */
@@ -535,6 +612,257 @@ async function deletePersonalRows(
 }
 
 /**
+ * 兼容窗口收口：把本人尚未回填的存量行（`organization_id IS NULL`）并入其**存活的默认
+ * 组织**，随后由 transferSharedRowsToOwners 一次性过户给该组织的接任 Owner。
+ *
+ * 为什么必须收口而不是直接删（R1 I-1）：MIG-B 回填前的存量行逻辑上属于创建者的默认
+ * 组织（organizationLedgerScope / report.service / account.service 同口径），组织级
+ * usage_records 也可能已挂在这些 NULL 计划上（`organizationId: actor.organizationId`）。
+ * 创建者转移所有权后个人注销，若把 NULL 行当个人域行删光，存活默认组织就会丢行并留下
+ * 悬空的 plan_id 引用。
+ *
+ * 口径：
+ * - 保留原 `updated_at` 与金额：全部走原生 SQL（Prisma updateMany 会经 @updatedAt
+ *   改写 updated_at）；
+ * - 审计快照补齐：`created_by_id` / `actor_user_id` 缺失时回填原 userId；
+ * - 绝不收口个人 ai_conversations 与 scope='PERSONAL' 的 data_requests（个人内容，
+ *   随账号删除）；
+ * - 锁序：组织成员锁（已持有）→ 组织账本锁（lockOrgLedgerAccounts）→ 行锁。
+ */
+async function consolidateLegacyRowsIntoDefaultOrganization(
+	tx: Tx,
+	userId: string,
+	defaultOrgId: string,
+	stats: ClearStats,
+): Promise<void> {
+	// 1. 固化回落设置：原创建者的 UserSettings 随账号删除，存活默认组织不得因此失去
+	//    baseCurrency 变成未建账（组织锁守卫 / 全端点 409 均依赖它）。
+	await materializeLegacyOrganizationSettings(tx, defaultOrgId);
+	await materializeCreatorOrganizationSettings(tx, defaultOrgId, userId);
+
+	// 2. 取存量行涉及的币种集合（按全局锁序：组织成员锁 → 组织账本锁）
+	const currencies = await collectLegacyCurrencyCodes(tx, userId);
+	if (currencies.length > 0) {
+		await lockOrgLedgerAccounts(tx, defaultOrgId, currencies);
+	}
+
+	// 3. accounts：与存活组织同 (organization_id, currency_code) 冲突的 NULL 账户，
+	//    余额并入组织行后删旧行（同 MIG-B organization-backfill.ts:212-231 口径），
+	//    其余 NULL 账户收口进组织。
+	const mergedAccounts = Number(
+		await tx.$executeRaw`
+			WITH merged AS (
+				UPDATE accounts org
+				SET balance = org.balance + leg.balance
+				FROM accounts leg
+				WHERE org.organization_id = ${defaultOrgId}
+					AND leg.user_id = ${userId}
+					AND leg.organization_id IS NULL
+					AND org.currency_code = leg.currency_code
+				RETURNING leg.id
+			)
+			DELETE FROM accounts
+			WHERE id IN (SELECT id FROM merged)`,
+	);
+	const updatedAccounts = Number(
+		await tx.$executeRaw`
+			UPDATE accounts
+			SET organization_id = ${defaultOrgId},
+				created_by_id = COALESCE(created_by_id, ${userId})
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	add(stats, "consolidatedAccounts", mergedAccounts + updatedAccounts);
+
+	// 4. initial_holdings：每币种至多一笔（唯一索引 (organization_id, currency_code)）。
+	//    组织已有同币种持仓时，存量 NULL 持仓行被组织行覆盖（删除，不重复入账）；
+	//    其余收口进组织。
+	const dedupedHoldings = Number(
+		await tx.$executeRaw`
+			DELETE FROM initial_holdings leg
+			USING initial_holdings org
+			WHERE org.organization_id = ${defaultOrgId}
+				AND leg.user_id = ${userId}
+				AND leg.organization_id IS NULL
+				AND org.currency_code = leg.currency_code`,
+	);
+	const updatedHoldings = Number(
+		await tx.$executeRaw`
+			UPDATE initial_holdings
+			SET organization_id = ${defaultOrgId},
+				created_by_id = COALESCE(created_by_id, ${userId})
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	add(stats, "consolidatedInitialHoldings", dedupedHoldings + updatedHoldings);
+
+	// 5. 其余业务表：只改租户列（保留 updated_at 与全部金额）
+	add(
+		stats,
+		"consolidatedTransactions",
+		Number(
+			await tx.$executeRaw`
+				UPDATE transactions
+				SET organization_id = ${defaultOrgId},
+					created_by_id = COALESCE(created_by_id, ${userId})
+				WHERE user_id = ${userId} AND organization_id IS NULL`,
+		),
+	);
+	add(
+		stats,
+		"consolidatedCostLots",
+		Number(
+			await tx.$executeRaw`
+				UPDATE cost_lots
+				SET organization_id = ${defaultOrgId}
+				WHERE user_id = ${userId} AND organization_id IS NULL`,
+		),
+	);
+	add(
+		stats,
+		"consolidatedPlans",
+		Number(
+			await tx.$executeRaw`
+				UPDATE plans
+				SET organization_id = ${defaultOrgId},
+					created_by_id = COALESCE(created_by_id, ${userId})
+				WHERE user_id = ${userId} AND organization_id IS NULL`,
+		),
+	);
+	add(
+		stats,
+		"consolidatedUsageRecords",
+		Number(
+			await tx.$executeRaw`
+				UPDATE usage_records
+				SET organization_id = ${defaultOrgId},
+					created_by_id = COALESCE(created_by_id, ${userId})
+				WHERE user_id = ${userId} AND organization_id IS NULL`,
+		),
+	);
+	add(
+		stats,
+		"consolidatedCorrections",
+		Number(
+			await tx.$executeRaw`
+				UPDATE corrections
+				SET organization_id = ${defaultOrgId},
+					actor_user_id = COALESCE(actor_user_id, ${userId})
+				WHERE user_id = ${userId} AND organization_id IS NULL`,
+		),
+	);
+
+	// 6. plan_change_logs：无 user_id，按父 Plan 校对（父 Plan 已收口进组织）
+	add(
+		stats,
+		"consolidatedPlanChangeLogs",
+		Number(
+			await tx.$executeRaw`
+				UPDATE plan_change_logs c
+				SET organization_id = ${defaultOrgId},
+					actor_user_id = COALESCE(c.actor_user_id, ${userId})
+				FROM plans p
+				WHERE p.id = c.plan_id
+					AND p.organization_id = ${defaultOrgId}
+					AND c.organization_id IS NULL`,
+		),
+	);
+
+	// 7. reminders：唯一索引 (organization_id, dedup_key, scheduled_for)。与组织既有提醒
+	//    碰撞时，先清理其已读行再删旧 NULL 提醒（不依赖级联），其余收口进组织；
+	//    接任者的已读态由随后的过户统一清空 read_at 处理。
+	const dedupedReminders = Number(
+		await tx.$executeRaw`
+			DELETE FROM reminder_reads
+			WHERE reminder_id IN (
+				SELECT leg.id
+				FROM reminders leg
+				JOIN reminders org
+					ON org.organization_id = ${defaultOrgId}
+					AND org.dedup_key = leg.dedup_key
+					AND org.scheduled_for = leg.scheduled_for
+				WHERE leg.user_id = ${userId} AND leg.organization_id IS NULL
+			)`,
+	);
+	add(stats, "consolidatedReminderReads", dedupedReminders);
+	const removedReminders = Number(
+		await tx.$executeRaw`
+			DELETE FROM reminders leg
+			USING reminders org
+			WHERE org.organization_id = ${defaultOrgId}
+				AND leg.user_id = ${userId}
+				AND leg.organization_id IS NULL
+				AND org.dedup_key = leg.dedup_key
+				AND org.scheduled_for = leg.scheduled_for`,
+	);
+	const updatedReminders = Number(
+		await tx.$executeRaw`
+			UPDATE reminders
+			SET organization_id = ${defaultOrgId}
+			WHERE user_id = ${userId} AND organization_id IS NULL`,
+	);
+	add(stats, "consolidatedReminders", removedReminders + updatedReminders);
+}
+
+/**
+ * 按创建者口径固化组织设置（MIG-B §12.2.3 复制口径）：组织尚无 OrganizationSettings
+ * 且创建者的个人设置有非空本位币时，把个人设置复制成组织自己的设置。
+ *
+ * 与 materializeLegacyOrganizationSettings 的差别：后者按「当前 ACTIVE OWNER 的默认
+ * 组织」解析回落锚点——所有权转移后锚点已移到接任者身上，解析不到创建者的个人设置，
+ * 回落即失效。这里按创建者口径补齐，保证原创建者的 UserSettings 随账号删除后，存活
+ * 默认组织仍保有本位币（不会退化成未建账）。已有组织设置时一律不动。
+ */
+async function materializeCreatorOrganizationSettings(
+	tx: Tx,
+	organizationId: string,
+	creatorUserId: string,
+): Promise<boolean> {
+	const existing = await tx.organizationSettings.findUnique({
+		where: { organizationId },
+		select: { organizationId: true },
+	});
+	if (existing) return false;
+	const legacy = await tx.userSettings.findUnique({
+		where: { userId: creatorUserId },
+	});
+	if (!legacy || legacy.baseCurrency.trim() === "") return false;
+	await tx.organizationSettings.upsert({
+		where: { organizationId },
+		create: {
+			organizationId,
+			baseCurrency: legacy.baseCurrency,
+			prepPreference: legacy.prepPreference,
+			reminderEnabled: legacy.reminderEnabled,
+			ledgerStartedAt: legacy.ledgerStartedAt,
+		},
+		update: {},
+	});
+	return true;
+}
+
+/** 存量行涉及的币种集合（accounts / initial_holdings / cost_lots / transactions / plans / usage_records） */
+async function collectLegacyCurrencyCodes(
+	tx: Tx,
+	userId: string,
+): Promise<string[]> {
+	const rows = await tx.$queryRaw<Array<{ currencyCode: string }>>`
+		SELECT DISTINCT currency_code AS "currencyCode" FROM (
+			SELECT currency_code FROM accounts
+			WHERE user_id = ${userId} AND organization_id IS NULL
+			UNION SELECT currency_code FROM initial_holdings
+			WHERE user_id = ${userId} AND organization_id IS NULL
+			UNION SELECT currency_code FROM cost_lots
+			WHERE user_id = ${userId} AND organization_id IS NULL
+			UNION SELECT currency_code FROM transactions
+			WHERE user_id = ${userId} AND organization_id IS NULL
+			UNION SELECT target_currency FROM plans
+			WHERE user_id = ${userId} AND organization_id IS NULL
+			UNION SELECT currency_code FROM usage_records
+			WHERE user_id = ${userId} AND organization_id IS NULL
+		) legacy_currencies`;
+	return rows.map((row) => row.currencyCode);
+}
+
+/**
  * PERSONAL DELETION 到期执行（事务内）。命中最后 Owner 时抛 409
  * LAST_OWNER_REQUIRED（调用方回滚并处置），绝不删除任何组织账本行。
  */
@@ -562,13 +890,26 @@ export async function executePersonalDeletion(
 	// 2. 关闭本人导出链接（文件在事务提交后删除）
 	const exportFilesToDelete = await closeExportLinks(tx, userId, ctx.now);
 
-	// 3. 共享组织行过户给各组织的另一位 ACTIVE OWNER
+	// 3. 兼容窗口收口：本人未回填的存量行（organization_id IS NULL）逻辑上属于其存活
+	//    的默认组织——先并入该组织，再随第 4 步一次性过户给接任 Owner，绝不删成个人域行。
+	//    默认组织已不存在（先删了组织）时返回 null，残留 NULL 行由第 5 步清理。
+	const defaultOrgId = await resolveDefaultOrganizationId(tx, userId);
+	if (defaultOrgId !== null) {
+		await consolidateLegacyRowsIntoDefaultOrganization(
+			tx,
+			userId,
+			defaultOrgId,
+			stats,
+		);
+	}
+
+	// 4. 共享组织行过户给各组织的另一位 ACTIVE OWNER
 	await transferSharedRowsToOwners(tx, userId, stats);
 
-	// 4. 个人域行清理
+	// 5. 个人域行清理（默认组织已不存在时的残留 NULL 行在此清空）
 	await deletePersonalRows(tx, userId, stats);
 
-	// 5. 删除身份：先显式删个人身份行 → 断言零残留引用 → 删用户行（无任何级联发生）
+	// 6. 删除身份：先显式删个人身份行 → 断言零残留引用 → 删用户行（无任何级联发生）
 	await tx.membership.deleteMany({ where: { userId } });
 	await tx.otpIdentity.deleteMany({ where: { userId } });
 	await tx.termsConsent.deleteMany({ where: { userId } });

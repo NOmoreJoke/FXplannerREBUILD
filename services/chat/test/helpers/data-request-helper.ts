@@ -128,6 +128,7 @@ export async function makeRequestDue(
 
 export interface SeedBusinessDataResult {
 	accountId: string;
+	initialHoldingId: string;
 	transactionId: string;
 	planId: string;
 	planAllocationId: string;
@@ -265,6 +266,7 @@ export async function seedBusinessData(
 	void holding;
 	return {
 		accountId: account.id,
+		initialHoldingId: holding.id,
 		transactionId: transaction.id,
 		planId: plan.id,
 		planAllocationId: allocation.id,

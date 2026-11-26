@@ -219,8 +219,22 @@ export interface PersonalExportBundleData {
 // 基础格式化
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * CSV 公式注入中和（R1 I-2）：Excel / LibreOffice / Google Sheets 会把以
+ * `=` `+` `-` `@` TAB CR 开头的字段当公式解析（`=cmd|'/C calc'!A0` 可触发 DDE）。
+ * 这类字段一律加单引号前缀（`'…`），使表格软件按纯文本处理。
+ *
+ * 豁免：纯负数（`-12.34`）是合法金额写法，不得被前缀破坏。
+ * 中和后的字段整体加双引号（RFC 4180），前缀与内容的边界始终明确。
+ */
+const CSV_FORMULA_PREFIX = /^[=+\-@\t\r]/;
+const CSV_PURE_NEGATIVE_NUMBER = /^-[0-9]+(\.[0-9]+)?$/;
+
 /** CSV 字段转义：含逗号/引号/换行/回车的字段包裹双引号，内部引号翻倍 */
 export function escapeCsvField(value: string): string {
+	if (CSV_FORMULA_PREFIX.test(value) && !CSV_PURE_NEGATIVE_NUMBER.test(value)) {
+		return `"'${value.replaceAll('"', '""')}"`;
+	}
 	if (/[",\n\r]/.test(value)) {
 		return `"${value.replaceAll('"', '""')}"`;
 	}

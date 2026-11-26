@@ -118,7 +118,7 @@ export class ReportPlanListItemDto {
 export class ReportPlanListDto {
 	@ApiProperty({
 		description:
-			"本位币（成本币种，取 userSettings.baseCurrency）；新用户无设置行时为 null",
+			"本位币（成本币种，取组织本位币（兼容窗口回落创建者默认设置））；新用户无设置行时为 null",
 		example: "CNY",
 		type: String,
 		nullable: true,

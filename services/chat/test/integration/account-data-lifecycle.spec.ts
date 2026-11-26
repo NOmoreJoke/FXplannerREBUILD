@@ -274,6 +274,16 @@ describe("AccountData 生命周期（integration）", () => {
 		const auditBefore = await env.prisma.auditLog.count({
 			where: { organizationId: orgId },
 		});
+		// 存量 NULL 行的原始快照：收口只改租户列，金额 / 审计快照 / updated_at 一律不动
+		const legacyAccountBefore = await env.prisma.account.findUniqueOrThrow({
+			where: { id: legacy.accountId },
+		});
+		const legacyPlanBefore = await env.prisma.plan.findUniqueOrThrow({
+			where: { id: legacy.planId },
+		});
+		const legacyTransactionBefore = await env.prisma.transaction.findUniqueOrThrow({
+			where: { id: legacy.transactionId },
+		});
 
 		// 1. 本人是该组织唯一所有者：不替用户选择处置方式，直接注销被拒且不建请求
 		const blockedCredential = await sendAndVerify(
@@ -296,6 +306,20 @@ describe("AccountData 生命周期（integration）", () => {
 
 		// 2. 转移所有权（本人降为 ADMIN）
 		await transferOwnership(orgId, user.userId, successor.userId);
+
+		// 2b. 兼容窗口的既有形态：另一位成员已在「创建者的存量 NULL 计划」上发起组织级使用
+		//     （usage_records 写 organizationId: orgId，planId 仍指向存量计划）
+		const successorUsage = await env.prisma.usageRecord.create({
+			data: {
+				userId: successor.userId,
+				organizationId: orgId,
+				createdById: successor.userId,
+				planId: legacy.planId,
+				currencyCode: "USD",
+				amount: "10.0000",
+				usedAt: new Date(),
+			},
+		});
 
 		// 3. 提交 DELETION：锁定（GET 业务端点也拦截 ACCOUNT_PENDING_DELETION）
 		const deletion = await submitRequest(user, "DELETION", "PERSONAL");
@@ -345,22 +369,26 @@ describe("AccountData 生命周期（integration）", () => {
 		expect(await env.prisma.userSettings.count({ where: { userId: user.userId } })).toBe(0);
 		expect(await env.prisma.termsConsent.count({ where: { userId: user.userId } })).toBe(0);
 		expect(await env.prisma.dataRequest.count({ where: { userId: user.userId } })).toBe(0);
-		// 已无任何行指向被删用户（共享行已过户，个人域存量行已清空）
+		// 已无任何行指向被删用户（共享行与被收口的存量行均已过户）
 		expect(await env.prisma.plan.count({ where: { userId: user.userId } })).toBe(0);
 		expect(await env.prisma.transaction.count({ where: { userId: user.userId } })).toBe(0);
 		expect(await env.prisma.account.count({ where: { userId: user.userId } })).toBe(0);
-		expect(
-			await env.prisma.account.findUnique({ where: { id: legacy.accountId } }),
-		).toBeNull();
-		expect(await env.prisma.plan.findUnique({ where: { id: legacy.planId } })).toBeNull();
+		expect(await env.prisma.usageRecord.count({ where: { userId: user.userId } })).toBe(0);
+		expect(await env.prisma.correction.count({ where: { userId: user.userId } })).toBe(0);
+		expect(await env.prisma.reminder.count({ where: { userId: user.userId } })).toBe(0);
+		expect(await env.prisma.costLot.count({ where: { userId: user.userId } })).toBe(0);
+		expect(await env.prisma.initialHolding.count({ where: { userId: user.userId } })).toBe(0);
 
-		// 共享组织账本：行仍在、余额零变化、过户给接任者；创建者审计快照与 updated_at 不变
+		// 共享组织账本：行仍在、过户给接任者；创建者审计快照与 updated_at 不变
 		const account = await env.prisma.account.findUniqueOrThrow({
 			where: { id: shared.accountId },
 		});
 		expect(account.organizationId).toBe(orgId);
 		expect(account.userId).toBe(successor.userId);
-		expect(account.balance.toString()).toBe(accountBefore.balance.toString());
+		// 存量 NULL 账户与组织同币种账户冲突：余额按 MIG-B 口径并入存活组织行后删旧行
+		expect(account.balance.toString()).toBe(
+			accountBefore.balance.add(legacyAccountBefore.balance).toString(),
+		);
 		expect(account.createdById).toBe(user.userId);
 		expect(account.updatedAt).toEqual(accountBefore.updatedAt);
 		const [transaction, plan, usage, lot, reminder, correction, allocation, usageLot] =
@@ -384,6 +412,46 @@ describe("AccountData 生命周期（integration）", () => {
 		expect(correction.actorUserId).toBe(user.userId);
 		expect(allocation).not.toBeNull();
 		expect(usageLot).not.toBeNull();
+
+		// R1 I-1：创建者的存量 NULL 行不再被当个人域行删光——收口进存活默认组织后
+		// 完整过户给接任者（金额、审计快照、updated_at 一律不动）
+		const legacyPlanAfter = await env.prisma.plan.findUniqueOrThrow({
+			where: { id: legacy.planId },
+		});
+		expect(legacyPlanAfter.organizationId).toBe(orgId);
+		expect(legacyPlanAfter.userId).toBe(successor.userId);
+		expect(legacyPlanAfter.targetAmount.toString()).toBe(
+			legacyPlanBefore.targetAmount.toString(),
+		);
+		// 审计快照缺失时回填原创建者（COALESCE(created_by_id, userId)）
+		expect(legacyPlanBefore.createdById).toBeNull();
+		expect(legacyPlanAfter.createdById).toBe(user.userId);
+		expect(legacyPlanAfter.updatedAt).toEqual(legacyPlanBefore.updatedAt);
+		const legacyTransactionAfter = await env.prisma.transaction.findUniqueOrThrow({
+			where: { id: legacy.transactionId },
+		});
+		expect(legacyTransactionAfter.organizationId).toBe(orgId);
+		expect(legacyTransactionAfter.userId).toBe(successor.userId);
+		expect(legacyTransactionAfter.principalAmount.toString()).toBe(
+			legacyTransactionBefore.principalAmount.toString(),
+		);
+		expect(legacyTransactionAfter.updatedAt).toEqual(legacyTransactionBefore.updatedAt);
+		// 同币种存量账户 / 持仓被存活组织行覆盖（账户余额已并入，持仓不重复入账）
+		expect(
+			await env.prisma.account.findUnique({ where: { id: legacy.accountId } }),
+		).toBeNull();
+		expect(
+			await env.prisma.initialHolding.findUnique({ where: { id: legacy.initialHoldingId } }),
+		).toBeNull();
+
+		// 接任者在存量计划上发起的组织级使用完好无损（计划被收口后关联仍在）
+		const successorUsageAfter = await env.prisma.usageRecord.findUniqueOrThrow({
+			where: { id: successorUsage.id },
+		});
+		expect(successorUsageAfter.organizationId).toBe(orgId);
+		expect(successorUsageAfter.planId).toBe(legacy.planId);
+		expect(successorUsageAfter.userId).toBe(successor.userId);
+		expect(successorUsageAfter.amount.equals("10.0000")).toBe(true);
 
 		// 组织与接任者保留；组织审计一条不删（个人注销不删组织审计）
 		expect(
@@ -417,6 +485,39 @@ describe("AccountData 生命周期（integration）", () => {
 		).toBe(0);
 		// 清理注册产物（userIds 里旧 id 已不存在，cleanupUser 容错）
 		userIds.push(newUserId);
+	});
+
+	it("注销：默认组织已不存在时，遗留个人 NULL 行按个人域正常删除（不静默挂到别的组织）", async () => {
+		const user = await onboardedUser("life-del-orphan");
+		const orgId = await defaultOrgIdOf(user.userId);
+		const legacy = await seedBusinessData(env.prisma, user.userId);
+		// 默认组织先被删除（成员关系随组织级联消失 → 该用户不再有默认组织）
+		await env.prisma.organization.delete({ where: { id: orgId } });
+		expect(await resolveDefaultOrganizationId(env.prisma, user.userId)).toBeNull();
+
+		const deletion = await submitRequest(user, "DELETION", "PERSONAL");
+		await makeRequestDue(
+			env.prisma,
+			(deletion as { id: string }).id,
+			new Date(Date.now() - 1000),
+		);
+		await request(app.getHttpServer())
+			.get("/api/data-requests/current")
+			.set("Authorization", `Bearer ${user.accessToken}`)
+			.expect(401);
+
+		// 账号与个人域行一并清空，零残留
+		expect(await env.prisma.user.findUnique({ where: { id: user.userId } })).toBeNull();
+		expect(
+			await env.prisma.account.findUnique({ where: { id: legacy.accountId } }),
+		).toBeNull();
+		expect(await env.prisma.plan.findUnique({ where: { id: legacy.planId } })).toBeNull();
+		expect(
+			await env.prisma.usageRecord.count({ where: { userId: user.userId } }),
+		).toBe(0);
+		expect(
+			await env.prisma.planAllocation.count({ where: { planId: legacy.planId } }),
+		).toBe(0);
 	});
 
 	it("组织删除：Admin 不可发起 → Owner 发起进入撤回期 → 到期删除组织及其账本，成员账号与其他组织不受影响", async () => {

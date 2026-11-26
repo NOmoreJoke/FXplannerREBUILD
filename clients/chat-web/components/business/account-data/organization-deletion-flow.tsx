@@ -13,7 +13,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
-import { DATA_REQUESTS_PAGE_PATH } from "@/lib/api/client";
+import { ApiError, DATA_REQUESTS_PAGE_PATH } from "@/lib/api/client";
 import { useDeleteOrganization } from "@/lib/hooks/use-data-request";
 import { OtpVerifyStep } from "./otp-verify-step";
 
@@ -67,6 +67,23 @@ export function OrganizationDeletionFlow({
 					// 组织随即进入删除处理期：直达进度页（撤回入口在那里）。
 					// 纯 /data-requests，不拼查询参数（与组织锁的 403 跳转同一目的地）
 					router.push(DATA_REQUESTS_PAGE_PATH);
+				},
+				onError: (error: Error) => {
+					// 凭证失效（过期 / 已用 / 非法）：清掉凭证并退回验证步骤，让用户重新验证
+					if (
+						error instanceof ApiError &&
+						(error.code === "VERIFICATION_EXPIRED" ||
+							error.code === "VERIFICATION_USED" ||
+							error.code === "VERIFICATION_INVALID")
+					) {
+						setChallengeId(null);
+						setStep("verify");
+						toast.error(error.message || "验证已失效，请重新验证邮箱");
+						return;
+					}
+					// 其余错误（409 DATA_REQUEST_CONFLICT / 403 PERMISSION_DENIED 等）：
+					// 必须给出反馈，绝不静默卡死在确认页
+					toast.error(error.message || "提交失败");
 				},
 			},
 		);
