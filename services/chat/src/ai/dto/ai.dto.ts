@@ -9,6 +9,11 @@ import {
 	Min,
 } from "class-validator";
 import { Type } from "class-transformer";
+import {
+	AllocatableCapsDto,
+	PlanInstallmentDto,
+} from "../../plan/dto/plan.dto";
+import { PACE_PREFERENCES, type PacePreference } from "../../plan/schedule-builder";
 
 /**
  * AI 模块 DTO（ai-assistant 技术方案 §4/§5.1）。
@@ -109,6 +114,74 @@ export class AiConversationListDto {
 	items!: AiConversationSummaryDto[];
 }
 
+/** AI 计划草稿（ToB R2 P8：复用排期预览与可分配上限，未保存，需经人工确认保存） */
+export class AiPlanDraftDto {
+	@ApiProperty({
+		description: "关联的 Agent 运行 ID（确认保存时透传给 POST /api/plans 写入审计）",
+		example: "fd82b1c0-1234-4567-89ab-cdef01234567",
+		type: String,
+	})
+	agentRunId!: string;
+
+	@ApiProperty({
+		description: "建议的计划名称（可为空）",
+		example: "12月广告费换汇",
+		type: String,
+		nullable: true,
+	})
+	name!: string | null;
+
+	@ApiProperty({ description: "目标币种（ISO 4217）", example: "USD", type: String })
+	targetCurrency!: string;
+
+	@ApiProperty({ description: "目标净到账金额（字符串）", example: "10000", type: String })
+	targetAmount!: string;
+
+	@ApiProperty({
+		description: "期望用汇日（ISO 8601 UTC）",
+		example: "2027-12-10T00:00:00.000Z",
+		type: String,
+	})
+	expectUseDate!: string;
+
+	@ApiProperty({ description: "提前准备天数（1~30）", example: 3, type: Number })
+	prepLeadDays!: number;
+
+	@ApiProperty({
+		description: "建议准备节奏",
+		example: "balanced",
+		enum: [...PACE_PREFERENCES],
+		type: String,
+	})
+	pacePreference!: PacePreference;
+
+	@ApiProperty({
+		description: "建议计入已有外币金额（4 位小数字符串）",
+		example: "0.0000",
+		type: String,
+	})
+	allocatedAmount!: string;
+
+	@ApiProperty({
+		description: "最晚准备日（ISO 8601 UTC）",
+		example: "2027-12-07T00:00:00.000Z",
+		type: String,
+	})
+	latestPrepDate!: string;
+
+	@ApiProperty({
+		description: "建议分批排期预览（确认页会按最新余额实时重算）",
+		type: [PlanInstallmentDto],
+	})
+	installments!: PlanInstallmentDto[];
+
+	@ApiProperty({
+		description: "草稿生成时刻的可分配余额上限信息",
+		type: AllocatableCapsDto,
+	})
+	caps!: AllocatableCapsDto;
+}
+
 export class AiMessageDto {
 	@ApiProperty({ description: "消息 ID（cuid）", type: String })
 	id!: string;
@@ -138,6 +211,14 @@ export class AiMessageDto {
 		nullable: true,
 	})
 	model?: string | null;
+
+	@ApiProperty({
+		description: "助手消息关联的换汇计划草稿（未保存，需人工确认）",
+		type: AiPlanDraftDto,
+		required: false,
+		nullable: true,
+	})
+	planDraft?: AiPlanDraftDto | null;
 }
 
 export class AiMessageListDto {
@@ -181,4 +262,11 @@ export class ChatModelListDto {
 		type: [ChatModelSummaryDto],
 	})
 	items!: ChatModelSummaryDto[];
+
+	@ApiProperty({
+		description: "组织业务工具总开关是否开启（false 时仅可用公共汇率查询）",
+		example: true,
+		type: Boolean,
+	})
+	orgToolsEnabled!: boolean;
 }

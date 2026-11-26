@@ -599,6 +599,8 @@ model AiMessage {
   content        String         @db.Text
   /// assistant 消息所用的白名单 key（如 "gpt-4.1-mini"，ai-model-whitelist 技术方案 §3.2）；user 消息为 NULL，存量行为 NULL
   model          String?
+  /// ToB R2（P8）：assistant 调用 draft_fx_plan 生成的结构化计划草稿（仅建议，未保存）
+  planDraft      Json?          @map("plan_draft")
   createdAt      DateTime       @default(now()) @map("created_at")
 
   @@index([conversationId, createdAt], map: "idx_conversation_created")

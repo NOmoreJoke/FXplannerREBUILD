@@ -6187,6 +6187,13 @@
             "type": "string",
             "description": "目标名称（缺省存 null）",
             "example": "今年换 5 万美元"
+          },
+          "agentRunId": {
+            "type": "string",
+            "description": "关联的 Agent 运行 ID（由 AI 计划草稿确认页带入，用于串联草稿生成与人工确认审计；普通手动创建缺省）",
+            "example": "fd82b1c0-1234-4567-89ab-cdef01234567",
+            "maxLength": 64,
+            "pattern": "^[a-zA-Z0-9_-]{8,64}$"
           }
         },
         "required": [
@@ -9323,6 +9330,90 @@
           "items"
         ]
       },
+      "AiPlanDraftDto": {
+        "type": "object",
+        "properties": {
+          "agentRunId": {
+            "type": "string",
+            "description": "关联的 Agent 运行 ID（确认保存时透传给 POST /api/plans 写入审计）",
+            "example": "fd82b1c0-1234-4567-89ab-cdef01234567"
+          },
+          "name": {
+            "type": "string",
+            "description": "建议的计划名称（可为空）",
+            "example": "12月广告费换汇",
+            "nullable": true
+          },
+          "targetCurrency": {
+            "type": "string",
+            "description": "目标币种（ISO 4217）",
+            "example": "USD"
+          },
+          "targetAmount": {
+            "type": "string",
+            "description": "目标净到账金额（字符串）",
+            "example": "10000"
+          },
+          "expectUseDate": {
+            "type": "string",
+            "description": "期望用汇日（ISO 8601 UTC）",
+            "example": "2027-12-10T00:00:00.000Z"
+          },
+          "prepLeadDays": {
+            "type": "number",
+            "description": "提前准备天数（1~30）",
+            "example": 3
+          },
+          "pacePreference": {
+            "type": "string",
+            "description": "建议准备节奏",
+            "example": "balanced",
+            "enum": [
+              "conservative",
+              "balanced",
+              "aggressive"
+            ]
+          },
+          "allocatedAmount": {
+            "type": "string",
+            "description": "建议计入已有外币金额（4 位小数字符串）",
+            "example": "0.0000"
+          },
+          "latestPrepDate": {
+            "type": "string",
+            "description": "最晚准备日（ISO 8601 UTC）",
+            "example": "2027-12-07T00:00:00.000Z"
+          },
+          "installments": {
+            "description": "建议分批排期预览（确认页会按最新余额实时重算）",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanInstallmentDto"
+            }
+          },
+          "caps": {
+            "description": "草稿生成时刻的可分配余额上限信息",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AllocatableCapsDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "agentRunId",
+          "name",
+          "targetCurrency",
+          "targetAmount",
+          "expectUseDate",
+          "prepLeadDays",
+          "pacePreference",
+          "allocatedAmount",
+          "latestPrepDate",
+          "installments",
+          "caps"
+        ]
+      },
       "AiMessageDto": {
         "type": "object",
         "properties": {
@@ -9352,6 +9443,16 @@
             "description": "助手消息实际使用的白名单模型 key；用户消息或存量数据为 null",
             "example": "gpt-4.1-mini",
             "nullable": true
+          },
+          "planDraft": {
+            "description": "助手消息关联的换汇计划草稿（未保存，需人工确认）",
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AiPlanDraftDto"
+              }
+            ]
           }
         },
         "required": [
@@ -9438,10 +9539,16 @@
             "items": {
               "$ref": "#/components/schemas/ChatModelSummaryDto"
             }
+          },
+          "orgToolsEnabled": {
+            "type": "boolean",
+            "description": "组织业务工具总开关是否开启（false 时仅可用公共汇率查询）",
+            "example": true
           }
         },
         "required": [
-          "items"
+          "items",
+          "orgToolsEnabled"
         ]
       }
     }

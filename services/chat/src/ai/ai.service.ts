@@ -19,6 +19,7 @@ import {
 	type ResolvedChatModelConfig,
 } from "./ai-models.config";
 import type { AiHistoryMessage } from "./ai-agent.service";
+import type { AiPlanDraftDto } from "./dto/ai.dto";
 import { AI_RUNTIME_CONFIG, type AiRuntimeConfig } from "./llm/ai-runtime-config";
 
 /** 消息长度上限（§4：1~2000 字符，trim 后非空） */
@@ -80,6 +81,11 @@ export class AiService {
 	assertChatAvailable(): void {
 		if (!this.config.hasConfiguredModel) throw new AiNotConfiguredException();
 		if (!this.config.chatEnabled) throw new AiDisabledException();
+	}
+
+	/** 组织 Agent 工具独立降级开关状态（技术方案 §15.4） */
+	isOrgToolsEnabled(): boolean {
+		return this.config.orgToolsEnabled;
 	}
 
 	/**
@@ -159,6 +165,8 @@ export class AiService {
 				role: row.role,
 				content: row.content,
 				model: row.model,
+				planDraft:
+					(row.planDraft as AiPlanDraftDto | null | undefined) ?? null,
 				createdAt: row.createdAt.toISOString(),
 			})),
 		};
@@ -326,11 +334,13 @@ export class AiService {
 		content: string,
 		model: string,
 		scope: ReadScope,
+		planDraft: AiPlanDraftDto | null = null,
 	): Promise<{
 		id: string;
 		role: string;
 		content: string;
 		model: string | null;
+		planDraft: AiPlanDraftDto | null;
 		createdAt: Date;
 	} | null> {
 		try {
@@ -348,9 +358,26 @@ export class AiService {
 					);
 					return null;
 				}
-				return tx.aiMessage.create({
-					data: { conversationId, role: "assistant", content, model },
+				const created = await tx.aiMessage.create({
+					data: {
+						conversationId,
+						role: "assistant",
+						content,
+						model,
+						...(planDraft
+							? { planDraft: planDraft as unknown as Prisma.InputJsonValue }
+							: {}),
+					},
 				});
+				return {
+					id: created.id,
+					role: created.role,
+					content: created.content,
+					model: created.model,
+					planDraft:
+						(created.planDraft as AiPlanDraftDto | null | undefined) ?? null,
+					createdAt: created.createdAt,
+				};
 			});
 		} catch (error) {
 			if (

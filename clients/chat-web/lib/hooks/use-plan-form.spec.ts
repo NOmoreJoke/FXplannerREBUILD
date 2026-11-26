@@ -5,6 +5,7 @@ import {
 	isPacePreference,
 	localTodayYmd,
 	PACE_PREFERENCES,
+	parsePlanDraftQuery,
 	toPacePreference,
 	usePlanForm,
 	validatePlanForm,
@@ -250,5 +251,80 @@ describe("usePlanForm", () => {
 		});
 
 		expect(result.current.isValid).toBe(true);
+	});
+
+	it("传入 initialValues 时预填值生效且字段默认 touched=true（防止 onboarding 回填覆盖草稿节奏）", () => {
+		const { result } = renderHook(() =>
+			usePlanForm({
+				targetCurrency: "USD",
+				targetAmount: "10000",
+				expectUseDate: "2030-12-10",
+				pacePreference: "aggressive",
+			}),
+		);
+
+		expect(result.current.values.targetCurrency).toBe("USD");
+		expect(result.current.values.pacePreference).toBe("aggressive");
+		expect(result.current.touched.pacePreference).toBe(true);
+		expect(result.current.isValid).toBe(true);
+	});
+});
+
+describe("parsePlanDraftQuery（AI 计划草稿参数解析）", () => {
+	it("缺少 fromDraft=1 时返回空状态", () => {
+		expect(
+			parsePlanDraftQuery(new URLSearchParams("targetCurrency=USD")),
+		).toEqual({
+			fromDraft: false,
+			agentRunId: null,
+			initialValues: {},
+		});
+	});
+
+	it("合法草稿参数完整解析，非法币种/金额/日期/agentRunId 安全忽略", () => {
+		const parsed = parsePlanDraftQuery(
+			new URLSearchParams({
+				fromDraft: "1",
+				agentRunId: "run_12345678",
+				name: "12月广告费",
+				targetCurrency: "usd",
+				targetAmount: "10000",
+				expectUseDate: "2030-12-10T00:00:00.000Z",
+				prepLeadDays: "5",
+				pacePreference: "conservative",
+				allocatedAmount: "2000.0000",
+			}),
+		);
+		expect(parsed).toEqual({
+			fromDraft: true,
+			agentRunId: "run_12345678",
+			initialValues: {
+				name: "12月广告费",
+				targetCurrency: "USD",
+				targetAmount: "10000",
+				expectUseDate: "2030-12-10",
+				prepLeadDays: "5",
+				pacePreference: "conservative",
+				allocatedAmount: "2000.0000",
+			},
+		});
+
+		const dirty = parsePlanDraftQuery(
+			new URLSearchParams({
+				fromDraft: "1",
+				agentRunId: "bad id!",
+				targetCurrency: "BTC",
+				targetAmount: "-1",
+				expectUseDate: "not-a-date",
+				prepLeadDays: "99",
+				pacePreference: "invalid",
+				allocatedAmount: "NaN",
+			}),
+		);
+		expect(dirty).toEqual({
+			fromDraft: true,
+			agentRunId: null,
+			initialValues: {},
+		});
 	});
 });

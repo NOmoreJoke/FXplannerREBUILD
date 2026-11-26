@@ -553,4 +553,70 @@ describe("streamMessage（fetch + 响应校验协议）", () => {
 		).rejects.toThrow("Aborted");
 		expect(captureApiError).not.toHaveBeenCalled();
 	});
+
+	it("R2 P8：parseSseStream 正确解析 draft 帧与 done.assistantMessage.planDraft", async () => {
+		const sampleDraft = {
+			agentRunId: "run_12345678",
+			name: "12月广告费",
+			targetCurrency: "USD",
+			targetAmount: "10000",
+			expectUseDate: "2027-12-10T00:00:00.000Z",
+			prepLeadDays: 3,
+			pacePreference: "balanced",
+			allocatedAmount: "0.0000",
+			latestPrepDate: "2027-12-07T00:00:00.000Z",
+			installments: [
+				{
+					seq: 1,
+					scheduledAt: "2027-12-01T00:00:00.000Z",
+					amount: "3333.3400",
+				},
+			],
+			caps: { allocatableBalance: "0.0000", maxAllocatable: "0.0000" },
+		};
+		const body = streamFromChunks([
+			metaFrame +
+				frame("tool", { name: "draft_fx_plan", state: "start" }) +
+				frame("tool", { name: "draft_fx_plan", state: "end" }) +
+				frame("draft", sampleDraft) +
+				frame("done", {
+					assistantMessage: {
+						id: "msg-a2",
+						role: "assistant",
+						content: "已为你起草计划草稿。",
+						createdAt: "2026-11-27T00:00:00.000Z",
+						model: "gpt-4.1-mini",
+						planDraft: sampleDraft,
+					},
+					usage: { inputTokens: 10, outputTokens: 20 },
+					model: "gpt-4.1-mini",
+				}),
+		]);
+
+		const events = await collect(parseSseStream(body));
+		expect(events).toEqual([
+			{
+				type: "meta",
+				conversationId: "conv-1",
+				userMessageId: "msg-u1",
+				title: "你好呀世界",
+			},
+			{ type: "tool", name: "draft_fx_plan", state: "start" },
+			{ type: "tool", name: "draft_fx_plan", state: "end" },
+			{ type: "draft", draft: sampleDraft },
+			{
+				type: "done",
+				assistantMessage: {
+					id: "msg-a2",
+					role: "assistant",
+					content: "已为你起草计划草稿。",
+					createdAt: "2026-11-27T00:00:00.000Z",
+					model: "gpt-4.1-mini",
+					planDraft: sampleDraft,
+				},
+				usage: { inputTokens: 10, outputTokens: 20 },
+				model: "gpt-4.1-mini",
+			},
+		]);
+	});
 });

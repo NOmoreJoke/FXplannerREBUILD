@@ -45,6 +45,9 @@ export const ORGANIZATION_PERMISSIONS = [
 	"correction.apply",
 	"data.export",
 	"data.clear",
+	"agent.use",
+	"agent.business_read",
+	"agent.draft",
 ] as const;
 
 export type OrganizationPermission = (typeof ORGANIZATION_PERMISSIONS)[number];

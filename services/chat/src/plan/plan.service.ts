@@ -162,6 +162,7 @@ interface AllocatableCaps {
 
 /** 列表服务端兑底条数（§4.1：个人工具无分页，limit 100 防御） */
 const PLAN_LIST_LIMIT = 100;
+const AGENT_RUN_ID_PATTERN = /^[a-zA-Z0-9_-]{8,64}$/;
 
 /** 解析后的排期入参（全部规范化：币种大写、日期 UTC 0 点、金额 Decimal） */
 interface ParsedPlanParams {
@@ -257,6 +258,13 @@ export class PlanService {
 			dto.allocatedAmount !== undefined && dto.allocatedAmount !== null
 				? this.parseNonNegativeAmount(dto.allocatedAmount, "分配金额")
 				: new Prisma.Decimal(0);
+		const agentRunId =
+			dto.agentRunId === undefined || dto.agentRunId === null
+				? null
+				: dto.agentRunId.trim();
+		if (agentRunId !== null && !AGENT_RUN_ID_PATTERN.test(agentRunId)) {
+			throw new PlanInvalidParamsException("agentRunId 格式非法");
+		}
 
 		let deniedRole: OrganizationRole = actor.role;
 		try {
@@ -360,7 +368,9 @@ export class PlanService {
 					targetId: plan.id,
 					result: "SUCCESS",
 					requestId: requestId ?? null,
+					agentRunId,
 					detail: {
+						...(agentRunId ? { source: "agent_draft" } : {}),
 						targetCurrency: plan.targetCurrency,
 						targetAmount: plan.targetAmount.toFixed(4),
 						allocatedAmount: allocatedAmount.toFixed(4),

@@ -1,8 +1,9 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import type { AiMessageRole } from "@/lib/api/chat";
+import type { AiMessageRole, AiPlanDraft } from "@/lib/api/chat";
 import { useModels } from "@/lib/hooks/use-models";
+import { PlanDraftCard } from "./plan-draft-card";
 
 interface MessageBubbleProps {
 	role: AiMessageRole;
@@ -11,10 +12,12 @@ interface MessageBubbleProps {
 	streaming?: boolean;
 	/** 所用白名单模型 key（assistant 消息；null/undefined 不展示角标） */
 	model?: string | null;
+	/** 关联的计划草稿（仅助手消息；未保存，需人工确认） */
+	planDraft?: AiPlanDraft | null;
 }
 
 /**
- * 消息气泡（ai-assistant 方案 §5.2）。
+ * 消息气泡（ai-assistant 方案 §5.2 + ToB R2 §10.2）。
  * XSS 纪律：AI 输出按纯文本渲染（React 转义），禁用 dangerouslySetInnerHTML；
  * 未来若支持 markdown 必须过 sanitize 并补 XSS 用例（§8.3 场景 4）。
  * 助手气泡下角小字展示所用模型（ai-model-whitelist 方案 §5.2）：
@@ -25,6 +28,7 @@ export function MessageBubble({
 	content,
 	streaming = false,
 	model,
+	planDraft = null,
 }: MessageBubbleProps) {
 	const isUser = role === "user";
 	// react-query 缓存去重：多实例共享同一份模型列表，无额外请求
@@ -54,6 +58,7 @@ export function MessageBubble({
 						▍
 					</span>
 				)}
+				{!isUser && planDraft && <PlanDraftCard draft={planDraft} />}
 				{modelDisplayName !== null && (
 					<div
 						data-testid="message-model"
