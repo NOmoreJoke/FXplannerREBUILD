@@ -301,19 +301,25 @@ test.describe("【AI 助手】菜单 / 流式 / 持久化 / 会话管理 / XSS �
 
 	test("T-AI-005: XSS 冒烟 + 流式中停止（纯文本渲染无 script/img，停止后回复不落库）", async ({
 		page,
-	}) => {
+	}, testInfo) => {
 		logger.log("action", "info", "开始：XSS 冒烟与流式中停止");
 		logger.setupPageListeners(page);
 
 		await openChat(page, seed.accessToken);
 
-		// XSS 载荷（赋值表达式而非 alert，避免 dialog 挂起；< 2000 字上限）
-		const xssPayload =
-			'<img src=x onerror="window.__e2eXss=1"><script>window.__e2eXss=2</script>';
+		// XSS 载荷（按 retry 唯一化前 20 字标题，避免重试复用同一用户导致 strict mode 命中两条；< 2000 字上限）
+		const xssPayload = `<img r=${testInfo.retry} src=x onerror="window.__e2eXss=1"><script>window.__e2eXss=2</script>`;
 		await sendMessage(page, xssPayload);
 
 		// 用户消息按纯文本渲染（React 转义）：气泡文本 = 原文
 		await expect(page.getByTestId("message-user")).toHaveText(xssPayload);
+
+		// 先抓住流式窗口点击停止（截屏耗时较多，避免占满 ~3s 假流窗口导致停止前流式结束）
+		await expect(page.locator(CARET).first()).toBeVisible();
+		await page.getByTestId("chat-stop").click();
+
+		// 输入框立即恢复：停止钮换回发送钮
+		await expect(page.getByTestId("chat-send")).toBeVisible();
 
 		// DOM 中无 script / img 元素（若被当 HTML 注入会创建元素并触发 onerror）
 		await expect(
@@ -323,15 +329,7 @@ test.describe("【AI 助手】菜单 / 流式 / 持久化 / 会话管理 / XSS �
 			() => (window as unknown as { __e2eXss?: number }).__e2eXss,
 		);
 		expect(xssProbe).toBeUndefined();
-		await saveScreenshot(page, "14-ai-chat", "T-AI-005-01-xss-escaped");
-
-		// 流式光标出现后点停止（§3.2 断言点：流式中停止）
-		await expect(page.locator(CARET).first()).toBeVisible();
-		await saveScreenshot(page, "14-ai-chat", "T-AI-005-02-stop-streaming");
-		await page.getByTestId("chat-stop").click();
-
-		// 输入框立即恢复：停止钮换回发送钮
-		await expect(page.getByTestId("chat-send")).toBeVisible();
+		await saveScreenshot(page, "14-ai-chat", "T-AI-005-01-xss-and-stopped");
 
 		// 负向等待覆盖假流总时长（38 字 × 80ms ≈ 3s + abort 透传余量）：
 		// 若中断失败，流会在此窗口内完成并出现完整回复 → 断言失败
@@ -350,7 +348,7 @@ test.describe("【AI 助手】菜单 / 流式 / 持久化 / 会话管理 / XSS �
 		await convXss.click();
 		await expect(page.getByTestId("message-user")).toHaveCount(1);
 		await expect(page.getByTestId("message-assistant")).toHaveCount(0);
-		await saveScreenshot(page, "14-ai-chat", "T-AI-005-03-not-persisted");
+		await saveScreenshot(page, "14-ai-chat", "T-AI-005-02-not-persisted");
 
 		await logger.saveToFile();
 	});

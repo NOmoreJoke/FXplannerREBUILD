@@ -55,6 +55,11 @@ function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Playwright 重试时派生独立造数标签，避免复用 Attempt #1 的已变更组织/成员状态 */
+function retryLabel(base: string, retry: number): string {
+	return retry === 0 ? base : `${base}-r${retry}`;
+}
+
 function orgHeaders(organizationId: string): Record<string, string> {
 	return {
 		"X-Organization-Id": assertShape(
@@ -509,8 +514,10 @@ test.describe("【组织工作台】切换 / 成员 / 邀请 / 审计", () => {
 test.describe("【GWT-1..5】默认组织 / 新建隔离 / 跨页切换 / 延迟防篡改 / 最后 Owner", () => {
 	test("GWT-1: 默认组织视图——Owner 身份与原账户/计划/报告金额完整可见", async ({
 		page,
-	}) => {
-		const user = await seedRegisterAndLogin("gwt1-default");
+	}, testInfo) => {
+		const user = await seedRegisterAndLogin(
+			retryLabel("gwt1-default", testInfo.retry),
+		);
 		const orgId = user.defaultOrganizationId;
 		await seedOnboarding(user.accessToken, "CNY", orgId);
 		await seedTransaction(user.accessToken, "CAD", "6000", orgId);
@@ -538,9 +545,13 @@ test.describe("【GWT-1..5】默认组织 / 新建隔离 / 跨页切换 / 延迟
 			"已建账（本位币 CNY）",
 		);
 
+		// 12000 买入 - 1500 使用 = 10500 余额；6000 分配 - 1500 使用 = 4500 已分配；未分配 = 6000
 		await page.goto(`${BASE_URL}/accounts`);
-		await expect(page.getByText("12000.0000")).toBeVisible();
-		await expect(page.getByText("6000.0000").first()).toBeVisible();
+		const cadRow = page.locator("tbody tr").filter({ hasText: "CAD" });
+		await expect(cadRow).toBeVisible();
+		await expect(cadRow).toContainText("10500.0000");
+		await expect(cadRow).toContainText("4500.0000");
+		await expect(cadRow).toContainText("6000.0000");
 
 		await page.goto(`${BASE_URL}/plans`);
 		await expect(page.getByText(planName)).toBeVisible();
@@ -611,8 +622,10 @@ test.describe("【GWT-1..5】默认组织 / 新建隔离 / 跨页切换 / 延迟
 
 	test("GWT-3: A↔B 跨页切换一致性——首页/账户/计划/报告仅显示当前组织数据", async ({
 		page,
-	}) => {
-		const user = await seedRegisterAndLogin("gwt3-crosspage");
+	}, testInfo) => {
+		const user = await seedRegisterAndLogin(
+			retryLabel("gwt3-crosspage", testInfo.retry),
+		);
 		const orgAId = user.defaultOrganizationId;
 		await seedOnboarding(user.accessToken, "CNY", orgAId);
 		await seedTransaction(user.accessToken, "CAD", "4000", orgAId);
@@ -655,28 +668,44 @@ test.describe("【GWT-1..5】默认组织 / 新建隔离 / 跨页切换 / 延迟
 		await expect(page.getByText(planBName)).toBeVisible();
 		await expect(page.getByText(planAName)).toHaveCount(0);
 
-		// 账户页 B → A
-		await page.goto(`${BASE_URL}/accounts`);
-		await expect(page.getByText("2500.0000")).toBeVisible();
-		await expect(page.getByText("4000.0000")).toHaveCount(0);
+		// 计划页 B → A
+		await page.goto(`${BASE_URL}/plans`);
+		await expect(page.getByText(planBName)).toBeVisible();
+		await expect(page.getByText(planAName)).toHaveCount(0);
 		await switchOrganization(page, orgB.name, orgA.name);
-		await expect(page.getByText("4000.0000")).toBeVisible();
-		await expect(page.getByText("2500.0000")).toHaveCount(0);
+		await expect(page.getByText(planAName)).toBeVisible();
+		await expect(page.getByText(planBName)).toHaveCount(0);
 
-		// 报告页 A → B
-		await page.goto(`${BASE_URL}/reports`);
+		// 账户页 A → B（Org A: 4000 CAD - 1000 usage = 3000.0000，无 EUR；Org B: 2500 EUR - 500 usage = 2000.0000，无 CAD）
+		await page.goto(`${BASE_URL}/accounts`);
 		await expect(
-			page.getByTestId("report-plan-row").filter({ hasText: planAName }),
-		).toBeVisible();
+			page.locator("tbody tr").filter({ hasText: "CAD" }),
+		).toContainText("3000.0000");
 		await expect(
-			page.getByTestId("report-plan-row").filter({ hasText: planBName }),
+			page.locator("tbody tr").filter({ hasText: "EUR" }),
 		).toHaveCount(0);
 		await switchOrganization(page, orgA.name, orgB.name);
 		await expect(
+			page.locator("tbody tr").filter({ hasText: "EUR" }),
+		).toContainText("2000.0000");
+		await expect(
+			page.locator("tbody tr").filter({ hasText: "CAD" }),
+		).toHaveCount(0);
+
+		// 报告页 B → A
+		await page.goto(`${BASE_URL}/reports`);
+		await expect(
 			page.getByTestId("report-plan-row").filter({ hasText: planBName }),
 		).toBeVisible();
 		await expect(
 			page.getByTestId("report-plan-row").filter({ hasText: planAName }),
+		).toHaveCount(0);
+		await switchOrganization(page, orgB.name, orgA.name);
+		await expect(
+			page.getByTestId("report-plan-row").filter({ hasText: planAName }),
+		).toBeVisible();
+		await expect(
+			page.getByTestId("report-plan-row").filter({ hasText: planBName }),
 		).toHaveCount(0);
 	});
 
@@ -780,8 +809,10 @@ test.describe("【GWT-1..5】默认组织 / 新建隔离 / 跨页切换 / 延迟
 
 	test("GWT-5: 最后 Owner 保护——不可退出也不可自降权（UI 隐藏 + API 409 LAST_OWNER_REQUIRED）", async ({
 		page,
-	}) => {
-		const owner = await seedRegisterAndLogin("gwt5-last-owner");
+	}, testInfo) => {
+		const owner = await seedRegisterAndLogin(
+			retryLabel("gwt5-last-owner", testInfo.retry),
+		);
 		const orgId = owner.defaultOrganizationId;
 		await seedOnboarding(owner.accessToken, "CNY", orgId);
 
@@ -790,7 +821,8 @@ test.describe("【GWT-1..5】默认组织 / 新建隔离 / 跨页切换 / 延迟
 			.getByTestId("member-row")
 			.filter({ hasText: owner.email });
 		await expect(ownerRow).toBeVisible();
-		await expect(ownerRow.getByTestId("role-select")).toBeDisabled();
+		await expect(ownerRow).toContainText("所有者");
+		await expect(ownerRow.getByTestId("role-select")).toHaveCount(0);
 		await expect(page.getByTestId("leave-organization-entry")).toHaveCount(0);
 
 		const members = await api<MemberView[]>(
@@ -828,9 +860,13 @@ test.describe("【GWT-1..5】默认组织 / 新建隔离 / 跨页切换 / 延迟
 test.describe("【GWT-6..14】邀请边界 / 五角色权限 / 跨组织隔离 / 降权移除转移", () => {
 	test("GWT-6: 未登录访问邀请链接 → 跳转 /login?redirect=... → 登录后回跳接受并可见共享账本", async ({
 		page,
-	}) => {
-		const owner = await seedRegisterAndLogin("gwt6-owner");
-		const invitee = await seedRegisterAndLogin("gwt6-finance");
+	}, testInfo) => {
+		const owner = await seedRegisterAndLogin(
+			retryLabel("gwt6-owner", testInfo.retry),
+		);
+		const invitee = await seedRegisterAndLogin(
+			retryLabel("gwt6-finance", testInfo.retry),
+		);
 		const orgId = owner.defaultOrganizationId;
 		await seedOnboarding(owner.accessToken, "CNY", orgId);
 		await seedOnboarding(
@@ -855,12 +891,17 @@ test.describe("【GWT-6..14】邀请边界 / 五角色权限 / 跨组织隔离 /
 				url.pathname === "/login" &&
 				url.searchParams.get("redirect") === invitePath,
 		);
+		await page.waitForLoadState("networkidle");
 
 		// 登录表单完成登录 → 自动回跳 /invitations/<token>
 		await page.fill('input[name="email"]', invitee.email);
 		await page.fill('input[name="password"]', invitee.password);
-		await page.check('[data-testid="consent-age18"]');
-		await page.check('[data-testid="consent-terms"]');
+		const age18 = page.getByTestId("consent-age18");
+		const terms = page.getByTestId("consent-terms");
+		await age18.check();
+		await terms.check();
+		await expect(age18).toBeChecked();
+		await expect(terms).toBeChecked();
 		await page.click('button[type="submit"]');
 
 		await expect(page).toHaveURL(`${BASE_URL}${invitePath}`);
@@ -870,15 +911,23 @@ test.describe("【GWT-6..14】邀请边界 / 五角色权限 / 跨组织隔离 /
 		await page.getByRole("link", { name: "进入工作台" }).click();
 		await expect(page).toHaveURL(/\/home/);
 		await page.goto(`${BASE_URL}/accounts`);
-		await expect(page.getByText("3200.0000")).toBeVisible();
+		const usdRow = page.locator("tbody tr").filter({ hasText: "USD" });
+		await expect(usdRow).toBeVisible();
+		await expect(usdRow).toContainText("3200.0000");
 	});
 
 	test("GWT-7: 错误邮箱拒绝接受——邮箱 B 打开邮箱 A 邀请被拒且不产生成员关系", async ({
 		page,
-	}) => {
-		const owner = await seedRegisterAndLogin("gwt7-owner");
-		const intended = await seedRegisterAndLogin("gwt7-a");
-		const wrongUser = await seedRegisterAndLogin("gwt7-b");
+	}, testInfo) => {
+		const owner = await seedRegisterAndLogin(
+			retryLabel("gwt7-owner", testInfo.retry),
+		);
+		const intended = await seedRegisterAndLogin(
+			retryLabel("gwt7-a", testInfo.retry),
+		);
+		const wrongUser = await seedRegisterAndLogin(
+			retryLabel("gwt7-b", testInfo.retry),
+		);
 		const orgId = owner.defaultOrganizationId;
 		await seedOnboarding(owner.accessToken, "CNY", orgId);
 
@@ -895,7 +944,9 @@ test.describe("【GWT-6..14】邀请边界 / 五角色权限 / 跨组织隔离 /
 		);
 
 		await openProtected(page, `/invitations/${token}`, wrongUser.accessToken);
-		await expect(page.getByRole("alert")).toBeVisible();
+		await expect(page.locator("main").getByRole("alert")).toContainText(
+			"邀请邮箱与当前登录邮箱不一致",
+		);
 		await expect(page.getByTestId("invitation-accept")).toHaveCount(0);
 
 		const acceptRes = await rawApi(
@@ -1022,11 +1073,19 @@ test.describe("【GWT-6..14】邀请边界 / 五角色权限 / 跨组织隔离 /
 	test("GWT-9 & GWT-10: 五角色关键路径——Operator 建计划可/记账拒；Viewer 只读且越权写进 DENIED 审计", async ({
 		page,
 		browser,
-	}) => {
-		const owner = await seedRegisterAndLogin("gwt9-owner");
-		const admin = await seedRegisterAndLogin("gwt9-admin");
-		const operator = await seedRegisterAndLogin("gwt9-operator");
-		const viewer = await seedRegisterAndLogin("gwt9-viewer");
+	}, testInfo) => {
+		const owner = await seedRegisterAndLogin(
+			retryLabel("gwt9-owner", testInfo.retry),
+		);
+		const admin = await seedRegisterAndLogin(
+			retryLabel("gwt9-admin", testInfo.retry),
+		);
+		const operator = await seedRegisterAndLogin(
+			retryLabel("gwt9-operator", testInfo.retry),
+		);
+		const viewer = await seedRegisterAndLogin(
+			retryLabel("gwt9-viewer", testInfo.retry),
+		);
 		const orgId = owner.defaultOrganizationId;
 		await seedOnboarding(owner.accessToken, "CNY", orgId);
 		const txId = await seedTransaction(owner.accessToken, "USD", "5000", orgId);
@@ -1394,9 +1453,14 @@ test.describe("【GWT-6..14】邀请边界 / 五角色权限 / 跨组织隔离 /
 
 	test("GWT-14: 所有权转移——新 Owner 可管理组织，原 Owner 降为 Admin，审计包含双方与组织", async ({
 		page,
-	}) => {
-		const owner = await seedRegisterAndLogin("gwt14-owner");
-		const admin = await seedRegisterAndLogin("gwt14-admin");
+		browser,
+	}, testInfo) => {
+		const owner = await seedRegisterAndLogin(
+			retryLabel("gwt14-owner", testInfo.retry),
+		);
+		const admin = await seedRegisterAndLogin(
+			retryLabel("gwt14-admin", testInfo.retry),
+		);
 		const orgId = owner.defaultOrganizationId;
 		await seedOnboarding(owner.accessToken, "CNY", orgId);
 		await seedOnboarding(admin.accessToken, "CNY", admin.defaultOrganizationId);
@@ -1447,19 +1511,29 @@ test.describe("【GWT-6..14】邀请边界 / 五角色权限 / 跨组织隔离 /
 			}),
 		});
 
-		// 新 Owner 拥有 OWNER 权限（可见 OWNER 身份、删除组织与转移所有权入口）
-		await openProtected(page, "/organization", admin.accessToken);
-		await pickOrganization(page, orgName);
-		await expect(page.getByTestId("organization-form")).toContainText("OWNER");
-		await page.goto(`${BASE_URL}/organization/members`);
-		await expect(
-			page
-				.getByTestId("member-row")
-				.filter({ hasText: owner.email })
-				.getByTestId("transfer-ownership-entry"),
-		).toBeVisible();
-		await page.goto(`${BASE_URL}/settings`);
-		await expect(page.getByTestId("organization-data-delete")).toBeVisible();
+		// 新 Owner 在独立上下文中拥有 OWNER 权限（隔离原 Owner 的 localStorage activeOrganizationId）
+		const newOwnerCtx = await browser.newContext();
+		const newOwnerPage = await newOwnerCtx.newPage();
+		try {
+			await openProtected(newOwnerPage, "/organization", admin.accessToken);
+			await pickOrganization(newOwnerPage, orgName);
+			await expect(
+				newOwnerPage.getByTestId("organization-form"),
+			).toContainText("OWNER");
+			await newOwnerPage.goto(`${BASE_URL}/organization/members`);
+			await expect(
+				newOwnerPage
+					.getByTestId("member-row")
+					.filter({ hasText: owner.email })
+					.getByTestId("transfer-ownership-entry"),
+			).toBeVisible();
+			await newOwnerPage.goto(`${BASE_URL}/settings`);
+			await expect(
+				newOwnerPage.getByTestId("organization-data-delete"),
+			).toBeVisible();
+		} finally {
+			await newOwnerCtx.close();
+		}
 	});
 });
 

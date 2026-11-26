@@ -1978,6 +1978,11 @@ export interface components {
              */
             id: string;
             /**
+             * @description 目标名称（缺省为 null）
+             * @example 今年换 5 万美元
+             */
+            name: string | null;
+            /**
              * @description 目标币种（ISO 4217）
              * @example USD
              */

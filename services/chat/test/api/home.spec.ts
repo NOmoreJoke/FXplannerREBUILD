@@ -195,6 +195,7 @@ describe("HomeController（e2e）", () => {
 		const planSummary = res.body.data.plans[0];
 		expect(planSummary).toMatchObject({
 			id: plan.id,
+			name: null,
 			targetCurrency: "USD",
 			targetAmount: "10000.0000",
 			allocatedAmount: "4000.0000",
@@ -210,6 +211,7 @@ describe("HomeController（e2e）", () => {
 			data: {
 				organizationId: user.defaultOrganizationId,
 				createdById: user.userId,
+				name: "日本学费换汇",
 				targetCurrency: "JPY",
 				targetAmount: "120000.0000",
 				expectUseDate: EXPECT_USE_DATE,
@@ -226,6 +228,7 @@ describe("HomeController（e2e）", () => {
 		expect(res.body.data.plans).toHaveLength(2);
 		expect(res.body.data.plans[0]).toMatchObject({
 			id: plan.id,
+			name: "日本学费换汇",
 			targetCurrency: "JPY",
 			targetAmount: "120000.0000",
 			allocatedAmount: "0.0000",

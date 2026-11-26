@@ -1,4 +1,5 @@
 import { test, expect } from "../fixtures/auto-screenshot";
+import { seedRegisterAndLogin } from "../helpers/api-seeder";
 import { TestLogger } from "../helpers/logger";
 import { saveScreenshot } from "../helpers/save-screenshot";
 import { TEST_ALT_PASSWORD, TEST_PASSWORD } from "../helpers/test-credentials";
@@ -14,7 +15,8 @@ import { TEST_ALT_PASSWORD, TEST_PASSWORD } from "../helpers/test-credentials";
  */
 
 const BASE_URL = process.env.CORS_ORIGIN || "http://localhost:3001";
-const TEST_EMAIL = `e2e-auth-${Date.now()}@example.com`;
+const RUN_ID = process.env.E2E_SEED_RUN_ID ?? String(Date.now());
+const TEST_EMAIL = `e2e-auth-${RUN_ID}@example.com`;
 
 test.describe("【认证模块】用户认证流程", () => {
 	const logger = new TestLogger("auth-module");
@@ -183,12 +185,19 @@ test.describe("【认证模块】用户认证流程", () => {
 			logger.log("action", "info", "开始：已登录访问落地页跳转工作台");
 			logger.setupPageListeners(page);
 
-			// 先登录（复用 T-AUTH-001 注册的用户；未建账 → 登录后进向导）
+			const user = await seedRegisterAndLogin("auth-landing-redirect");
+
+			// 先登录（使用独立种子用户，避免重试与前序用例相互干扰）
 			await page.goto(`${BASE_URL}/login`);
-			await page.fill('input[name="email"]', TEST_EMAIL);
-			await page.fill('input[name="password"]', TEST_PASSWORD);
-			await page.check('[data-testid="consent-age18"]');
-			await page.check('[data-testid="consent-terms"]');
+			await page.waitForLoadState("networkidle");
+			await page.fill('input[name="email"]', user.email);
+			await page.fill('input[name="password"]', user.password);
+			const age18 = page.getByTestId("consent-age18");
+			const terms = page.getByTestId("consent-terms");
+			await age18.check();
+			await terms.check();
+			await expect(age18).toBeChecked();
+			await expect(terms).toBeChecked();
 			await page.click('button[type="submit"]');
 			await page.waitForURL(/\/(home|onboarding)/, { timeout: 10000 });
 			logger.log("action", "info", "✓ 已登录");
@@ -208,12 +217,19 @@ test.describe("【认证模块】用户认证流程", () => {
 			logger.log("action", "info", "开始：用户登出成功");
 			logger.setupPageListeners(page);
 
+			const user = await seedRegisterAndLogin("auth-logout");
+
 			// 先登录（未建账用户登录后进向导，onboarding-rework 行为）
 			await page.goto(`${BASE_URL}/login`);
-			await page.fill('input[name="email"]', TEST_EMAIL);
-			await page.fill('input[name="password"]', TEST_PASSWORD);
-			await page.check('[data-testid="consent-age18"]');
-			await page.check('[data-testid="consent-terms"]');
+			await page.waitForLoadState("networkidle");
+			await page.fill('input[name="email"]', user.email);
+			await page.fill('input[name="password"]', user.password);
+			const age18 = page.getByTestId("consent-age18");
+			const terms = page.getByTestId("consent-terms");
+			await age18.check();
+			await terms.check();
+			await expect(age18).toBeChecked();
+			await expect(terms).toBeChecked();
 			await page.click('button[type="submit"]');
 			await page.waitForURL(/\/(home|onboarding)/, { timeout: 10000 });
 			logger.log("action", "info", "✓ 已登录");

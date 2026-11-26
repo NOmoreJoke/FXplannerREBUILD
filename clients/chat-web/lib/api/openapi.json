@@ -5109,6 +5109,12 @@
             "description": "计划 ID（cuid）",
             "example": "cmex5g2h70000abcd"
           },
+          "name": {
+            "type": "string",
+            "description": "目标名称（缺省为 null）",
+            "example": "今年换 5 万美元",
+            "nullable": true
+          },
           "targetCurrency": {
             "type": "string",
             "description": "目标币种（ISO 4217）",
@@ -5152,6 +5158,7 @@
         },
         "required": [
           "id",
+          "name",
           "targetCurrency",
           "targetAmount",
           "allocatedAmount",

@@ -160,6 +160,7 @@ export class HomeService {
 	): PlanSummaryDto {
 		return {
 			id: plan.id,
+			name: plan.name ?? null,
 			targetCurrency: plan.targetCurrency,
 			targetAmount: plan.targetAmount.toFixed(4),
 			allocatedAmount: allocation

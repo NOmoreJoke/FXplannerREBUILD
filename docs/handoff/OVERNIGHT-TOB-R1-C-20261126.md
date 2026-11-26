@@ -31,24 +31,27 @@
 
 ---
 
-## 3. Final Gate 全量结果（`abf8f2c` 实测）
+## 3. Final Gate 全量结果（E2E 修复迭代后最新实测）
 
 - **裁判基线**：`git diff dev -- eslint.config.mjs docs/VERIFY.md scripts/check-structure.ts` = **空**。
 - **L1 静态与契约**：
   - `check:structure` exit 0；
   - `check:org-scope` exit 0（扫描 `62` 文件，`0` 违规；`scripts/__tests__/check-org-scope.spec.ts` **16 pass, 0 fail** 含可变 `let`/类型别名遮蔽/强转 `OrganizationLedgerScope` 负向反证）；
   - `lint` exit 0（`lint:observe`：`clients/chat-web` 261 文件 `0 errors, 15 warnings`；`services/chat` 275 文件 `0 errors, 59 warnings`）；
-  - `typecheck` exit 0（Turbo 4/4）；`generate:api` ×2 SHA-256 零漂移（`openapi.json` `1dbec227...`，`schema.gen.ts` `6ecf330f...`）；`build` exit 0（NestJS + Next.js 16.2.3 21 路由）。
+  - `typecheck` exit 0（Turbo 4/4）；`generate:api` ×2 SHA-256 零漂移（`openapi.json` `f9d05b4c...`，`schema.gen.ts` `971566ac...`）；`build` exit 0（NestJS + Next.js 16.2.3 21 路由）。
 - **L1+ & L2 测试全绿**：
   - `unit`: 50 文件 / **`740 passed | 1 todo (741)`**
-  - `web`: 36 文件 / **`432 passed`**
+  - `web`: 36 文件 / **`433 passed`**
   - `money`: 4 文件 / **`64 passed`**
   - `dev-log`: 4 文件 / **`31 passed`**
   - `scripts`: **`24 pass, 0 fail`**
   - `api`: 22 文件 / **`849 passed`**（含 `organization-matrix.spec.ts` **409/409**）
   - `integration`: 18 文件 / **`147 passed`**
   - `infra`: 1 文件 (`test/prisma.spec.ts`) / **`26 passed`**
-- **L3 E2E**：端口探针 `3001/4001` 为 `NO_SERVICES_LISTENING`，遵守 `AGENTS.md` 禁止 AI 启服铁律，L3 标记 **`NOT_RUN`**（`bunx playwright test --list` 确认 `15-organization.spec.ts` `32` 条、全仓 `107` 条，且修改的 8 个 E2E 文件 `tsc --noEmit --skipLibCheck` 0 错误）。
+- **L3 E2E**：
+  - 人类首轮实跑（`e2e/test-results/test-results.json`）：**`94 passed`** / `3 skipped`（外部汇率不可用）/ `10 failed`（Goal #3B 8 条回归及 `15-organization` 25/32 均一次通过）；
+  - 已完成全部 10 条根因修复（补齐 `PlanSummaryDto.name` 解决 `GWT-3`/`GWT-9`，并修复 `01-auth`、`14-ai-chat`、`15-organization` 的水合/截屏窗口/strict-mode 定位/余额算术/上下文隔离问题），详见 [验收记录.md](../../changes/tob-agent-workspace/验收记录.md) §2.3；
+  - 修复后端口 `3001/4001` 已关闭（`NOT_LISTENING`），遵守 `AGENTS.md` 禁止 AI 启服铁律，已跑通 `tsc`、`playwright test --list`（107 条）与全量 L1/L2，待合入 `dev` 后按需启服复验修复项。
 
 ---
 
@@ -66,13 +69,13 @@
   # bun run test:e2e -- e2e/modules/15-organization.spec.ts
   rm -rf e2e/test-results
   ```
-  重点复跑验证：`15-organization.spec.ts` 全量 32 条 + Goal #3B 修复的 8 条（`T-OBW-002`、`T-CORR-005`、`W6-09`、`T-RPT-001`、`T-DATA-002/006/007`、`T-AI-003`）。
+  重点复跑验证（人类首轮实跑已验证 Goal #3B 8 条全绿，若复跑修复迭代可按 `--grep` 抽检以下 10 条）：`T-AUTH-005`、`T-AUTH-007`、`T-AI-005`、`GWT-1`、`GWT-3`、`GWT-5`、`GWT-6`、`GWT-7`、`GWT-9`、`GWT-14`。
 
 ---
 
 ## 5. ToB R1 发布门 & Goal #4（P7–P8 组织只读/草稿 Agent）启动准入签字项
 
-- [x] P0–P6 全部 L1/L1+/L2（`check:structure`、`check:org-scope` 62/0、`lint` 0 err、`typecheck` 4/4、`unit` 740、`web` 432、`money` 64、`dev-log` 31、`scripts` 24、`api` 849、`integration` 147、`infra` 26、`build`）全部实跑通过
+- [x] P0–P6 全部 L1/L1+/L2（`check:structure`、`check:org-scope` 62/0、`lint` 0 err、`typecheck` 4/4、`unit` 740、`web` 433、`money` 64、`dev-log` 31、`scripts` 24、`api` 849、`integration` 147、`infra` 26、`build`）全部实跑通过
 - [x] `MIG-D`（删 `BusinessOrgScopeGuard`）+ `MIG-E`（`NOT NULL` / `ON DELETE RESTRICT`）+ `MIG-F`（删 8 表旧 `user_id`）本地切换零差异 & `benchmark-p6` 8/8 `0 Seq Scan`
 - [x] 独立分支级别对抗审 `D6` R1（拦截 1 项口径夸大 `[Important]`）→ 修订闭合后经增量 R2 复核确认 `Important count: 0`
 - [ ] **人类待签字项**：启动前后端服务跑通 `./e2e/scripts/run-e2e-tests.sh --headless`（确认 `15-organization.spec.ts` 32/32 与全量 107 条 E2E 0 failed）并将 Draft PR 审阅合入 `dev` 后，正式进入 **Goal #4（ToB R2：`AGENT-02..04` / `GWT-19..25`）**。
