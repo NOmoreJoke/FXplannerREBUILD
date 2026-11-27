@@ -133,7 +133,9 @@ const initialStoreState = {
 	streamingIds: [] as string[],
 	creatingStream: false,
 	streamTexts: {} as Record<string, string>,
+	streamDrafts: {},
 	toolActiveIds: [] as string[],
+	activeTools: {},
 	errors: {} as Record<string, string | null>,
 	newChatError: null as string | null,
 	pendingUserContent: null as string | null,
@@ -880,5 +882,86 @@ describe("useChat 会话切换与消息拉取", () => {
 			content: "历史消息",
 		});
 		expect(result.current.isLoadingMessages).toBe(false);
+	});
+});
+
+describe("useChat R2 工具名与草稿帧收敛", () => {
+	it("tool(start) 暴露 activeToolName，draft 帧挂入 streamDraft，done 后清理流式态并保留 planDraft 于缓存", async () => {
+		hangMessagesFetch();
+		const draftPayload = {
+			agentRunId: "run_12345678",
+			name: "12月备货",
+			targetCurrency: "USD",
+			targetAmount: "10000",
+			expectUseDate: "2027-12-10T00:00:00.000Z",
+			prepLeadDays: 3,
+			pacePreference: "balanced" as const,
+			allocatedAmount: "0.0000",
+			latestPrepDate: "2027-12-07T00:00:00.000Z",
+			installments: [],
+			caps: { allocatableBalance: "0.0000", maxAllocatable: "0.0000" },
+		};
+		vi.mocked(streamMessage).mockResolvedValue(
+			streamOf([
+				metaEvent,
+				{ type: "tool", name: "draft_fx_plan", state: "start" },
+				{ type: "tool", name: "draft_fx_plan", state: "end" },
+				{ type: "draft", draft: draftPayload },
+				{
+					type: "done",
+					assistantMessage: {
+						id: "msg-a2",
+						role: "assistant",
+						content: "已为你起草计划草稿。",
+						createdAt: "2026-11-27T00:00:00.000Z",
+						model: "gpt-4.1-mini",
+						planDraft: draftPayload,
+					},
+					usage: { inputTokens: 10, outputTokens: 20 },
+					model: "gpt-4.1-mini",
+				},
+			]),
+		);
+
+		const { queryClient, wrapper } = createWrapper();
+		const { result } = renderHook(() => useChat(), { wrapper });
+
+		await act(async () => {
+			await result.current.send("帮我起草 USD 计划");
+		});
+
+		expect(result.current.streamDraft).toBeNull();
+		expect(result.current.activeToolName).toBeNull();
+		const cached = queryClient.getQueryData<AiMessageListData>(
+			aiMessagesQueryKey("conv-1"),
+		);
+		expect(cached?.items[1]?.planDraft).toEqual(draftPayload);
+	});
+
+	it("abortActiveStream 重置 streamDrafts 与 activeTools，不泄漏到新组织", () => {
+		useChatStore.setState({
+			activeConversationId: "conv-1",
+			activeTools: { "conv-1": "get_account_summary" },
+			streamDrafts: {
+				"conv-1": {
+					agentRunId: "run_12345678",
+					name: null,
+					targetCurrency: "USD",
+					targetAmount: "1000",
+					expectUseDate: "2027-12-10T00:00:00.000Z",
+					prepLeadDays: 3,
+					pacePreference: "balanced",
+					allocatedAmount: "0.0000",
+					latestPrepDate: "2027-12-07T00:00:00.000Z",
+					installments: [],
+					caps: { allocatableBalance: "0.0000", maxAllocatable: "0.0000" },
+				},
+			},
+		});
+
+		abortActiveStream();
+		const state = useChatStore.getState();
+		expect(state.streamDrafts).toEqual({});
+		expect(state.activeTools).toEqual({});
 	});
 });

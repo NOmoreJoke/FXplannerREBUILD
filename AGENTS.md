@@ -56,7 +56,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  ├─ authorization/             # ToB R1：ActorContext、纯函数权限策略、组织上下文/权限/双锁 Guard 与白名单装饰器
 │  │  ├─ audit/                     # ToB R1：审计同事务 writer 与只读分页查询（无 update/delete 接口）
 │  │  ├─ account/                   # 账户与分配只读视图
-│  │  ├─ ai/                        # AI 助手（会话、配额、汇率工具）
+│  │  ├─ ai/                        # AI 助手（按 userId+organizationId 隔离会话、配额、公共汇率与组织只读/计划草稿工具、工具级实时鉴权与审计）
 │  │  ├─ correction/                # 更正与账本重放（FIFO）
 │  │  ├─ currency/                  # 币种清单下发
 │  │  ├─ data-request/              # 数据请求与双锁判定实现（个人账号锁 / 组织数据锁；导出/清空/注销）
@@ -76,7 +76,8 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  │  ├─ 20261120090000_rate_cache_migration_receipt/ # 汇率缓存迁移完成记录与行归属
 │  │  │  ├─ 20261120091000_rate_cache_canonical_write/ # 记录可信的汇率回源写入
 │  │  │  ├─ 20261126190000_tob_r1_mig_e_tighten_constraints/ # ToB R1 MIG-E：NOT NULL / ON DELETE RESTRICT / 删旧用户唯一索引
-│  │  │  └─ 20261126191000_tob_r1_mig_f_drop_legacy_columns/ # ToB R1 MIG-F：删 8 表旧 user_id、UserSettings 旧账本列、reminders.read_at，重命名 requester_user_id
+│  │  │  ├─ 20261126191000_tob_r1_mig_f_drop_legacy_columns/ # ToB R1 MIG-F：删 8 表旧 user_id、UserSettings 旧账本列、reminders.read_at，重命名 requester_user_id
+│  │  │  └─ 20261127010000_tob_r2_ai_message_plan_draft/ # ToB R2：ai_messages.plan_draft 结构化计划草稿载荷列
 │  │  ├─ rate-cache-migration/      # 旧汇率缓存迁移运维 CLI（B2；README 见目录内）
 │  │  └─ tob-r1-migration/          # ToB R1 MIG-B/E/F 回填、核对与 §14.5 P6 基准 CLI（benchmark-p6.ts / README 见目录内）
 │  └─ test/
@@ -140,6 +141,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | 单元测试         | 与源码同目录`<被测文件>.spec.ts`                                          |
 | E2E 用例         | `e2e/modules/<编号>-<模块>.spec.ts`                                       |
 | ToB 组织工作台与 Agent 规划 | `changes/tob-agent-workspace/` |
+| ToB R2 组织 Agent 工具与草稿闭环 | 工具目录 `services/chat/src/ai/tools/`（经 `tool-guard.ts` 统一实时校验双锁、`Membership`、独立开关 `AI_ORG_TOOLS_ENABLED`、`can(freshRole, permission)` 并写 `AuditLog(actorType="AGENT", agentRunId)`）；前端草稿卡 `clients/chat-web/components/business/chat/plan-draft-card.tsx`（经 `components/business/chat/index.ts` 导出）；组织 Agent 授权集成测试 `services/chat/test/integration/agent-tool-authorization.spec.ts`；组织 Agent E2E `e2e/modules/16-agent-organization.spec.ts` |
 | ToB R1 后端新模块（组织/成员/邀请/设置、权限策略与 Guard、审计） | `services/chat/src/{organization,authorization,audit}/`，在 `app.module.ts` 唯一注册；`authorization/` 仅纯函数与类型（IO 在 Guard/Service 层） |
 | 双域数据请求与双锁守卫 | `services/chat/src/data-request/`：个人域 `/api/data-requests/*`（`DataRequestController`，仅 `JwtAuthGuard`）+ 组织域 `/api/organizations/current/data-requests/*`（`OrganizationDataRequestController`，类级 `@SkipOrganizationLock()`，`JwtAuthGuard → OrganizationContextGuard → OrganizationLockGuard → PermissionGuard`）；`PersonalAccountLockGuard`（全局 `APP_GUARD`，未挂组织锁守卫的路由走个人域单查）/ `OrganizationLockGuard`（**横切守卫，契约与实现分离**：守卫 + `ORGANIZATION_LOCK_RESOLVER` 契约在 `services/chat/src/authorization/guards/organization-lock.guard.ts`，真实判定在 `data-request/organization-lock-resolver.ts`，经全局 `DataRequestModule` 导出后注入——`authorization/` 与 `audit/` 均禁止引入业务记账模块）；双锁白名单装饰器统一在 `services/chat/src/authorization/guards/data-lock.decorators.ts` |
 | 组织锁守卫挂载顺序铁律 | `@UseGuards(OrganizationContextGuard, OrganizationLockGuard, PermissionGuard)`——先解析 `actor.organizationId`、再检锁、最后检权限；**W30（MIG-D）起组织上下文唯一**：`BusinessOrgScopeGuard`（缺头时猜「唯一默认组织」的兼容窗口守卫）已删除，缺 `X-Organization-Id` 一律 400 `ORGANIZATION_REQUIRED`，不再有单组织回落；放前则无 actor 绕过、放后则 403 先于锁原因返回。**唯一例外**：`PATCH /api/settings` 因按字段分权（`personal` 的 region/locale 放行全部成员 vs `organization` 的 prepPreference/reminderEnabled 需 `settings.update`）未挂类/方法级 `PermissionGuard`，改在 `SettingsService` 持组织锁（`lockOrganizationForActor`）后按字段内联校验角色并写审计（成功同事务 SUCCESS，失败回滚后写 DENIED）——新增按字段分权的端点须照此办理，不得擅自跳过内联校验 |

@@ -45,6 +45,9 @@ export type ChatModelSummary = Schemas["ChatModelSummaryDto"];
 
 export type ModelsListData = Schemas["ChatModelListDto"];
 
+/** 计划草稿结构化载荷（ToB R2 P8：由 draft_fx_plan 产出，未保存，需人工确认） */
+export type AiPlanDraft = Schemas["AiPlanDraftDto"];
+
 /** SSE token 用量（done 帧；本期仅透传展示来源，前端不持久化） */
 export interface AiStreamUsage {
 	inputTokens: number;
@@ -52,7 +55,7 @@ export interface AiStreamUsage {
 }
 
 /**
- * SSE 帧判别联合（§4 帧协议：meta / tool / token / done / error）。
+ * SSE 帧判别联合（§4 帧协议：meta / tool / draft / token / done / error）。
  * 每帧 data 行为 JSON.stringify(完整载荷对象)——delta 含换行时整体转义，
  * 解析后还原为真实换行。
  */
@@ -64,6 +67,7 @@ export type AiStreamEvent =
 			title: string;
 	  }
 	| { type: "tool"; name: string; state: "start" | "end" }
+	| { type: "draft"; draft: AiPlanDraft }
 	| { type: "token"; delta: string }
 	| {
 			type: "done";
@@ -367,6 +371,11 @@ function toStreamEvent(
 				type: "tool",
 				name: String(payload.name ?? ""),
 				state: payload.state === "end" ? "end" : "start",
+			};
+		case "draft":
+			return {
+				type: "draft",
+				draft: payload as unknown as AiPlanDraft,
 			};
 		case "token":
 			return { type: "token", delta: String(payload.delta ?? "") };

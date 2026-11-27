@@ -1,5 +1,13 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsBoolean, IsInt, IsIn, IsOptional, IsString } from "class-validator";
+import {
+	IsBoolean,
+	IsInt,
+	IsIn,
+	IsOptional,
+	IsString,
+	Matches,
+	MaxLength,
+} from "class-validator";
 import { PACE_PREFERENCES, type PacePreference } from "../schedule-builder";
 
 /**
@@ -80,7 +88,7 @@ export class SchedulePreviewDto {
 	allocatedAmount?: string;
 }
 
-/** POST /api/plans 请求体：排期参数全量（含 allocatedAmount）+ 计划名称 */
+/** POST /api/plans 请求体：排期参数全量（含 allocatedAmount）+ 计划名称 + 可选 Agent 审计串联 ID */
 export class CreatePlanDto extends SchedulePreviewDto {
 	@ApiProperty({
 		description: "目标名称（缺省存 null）",
@@ -91,6 +99,21 @@ export class CreatePlanDto extends SchedulePreviewDto {
 	@IsOptional()
 	@IsString({ message: "目标名称必须是字符串" })
 	name?: string;
+
+	@ApiProperty({
+		description:
+			"关联的 Agent 运行 ID（由 AI 计划草稿确认页带入，用于串联草稿生成与人工确认审计；普通手动创建缺省）",
+		example: "fd82b1c0-1234-4567-89ab-cdef01234567",
+		type: String,
+		required: false,
+		maxLength: 64,
+		pattern: "^[a-zA-Z0-9_-]{8,64}$",
+	})
+	@IsOptional()
+	@IsString({ message: "agentRunId 必须是字符串" })
+	@MaxLength(64, { message: "agentRunId 最长 64 字符" })
+	@Matches(/^[a-zA-Z0-9_-]{8,64}$/, { message: "agentRunId 格式非法" })
+	agentRunId?: string;
 }
 
 /** 单条分批排期（preview 与 PlanDto 共用） */

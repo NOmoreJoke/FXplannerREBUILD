@@ -1,5 +1,6 @@
 "use client";
 
+import { Building2 } from "lucide-react";
 import { PageLoading } from "@/components/base";
 import { ChatInput } from "./chat-input";
 import { ConversationList } from "./conversation-list";
@@ -9,10 +10,14 @@ import {
 	useConversations,
 	useDeleteConversation,
 } from "@/lib/hooks/use-conversations";
+import { useModels } from "@/lib/hooks/use-models";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
+import { useCurrentOrganization } from "@/lib/hooks/use-organizations";
 import { useChatStore } from "@/lib/stores/chat-store";
 
 /**
- * 聊天工作台（ai-assistant 方案 §3.2/§5.2）：左会话列表 + 右对话区。
+ * 聊天工作台（ai-assistant 方案 §3.2/§5.2 + ToB R2 §10.2）：
+ * 左会话列表 + 右对话区（含当前组织标识与组织工具状态）。
  * 状态编排集中在 use-chat / use-conversations（本组件只做组装与布局）；
  * 认证守卫在 (protected)/layout.tsx，页面（chat/page.tsx）只是本组件的瘦壳。
  */
@@ -21,6 +26,9 @@ export function ChatWorkspace() {
 	const deleteMutation = useDeleteConversation();
 	const chat = useChat();
 	const streamingIds = useChatStore((s) => s.streamingIds);
+	const { data: currentOrg, isError: orgError } = useCurrentOrganization();
+	const { can, isLoading: capabilitiesLoading } = useOrganizationCapabilities();
+	const { data: modelsData } = useModels();
 
 	const handleDelete = (id: string) => {
 		deleteMutation.mutate(id, {
@@ -37,12 +45,27 @@ export function ChatWorkspace() {
 		chat.activeId === null
 			? chat.messages.length > 0
 				? null
-				: "向 AI 助手提问汇率问题（如「现在美元兑日元是多少」），开始新的对话。"
+				: "向 AI 助手提问公共汇率、当前组织余额与计划缺口，或起草换汇计划草稿。"
 			: chat.isLoadingMessages
 				? null
 				: chat.messages.length === 0
 					? "暂无消息，输入你的第一个问题。"
 					: null;
+
+	const orgToolsStatusText =
+		modelsData?.orgToolsEnabled === false
+			? "组织工具已临时关闭（仅公共汇率可用）"
+			: orgError
+				? "组织上下文加载失败"
+				: !currentOrg || capabilitiesLoading
+					? "组织工具检查中…"
+					: !currentOrg.onboardingCompleted
+						? "当前组织未建账（可查公共汇率）"
+						: can("agent.draft")
+							? "组织只读与草稿工具已就绪"
+							: can("agent.business_read")
+								? "组织只读工具已就绪（无草稿保存权限）"
+								: "当前角色仅可用公共汇率查询";
 
 	return (
 		<div data-testid="chat-page" className="flex h-[calc(100dvh-3.5rem)]">
@@ -57,12 +80,33 @@ export function ChatWorkspace() {
 			/>
 
 			<section className="flex min-w-0 flex-1 flex-col">
-				<header className="border-b border-border px-6 py-3">
-					<h1 className="text-base font-semibold text-foreground">AI 助手</h1>
-					<p className="text-xs text-muted-foreground">
-						以自然语言查询汇率（最新 / 历史）。回复由 AI
-						生成，关键数值请以行情页为准。
-					</p>
+				<header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-3">
+					<div>
+						<h1 className="text-base font-semibold text-foreground">AI 助手</h1>
+						<p className="text-xs text-muted-foreground">
+							支持公共汇率、当前组织账本查询与计划草稿建议。请区分市场事实、组织账本与未保存草稿，关键入账请在业务页确认。
+						</p>
+					</div>
+					<div className="flex flex-wrap items-center gap-2 text-xs">
+						{currentOrg && (
+							<span
+								data-testid="chat-current-org"
+								className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 font-medium text-foreground"
+							>
+								<Building2
+									className="size-3.5 text-muted-foreground"
+									aria-hidden="true"
+								/>
+								<span>{currentOrg.name}</span>
+							</span>
+						)}
+						<span
+							data-testid="chat-org-tools-status"
+							className="rounded-full bg-mint-50 px-2.5 py-1 font-medium text-mint-700"
+						>
+							{orgToolsStatusText}
+						</span>
+					</div>
 				</header>
 
 				{chat.isLoadingMessages ? (
@@ -71,7 +115,9 @@ export function ChatWorkspace() {
 					<MessageList
 						messages={chat.messages}
 						streamingText={chat.streamText}
+						streamingDraft={chat.streamDraft}
 						toolActive={chat.toolActive}
+						activeToolName={chat.activeToolName}
 						emptyHint={emptyHint}
 					/>
 				)}

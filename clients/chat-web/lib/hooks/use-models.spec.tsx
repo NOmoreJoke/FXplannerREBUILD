@@ -33,6 +33,7 @@ const modelsData = {
 			description: "旗舰模型",
 		},
 	],
+	orgToolsEnabled: true,
 };
 
 const createWrapper = () => {

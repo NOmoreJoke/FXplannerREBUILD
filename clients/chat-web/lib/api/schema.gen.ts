@@ -2686,6 +2686,11 @@ export interface components {
              * @example 今年换 5 万美元
              */
             name?: string;
+            /**
+             * @description 关联的 Agent 运行 ID（由 AI 计划草稿确认页带入，用于串联草稿生成与人工确认审计；普通手动创建缺省）
+             * @example fd82b1c0-1234-4567-89ab-cdef01234567
+             */
+            agentRunId?: string;
         };
         CurrencyResponseDto: {
             /**
@@ -4380,6 +4385,58 @@ export interface components {
             /** @description 会话列表（lastMessageAt 倒序） */
             items: components["schemas"]["AiConversationSummaryDto"][];
         };
+        AiPlanDraftDto: {
+            /**
+             * @description 关联的 Agent 运行 ID（确认保存时透传给 POST /api/plans 写入审计）
+             * @example fd82b1c0-1234-4567-89ab-cdef01234567
+             */
+            agentRunId: string;
+            /**
+             * @description 建议的计划名称（可为空）
+             * @example 12月广告费换汇
+             */
+            name: string | null;
+            /**
+             * @description 目标币种（ISO 4217）
+             * @example USD
+             */
+            targetCurrency: string;
+            /**
+             * @description 目标净到账金额（字符串）
+             * @example 10000
+             */
+            targetAmount: string;
+            /**
+             * @description 期望用汇日（ISO 8601 UTC）
+             * @example 2027-12-10T00:00:00.000Z
+             */
+            expectUseDate: string;
+            /**
+             * @description 提前准备天数（1~30）
+             * @example 3
+             */
+            prepLeadDays: number;
+            /**
+             * @description 建议准备节奏
+             * @example balanced
+             * @enum {string}
+             */
+            pacePreference: "conservative" | "balanced" | "aggressive";
+            /**
+             * @description 建议计入已有外币金额（4 位小数字符串）
+             * @example 0.0000
+             */
+            allocatedAmount: string;
+            /**
+             * @description 最晚准备日（ISO 8601 UTC）
+             * @example 2027-12-07T00:00:00.000Z
+             */
+            latestPrepDate: string;
+            /** @description 建议分批排期预览（确认页会按最新余额实时重算） */
+            installments: components["schemas"]["PlanInstallmentDto"][];
+            /** @description 草稿生成时刻的可分配余额上限信息 */
+            caps: components["schemas"]["AllocatableCapsDto"];
+        };
         AiMessageDto: {
             /** @description 消息 ID（cuid） */
             id: string;
@@ -4400,6 +4457,8 @@ export interface components {
              * @example gpt-4.1-mini
              */
             model?: string | null;
+            /** @description 助手消息关联的换汇计划草稿（未保存，需人工确认） */
+            planDraft?: components["schemas"]["AiPlanDraftDto"] | null;
         };
         AiMessageListDto: {
             /** @description 会话消息列表（createdAt 升序） */
@@ -4444,6 +4503,11 @@ export interface components {
         ChatModelListDto: {
             /** @description 可选模型白名单（按 costTier 升序） */
             items: components["schemas"]["ChatModelSummaryDto"][];
+            /**
+             * @description 组织业务工具总开关是否开启（false 时仅可用公共汇率查询）
+             * @example true
+             */
+            orgToolsEnabled: boolean;
         };
     };
     responses: never;

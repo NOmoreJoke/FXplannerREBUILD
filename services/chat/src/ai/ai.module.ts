@@ -1,6 +1,10 @@
 import { Logger, Module } from "@nestjs/common";
-import { RateModule } from "../rate/rate.module";
+import { AccountModule } from "../account/account.module";
 import { AuthorizationModule } from "../authorization/authorization.module";
+import { PlanModule } from "../plan/plan.module";
+import { RateModule } from "../rate/rate.module";
+import { ReminderModule } from "../reminder/reminder.module";
+import { ReportModule } from "../report/report.module";
 import { AiAgentService } from "./ai-agent.service";
 import { AiController } from "./ai.controller";
 import { AiService } from "./ai.service";
@@ -12,13 +16,20 @@ import {
 import { AI_LLM_FACTORY, createLlmFactory } from "./llm/llm-factory";
 
 /**
- * AI 助手模块（ai-assistant 技术方案 §5.1）：ReAct agent 对话 + 会话/消息持久化。
- * 依赖 RateModule（唯一工具 query_exchange_rate 包装 RateService）；
- * 在 app.module.ts 唯一注册。AI_RUNTIME_CONFIG 在模块 compile 时从 process.env
- * 解析（而非加载期固化的 env 常量），使集成测试可按 app 实例注入阈值（§8.2 装配③）。
+ * AI 助手模块（ai-assistant 技术方案 §5.1 + ToB R2 §8）：
+ * ReAct agent 对话 + 会话/消息持久化 + 公共汇率与组织只读/计划草稿工具；
+ * 在 app.module.ts 唯一注册。单向依赖 Account/Plan/Report/Reminder/Rate/Authorization，
+ * 业务模块严禁反向依赖 ai/（eslint 护栏强制）。
  */
 @Module({
-	imports: [RateModule, AuthorizationModule],
+	imports: [
+		RateModule,
+		AuthorizationModule,
+		AccountModule,
+		PlanModule,
+		ReportModule,
+		ReminderModule,
+	],
 	controllers: [AiController],
 	providers: [
 		AiService,

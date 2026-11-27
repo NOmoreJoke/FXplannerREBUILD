@@ -47,6 +47,7 @@ vi.mock("@nestjs/throttler", async (importOriginal) => {
 import { AI_LLM_FACTORY } from "../../src/ai/llm/llm-factory";
 import type { PrismaService } from "../../src/prisma/prisma.service";
 import { RateProvider } from "../../src/rate/rate.provider";
+import { RateService } from "../../src/rate/rate.service";
 import { resolveDefaultOrganizationId } from "../../src/authorization/default-organization";
 
 // ────────────────────────── 脚本队列假模型（§8.2 装配①）──────────────────────────
@@ -426,6 +427,7 @@ describe("AiController（接口，ai-assistant 技术方案 §8.2）", () => {
 			costTier: number;
 		}[];
 		expect(items).toHaveLength(5);
+		expect(res.body.data.orgToolsEnabled).toBe(true);
 		const tiers = items.map((item) => item.costTier);
 		expect(tiers).toEqual([...tiers].sort((a, b) => a - b));
 		expect(items.map((item) => item.key)).toContain("gpt-4.1-mini");
@@ -1321,6 +1323,76 @@ describe("AiController env 场景（§8.2 行 4/14/15/16/17）", () => {
 			.expect(503);
 		expect(res.body.code).toBe("AI_DISABLED");
 	});
+
+	it("AI_ORG_TOOLS_ENABLED=false：/api/ai/models 下发 orgToolsEnabled=false；SSE 仍可达，组织工具被拒而公共汇率放行（ToB R2 P7）", {
+		timeout: 30_000,
+	}, async () => {
+		await closePreviousApp();
+		ctx = await buildAiApp({ AI_ORG_TOOLS_ENABLED: "false" });
+		app = ctx.app;
+		prisma = ctx.prisma;
+		user = await createTestUser(app, "ai-org-tools-off");
+		userIds.push(user.userId);
+
+		const models = await request(app.getHttpServer())
+			.get("/api/ai/models")
+			.set(bearer(user.accessToken))
+			.expect(200);
+		expect(models.body.data.orgToolsEnabled).toBe(false);
+
+		const rateSpy = vi
+			.spyOn(app.get(RateService), "getLatest")
+			.mockResolvedValue({
+				target: "USD",
+				rate: "0.14000000",
+				observedAt: "2026-11-20T08:00:00.000Z",
+			} as never);
+		try {
+			scriptHolder.steps = [
+				{
+					message: new AIMessage({
+						content: "",
+						tool_calls: [
+							{ id: "call-org-off", name: "get_account_summary", args: {} },
+						],
+					}),
+				},
+				{
+					message: new AIMessage({
+						content: "",
+						tool_calls: [
+							{
+								id: "call-rate-on",
+								name: "query_exchange_rate",
+								args: { mode: "latest", base: "CNY", targets: ["USD"] },
+							},
+						],
+					}),
+				},
+				textReply("组织工具已关闭，但为您查到了最新参考汇率。"),
+			];
+
+			const sseRes = await request(app.getHttpServer())
+				.post("/api/ai/conversations")
+				.set(orgBearer(user))
+				.send({ content: "先查账户再查汇率" })
+				.expect(200);
+
+			const frames = parseSse(sseRes.text);
+			expect(frames.at(-1)?.event).toBe("done");
+			// 第 3 步收到的 ToolMessage 分别包含 AI_ORG_TOOLS_DISABLED 与真实汇率
+			const thirdCall = scriptHolder.shared.captured[2]!;
+			const toolOutputs = thirdCall
+				.filter((msg) => msg.getType() === "tool")
+				.map((msg) => String(msg.content));
+			expect(toolOutputs.some((t) => t.includes("AI_ORG_TOOLS_DISABLED"))).toBe(
+				true,
+			);
+			expect(toolOutputs.some((t) => t.includes("0.14000000"))).toBe(true);
+		} finally {
+			rateSpy.mockRestore();
+		}
+	});
 });
 
 /**
@@ -1524,6 +1596,90 @@ describe("AiController 组织隔离（W25）", () => {
 				},
 			},
 			data: { status: "ACTIVE" },
+		});
+	});
+
+	it("W35-AI-R2-1 draft_fx_plan SSE 下发 draft 帧并持久化 ai_messages.plan_draft；Plan 表零新增（ToB R2 P8）", async () => {
+		await prisma.organizationSettings.upsert({
+			where: { organizationId: orgA },
+			create: {
+				organizationId: orgA,
+				baseCurrency: "CNY",
+				prepPreference: "balanced",
+				reminderEnabled: true,
+			},
+			update: {
+				baseCurrency: "CNY",
+				prepPreference: "balanced",
+			},
+		});
+		const expectUseDate = new Date(Date.now() + 45 * 86_400_000)
+			.toISOString()
+			.slice(0, 10);
+		const planCountBefore = await prisma.plan.count({
+			where: { organizationId: orgA },
+		});
+
+		scriptHolder.steps = [
+			{
+				message: new AIMessage({
+					content: "",
+					tool_calls: [
+						{
+							id: "call-draft-1",
+							name: "draft_fx_plan",
+							args: {
+								targetCurrency: "USD",
+								targetAmount: "10000",
+								expectUseDate,
+								name: "SSE 草稿回环验证",
+							},
+						},
+					],
+				}),
+			},
+			textReply("已为您起草换汇计划草稿，请在确认页核对后保存。"),
+		];
+
+		const res = await request(app.getHttpServer())
+			.post("/api/ai/conversations")
+			.set(orgHeaders(user, orgA))
+			.send({ content: "帮我起草一万美金换汇计划" })
+			.expect(200);
+
+		const frames = parseSse(res.text);
+		const meta = frames[0]!.data as { conversationId: string };
+		const draftFrame = frames.find((frame) => frame.event === "draft");
+		const doneFrame = frames.at(-1)!;
+		expect(doneFrame.event).toBe("done");
+		expect(draftFrame).toBeDefined();
+		expect(draftFrame!.data).toMatchObject({
+			name: "SSE 草稿回环验证",
+			targetCurrency: "USD",
+			targetAmount: "10000",
+			allocatedAmount: "0.0000",
+		});
+		const agentRunId = draftFrame!.data.agentRunId as string;
+		expect(agentRunId).toBeTruthy();
+
+		// 仅草稿预览：Plan 表零新增
+		expect(
+			await prisma.plan.count({ where: { organizationId: orgA } }),
+		).toBe(planCountBefore);
+
+		// 查询历史消息回读，助手消息完整携带 planDraft
+		const historyRes = await request(app.getHttpServer())
+			.get(`/api/ai/conversations/${meta.conversationId}/messages`)
+			.set(orgHeaders(user, orgA))
+			.expect(200);
+		const messages = historyRes.body.data.items as Array<{
+			role: string;
+			planDraft: { agentRunId: string; name: string } | null;
+		}>;
+		const assistant = messages.find((m) => m.role === "assistant");
+		expect(assistant?.planDraft).toMatchObject({
+			agentRunId,
+			name: "SSE 草稿回环验证",
 		});
 	});
 });

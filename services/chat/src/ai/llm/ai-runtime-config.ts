@@ -24,6 +24,8 @@ export interface AiRuntimeConfig {
 	/** 派生：任一模型密钥可用（全部未配 → 全部端点 503 AI_NOT_CONFIGURED） */
 	hasConfiguredModel: boolean;
 	chatEnabled: boolean;
+	/** 组织 Agent 工具独立降级开关（false 时禁用组织只读与草稿工具，保留公共汇率查询） */
+	orgToolsEnabled: boolean;
 	historyWindow: number;
 	maxConcurrency: number;
 	dailyQuota: number;
@@ -67,6 +69,7 @@ export function resolveAiRuntimeConfig(
 		modelKeyAvailability,
 		hasConfiguredModel: Object.values(modelKeyAvailability).some(Boolean),
 		chatEnabled: source.AI_CHAT_ENABLED !== "false",
+		orgToolsEnabled: source.AI_ORG_TOOLS_ENABLED !== "false",
 		historyWindow: positiveInt(source.AI_CHAT_HISTORY_WINDOW, 20),
 		maxConcurrency: positiveInt(source.AI_CHAT_MAX_CONCURRENCY, 40),
 		dailyQuota: positiveInt(source.AI_DAILY_MESSAGE_QUOTA, 100),

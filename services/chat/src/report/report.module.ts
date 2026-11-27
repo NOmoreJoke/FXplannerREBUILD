@@ -13,5 +13,6 @@ import { ReportService } from "./report.service";
 	imports: [AuthorizationModule],
 	controllers: [ReportController],
 	providers: [ReportService],
+	exports: [ReportService],
 })
 export class ReportModule {}

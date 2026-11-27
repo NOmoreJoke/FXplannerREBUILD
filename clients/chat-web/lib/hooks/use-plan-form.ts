@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import type { PacePreference, PlanCaps } from "@/lib/api/contract";
+import { getCurrencyName } from "@/lib/api/currencies";
 
 /**
  * 创建换汇计划表单（changes/plan-creation/技术方案.md §6）
@@ -171,19 +172,103 @@ export function validatePlanForm(
 	return errors;
 }
 
+const AGENT_RUN_ID_PATTERN = /^[a-zA-Z0-9_-]{8,64}$/;
+
+export interface ParsedPlanDraftQuery {
+	fromDraft: boolean;
+	agentRunId: string | null;
+	initialValues: Partial<PlanFormValues>;
+}
+
+/**
+ * 解析来自 AI 计划草稿卡片的 URL 查询参数（ToB R2 P8）。
+ * 严格校验 sourceOrgId === activeOrgId（防止在 /plans/new 切换组织后旧组织草稿参数及 agentRunId 串入新组织）；
+ * 所有参数做格式与白名单校验，非法值安全忽略，不影响页面正常填表。
+ */
+export function parsePlanDraftQuery(
+	params: Pick<URLSearchParams, "get"> | Record<string, string | undefined>,
+	activeOrgId?: string | null,
+): ParsedPlanDraftQuery {
+	const readParam = (key: string): string | undefined => {
+		if (typeof (params as Pick<URLSearchParams, "get">).get === "function") {
+			const val = (params as Pick<URLSearchParams, "get">).get(key);
+			return val ?? undefined;
+		}
+		return (params as Record<string, string | undefined>)[key];
+	};
+
+	const fromDraft = readParam("fromDraft") === "1";
+	const sourceOrgId = readParam("sourceOrgId")?.trim();
+	if (!fromDraft || !sourceOrgId || !activeOrgId || sourceOrgId !== activeOrgId) {
+		return { fromDraft: false, agentRunId: null, initialValues: {} };
+	}
+
+	const initialValues: Partial<PlanFormValues> = {};
+	const name = readParam("name")?.trim();
+	if (name) {
+		initialValues.name = name.slice(0, 50);
+	}
+	const targetCurrency = readParam("targetCurrency")?.trim().toUpperCase();
+	if (targetCurrency && getCurrencyName(targetCurrency)) {
+		initialValues.targetCurrency = targetCurrency;
+	}
+	const targetAmount = readParam("targetAmount")?.trim();
+	if (targetAmount && AMOUNT_PATTERN.test(targetAmount)) {
+		initialValues.targetAmount = targetAmount;
+	}
+	const rawDate = readParam("expectUseDate")?.trim();
+	const datePrefix = rawDate ? rawDate.slice(0, 10) : "";
+	if (DATE_PATTERN.test(datePrefix)) {
+		initialValues.expectUseDate = datePrefix;
+	}
+	const prepLeadDays = readParam("prepLeadDays")?.trim();
+	if (prepLeadDays) {
+		const parsedLead = Number(prepLeadDays);
+		if (Number.isInteger(parsedLead) && parsedLead >= 1 && parsedLead <= 30) {
+			initialValues.prepLeadDays = String(parsedLead);
+		}
+	}
+	const pace = readParam("pacePreference")?.trim();
+	if (isPacePreference(pace)) {
+		initialValues.pacePreference = pace;
+	}
+	const allocatedAmount = readParam("allocatedAmount")?.trim();
+	if (allocatedAmount && AMOUNT_PATTERN.test(allocatedAmount)) {
+		initialValues.allocatedAmount = allocatedAmount;
+	}
+
+	const rawRunId = readParam("agentRunId")?.trim();
+	const agentRunId =
+		rawRunId && AGENT_RUN_ID_PATTERN.test(rawRunId) ? rawRunId : null;
+
+	return { fromDraft: true, agentRunId, initialValues };
+}
+
 /**
  * 创建计划表单状态 hook
  *
  * 暴露 values / setField / setCaps / touched / getError / isValid；
  * getError 在字段未触碰且无值时不返回错误，避免初始全红。
+ * 支持传入 initialValues（草稿预填）：被预填的字段默认标记 touched=true，
+ * 防止 onboarding 默认节奏回填覆盖草稿建议节奏。
  */
-export function usePlanForm() {
-	const [values, setValues] = useState<PlanFormValues>(
-		DEFAULT_PLAN_FORM_VALUES,
-	);
+export function usePlanForm(initialValues?: Partial<PlanFormValues>) {
+	const [values, setValues] = useState<PlanFormValues>(() => ({
+		...DEFAULT_PLAN_FORM_VALUES,
+		...initialValues,
+	}));
 	const [touched, setTouched] = useState<
 		Partial<Record<PlanFormField, boolean>>
-	>({});
+	>(() => {
+		if (!initialValues) return {};
+		const initialTouched: Partial<Record<PlanFormField, boolean>> = {};
+		for (const key of Object.keys(initialValues) as PlanFormField[]) {
+			if (initialValues[key] !== undefined) {
+				initialTouched[key] = true;
+			}
+		}
+		return initialTouched;
+	});
 	const [caps, setCapsState] = useState<PlanCaps | null>(null);
 
 	const setField = useCallback(

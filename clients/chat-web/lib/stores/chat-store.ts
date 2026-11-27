@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { AiPlanDraft } from "@/lib/api/chat";
 
 /**
  * 聊天工作台运行时状态（ai-assistant 方案 §5.2）。
@@ -28,8 +29,12 @@ interface ChatStore {
 	creatingStream: boolean;
 	/** 各会话流式中的增量文本 */
 	streamTexts: Record<string, string>;
-	/** 正在执行汇率工具查询的会话 id 集合（展示「正在查询汇率…」） */
+	/** 各会话流式中最近一次草稿建议卡片（done 收敛后随消息落库） */
+	streamDrafts: Record<string, AiPlanDraft | null>;
+	/** 正在执行工具查询的会话 id 集合 */
 	toolActiveIds: string[];
+	/** 各会话当前正在执行的工具名（未执行为 null） */
+	activeTools: Record<string, string | null>;
 	/** 各会话最近一次发送失败的错误信息（成功发送时清除；endStream 不动它） */
 	errors: Record<string, string | null>;
 	/** 新建会话（尚无会话 id）视图的错误信息 */
@@ -48,7 +53,8 @@ interface ChatStore {
 	/** 结束流：清理该会话流式文本与工具态（错误态保留供 UI 展示）；null = 创建流未转正即结束 */
 	endStream: (id: string | null) => void;
 	appendStreamText: (id: string, delta: string) => void;
-	setToolActive: (id: string, active: boolean) => void;
+	setStreamDraft: (id: string, draft: AiPlanDraft | null) => void;
+	setToolActive: (id: string, active: boolean, toolName?: string) => void;
 	setError: (id: string, message: string | null) => void;
 	setNewChatError: (message: string | null) => void;
 	setPendingUserContent: (content: string | null) => void;
@@ -69,7 +75,9 @@ export const useChatStore = create<ChatStore>()(
 			streamingIds: [],
 			creatingStream: false,
 			streamTexts: {},
+			streamDrafts: {},
 			toolActiveIds: [],
+			activeTools: {},
 			errors: {},
 			newChatError: null,
 			pendingUserContent: null,
@@ -99,12 +107,18 @@ export const useChatStore = create<ChatStore>()(
 					: set((state) => {
 							const streamTexts = { ...state.streamTexts };
 							delete streamTexts[id];
+							const streamDrafts = { ...state.streamDrafts };
+							delete streamDrafts[id];
+							const activeTools = { ...state.activeTools };
+							delete activeTools[id];
 							return {
 								streamingIds: state.streamingIds.filter((item) => item !== id),
 								toolActiveIds: state.toolActiveIds.filter(
 									(item) => item !== id,
 								),
 								streamTexts,
+								streamDrafts,
+								activeTools,
 							};
 						}),
 
@@ -116,18 +130,31 @@ export const useChatStore = create<ChatStore>()(
 					},
 				})),
 
-			setToolActive: (id, active) =>
+			setStreamDraft: (id, draft) =>
+				set((state) => ({
+					streamDrafts: { ...state.streamDrafts, [id]: draft },
+				})),
+
+			setToolActive: (id, active, toolName) =>
 				set((state) => {
 					const has = state.toolActiveIds.includes(id);
+					const nextTools = {
+						...state.activeTools,
+						[id]: active ? (toolName ?? state.activeTools[id] ?? null) : null,
+					};
 					if (active && !has) {
-						return { toolActiveIds: [...state.toolActiveIds, id] };
+						return {
+							toolActiveIds: [...state.toolActiveIds, id],
+							activeTools: nextTools,
+						};
 					}
 					if (!active && has) {
 						return {
 							toolActiveIds: state.toolActiveIds.filter((item) => item !== id),
+							activeTools: nextTools,
 						};
 					}
-					return {};
+					return { activeTools: nextTools };
 				}),
 
 			setError: (id, message) =>
@@ -145,7 +172,9 @@ export const useChatStore = create<ChatStore>()(
 					streamingIds: [],
 					creatingStream: false,
 					streamTexts: {},
+					streamDrafts: {},
 					toolActiveIds: [],
+					activeTools: {},
 					errors: {},
 					newChatError: null,
 					pendingUserContent: null,

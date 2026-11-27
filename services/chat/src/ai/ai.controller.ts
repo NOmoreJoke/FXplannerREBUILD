@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
 	Body,
 	Controller,
@@ -31,7 +32,11 @@ import { OrganizationContextGuard } from "../authorization/guards/organization-c
 import { PermissionGuard } from "../authorization/guards/permission.guard";
 import { RequiresPermission } from "../authorization/decorators/requires-permission.decorator";
 import type { ActorContext } from "../authorization/authorization.types";
-import type { ReadScope } from "../authorization/organization-scope";
+import { extractRequestId } from "../authorization/request-id";
+import {
+	AllocatableCapsDto,
+	PlanInstallmentDto,
+} from "../plan/dto/plan.dto";
 import { AiService } from "./ai.service";
 import { AiAgentService, type StreamReplyParams } from "./ai-agent.service";
 import { listChatModels } from "./ai-models.config";
@@ -46,6 +51,7 @@ import {
 	AiConversationSummaryDto,
 	AiMessageDto,
 	AiMessageListDto,
+	AiPlanDraftDto,
 	ChatModelListDto,
 	ChatModelSummaryDto,
 	ListConversationsQueryDto,
@@ -53,9 +59,13 @@ import {
 	SendMessageDto,
 } from "./dto/ai.dto";
 import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
+import { env } from "../config/env";
 
-/** 发消息端点的 IP 级限流：路由级 @Throttle 覆盖全局配置（§4，throttler「覆盖」语义） */
-const AI_SEND_THROTTLE = { default: { limit: 5, ttl: 60_000 } } as const;
+/** 发消息端点的 IP 级限流：路由级 @Throttle 覆盖全局配置（默认 5/min，E2E 经 AI_SEND_THROTTLE_LIMIT 放大） */
+const AI_SEND_THROTTLE_LIMIT = env.AI_SEND_THROTTLE_LIMIT ?? 5;
+const AI_SEND_THROTTLE = {
+	default: { limit: AI_SEND_THROTTLE_LIMIT, ttl: 60_000 },
+} as const;
 
 /** 整流硬上限（§6：超时终止并落 error 帧） */
 const AI_STREAM_HARD_TIMEOUT_MS = 120_000;
@@ -65,7 +75,8 @@ const AI_UPSTREAM_FAILED_MESSAGE = "回复生成失败，请稍后重试";
 const AI_CONVERSATION_GONE_MESSAGE = "会话不存在或已被删除";
 
 interface StreamWriteParams {
-	scope: ReadScope;
+	actor: ActorContext;
+	requestId: string | null;
 	conversationId: string;
 	userMessageId: string;
 	title: string;
@@ -94,6 +105,9 @@ interface StreamWriteParams {
 	SendMessageDto,
 	AiConversationSummaryDto,
 	AiConversationListDto,
+	AiPlanDraftDto,
+	PlanInstallmentDto,
+	AllocatableCapsDto,
 	AiMessageDto,
 	AiMessageListDto,
 	ChatModelSummaryDto,
@@ -158,7 +172,10 @@ export class AiController {
 		},
 	})
 	async listModels() {
-		const data = { items: listChatModels() };
+		const data = {
+			items: listChatModels(),
+			orgToolsEnabled: this.aiService.isOrgToolsEnabled(),
+		};
 		return { success: true, data, message: "模型列表获取成功" };
 	}
 
@@ -184,7 +201,8 @@ export class AiController {
 			modelKey: dto.modelKey,
 		});
 		await this.streamReply(req, res, {
-			scope: actor,
+			actor,
+			requestId: extractRequestId(req),
 			conversationId: prepared.conversation.id,
 			userMessageId: prepared.userMessageId,
 			title: prepared.conversation.title,
@@ -218,7 +236,8 @@ export class AiController {
 			modelKey: dto.modelKey,
 		});
 		await this.streamReply(req, res, {
-			scope: actor,
+			actor,
+			requestId: extractRequestId(req),
 			conversationId,
 			userMessageId: prepared.userMessageId,
 			title: prepared.conversation.title,
@@ -310,8 +329,9 @@ export class AiController {
 			res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 		};
 
+		const agentRunId = randomUUID();
 		this.logger.log(
-			`AI 流开始：conversationId=${params.conversationId} userMessageId=${params.userMessageId} contentLen=${params.userContent.length}`,
+			`AI 流开始：conversationId=${params.conversationId} userMessageId=${params.userMessageId} agentRunId=${agentRunId} contentLen=${params.userContent.length}`,
 		);
 		writeFrame("meta", {
 			conversationId: params.conversationId,
@@ -321,6 +341,10 @@ export class AiController {
 
 		try {
 			for await (const frame of this.aiAgentService.streamReply({
+				actor: params.actor,
+				conversationId: params.conversationId,
+				agentRunId,
+				requestId: params.requestId,
 				history: params.history,
 				userContent: params.userContent,
 				signal: abort.signal,
@@ -330,12 +354,15 @@ export class AiController {
 					writeFrame("token", { delta: frame.delta });
 				} else if (frame.type === "tool") {
 					writeFrame("tool", { name: frame.name, state: frame.state });
+				} else if (frame.type === "draft") {
+					writeFrame("draft", frame.draft);
 				} else if (frame.type === "done") {
 					const saved = await this.aiService.saveAssistantMessage(
 						params.conversationId,
 						frame.content,
 						params.modelKey,
-						params.scope,
+						params.actor,
+						frame.planDraft ?? null,
 					);
 					if (!saved) {
 						writeFrame("error", {
@@ -349,6 +376,7 @@ export class AiController {
 								role: saved.role,
 								content: saved.content,
 								model: saved.model,
+								planDraft: saved.planDraft,
 								createdAt: saved.createdAt.toISOString(),
 							},
 							usage: frame.usage,

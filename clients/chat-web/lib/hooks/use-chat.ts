@@ -98,6 +98,7 @@ export function useChat() {
 	const promoteStream = useChatStore((s) => s.promoteStream);
 	const endStream = useChatStore((s) => s.endStream);
 	const appendStreamText = useChatStore((s) => s.appendStreamText);
+	const setStreamDraft = useChatStore((s) => s.setStreamDraft);
 	const setToolActive = useChatStore((s) => s.setToolActive);
 	const setError = useChatStore((s) => s.setError);
 	const setNewChatError = useChatStore((s) => s.setNewChatError);
@@ -107,8 +108,14 @@ export function useChat() {
 	const streamText = useChatStore((s) =>
 		activeId !== null ? (s.streamTexts[activeId] ?? undefined) : undefined,
 	);
+	const streamDraft = useChatStore((s) =>
+		activeId !== null ? (s.streamDrafts[activeId] ?? null) : null,
+	);
 	const toolActive = useChatStore((s) =>
 		activeId !== null ? s.toolActiveIds.includes(activeId) : false,
+	);
+	const activeToolName = useChatStore((s) =>
+		activeId !== null ? (s.activeTools[activeId] ?? null) : null,
 	);
 	const error = useChatStore((s) =>
 		activeId !== null ? (s.errors[activeId] ?? null) : s.newChatError,
@@ -268,7 +275,10 @@ export function useChat() {
 							break;
 						}
 						case "tool":
-							setToolActive(currentId!, event.state === "start");
+							setToolActive(currentId!, event.state === "start", event.name);
+							break;
+						case "draft":
+							setStreamDraft(currentId!, event.draft);
 							break;
 						case "token":
 							appendStreamText(currentId!, event.delta);
@@ -350,6 +360,7 @@ export function useChat() {
 			promoteStream,
 			endStream,
 			appendStreamText,
+			setStreamDraft,
 			setToolActive,
 			setError,
 			setNewChatError,
@@ -392,8 +403,12 @@ export function useChat() {
 		isLoadingMessages: messagesQuery.isPending && activeId !== null,
 		/** 当前会话流式增量文本（无流为 undefined） */
 		streamText,
-		/** 当前会话正在执行汇率工具查询（「正在查询汇率…」） */
+		/** 当前会话流式中的计划草稿卡片（无草稿为 null） */
+		streamDraft,
+		/** 当前会话正在执行工具查询 */
 		toolActive,
+		/** 当前会话正在执行的工具名 */
+		activeToolName,
 		/** 当前视图最近一次发送错误 */
 		error,
 		/** 发送状态机（当前视图） */

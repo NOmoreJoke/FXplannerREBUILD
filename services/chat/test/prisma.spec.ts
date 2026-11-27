@@ -210,6 +210,62 @@ describe("数据库基础设施测试", () => {
 			expect(checkpoint.checkpoint).toEqual({ node: "rate", version: 1 });
 			expect(checkpoint.metadata).toEqual({ source: "prisma-test" });
 		});
+
+		test("AiMessage 支持可空 planDraft JSONB 列读写往返（ToB R2）", async () => {
+			const conv = await prisma.aiConversation.create({
+				data: {
+					userId: testUserId,
+					organizationId: testOrgId,
+					title: "R2草稿列基础设施校验",
+				},
+			});
+			try {
+				const sampleDraft = {
+					agentRunId: "run-prisma-spec-0001",
+					name: "草稿列测试",
+					targetCurrency: "USD",
+					targetAmount: "5000.0000",
+					expectUseDate: "2027-12-10T00:00:00.000Z",
+					prepLeadDays: 3,
+					pacePreference: "balanced",
+					allocatedAmount: "0.0000",
+					latestPrepDate: "2027-12-07T00:00:00.000Z",
+					installments: [],
+					caps: {
+						accountBalance: "0.0000",
+						existingAllocated: "0.0000",
+						unallocatedBalance: "0.0000",
+						maxAllocatable: "0.0000",
+					},
+				};
+				const userMsg = await prisma.aiMessage.create({
+					data: {
+						conversationId: conv.id,
+						role: "user",
+						content: "起草测试",
+					},
+				});
+				const assistantMsg = await prisma.aiMessage.create({
+					data: {
+						conversationId: conv.id,
+						role: "assistant",
+						content: "已生成草稿",
+						model: "gpt-4.1-mini",
+						planDraft: sampleDraft,
+					},
+				});
+				const readUser = await prisma.aiMessage.findUniqueOrThrow({
+					where: { id: userMsg.id },
+				});
+				const readAssistant = await prisma.aiMessage.findUniqueOrThrow({
+					where: { id: assistantMsg.id },
+				});
+				expect(readUser.planDraft).toBeNull();
+				expect(readAssistant.planDraft).toEqual(sampleDraft);
+			} finally {
+				await prisma.aiConversation.delete({ where: { id: conv.id } });
+			}
+		});
 	});
 
 	describe("事务", () => {
