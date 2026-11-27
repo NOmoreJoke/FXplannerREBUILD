@@ -14,14 +14,14 @@
 | 更正与账本重放 | `/corrections/new`（`targetType`/`targetId` 参数） | `e2e/modules/11-correction.spec.ts`, `11-correction-quote.spec.ts`, `11-usage-correction-history.spec.ts` | 更正日志幂等且不可篡改；涉及旧版迁移需跑差分测试 |
 | 市场汇率与图表 | `/market` | `e2e/modules/13-market.spec.ts` | 汇率三源路由与精度不可引入 IEEE-754 浮点漂移 |
 | 提醒与报告导出 | 报告页 / 提醒入口 | `e2e/modules/11-reminders.spec.ts`, `11-reports.spec.ts` | 核对报告金额格式与打印视图 |
-| 用户设置与数据请求 | `/settings`（个人/组织设置 + 个人/组织数据）、`/data-requests`（双域进度） | `e2e/modules/09-settings-preferences.spec.ts`, `12-account-data.spec.ts`, `organization-data-lifecycle.spec.ts` | 数据请求需持双锁守卫（个人账号注销锁 / 组织数据锁）；导出 CSV 已防公式注入 |
+| 用户设置与数据请求 | `/settings`（个人/组织设置 + 个人/组织数据）、`/data-requests`（双域进度） | `e2e/modules/09-settings-preferences.spec.ts`, `12-account-data.spec.ts`, `organization-data-lifecycle.spec.ts`, `clients/chat-web/components/business/account-data/request-progress.spec.tsx` | 数据请求需持双锁守卫（个人账号注销锁 / 组织数据锁）；导出 CSV 已防公式注入；组织域撤回/下载按权限点与 `DataRequestViewDto.isRequester` 双重门控 |
 | 组织工作台、成员与审计 | `/organization`, `/organization/members`, `/organization/audit`, `/invitations/[token]` | `e2e/modules/15-organization.spec.ts` (32 cases), `services/chat/test/api/organization-matrix.spec.ts` (409 cases) | W30 MIG-D 起组织业务路由必须携带 `X-Organization-Id`（缺头 400 `ORGANIZATION_REQUIRED`）；前端严禁持久化 `role`/`capabilities` |
-| AI 助手与可控组织 Agent | `/chat`（侧栏「AI 助手」）→ 草稿跳转 `/plans/new?fromDraft=1` | `services/chat/src/ai/tools/agent-tools.spec.ts`, `services/chat/test/integration/agent-tool-authorization.spec.ts`, `services/chat/test/api/ai-chat.spec.ts`, `e2e/modules/14-ai-chat.spec.ts`, `e2e/modules/16-agent-organization.spec.ts` | 组织工具（账户/敞口/成本/待办/草稿）全走 `tool-guard` 实时重查双锁+Membership+RBAC+`AuditLog(AGENT)`；全 `.strict()` zod 无 `orgId`/`userId` 参数；支持 `AI_ORG_TOOLS_ENABLED=false` 独立降级；`draft_fx_plan` 仅调 preview、确认带 `agentRunId` 入审计；AI 禁止自行启动本地服务 |
+| AI 助手与可控组织 Agent | `/chat`（侧栏「AI 助手」）→ 草稿跳转 `/plans/new?fromDraft=1` | `services/chat/src/ai/tools/agent-tools.spec.ts`, `services/chat/test/integration/agent-tool-authorization.spec.ts`, `services/chat/test/api/ai-chat.spec.ts`, `e2e/modules/14-ai-chat.spec.ts`, `e2e/modules/16-agent-organization.spec.ts` | 组织工具（账户/敞口/成本/待办/草稿）全走 `tool-guard` 先鉴权后验参（双锁+Membership+RBAC+`AuditLog(AGENT)`）；全 `.strict()` zod 无 `orgId`/`userId` 参数；支持 `AI_ORG_TOOLS_ENABLED=false` 独立降级；`draft_fx_plan` 仅调 preview、确认带 `agentRunId` 入审计；AI 禁止自行启动本地服务 |
 
 ## 常用验证命令（廉价先行）
 ```bash
-# L1: 静态护栏（ESLint 架构边界 + 结构守卫 + 组织隔离守卫 + 类型检查）
-bun run check:structure && bun run check:org-scope && bun run lint && bun run typecheck
+# L1: 静态护栏（ESLint 架构边界 + 全包 0-warning enforce + 结构守卫 + 组织隔离守卫 + 类型检查）
+bun run lint && bun run typecheck
 
 # L1+: 单元与属性测试
 bun run test unit web scripts money dev-log

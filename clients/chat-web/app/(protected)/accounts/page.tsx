@@ -7,6 +7,7 @@ import { accountsApi, type AccountListItem } from "@/lib/api/accounts";
 import { getCurrencyName } from "@/lib/api/currencies";
 import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -29,6 +30,8 @@ export default function AccountsPage() {
 	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07：键不含组织时，
 	// 切换组织的缓存清理不会通知挂载态的观察者）
 	const orgId = useActiveOrgId();
+	const { can } = useOrganizationCapabilities();
+	const canCreateTransaction = can("transaction.create");
 	const query = useQuery({
 		queryKey: withOrgScope(orgId, queryKeys.accounts.list()),
 		queryFn: () => accountsApi.list(),
@@ -58,19 +61,22 @@ export default function AccountsPage() {
 						按币种查看持仓、已分配与未分配余额。
 					</p>
 				</div>
-				<Link
-					href="/transactions/new"
-					className={buttonVariants({
-						className: "bg-mint-700 text-white hover:bg-mint-700/90",
-					})}
-				>
-					<Plus className="size-4" />
-					录入换汇
-				</Link>
+				{canCreateTransaction ? (
+					<Link
+						href="/transactions/new"
+						data-testid="accounts-create-transaction"
+						className={buttonVariants({
+							className: "bg-mint-700 text-white hover:bg-mint-700/90",
+						})}
+					>
+						<Plus className="size-4" />
+						录入换汇
+					</Link>
+				) : null}
 			</header>
 
 			{isEmpty ? (
-				<AccountsEmpty />
+				<AccountsEmpty canCreateTransaction={canCreateTransaction} />
 			) : (
 				<AccountsTable accounts={query.data.accounts} />
 			)}
@@ -128,25 +134,34 @@ function AccountsTable({ accounts }: { accounts: AccountListItem[] }) {
 	);
 }
 
-/** 空态：引导用户去录入第一笔换汇 */
-function AccountsEmpty() {
+/** 空态：引导具备记账权限的成员去录入第一笔换汇 */
+function AccountsEmpty({
+	canCreateTransaction,
+}: {
+	canCreateTransaction: boolean;
+}) {
 	return (
 		<div className="flex flex-col items-center rounded-2xl border border-dashed border-border bg-white px-8 py-16 text-center">
 			<h2 className="text-base font-bold text-foreground">
 				还没有任何外汇账户
 			</h2>
 			<p className="mt-2 max-w-md text-sm text-muted-foreground">
-				录入第一笔换汇后，系统会按币种自动建立账户，汇总持仓与分配情况。
+				{canCreateTransaction
+					? "录入第一笔换汇后，系统会按币种自动建立账户，汇总持仓与分配情况。"
+					: "当前组织尚未建立任何外汇账户。如需录入换汇，请联系具备记账权限的成员。"}
 			</p>
-			<Link
-				href="/transactions/new"
-				className={buttonVariants({
-					className: "mt-6 bg-mint-700 text-white hover:bg-mint-700/90",
-				})}
-			>
-				<Plus className="size-4" />
-				录入换汇
-			</Link>
+			{canCreateTransaction ? (
+				<Link
+					href="/transactions/new"
+					data-testid="accounts-empty-create-transaction"
+					className={buttonVariants({
+						className: "mt-6 bg-mint-700 text-white hover:bg-mint-700/90",
+					})}
+				>
+					<Plus className="size-4" />
+					录入换汇
+				</Link>
+			) : null}
 		</div>
 	);
 }

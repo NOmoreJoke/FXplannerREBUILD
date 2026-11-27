@@ -15,6 +15,7 @@ import {
 import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import { reportsApi } from "@/lib/api/reports";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 import type { ReportPlanListItem, ReportListStatus } from "@/lib/api/contract";
 
 /**
@@ -65,6 +66,8 @@ export function ReportPlanList({ onDownload }: ReportPlanListProps) {
 
 	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
 	const orgId = useActiveOrgId();
+	const { can } = useOrganizationCapabilities();
+	const canCreatePlan = can("plan.create");
 	const query = useQuery({
 		// 筛选参数变化 → 换 Key 重查（方案 §6：react-query 参数变化重查）
 		queryKey: withOrgScope(
@@ -183,7 +186,7 @@ export function ReportPlanList({ onDownload }: ReportPlanListProps) {
 					</Button>
 				</div>
 			) : items.length === 0 ? (
-				<ReportEmptyState />
+				<ReportEmptyState canCreatePlan={canCreatePlan} />
 			) : (
 				<div className="space-y-3">
 					{items.map((item) => (
@@ -200,8 +203,8 @@ export function ReportPlanList({ onDownload }: ReportPlanListProps) {
 	);
 }
 
-/** 无任何计划：空状态引导创建（需求 5.1 条 4 / 验收 1 前置） */
-function ReportEmptyState() {
+/** 无任何计划：空状态引导具备 plan.create 权限的成员创建（需求 5.1 条 4 / 验收 1 前置） */
+function ReportEmptyState({ canCreatePlan }: { canCreatePlan: boolean }) {
 	return (
 		<div
 			data-testid="reports-empty"
@@ -211,18 +214,22 @@ function ReportEmptyState() {
 				还没有可展示的报告
 			</h2>
 			<p className="mt-2 max-w-md text-sm text-muted-foreground">
-				创建换汇计划并记录使用后，这里会按计划汇总成本，支持一键下载报告。
+				{canCreatePlan
+					? "创建换汇计划并记录使用后，这里会按计划汇总成本，支持一键下载报告。"
+					: "当前组织还没有任何换汇计划。如需创建计划，请联系具备计划创建权限的成员。"}
 			</p>
-			<Link
-				href="/plans/new"
-				data-testid="reports-empty-create"
-				className={buttonVariants({
-					className: "mt-6 bg-mint-700 text-white hover:bg-mint-700/90",
-				})}
-			>
-				<Plus className="size-4" />
-				去创建计划
-			</Link>
+			{canCreatePlan ? (
+				<Link
+					href="/plans/new"
+					data-testid="reports-empty-create"
+					className={buttonVariants({
+						className: "mt-6 bg-mint-700 text-white hover:bg-mint-700/90",
+					})}
+				>
+					<Plus className="size-4" />
+					去创建计划
+				</Link>
+			) : null}
 		</div>
 	);
 }

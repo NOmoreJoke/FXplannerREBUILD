@@ -24,7 +24,7 @@ const NODE_IO_BUILTINS = [
   'worker_threads',
 ];
 
-// 既有存量 useEffect 文件过渡白名单（禁止继续扩张；新建业务文件严禁裸写 useEffect）
+// 既有存量 useEffect 页面级过渡白名单（禁止继续扩张；业务组件已全数清零，页面级剩余存量逐步收敛）
 const LEGACY_USE_EFFECT_FILES = [
   'clients/chat-web/app/(protected)/corrections/new/page.tsx',
   'clients/chat-web/app/(protected)/home/page.tsx',
@@ -33,12 +33,7 @@ const LEGACY_USE_EFFECT_FILES = [
   'clients/chat-web/app/(protected)/onboarding/page.tsx',
   'clients/chat-web/app/(protected)/plans/new/page.tsx',
   'clients/chat-web/app/(protected)/transactions/new/page.tsx',
-  'clients/chat-web/components/business/chat/message-list.tsx',
-  'clients/chat-web/components/business/chat/model-selector.tsx',
-  'clients/chat-web/components/business/onboarding/wizard-step-holdings.tsx',
-  'clients/chat-web/components/business/plan/plan-adjust-dialog.tsx',
   'clients/chat-web/components/business/report/plan-report-print-view.tsx',
-  'clients/chat-web/components/business/settings/preferences-form.tsx',
 ];
 
 export default [

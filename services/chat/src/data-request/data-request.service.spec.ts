@@ -1302,6 +1302,18 @@ describe("ORGANIZATION DELETION：删组织不删任何成员 User", () => {
 		await transferOwnership(orgX.id, creator.id, admin.id);
 		await db.membership.deleteMany({ where: { userId: creator.id } });
 		await db.user.delete({ where: { id: creator.id } });
+		await db.dataRequest.update({
+			where: { id: request.id },
+			data: { requestedAt: new Date() },
+		});
+
+		// N4：requesterUserId === null 时，当前查看者（admin）视角 isRequester 必须严格为 false（不误命中 null === null）
+		const viewWithNullRequester = await service.getOrganizationCurrentView(
+			orgX.id,
+			admin.id,
+		);
+		expect(viewWithNullRequester).not.toBeNull();
+		expect(viewWithNullRequester?.isRequester).toBe(false);
 
 		const result = await runOrganizationRequest(
 			{ ...request, requesterUserId: null },

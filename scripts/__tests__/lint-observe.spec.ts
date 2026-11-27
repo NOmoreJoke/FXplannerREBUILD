@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	evaluateEnforcePolicy,
 	evaluateObservePolicy,
 	mergeChangedMaps,
 	normalizeDirArg,
@@ -13,16 +14,18 @@ import {
 } from "../lint-observe";
 
 describe("lint-observe helpers", () => {
-	test("parseCliArgs extracts --dir and optional --base", () => {
+	test("parseCliArgs extracts --dir, optional --base, and optional --enforce", () => {
 		expect(parseCliArgs(["--dir", "services/chat"])).toEqual({
 			dir: "services/chat",
 			base: undefined,
+			enforce: false,
 		});
 		expect(
-			parseCliArgs(["--dir=clients/chat-web", "--base", "origin/dev"]),
+			parseCliArgs(["--dir=clients/chat-web", "--base", "origin/dev", "--enforce"]),
 		).toEqual({
 			dir: "clients/chat-web",
 			base: "origin/dev",
+			enforce: true,
 		});
 		expect(() => parseCliArgs([])).toThrow();
 	});
@@ -121,7 +124,7 @@ describe("lint-observe helpers", () => {
 		expect(mergeChangedMaps(committed, wt).get("services/chat/src/new.ts")).toBe("added");
 	});
 
-	test("evaluateObservePolicy ignores untouched legacy files, allows warnings on modified files, blocks warnings on added files", () => {
+	test("evaluateObservePolicy ignores untouched files and blocks errors and warnings on modified and added files; evaluateEnforcePolicy blocks all files with errors or warnings", () => {
 		const repoRoot = "/repo";
 		const results: EslintFileResult[] = [
 			{
@@ -165,7 +168,7 @@ describe("lint-observe helpers", () => {
 				],
 			},
 			{
-				filePath: "/repo/services/chat/src/added-clean.ts",
+				filePath: "/repo/services/chat-web/src/added-clean.ts",
 				errorCount: 0,
 				warningCount: 0,
 				messages: [],
@@ -176,11 +179,20 @@ describe("lint-observe helpers", () => {
 			["services/chat/src/modified-warn-only.ts", "modified"],
 			["services/chat/src/modified-with-err.ts", "modified"],
 			["services/chat/src/added-with-warn.ts", "added"],
-			["services/chat/src/added-clean.ts", "added"],
+			["services/chat-web/src/added-clean.ts", "added"],
 		]);
 
 		const violations = evaluateObservePolicy(results, changed, repoRoot);
 		expect(violations.map((v) => v.relPath)).toEqual([
+			"services/chat/src/modified-warn-only.ts",
+			"services/chat/src/modified-with-err.ts",
+			"services/chat/src/added-with-warn.ts",
+		]);
+
+		const enforceViolations = evaluateEnforcePolicy(results, repoRoot);
+		expect(enforceViolations.map((v) => v.relPath)).toEqual([
+			"services/chat/src/untouched.ts",
+			"services/chat/src/modified-warn-only.ts",
 			"services/chat/src/modified-with-err.ts",
 			"services/chat/src/added-with-warn.ts",
 		]);

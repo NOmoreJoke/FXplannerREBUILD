@@ -65,22 +65,7 @@ export function createDraftPlanTool(params: {
 			const targetCurrency = input.targetCurrency.trim().toUpperCase();
 			const targetAmount = input.targetAmount.trim();
 			const expectUseDateIso = normalizeExpectUseDate(input.expectUseDate);
-			if (!expectUseDateIso) {
-				return formatAgentToolError(
-					"INVALID_PLAN_PARAMS",
-					"用途日期格式非法，请提供 YYYY-MM-DD 或 ISO 8601 日期。",
-				);
-			}
 			const prepLeadDays = input.prepLeadDays ?? 3;
-			if (
-				input.pacePreference !== undefined &&
-				!(PACE_PREFERENCES as readonly string[]).includes(input.pacePreference)
-			) {
-				return formatAgentToolError(
-					"INVALID_PLAN_PARAMS",
-					"pacePreference 仅支持 conservative、balanced、aggressive。",
-				);
-			}
 
 			return params.guard({
 				toolName: DRAFT_PLAN_TOOL_NAME,
@@ -92,11 +77,29 @@ export function createDraftPlanTool(params: {
 					"plan.create",
 				],
 				auditDetail: {
-					targetCurrency,
-					targetAmount,
-					expectUseDate: expectUseDateIso.slice(0, 10),
+					targetCurrency: targetCurrency.slice(0, 16),
+					targetAmount: targetAmount.slice(0, 32),
+					expectUseDate: expectUseDateIso
+						? expectUseDateIso.slice(0, 10)
+						: input.expectUseDate.trim().slice(0, 32),
 				},
 				run: async (freshActor) => {
+					if (!expectUseDateIso) {
+						return formatAgentToolError(
+							"INVALID_PLAN_PARAMS",
+							"用途日期格式非法，请提供 YYYY-MM-DD 或 ISO 8601 日期。",
+						);
+					}
+					if (
+						input.pacePreference !== undefined &&
+						!(PACE_PREFERENCES as readonly string[]).includes(input.pacePreference)
+					) {
+						return formatAgentToolError(
+							"INVALID_PLAN_PARAMS",
+							"pacePreference 仅支持 conservative、balanced、aggressive。",
+						);
+					}
+
 					const preferences = await resolveOrganizationPreferences(
 						params.prisma,
 						freshActor.organizationId,
@@ -117,6 +120,32 @@ export function createDraftPlanTool(params: {
 							code: "INVALID_PLAN_PARAMS",
 							message: `目标币种不能与组织本位币相同（当前本位币：${preferences.baseCurrency}）。`,
 						};
+					}
+
+					let parsedAllocDecimal: Prisma.Decimal | null = null;
+					let rawAllocTrimmed = "";
+					if (input.allocatedAmount !== undefined) {
+						rawAllocTrimmed = input.allocatedAmount.trim();
+						let parsedAlloc: Prisma.Decimal;
+						try {
+							parsedAlloc = new Prisma.Decimal(rawAllocTrimmed);
+						} catch {
+							return {
+								kind: "plan_draft_blocked",
+								saved: false,
+								code: "INVALID_PLAN_PARAMS",
+								message: `allocatedAmount 格式非法：${input.allocatedAmount}`,
+							};
+						}
+						if (!parsedAlloc.isFinite() || parsedAlloc.isNegative()) {
+							return {
+								kind: "plan_draft_blocked",
+								saved: false,
+								code: "INVALID_PLAN_PARAMS",
+								message: `allocatedAmount 不能为负数或非有限数值：${input.allocatedAmount}`,
+							};
+						}
+						parsedAllocDecimal = parsedAlloc;
 					}
 
 					const pacePreference: PacePreference =
@@ -143,25 +172,14 @@ export function createDraftPlanTool(params: {
 					);
 					const targetDecimal = new Prisma.Decimal(targetAmount);
 
-					if (input.allocatedAmount !== undefined) {
-						const rawAlloc = input.allocatedAmount.trim();
-						try {
-							const parsedAlloc = new Prisma.Decimal(rawAlloc);
-							if (parsedAlloc.isFinite() && parsedAlloc.gt(0)) {
-								if (parsedAlloc.gt(maxAllocDecimal)) {
-									requestedAllocated = zeroPreview.caps.maxAllocatable;
-									noteSuffix = `（原请求计入已有外币 ${rawAlloc} 超出当前可分配上限，已自动按最新上限 ${requestedAllocated} 调整）`;
-								} else {
-									requestedAllocated = rawAlloc;
-								}
+					if (parsedAllocDecimal !== null) {
+						if (parsedAllocDecimal.gt(0)) {
+							if (parsedAllocDecimal.gt(maxAllocDecimal)) {
+								requestedAllocated = zeroPreview.caps.maxAllocatable;
+								noteSuffix = `（原请求计入已有外币 ${rawAllocTrimmed} 超出当前可分配上限，已自动按最新上限 ${requestedAllocated} 调整）`;
+							} else {
+								requestedAllocated = rawAllocTrimmed;
 							}
-						} catch {
-							return {
-								kind: "plan_draft_blocked",
-								saved: false,
-								code: "INVALID_PLAN_PARAMS",
-								message: `allocatedAmount 格式非法：${input.allocatedAmount}`,
-							};
 						}
 					} else if (input.includeExistingBalance === true && maxAllocDecimal.gt(0)) {
 						// 若可分配余额已大于等于目标金额，直接计入会导致剩余排期为 0（AMOUNT_TOO_SMALL），此时回退 0 由人工决定

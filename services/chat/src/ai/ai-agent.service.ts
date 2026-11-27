@@ -179,8 +179,8 @@ export class AiAgentService {
 				case "on_tool_end":
 					yield { type: "tool", name: String(event.name), state: "end" };
 					while (pendingDrafts.length > 0) {
-						const draft = pendingDrafts.shift()!;
-						yield { type: "draft", draft };
+						const draft = pendingDrafts.shift();
+						if (draft) yield { type: "draft", draft };
 					}
 					break;
 				default:
@@ -189,8 +189,8 @@ export class AiAgentService {
 		}
 		if (params.signal.aborted) return;
 		while (pendingDrafts.length > 0) {
-			const draft = pendingDrafts.shift()!;
-			yield { type: "draft", draft };
+			const draft = pendingDrafts.shift();
+			if (draft) yield { type: "draft", draft };
 		}
 		this.logger.log(
 			`AI 流结束：model=${params.modelKey} agentRunId=${params.agentRunId} inputTokens=${usage.inputTokens} outputTokens=${usage.outputTokens}`,

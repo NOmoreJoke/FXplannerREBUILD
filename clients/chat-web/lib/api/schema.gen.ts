@@ -3968,6 +3968,8 @@ export interface components {
             displayStatus: "SUBMITTED" | "WITHDRAWAL_PERIOD" | "PROCESSING" | "COMPLETED" | "CANCELLED" | "FAILED";
             /** @description 是否可撤回（CLEAR PENDING / DELETION PENDING） */
             canCancel: boolean;
+            /** @description 当前查看者是否为该请求的发起人本人（撤回与导出包下载仅限发起人本人操作；不暴露发起人 userId） */
+            isRequester: boolean;
             /** @description DELETION 撤回期截止（=dueAt），其余为 null */
             withdrawDeadline?: string | null;
             /** @description EXPORT COMPLETED 且未过期时的下载入口，其余为 null */

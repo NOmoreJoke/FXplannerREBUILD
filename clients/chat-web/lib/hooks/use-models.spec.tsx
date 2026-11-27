@@ -1,8 +1,35 @@
+// Node ≥26 在 globalThis 上自带返回 undefined 的 localStorage getter（vitest#8757），
+// 覆盖恢复 jsdom localStorage 供 zustand persist store（chat-store）读取。
+vi.hoisted(() => {
+	const dom = (
+		globalThis as { jsdom?: { window: Window & { localStorage?: Storage } } }
+	).jsdom;
+	const jsdomStorage = dom?.window?.localStorage;
+	if (!jsdomStorage) return;
+	const globals = [globalThis, globalThis.window] as Array<
+		Record<string, unknown>
+	>;
+	for (const target of globals) {
+		if (target.localStorage === undefined) {
+			Object.defineProperty(target, "localStorage", {
+				value: jsdomStorage,
+				configurable: true,
+				writable: true,
+			});
+		}
+	}
+});
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { AI_MODELS_QUERY_STEM, useModels } from "@/lib/hooks/use-models";
+import {
+	AI_MODELS_QUERY_STEM,
+	useModels,
+	useModelSelection,
+} from "@/lib/hooks/use-models";
 import { chatApi } from "@/lib/api/chat";
+import { useChatStore } from "@/lib/stores/chat-store";
 import type React from "react";
 
 // mock API 封装层（传输层由 client.ts 承接，不在本层断言）
@@ -98,5 +125,32 @@ describe("useModels", () => {
 
 		await waitFor(() => expect(result.current.isError).toBe(true));
 		expect(result.current.error).toMatchObject({ message: "网络失败" });
+	});
+});
+
+describe("useModelSelection (P7 白名单自愈)", () => {
+	it("持久化 selectedModel 不在白名单中时自动重置为 null 并回退首项默认模型", async () => {
+		useChatStore.setState({ selectedModel: "removed-legacy-model" });
+		vi.mocked(chatApi.listModels).mockResolvedValue(modelsData);
+		const { wrapper } = createWrapper();
+
+		const { result } = renderHook(() => useModelSelection(), { wrapper });
+
+		await waitFor(() =>
+			expect(useChatStore.getState().selectedModel).toBeNull(),
+		);
+		expect(result.current.current?.key).toBe("gpt-4.1-mini");
+	});
+
+	it("持久化 selectedModel 仍在白名单中时保持原选择不变", async () => {
+		useChatStore.setState({ selectedModel: "gpt-5.5" });
+		vi.mocked(chatApi.listModels).mockResolvedValue(modelsData);
+		const { wrapper } = createWrapper();
+
+		const { result } = renderHook(() => useModelSelection(), { wrapper });
+
+		await waitFor(() => expect(result.current.items).toHaveLength(2));
+		expect(useChatStore.getState().selectedModel).toBe("gpt-5.5");
+		expect(result.current.current?.key).toBe("gpt-5.5");
 	});
 });

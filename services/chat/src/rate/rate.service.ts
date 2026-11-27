@@ -237,9 +237,17 @@ export class RateService {
       );
     }
 
+    const resolveGroupItem = (target: string) => {
+      const resolved = group.get(target);
+      if (!resolved) {
+        throw new Error(`汇率分组结果缺失目标币种：${target}`);
+      }
+      return this.toItem(target, resolved);
+    };
+
     if (requested.length === 1) {
       // 单目标：组内错误项以 HTTP 语义上抛（422 币对不支持 / 502 数据源不可用）
-      const item = this.toItem(requested[0], group.get(requested[0])!);
+      const item = resolveGroupItem(requested[0]);
       if (!('rate' in item)) {
         throw item.error.code === 'RATE_PAIR_UNSUPPORTED'
                 ? new RatePairUnsupportedException(normalizedBase, requested[0])
@@ -249,7 +257,7 @@ export class RateService {
     }
     return {
       base: normalizedBase,
-      items: requested.map((target) => this.toItem(target, group.get(target)!)),
+      items: requested.map((target) => resolveGroupItem(target)),
     } satisfies LatestRateGroupResponse;
   }
 

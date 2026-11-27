@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "@/lib/api/client";
 import { plansApi } from "@/lib/api/plans";
 import type {
@@ -429,7 +429,7 @@ export function usePlanAdjust(): UsePlanAdjustResult {
 		}
 		const ok = await runPreviewRequest(params);
 		return ok;
-	}, [runPreviewRequest, state.form]);
+	}, [runPreviewRequest, state.form, state.initialForm]);
 
 	const confirm = useCallback(async (): Promise<PlanDetail | null> => {
 		const planId = planIdRef.current;
@@ -512,6 +512,7 @@ export function usePlanAdjust(): UsePlanAdjustResult {
 		nextRequestId,
 		state.expectedUpdatedAt,
 		state.form,
+		state.initialForm,
 		state.preview,
 	]);
 
@@ -540,7 +541,7 @@ export function usePlanAdjust(): UsePlanAdjustResult {
 		}
 		// 用保留的参数重新预览（已填内容不清空）
 		return runPreviewRequest(params);
-	}, [isStale, nextRequestId, runPreviewRequest, state.form]);
+	}, [isStale, nextRequestId, runPreviewRequest, state.form, state.initialForm]);
 
 	const clearError = useCallback(() => {
 		setState((prev) => ({ ...prev, error: null }));
@@ -573,4 +574,55 @@ export function usePlanAdjust(): UsePlanAdjustResult {
 		clearError,
 		reset,
 	};
+}
+
+export interface UsePlanAdjustDialogResult {
+	adjust: UsePlanAdjustResult;
+	targetInputRef: RefObject<HTMLInputElement | null>;
+	allocInputRef: RefObject<HTMLInputElement | null>;
+}
+
+/**
+ * 计划调整弹窗的受控生命周期封装：弹窗开关同步预填/复位、结果不明回调转发、
+ * 目标/分配低于已使用时焦点定位到对应输入框。
+ */
+export function usePlanAdjustDialog(params: {
+	plan: PlanDetail;
+	open: boolean;
+	onUnknownOutcome?: (detail: PlanDetail) => void;
+}): UsePlanAdjustDialogResult {
+	const adjust = usePlanAdjust();
+	const targetInputRef = useRef<HTMLInputElement>(null);
+	const allocInputRef = useRef<HTMLInputElement>(null);
+	const planRef = useRef(params.plan);
+	planRef.current = params.plan;
+	const onUnknownOutcomeRef = useRef(params.onUnknownOutcome);
+	onUnknownOutcomeRef.current = params.onUnknownOutcome;
+
+	const { startEditing, reset } = adjust;
+	useEffect(() => {
+		if (params.open) {
+			startEditing(planRef.current);
+		} else {
+			reset();
+		}
+	}, [params.open, startEditing, reset]);
+
+	useEffect(() => {
+		if (adjust.unknownOutcome && adjust.reconciledDetail) {
+			onUnknownOutcomeRef.current?.(adjust.reconciledDetail);
+		}
+	}, [adjust.unknownOutcome, adjust.reconciledDetail]);
+
+	const belowUsed = adjust.error?.kind === "belowUsed" ? adjust.error : null;
+	useEffect(() => {
+		if (!belowUsed) return;
+		const input =
+			belowUsed.field === "target"
+				? targetInputRef.current
+				: allocInputRef.current;
+		input?.focus();
+	}, [belowUsed]);
+
+	return { adjust, targetInputRef, allocInputRef };
 }

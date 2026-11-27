@@ -1130,6 +1130,7 @@ describe("DataRequestController（e2e）", () => {
 			scope: "ORGANIZATION",
 			organizationId: orgId,
 			status: "COMPLETED",
+			isRequester: true,
 		});
 		expect(
 			(await submitExpect(finance, "CLEAR", 403, { confirmedTotals: zeroTotals })).body
@@ -1149,7 +1150,22 @@ describe("DataRequestController（e2e）", () => {
 			organizationId: orgId,
 			status: "PENDING",
 			canCancel: true,
+			isRequester: true,
 		});
+		// N4：当前组织请求视图对发起人返回 isRequester=true，对其他有查看权成员（如 Owner）返回 isRequester=false（不泄露 userId）
+		const adminCurrentView = await request(app.getHttpServer())
+			.get("/api/organizations/current/data-requests/current")
+			.set("Authorization", `Bearer ${admin.accessToken}`)
+			.set("X-Organization-Id", orgId)
+			.expect(200);
+		expect(adminCurrentView.body.data.isRequester).toBe(true);
+		const ownerCurrentView = await request(app.getHttpServer())
+			.get("/api/organizations/current/data-requests/current")
+			.set("Authorization", `Bearer ${owner.accessToken}`)
+			.set("X-Organization-Id", orgId)
+			.expect(200);
+		expect(ownerCurrentView.body.data.isRequester).toBe(false);
+		expect(ownerCurrentView.body.data).not.toHaveProperty("requesterUserId");
 		// 提交 CLEAR 的同域联动：该组织此前的导出链接立即失效
 		const exportRow = await env.prisma.dataRequest.findUniqueOrThrow({
 			where: { id: financeExport.body.data.id as string },
@@ -1164,6 +1180,7 @@ describe("DataRequestController（e2e）", () => {
 			type: "CLEAR",
 			scope: "ORGANIZATION",
 			status: "PENDING",
+			isRequester: false,
 		});
 		// 影响确认页同样按角色判权
 		const impactDenied = await request(app.getHttpServer())

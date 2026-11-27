@@ -210,7 +210,13 @@ export class AuthService {
     return this.jwtService.sign(payload);
   }
 
-  private toUserDto(user: any): UserDto {
+  private toUserDto(user: {
+    id: string;
+    email: string | null;
+    name: string | null;
+    avatar: string | null;
+    createdAt: Date;
+  }): UserDto {
     return {
       id: user.id,
       email: user.email,

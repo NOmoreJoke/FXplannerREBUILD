@@ -108,6 +108,7 @@ export class OrganizationDataRequestController {
 	async getCurrent(@CurrentActor() actor: ActorContext) {
 		const data = await this.dataRequestService.getOrganizationCurrentView(
 			actor.organizationId,
+			actor.userId,
 		);
 		return { success: true, data, message: "查询成功" };
 	}

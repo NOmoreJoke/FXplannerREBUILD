@@ -8383,6 +8383,10 @@
             "type": "boolean",
             "description": "是否可撤回（CLEAR PENDING / DELETION PENDING）"
           },
+          "isRequester": {
+            "type": "boolean",
+            "description": "当前查看者是否为该请求的发起人本人（撤回与导出包下载仅限发起人本人操作；不暴露发起人 userId）"
+          },
           "withdrawDeadline": {
             "type": "string",
             "description": "DELETION 撤回期截止（=dueAt），其余为 null",
@@ -8407,7 +8411,8 @@
           "requestedAt",
           "dueAt",
           "displayStatus",
-          "canCancel"
+          "canCancel",
+          "isRequester"
         ]
       },
       "VerifyResultDto": {

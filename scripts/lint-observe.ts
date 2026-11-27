@@ -39,6 +39,7 @@ export interface PolicyViolation {
 export interface CliOptions {
 	dir: string;
 	base?: string;
+	enforce: boolean;
 }
 
 const TS_EXT_RE = /\.(ts|tsx|mts|cts)$/i;
@@ -46,6 +47,7 @@ const TS_EXT_RE = /\.(ts|tsx|mts|cts)$/i;
 export function parseCliArgs(argv: readonly string[]): CliOptions {
 	let dir = "";
 	let base: string | undefined;
+	let enforce = false;
 
 	for (let i = 0; i < argv.length; i++) {
 		const token = argv[i];
@@ -57,13 +59,17 @@ export function parseCliArgs(argv: readonly string[]): CliOptions {
 			base = argv[++i];
 		} else if (token.startsWith("--base=")) {
 			base = token.slice("--base=".length);
+		} else if (token === "--enforce") {
+			enforce = true;
 		}
 	}
 
 	if (!dir) {
-		throw new Error("用法: bun run scripts/lint-observe.ts --dir <pkg-dir> [--base <ref>]");
+		throw new Error(
+			"用法: bun run scripts/lint-observe.ts --dir <pkg-dir> [--base <ref>] [--enforce]",
+		);
 	}
-	return { dir, base };
+	return { dir, base, enforce };
 }
 
 export function normalizeRepoPath(repoRoot: string, absPath: string): string {
@@ -215,15 +221,40 @@ export function evaluateObservePolicy(
 		if (!changeKind) continue;
 
 		const fatalCount = file.fatalErrorCount ?? 0;
+		// Goal #5：无论是新增还是修改文件，一律 0 error & 0 warning 门禁
 		const blocked =
-			changeKind === "added"
-				? file.errorCount > 0 || fatalCount > 0 || file.warningCount > 0
-				: file.errorCount > 0 || fatalCount > 0;
+			file.errorCount > 0 || fatalCount > 0 || file.warningCount > 0;
 
 		if (blocked) {
 			violations.push({
 				relPath,
 				changeKind,
+				errorCount: file.errorCount,
+				warningCount: file.warningCount,
+				messages: file.messages,
+			});
+		}
+	}
+
+	return violations;
+}
+
+/**
+ * 全量 enforce 门禁（Goal #5）：对包内全部扫描文件执行 0 error & 0 warning 硬拦截，
+ * 不依赖 git diff 基线，确保任何存量回归都无法绕过。
+ */
+export function evaluateEnforcePolicy(
+	results: readonly EslintFileResult[],
+	repoRoot: string,
+): PolicyViolation[] {
+	const violations: PolicyViolation[] = [];
+
+	for (const file of results) {
+		const fatalCount = file.fatalErrorCount ?? 0;
+		if (file.errorCount > 0 || fatalCount > 0 || file.warningCount > 0) {
+			violations.push({
+				relPath: normalizeRepoPath(repoRoot, file.filePath),
+				changeKind: "modified",
 				errorCount: file.errorCount,
 				warningCount: file.warningCount,
 				messages: file.messages,
@@ -362,6 +393,32 @@ export function runLintObserve(argv: readonly string[]): number {
 		summary.topRules.length > 0
 			? summary.topRules.map((r) => `${r.ruleId}=${r.count}`).join(", ")
 			: "none";
+
+	if (opts.enforce) {
+		const violations = evaluateEnforcePolicy(parsedResults, repoRoot);
+		if (violations.length > 0) {
+			console.error(
+				`[lint-observe] ${normDir}: ENFORCE BLOCKED (${summary.totalErrors} errors, ${summary.totalWarnings} warnings across ${violations.length} file(s); top: ${rulesText}):`,
+			);
+			for (const v of violations) {
+				console.error(
+					`  - ${v.relPath} (${v.errorCount} errors, ${v.warningCount} warnings)`,
+				);
+				for (const msg of v.messages) {
+					const sev = msg.severity === 2 ? "error" : "warn";
+					console.error(
+						`      L${msg.line}:${msg.column} [${sev}] ${msg.ruleId ?? "fatal"}: ${msg.message}`,
+					);
+				}
+			}
+			return 1;
+		}
+		console.log(
+			`[lint-observe] ${normDir}: ENFORCE gate passed (0 errors, 0 warnings across ${summary.filesScanned} files)`,
+		);
+		return 0;
+	}
+
 	console.log(
 		`[lint-observe] ${normDir}: scanned ${summary.filesScanned} files, ${summary.totalErrors} errors, ${summary.totalWarnings} warnings (baseline observed; top: ${rulesText})`,
 	);
@@ -390,15 +447,10 @@ export function runLintObserve(argv: readonly string[]): number {
 			`[lint-observe] ${normDir}: BLOCKED (${violations.length} changed file(s) failed policy):`,
 		);
 		for (const v of violations) {
-			const ruleTag =
-				v.changeKind === "added"
-					? "added -> 0 error & 0 warning required"
-					: "modified -> 0 error required";
 			console.error(
-				`  - ${v.relPath} [${ruleTag}] (${v.errorCount} errors, ${v.warningCount} warnings)`,
+				`  - ${v.relPath} [${v.changeKind} -> 0 error & 0 warning required] (${v.errorCount} errors, ${v.warningCount} warnings)`,
 			);
 			for (const msg of v.messages) {
-				if (v.changeKind === "modified" && msg.severity < 2) continue;
 				const sev = msg.severity === 2 ? "error" : "warn";
 				console.error(
 					`      L${msg.line}:${msg.column} [${sev}] ${msg.ruleId ?? "fatal"}: ${msg.message}`,

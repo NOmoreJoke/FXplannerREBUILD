@@ -30,11 +30,10 @@ import { organizationCancelPermission, requestTypeText } from "./request-copy";
  * 个人域与组织域共用本卡，按服务端视图的 scope 决定走哪套端点（Goal #3B W28）：
  * - 个人域（scope=PERSONAL）：本人的数据，撤回与下载始终可操作——即使本人正处于
  *   注销锁定期（这正是 403 ACCOUNT_PENDING_DELETION 跳到进度页后要做的事）；
- * - 组织域（scope=ORGANIZATION）：任意有效成员都可查看进度；撤回与下载按钮按角色
- *   能力显隐（CLEAR → data.clear、DELETION → organization.delete、下载 → data.export），
- *   Viewer / 无权成员看得到进度，但不会出现点下去必然 403 的按钮。
- * 后端对撤回 / 下载另有一道「仅发起人本人」的校验，视图里没有发起人标识，
- * 因此他人发起的组织请求上，按钮仍可能显示、点击后被后端以 404 拒绝并给出提示。
+ * - 组织域（scope=ORGANIZATION）：任意有效成员都可查看进度；撤回与下载按钮同时受
+ *   角色能力（CLEAR → data.clear、DELETION → organization.delete、下载 → data.export）
+ *   与发起人身份（view.isRequester）双重门控，非发起人展示明确提示而非点击后 404，
+ *   Viewer / 无权成员看得到进度但不展示操作按钮或非发起人提示。
  */
 
 const STATUS_TEXT: Record<DataRequestDisplayStatus, string> = {
@@ -118,12 +117,19 @@ export function RequestProgress({ view }: { view: DataRequestView }) {
 
 	const isPersonal = view.scope === "PERSONAL";
 	const isDeletion = view.type === "DELETION";
-	// 组织域撤回按请求类型对应的权限点显隐；个人域是本人的数据，只看服务端 canCancel
+	// 组织域撤回按请求类型对应的权限点显隐，且仅限发起人本人（个人域只看服务端 canCancel）
 	const cancelPermission = isPersonal
 		? null
 		: organizationCancelPermission(view.type);
+	const hasCancelPermission =
+		isPersonal || (cancelPermission !== null && can(cancelPermission));
 	const canCancel =
-		view.canCancel && (isPersonal || (cancelPermission !== null && can(cancelPermission)));
+		view.canCancel && hasCancelPermission && (isPersonal || view.isRequester);
+	const showNonRequesterHint =
+		!isPersonal &&
+		!view.isRequester &&
+		((view.canCancel && hasCancelPermission) ||
+			(Boolean(view.download) && can("data.export")));
 
 	const cancel = (challengeId?: string) => {
 		const callbacks = {
@@ -216,7 +222,7 @@ export function RequestProgress({ view }: { view: DataRequestView }) {
 				</div>
 			)}
 
-			<div className="mt-4 flex items-center gap-2">
+			<div className="mt-4 flex flex-wrap items-center gap-2">
 				<ExportDownloadButton view={view} />
 				{canCancel && (
 					<Button
@@ -231,6 +237,14 @@ export function RequestProgress({ view }: { view: DataRequestView }) {
 						)}
 						{cancelLabel}
 					</Button>
+				)}
+				{showNonRequesterHint && (
+					<p
+						data-testid="organization-request-non-requester-hint"
+						className="text-xs text-muted-foreground"
+					>
+						该组织请求由其他成员发起，仅发起人本人可撤回或下载导出包。
+					</p>
 				)}
 			</div>
 

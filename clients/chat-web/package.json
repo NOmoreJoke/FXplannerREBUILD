@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "NODE_ENV=production next start -p ${WEB_PORT:-3001}",
     "typecheck": "tsc --noEmit",
-    "lint": "bun run ../../scripts/lint-observe.ts --dir clients/chat-web",
+    "lint": "bun run ../../scripts/lint-observe.ts --dir clients/chat-web --enforce",
     "generate:api": "cd ../../services/chat && bunx tsx ../../scripts/export-openapi.ts && cd ../../clients/chat-web && openapi-typescript lib/api/openapi.json -o lib/api/schema.gen.ts && bun -e 'import fs from \"node:fs\"; const p = \"lib/api/schema.gen.ts\"; fs.writeFileSync(p, \"// 由 generate:api 自动生成（后端 DTO → OpenAPI → openapi-typescript），禁止手改；后端契约变更后重新执行 bun run generate:api。\\n\" + fs.readFileSync(p, \"utf8\"));'",
     "test": "NODE_ENV=test vitest run",
     "test:watch": "NODE_ENV=test vitest"

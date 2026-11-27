@@ -21,12 +21,6 @@ export function createUpcomingActionsTool(
 	return tool(
 		async (input) => {
 			const withinDays = input.withinDays ?? 30;
-			if (!Number.isInteger(withinDays) || withinDays < 1 || withinDays > 365) {
-				return formatAgentToolError(
-					"INVALID_PARAMS",
-					"withinDays 必须是 1~365 之间的整数。",
-				);
-			}
 
 			return guard({
 				toolName: UPCOMING_ACTIONS_TOOL_NAME,
@@ -34,6 +28,13 @@ export function createUpcomingActionsTool(
 				requiredPermissions: ["agent.use", "agent.business_read", "plan.read"],
 				auditDetail: { withinDays },
 				run: async (freshActor) => {
+					if (!Number.isInteger(withinDays) || withinDays < 1 || withinDays > 365) {
+						return formatAgentToolError(
+							"INVALID_PARAMS",
+							"withinDays 必须是 1~365 之间的整数。",
+						);
+					}
+
 					let remindersEmptyReason: string | null = null;
 					let reminderItems: Array<{
 						planId: string;

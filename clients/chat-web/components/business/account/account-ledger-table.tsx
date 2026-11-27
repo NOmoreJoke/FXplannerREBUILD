@@ -8,6 +8,7 @@ import type {
 	AccountLedgerItemType,
 	AccountLedgerResp,
 } from "@/lib/api/accounts";
+import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 import { Badge } from "@/components/ui/badge";
 import {
 	Table,
@@ -48,6 +49,8 @@ export interface AccountLedgerTableProps {
 }
 
 export function AccountLedgerTable({ ledger }: AccountLedgerTableProps) {
+	const { can } = useOrganizationCapabilities();
+	const canApplyCorrection = can("correction.apply");
 	// 成本币种动态取接口返回的本位币；无 userSettings 时为 null，列头退化为纯「成本」
 	const costHeader = ledger.baseCurrency
 		? `成本（${ledger.baseCurrency}）`
@@ -75,7 +78,13 @@ export function AccountLedgerTable({ ledger }: AccountLedgerTableProps) {
 							</TableCell>
 						</TableRow>
 					) : (
-						ledger.items.map((item) => <LedgerRow key={item.id} item={item} />)
+						ledger.items.map((item) => (
+							<LedgerRow
+								key={item.id}
+								item={item}
+								canApplyCorrection={canApplyCorrection}
+							/>
+						))
 					)}
 				</TableBody>
 			</Table>
@@ -88,7 +97,13 @@ function formatDisplayDate(isoDate: string): string {
 	return isoDate.slice(0, 10);
 }
 
-function LedgerRow({ item }: { item: AccountLedgerItem }) {
+function LedgerRow({
+	item,
+	canApplyCorrection,
+}: {
+	item: AccountLedgerItem;
+	canApplyCorrection: boolean;
+}) {
 	const router = useRouter();
 	const badge = TYPE_BADGE[item.type];
 	const isPurchase = item.type === "PURCHASE";
@@ -121,8 +136,8 @@ function LedgerRow({ item }: { item: AccountLedgerItem }) {
 						<span className="sr-only">查看买入详情</span>
 					</Link>
 				) : null}
-				{isInitial ? (
-					// 初始持仓更正入口（corrections M8）：账户流水初始持仓行「更正」
+				{isInitial && canApplyCorrection ? (
+					// 初始持仓更正入口（corrections M8 + ToB P1 能力门控）：仅具备 correction.apply 权限时展示
 					<Link
 						href={`/corrections/new?targetType=INITIAL_HOLDING&targetId=${item.id}`}
 						className="ml-2 inline-flex items-center gap-0.5 text-xs font-medium text-mint-700 hover:underline"

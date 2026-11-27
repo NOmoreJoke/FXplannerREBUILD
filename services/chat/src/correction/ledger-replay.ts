@@ -127,7 +127,10 @@ export function replayCurrencyLedger(events: LedgerEvent[]): ReplayResult {
 				event.quantity,
 			);
 			for (const slice of consumption.slices) {
-				const replayLot = lots.find((lot) => lot.sourceId === slice.lotId)!;
+				const replayLot = lots.find((lot) => lot.sourceId === slice.lotId);
+				if (!replayLot) {
+					throw new Error(`重放分摊批次缺失：lotId=${slice.lotId}`);
+				}
 				replayLot.remainingQty = replayLot.remainingQty.sub(slice.quantity);
 				usageAllocations.push({
 					usageId: event.id,
@@ -144,12 +147,21 @@ export function replayCurrencyLedger(events: LedgerEvent[]): ReplayResult {
 		// INITIAL / PURCHASE → 生成成本批次
 		const isInitial = event.type === "INITIAL";
 		const fee = event.feeAmount ?? null;
-		const unitCost = isInitial
-			? event.unitCost!
-			: event.principalAmount!.add(fee ?? 0).div(event.quantity);
-		const totalCost = isInitial
-			? event.totalCost!
-			: event.principalAmount!.add(fee ?? 0);
+		let unitCost: Prisma.Decimal;
+		let totalCost: Prisma.Decimal;
+		if (isInitial) {
+			if (event.unitCost === undefined || event.totalCost === undefined) {
+				throw new Error(`初始持仓重放事件缺少成本字段：id=${event.id}`);
+			}
+			unitCost = event.unitCost;
+			totalCost = event.totalCost;
+		} else {
+			if (event.principalAmount === undefined) {
+				throw new Error(`买入重放事件缺少本金字段：id=${event.id}`);
+			}
+			totalCost = event.principalAmount.add(fee ?? 0);
+			unitCost = totalCost.div(event.quantity);
+		}
 		if (!isInitial && fee === null) {
 			hasUnknownFeeLot = true;
 		}

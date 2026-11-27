@@ -471,6 +471,87 @@ describe("ToB R2 Agent 工具与实时 Guard 单测", () => {
 				}),
 			);
 		});
+
+		it("先鉴权后验参（D6 Nit #2）：无权/锁态/移除成员传非法入参也必须进 guard 并记 DENIED 审计", async () => {
+			const mocks = makeServiceMocks();
+
+			// 1. VIEWER 传非法 expectUseDate / pacePreference 调 draft_fx_plan -> 先走 guard 判 PERMISSION_DENIED + DENIED 审计
+			const viewer = makeGuardDeps({ role: "VIEWER" });
+			const viewerGuard = createToolGuardRunner(viewer.deps, {
+				...baseCtx,
+				actor: { ...baseActor, role: "VIEWER" },
+			});
+			const draftDenied = JSON.parse(
+				await createDraftPlanTool({
+					planService: mocks.planService,
+					prisma: mocks.prisma,
+					guard: viewerGuard,
+					agentRunId: baseCtx.agentRunId,
+					onDraft: () => undefined,
+				}).invoke({
+					targetCurrency: "USD",
+					targetAmount: "10000",
+					expectUseDate: "invalid-date",
+				}),
+			) as { error: string };
+			expect(draftDenied.error).toBe("PERMISSION_DENIED");
+			expect(viewer.recordStandalone).toHaveBeenLastCalledWith(
+				expect.objectContaining({
+					action: "agent.tool.draft_fx_plan",
+					result: "DENIED",
+					detail: expect.objectContaining({ reason: "PERMISSION_DENIED" }),
+				}),
+			);
+
+			// 2. DISABLED 成员或组织锁传非法参数调用 4 个只读组织工具 -> 全数优先返回守卫拒因并记 DENIED
+			const locked = makeGuardDeps({
+				lockResolution: {
+					...unlockedResolution(),
+					organizationLock: "ORGANIZATION_DATA_LOCKED",
+					organizationLockSummary: { active: true, type: "CLEAR" },
+				},
+			});
+			const lockedGuard = createToolGuardRunner(locked.deps, baseCtx);
+			const disabled = makeGuardDeps({ status: "DISABLED" });
+			const disabledGuard = createToolGuardRunner(disabled.deps, baseCtx);
+
+			for (const [label, g, expectedCode] of [
+				["locked", lockedGuard, "ORGANIZATION_DATA_LOCKED"],
+				["disabled", disabledGuard, "PERMISSION_DENIED"],
+			] as const) {
+				const accRes = JSON.parse(
+					await createAccountSummaryTool(mocks.accountService, g).invoke({
+						currencyCode: "INVALID",
+					}),
+				) as { error: string };
+				expect(accRes.error, `${label}:account`).toBe(expectedCode);
+
+				const expRes = JSON.parse(
+					await createPlanExposureTool(mocks.planService, g).invoke({
+						withinDays: 999,
+					}),
+				) as { error: string };
+				expect(expRes.error, `${label}:exposure`).toBe(expectedCode);
+
+				const costRes = JSON.parse(
+					await createPlanCostTool(mocks.reportService, g).invoke({
+						currencyCode: "INVALID",
+					}),
+				) as { error: string };
+				expect(costRes.error, `${label}:cost`).toBe(expectedCode);
+
+				const actRes = JSON.parse(
+					await createUpcomingActionsTool(
+						mocks.planService,
+						mocks.reminderService,
+						g,
+					).invoke({ withinDays: 0 }),
+				) as { error: string };
+				expect(actRes.error, `${label}:actions`).toBe(expectedCode);
+			}
+			expect(locked.recordStandalone).toHaveBeenCalledTimes(4);
+			expect(disabled.recordStandalone).toHaveBeenCalledTimes(4);
+		});
 	});
 
 	describe("各工具业务语义（空态 / 未知手续费 / 不可信名称 / 草稿边界）", () => {
@@ -675,6 +756,38 @@ describe("ToB R2 Agent 工具与实时 Guard 单测", () => {
 			expect(resExplicit.draft.allocatedAmount).toBe("0.0000");
 			expect(resExplicit.note).toContain("暂按计入 0 生成");
 			expect(receivedDrafts).toHaveLength(2);
+		});
+
+		it("draft_fx_plan 拒绝负数与非有限 allocatedAmount，返回 INVALID_PLAN_PARAMS 且不触发 onDraft", async () => {
+			const mocks = makeServiceMocks();
+			const { deps } = makeGuardDeps();
+			const guard = createToolGuardRunner(deps, baseCtx);
+			const onDraft = vi.fn();
+
+			const tool = createDraftPlanTool({
+				planService: mocks.planService,
+				prisma: mocks.prisma,
+				guard,
+				agentRunId: baseCtx.agentRunId,
+				onDraft,
+			});
+
+			for (const badAlloc of ["-50", "NaN", "Infinity", "-Infinity", ""]) {
+				const blocked = JSON.parse(
+					await tool.invoke({
+						targetCurrency: "USD",
+						targetAmount: "10000",
+						expectUseDate: "2027-12-10",
+						allocatedAmount: badAlloc,
+					}),
+				) as { kind: string; saved: boolean; code: string };
+				expect(blocked, badAlloc).toMatchObject({
+					kind: "plan_draft_blocked",
+					saved: false,
+					code: "INVALID_PLAN_PARAMS",
+				});
+			}
+			expect(onDraft).not.toHaveBeenCalled();
 		});
 	});
 });

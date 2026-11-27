@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useAutoScrollToBottom } from "@/hooks/use-auto-scroll-to-bottom";
 import { MessageBubble } from "./message-bubble";
 import type { AiMessage, AiPlanDraft } from "@/lib/api/chat";
 
@@ -39,12 +39,10 @@ export function MessageList({
 	activeToolName = null,
 	emptyHint,
 }: MessageListProps) {
-	const bottomRef = useRef<HTMLDivElement>(null);
 	const streamLength = streamingText?.length ?? 0;
-
-	useEffect(() => {
-		bottomRef.current?.scrollIntoView({ block: "end" });
-	}, [messages.length, streamLength, toolActive, streamingDraft]);
+	const bottomRef = useAutoScrollToBottom<HTMLDivElement>(
+		`${messages.length}:${streamLength}:${toolActive}:${streamingDraft !== null}`,
+	);
 
 	if (emptyHint !== null) {
 		return (

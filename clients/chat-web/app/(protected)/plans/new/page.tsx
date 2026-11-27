@@ -103,6 +103,7 @@ function NewPlanForm({
 	const router = useRouter();
 	const queryClient = useQueryClient();
 	const form = usePlanForm(fromDraft ? initialValues : undefined);
+	const { setCaps, setField } = form;
 
 	const preview = useSchedulePreview({
 		targetCurrency: form.values.targetCurrency,
@@ -115,8 +116,8 @@ function NewPlanForm({
 
 	// 预览返回的分配上限 → 表单实时预检「计入已有外币」
 	useEffect(() => {
-		form.setCaps(preview.caps);
-	}, [preview.caps, form.setCaps]);
+		setCaps(preview.caps);
+	}, [preview.caps, setCaps]);
 
 	// 首次设置的节奏偏好回填为默认节奏；用户已手动改过（或草稿预填 touched）则不覆盖
 	const orgId = useActiveOrgId();
@@ -134,12 +135,12 @@ function NewPlanForm({
 		if (!backfillPace) return;
 		if (form.touched.pacePreference) return;
 		if (form.values.pacePreference === backfillPace) return;
-		form.setField("pacePreference", backfillPace, { touch: false });
+		setField("pacePreference", backfillPace, { touch: false });
 	}, [
 		backfillPace,
 		form.touched.pacePreference,
 		form.values.pacePreference,
-		form.setField,
+		setField,
 	]);
 
 	const createMutation = useMutation({
@@ -209,33 +210,33 @@ function NewPlanForm({
 					<p className="mt-1 text-xs text-muted-foreground">
 						系统已按当前组织最新余额和已有分配实时重算排期与可分配上限，确认无误后再点击「创建计划」。
 					</p>
-					{allocExceededLatestCap && preview.caps && (
-						<div
-							data-testid="plan-draft-caps-warning"
-							role="alert"
-							className="mt-2.5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"
-						>
-							<span>
-								组织余额已变化：草稿原计入已有外币高于当前可分配上限（
-								{preview.caps.maxAllocatable}），无法按原草稿直接保存。
-							</span>
-							<Button
-								type="button"
-								size="sm"
-								variant="outline"
-								className="h-7 bg-white text-xs text-foreground"
-								data-testid="plan-draft-apply-max-alloc"
-								onClick={() =>
-									form.setField(
-										"allocatedAmount",
-										preview.caps!.maxAllocatable,
-									)
-								}
+					{allocExceededLatestCap && preview.caps && (() => {
+						const latestMaxAllocatable = preview.caps.maxAllocatable;
+						return (
+							<div
+								data-testid="plan-draft-caps-warning"
+								role="alert"
+								className="mt-2.5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"
 							>
-								按最新上限填入
-							</Button>
-						</div>
-					)}
+								<span>
+									组织余额已变化：草稿原计入已有外币高于当前可分配上限（
+									{latestMaxAllocatable}），无法按原草稿直接保存。
+								</span>
+								<Button
+									type="button"
+									size="sm"
+									variant="outline"
+									className="h-7 bg-white text-xs text-foreground"
+									data-testid="plan-draft-apply-max-alloc"
+									onClick={() =>
+										form.setField("allocatedAmount", latestMaxAllocatable)
+									}
+								>
+									按最新上限填入
+								</Button>
+							</div>
+						);
+					})()}
 				</div>
 			)}
 
