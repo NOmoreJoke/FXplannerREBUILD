@@ -31,7 +31,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  ├─ components/
 │  │  ├─ ui/                        # shadcn 原语
 │  │  ├─ base/                      # 项目级基础组件
-│  │  └─ business/<domain>/         # 业务组件（按领域分目录）
+│  │  └─ business/<domain>/         # 业务组件（按领域分目录；collab/ 为知禾对话与存折备款检视台）
 │  ├─ hooks/                        # 自定义 hooks
 │  ├─ lib/
 │  │  ├─ api/                       # 后端 API 客户端（个人域请求带 skipOrganizationScope，不注入组织头）
@@ -42,7 +42,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  └─ utils.ts                   # 工具函数
 │  ├─ instrumentation-client.ts     # 客户端错误采集初始化（仅 dev 生效）
 │  ├─ proxy.ts                    # 边缘路由守卫
-│  └─ public/                       # 静态资源
+│  └─ public/                       # 静态资源（fonts/ 存放 next/font/local 自托管子集字体）
 │
 ├─ services/chat/                   # NestJS 后端
 │  │                                # ⛔ 此目录下仅允许：src/ prisma/ test/ + 配置文件
@@ -56,7 +56,8 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  ├─ authorization/             # ToB R1：ActorContext、纯函数权限策略、组织上下文/权限/双锁 Guard 与白名单装饰器
 │  │  ├─ audit/                     # ToB R1：审计同事务 writer 与只读分页查询（无 update/delete 接口）
 │  │  ├─ account/                   # 账户与分配只读视图
-│  │  ├─ ai/                        # AI 助手（按 userId+organizationId 隔离会话、配额、公共汇率与组织只读/计划草稿工具、工具级实时鉴权与审计）
+│  │  ├─ ai/                        # 知禾 AI 助手（会话隔离、agents/ 多子图与专员注册表、compliance/ 同源封杀词与校验、tools/ 实时鉴权与审计）
+│  │  ├─ proposal/                  # 产品即 Harness：AgentProposal 提案状态机、LedgerRevision 比对与人工持锁确认入账
 │  │  ├─ correction/                # 更正与账本重放（FIFO）
 │  │  ├─ currency/                  # 币种清单下发
 │  │  ├─ data-request/              # 数据请求与双锁判定实现（个人账号锁 / 组织数据锁；导出/清空/注销）
@@ -100,9 +101,11 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │     └─ playwright-report/         # HTML 报告
 │
 ├─ infra/compose/                   # Docker Compose + Dockerfile
-├─ scripts/                         # 工程脚本（init / test / worktree / check-structure / check-org-scope / lint-observe）+ __tests__/（bun test：工具链与跨包一致性对照）
+├─ scripts/                         # 工程脚本（init / test / worktree / check-structure / check-org-scope / check-compliance-copy / lint-observe）+ __tests__/（bun test：工具链与跨包一致性对照）
+├─ design-harness/                  # 前端 Design Harness 四层设计底座（foundations / intelligence / components / commands；语义色、知禾语气与存折手账感规范真源）
 ├─ changes/                         # ⛔ 变更文档唯一位置（需求/方案/验收），按功能名称分目录
-│  ├─ tob-agent-workspace/          # ToB 组织工作台与 Agent 需求、技术方案与 R1 验收记录（验收记录.md）
+│  ├─ product-harness-agent/        # 产品即 Harness × 知禾 Agent × 双模存折工作台需求、技术方案与分期验收记录
+│  ├─ tob-agent-workspace/          # ToB 组织工作台与 Agent 需求、技术方案与 R1/R2 验收记录（验收记录.md）
 │  └─ realtime-rate/                # MVP-F0 汇率回补与缓存迁移实施底稿（Goal #1 任务 B/C 执行口径）
 ├─ docs/                            # 长期规范文档
 │  ├─ VERIFY.md                     # 验证驱动、属性/差分测试与 Diff 触发防回归规范
@@ -141,6 +144,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | 单元测试         | 与源码同目录`<被测文件>.spec.ts`                                          |
 | E2E 用例         | `e2e/modules/<编号>-<模块>.spec.ts`                                       |
 | ToB 组织工作台与 Agent 规划 | `changes/tob-agent-workspace/` |
+| 产品即 Harness × 知禾 Agent × 双模工作台 | 变更文档 `changes/product-harness-agent/`；前端设计底座 `design-harness/{foundations,intelligence,components,commands}/`；独立提案状态机与人工确认入账模块 `services/chat/src/proposal/`（在 `app.module.ts` 注册，纳入 `check:org-scope`）；知禾多子图编排与专员注册表 `services/chat/src/ai/agents/`；同源合规封杀词与运行时/静态门禁 `services/chat/src/ai/compliance/` + `scripts/check-compliance-copy.ts`；前端知禾对话栏与存折备款检视台 `clients/chat-web/components/business/collab/`（带 `index.ts` 桶文件）及受控去抖预览 `clients/chat-web/lib/hooks/use-debounced-proposal-preview.ts`；自托管子集字体 `clients/chat-web/public/fonts/` |
 | ToB R2 组织 Agent 工具与草稿闭环 | 工具目录 `services/chat/src/ai/tools/`（经 `tool-guard.ts` 统一实时校验双锁、`Membership`、独立开关 `AI_ORG_TOOLS_ENABLED`、`can(freshRole, permission)` 并写 `AuditLog(actorType="AGENT", agentRunId)`）；前端草稿卡 `clients/chat-web/components/business/chat/plan-draft-card.tsx`（经 `components/business/chat/index.ts` 导出）；组织 Agent 授权集成测试 `services/chat/test/integration/agent-tool-authorization.spec.ts`；组织 Agent E2E `e2e/modules/16-agent-organization.spec.ts` |
 | ToB R1 后端新模块（组织/成员/邀请/设置、权限策略与 Guard、审计） | `services/chat/src/{organization,authorization,audit}/`，在 `app.module.ts` 唯一注册；`authorization/` 仅纯函数与类型（IO 在 Guard/Service 层） |
 | 双域数据请求与双锁守卫 | `services/chat/src/data-request/`：个人域 `/api/data-requests/*`（`DataRequestController`，仅 `JwtAuthGuard`）+ 组织域 `/api/organizations/current/data-requests/*`（`OrganizationDataRequestController`，类级 `@SkipOrganizationLock()`，`JwtAuthGuard → OrganizationContextGuard → OrganizationLockGuard → PermissionGuard`）；`PersonalAccountLockGuard`（全局 `APP_GUARD`，未挂组织锁守卫的路由走个人域单查）/ `OrganizationLockGuard`（**横切守卫，契约与实现分离**：守卫 + `ORGANIZATION_LOCK_RESOLVER` 契约在 `services/chat/src/authorization/guards/organization-lock.guard.ts`，真实判定在 `data-request/organization-lock-resolver.ts`，经全局 `DataRequestModule` 导出后注入——`authorization/` 与 `audit/` 均禁止引入业务记账模块）；双锁白名单装饰器统一在 `services/chat/src/authorization/guards/data-lock.decorators.ts` |
