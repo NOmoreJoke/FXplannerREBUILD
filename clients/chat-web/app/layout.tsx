@@ -1,12 +1,22 @@
 import "./globals.css";
+import localFont from "next/font/local";
 import { cn } from "@/lib/utils";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { ReactQueryProvider } from "@/lib/react-query-provider";
 
+const playfairDisplay = localFont({
+	src: "../public/fonts/playfair-display-latin-wght-normal.woff2",
+	variable: "--font-playfair",
+	weight: "400 900",
+	style: "normal",
+	display: "swap",
+	fallback: ["Songti SC", "STSong", "Noto Serif CJK SC", "serif"],
+});
+
 export const metadata = {
-	title: "fxplanner-new chat-web",
-	description: "monorepo 底座最小 Web 客户端",
+	title: "FXPlanner",
+	description: "FXPlanner 换汇备款规划与账本工作台",
 };
 
 export default function RootLayout({
@@ -16,7 +26,11 @@ export default function RootLayout({
 }) {
 	// suppressHydrationWarning：浏览器扩展（如 Bybit Wallet）会在 hydration 前向 <html> 注入属性，抑制该标签的属性不匹配警告
 	return (
-		<html lang="zh" className={cn("font-sans")} suppressHydrationWarning>
+		<html
+			lang="zh"
+			className={cn(playfairDisplay.variable, "font-sans")}
+			suppressHydrationWarning
+		>
 			<body>
 				<ReactQueryProvider>
 					<TooltipProvider>{children}</TooltipProvider>
