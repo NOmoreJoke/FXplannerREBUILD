@@ -61,3 +61,4 @@
 | 数据库基础设施与约束 | `bun run test infra` | 通过：1 file，27 passed |
 | 生产构建 | `bun run build` | 通过：`@fxplanner-new/chat` + `@fxplanner-new/chat-web` build 成功 |
 | Playwright E2E 清单发现 | `bunx playwright test --list` | 通过：112 tests in 21 files |
+| 全量浏览器 E2E（L3） | `./e2e/scripts/run-e2e-tests.sh` | 通过：**112 passed, 0 failed, 0 skipped, 0 flaky**（耗时 919.1s） |
