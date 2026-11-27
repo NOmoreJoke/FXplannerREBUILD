@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useRef } from "react";
 import { Loader2 } from "lucide-react";
 import type { PacePreference, PlanDetail } from "@/lib/api/contract";
 import {
@@ -21,7 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
-	usePlanAdjust,
+	usePlanAdjustDialog,
 	type UsePlanAdjustResult,
 } from "@/lib/hooks/use-plan-adjust";
 
@@ -65,42 +64,14 @@ export function PlanAdjustDialog({
 	onSuccess,
 	onUnknownOutcome,
 }: PlanAdjustDialogProps) {
-	const adjust = usePlanAdjust();
-	const targetInputRef = useRef<HTMLInputElement>(null);
-	const allocInputRef = useRef<HTMLInputElement>(null);
+	const { adjust, targetInputRef, allocInputRef } = usePlanAdjustDialog({
+		plan,
+		open,
+		onUnknownOutcome,
+	});
 
 	// 重新开启场景：COMPLETED 且 canReopen，仅允许改目标金额
 	const isReopen = plan.status === "COMPLETED" && plan.canReopen;
-
-	// 打开时从详情预填；关闭时复位（下一次打开重新预填）。
-	// 依赖只留 open：打开期间详情被外部刷新（如结果不明核对）时不得重置用户已填内容。
-	useEffect(() => {
-		if (open) {
-			adjust.startEditing(plan);
-		} else {
-			adjust.reset();
-		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [open]);
-
-	// 提交结果不明核对完成：把最新详情交给页面刷新，对话框保持打开展示提示
-	useEffect(() => {
-		if (adjust.unknownOutcome && adjust.reconciledDetail) {
-			onUnknownOutcome?.(adjust.reconciledDetail);
-		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [adjust.unknownOutcome, adjust.reconciledDetail]);
-
-	// 目标/分配低于已使用：焦点定位到对应字段（交互规格表）
-	const belowUsed = adjust.error?.kind === "belowUsed" ? adjust.error : null;
-	useEffect(() => {
-		if (!belowUsed) return;
-		const input =
-			belowUsed.field === "target"
-				? targetInputRef.current
-				: allocInputRef.current;
-		input?.focus();
-	}, [belowUsed]);
 
 	const handleSuccess = (detail: PlanDetail) => {
 		onOpenChange(false);
@@ -398,7 +369,7 @@ function AdjustPreviewView({
 	reopen,
 }: {
 	plan: PlanDetail;
-	preview: NonNullable<ReturnType<typeof usePlanAdjust>["preview"]>;
+	preview: NonNullable<UsePlanAdjustResult["preview"]>;
 	reopen: boolean;
 }) {
 	return (

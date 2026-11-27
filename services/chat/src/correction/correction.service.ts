@@ -153,13 +153,19 @@ export interface EffectiveUsage {
 	updatedAt: Date;
 }
 
-/** 目标加载产物（TRANSACTION / USAGE / INITIAL_HOLDING 三选一） */
-interface LoadedTarget {
-	type: "TRANSACTION" | "USAGE" | "INITIAL_HOLDING";
-	transaction?: TransactionModel;
-	usage?: UsageRecord;
-	holding?: InitialHolding;
+/** 内部不变量收窄辅助（替代 `!` 非空断言；缺失即明确抛出上下文错误） */
+function mustGet<T>(value: T | null | undefined, label: string): T {
+	if (value === null || value === undefined) {
+		throw new Error(`[correction] 内部不变量缺失：${label}`);
+	}
+	return value;
 }
+
+/** 目标加载产物（TRANSACTION / USAGE / INITIAL_HOLDING 三选一判别联合） */
+type LoadedTarget =
+	| { type: "TRANSACTION"; transaction: TransactionModel }
+	| { type: "USAGE"; usage: UsageRecord }
+	| { type: "INITIAL_HOLDING"; holding: InitialHolding };
 
 /** 单币种重放上下文（该币种全部账本事件来源行 + 计划分配现状） */
 interface CurrencyLedgerContext {
@@ -481,10 +487,10 @@ export class CorrectionService {
 			targetId,
 			target:
 				target.type === "TRANSACTION"
-					? this.serializeTransaction(this.toEffectiveTransaction(target.transaction!))
+					? this.serializeTransaction(this.toEffectiveTransaction(target.transaction))
 					: target.type === "USAGE"
-						? this.serializeUsage(this.toEffectiveUsage(target.usage!))
-						: this.serializeHolding(this.toEffectiveHolding(target.holding!)),
+						? this.serializeUsage(this.toEffectiveUsage(target.usage))
+						: this.serializeHolding(this.toEffectiveHolding(target.holding)),
 		};
 	}
 
@@ -697,19 +703,19 @@ export class CorrectionService {
 						ledgerStartedAt: preferences.ledgerStartedAt,
 					}
 				: null;
-		if (dto.targetType === "TRANSACTION") {
+		if (target.type === "TRANSACTION") {
 			return this.evaluateTransaction(
 				db,
 				dto,
-				target.transaction!,
+				target.transaction,
 				settings,
 				actor,
 			);
 		}
-		if (dto.targetType === "USAGE") {
-			return this.evaluateUsage(db, dto, target.usage!, settings, actor);
+		if (target.type === "USAGE") {
+			return this.evaluateUsage(db, dto, target.usage, settings, actor);
 		}
-		return this.evaluateHolding(db, dto, target.holding!, settings, mode, actor);
+		return this.evaluateHolding(db, dto, target.holding, settings, mode, actor);
 	}
 
 	/** 交易更正评估：变更解析 → 受影响币种重放（改币种时两币种各自全量）→ 校验 → 影响面 */
@@ -743,11 +749,11 @@ export class CorrectionService {
 			}),
 		);
 
+		const nextCurrency = changes.currencyCode;
 		const currencyChanged =
-			changes.currencyCode !== undefined &&
-			changes.currencyCode !== original.currencyCode;
+			nextCurrency !== undefined && nextCurrency !== original.currencyCode;
 		const affectedCurrencies = currencyChanged
-			? [original.currencyCode, changes.currencyCode!]
+			? [original.currencyCode, nextCurrency]
 			: [original.currencyCode];
 		const context = await this.loadLedgerContexts(
 			db,
@@ -775,7 +781,10 @@ export class CorrectionService {
 		const beforeReplays = new Map<string, ReplayResult>();
 		const afterReplays = new Map<string, ReplayResult>();
 		for (const currencyCode of affectedCurrencies) {
-			const ledger = context.get(currencyCode)!;
+			const ledger = mustGet(
+				context.get(currencyCode),
+				`context(${currencyCode})`,
+			);
 			beforeReplays.set(
 				currencyCode,
 				this.replayCurrency(
@@ -825,8 +834,14 @@ export class CorrectionService {
 			),
 			balances: affectedCurrencies.map((currencyCode) => ({
 				currencyCode,
-				before: beforeReplays.get(currencyCode)!.finalBalance,
-				after: afterReplays.get(currencyCode)!.finalBalance,
+				before: mustGet(
+					beforeReplays.get(currencyCode),
+					`beforeReplays(${currencyCode})`,
+				).finalBalance,
+				after: mustGet(
+					afterReplays.get(currencyCode),
+					`afterReplays(${currencyCode})`,
+				).finalBalance,
 			})),
 			costsBefore: collectUsageCosts(beforeReplays),
 			costsAfter: collectUsageCosts(afterReplays),
@@ -939,7 +954,10 @@ export class CorrectionService {
 			affectedCurrencies,
 		);
 		// 倒序补录时，按日期重放可能重新分配批次。原成本以账本已存的分摊为准。
-		const ledger = context.get(originalUsage.currencyCode)!;
+		const ledger = mustGet(
+			context.get(originalUsage.currencyCode),
+			`context(${originalUsage.currencyCode})`,
+		);
 		const postedCosts = await db.usageLotAllocation.groupBy({
 			by: ["usageId"],
 			where: { usageId: { in: ledger.usageRecords.map((usage) => usage.id) } },
@@ -980,7 +998,7 @@ export class CorrectionService {
 		}
 
 		// V2 按更正后的分配与使用额计算剩余分配，与落库增量一致。
-		context.get(originalUsage.currencyCode)!.planAllocations.set(usagePlan.id, {
+		ledger.planAllocations.set(usagePlan.id, {
 			planId: usagePlan.id,
 			amount: allocationAfter,
 			usedAmount: allocation.usedAmount.add(allocationDelta.usedAmountDelta),
@@ -1011,8 +1029,14 @@ export class CorrectionService {
 			diff: this.usageDiff(this.toEffectiveUsage(originalUsage), effective),
 			balances: affectedCurrencies.map((currencyCode) => ({
 				currencyCode,
-				before: beforeReplays.get(currencyCode)!.finalBalance,
-				after: afterReplays.get(currencyCode)!.finalBalance,
+				before: mustGet(
+					beforeReplays.get(currencyCode),
+					`beforeReplays(${currencyCode})`,
+				).finalBalance,
+				after: mustGet(
+					afterReplays.get(currencyCode),
+					`afterReplays(${currencyCode})`,
+				).finalBalance,
 			})),
 			costsBefore: new Map(postedCosts.map(({ usageId, _sum }) => [usageId, _sum.cost])),
 			costsAfter: collectUsageCosts(afterReplays),
@@ -1087,7 +1111,10 @@ export class CorrectionService {
 			if (nextCode === baseCurrency) {
 				throw new CorrectionNotAllowedException("初始持仓币种不能与本位币相同");
 			}
-			if (context.get(nextCode)!.initialHoldings.length > 0) {
+			if (
+				mustGet(context.get(nextCode), `context(${nextCode})`).initialHoldings
+					.length > 0
+			) {
 				throw new CorrectionInvalidParamsException(
 					"该币种已有初始记录；请在对应币种账户的初始记录中发起更正",
 				);
@@ -1158,7 +1185,10 @@ export class CorrectionService {
 		const beforeReplays = new Map<string, ReplayResult>();
 		const afterReplays = new Map<string, ReplayResult>();
 		for (const currencyCode of affectedCurrencies) {
-			const ledger = context.get(currencyCode)!;
+			const ledger = mustGet(
+				context.get(currencyCode),
+				`context(${currencyCode})`,
+			);
 			beforeReplays.set(
 				currencyCode,
 				this.replayCurrency(
@@ -1205,8 +1235,14 @@ export class CorrectionService {
 			diff: this.holdingDiff(this.toEffectiveHolding(original), effective),
 			balances: affectedCurrencies.map((currencyCode) => ({
 				currencyCode,
-				before: beforeReplays.get(currencyCode)!.finalBalance,
-				after: afterReplays.get(currencyCode)!.finalBalance,
+				before: mustGet(
+					beforeReplays.get(currencyCode),
+					`beforeReplays(${currencyCode})`,
+				).finalBalance,
+				after: mustGet(
+					afterReplays.get(currencyCode),
+					`afterReplays(${currencyCode})`,
+				).finalBalance,
 			})),
 			costsBefore: collectUsageCosts(beforeReplays),
 			costsAfter: collectUsageCosts(afterReplays),
@@ -1331,7 +1367,10 @@ export class CorrectionService {
 	): ReplayFailure[] {
 		const failures: ReplayFailure[] = [];
 		for (const currencyCode of currencies) {
-			const replay = replays.get(currencyCode)!;
+			const replay = mustGet(
+				replays.get(currencyCode),
+				`replays(${currencyCode})`,
+			);
 			// V3 优先收集（附日期+缺口明细，最具体）：终态负值常是同一缺口的两面，
 			// 方案 #18「初始改 0 且有历史使用」期望响应 V3 缺口明细
 			if (replay.violations.length > 0) {
@@ -1360,7 +1399,10 @@ export class CorrectionService {
 					],
 				});
 			}
-			const ledger = context.get(currencyCode)!;
+			const ledger = mustGet(
+				context.get(currencyCode),
+				`context(${currencyCode})`,
+			);
 			let allocatedRemaining = new Prisma.Decimal(0);
 			const planIdsWithRemaining: string[] = [];
 			for (const allocation of ledger.planAllocations.values()) {
@@ -1394,7 +1436,7 @@ export class CorrectionService {
 		tx: Prisma.TransactionClient,
 		evaluation: Evaluation,
 	): Promise<void> {
-		const effective = evaluation.afterTransaction!;
+		const effective = mustGet(evaluation.afterTransaction, "afterTransaction");
 		// @org-scope-exempt: post-lock 主键更新（applyInTransaction 已持组织账本锁并经 loadTarget+orgWhere 校验归属）
 		await tx.transaction.update({
 			where: { id: effective.id },
@@ -1418,9 +1460,12 @@ export class CorrectionService {
 		tx: Prisma.TransactionClient,
 		evaluation: Evaluation,
 	): Promise<UsageAllocationAudit | null> {
-		const effective = evaluation.afterUsage!;
-		const delta = evaluation.usageAllocationDelta!;
-		const usagePlan = evaluation.usagePlan!;
+		const effective = mustGet(evaluation.afterUsage, "afterUsage");
+		const delta = mustGet(
+			evaluation.usageAllocationDelta,
+			"usageAllocationDelta",
+		);
+		const usagePlan = mustGet(evaluation.usagePlan, "usagePlan");
 		// @org-scope-exempt: post-lock 主键更新（applyInTransaction 已持组织账本锁并经 loadTarget+orgWhere 校验归属）
 		await tx.usageRecord.update({
 			where: { id: effective.id },
@@ -1461,9 +1506,12 @@ export class CorrectionService {
 		evaluation: Evaluation,
 		allocation: UsageAllocationAudit,
 	): Promise<void> {
-		const before = evaluation.beforeUsage!;
-		const after = evaluation.afterUsage!;
-		const planTargetAmount = evaluation.usagePlan!.planTargetAmount;
+		const before = mustGet(evaluation.beforeUsage, "beforeUsage");
+		const after = mustGet(evaluation.afterUsage, "afterUsage");
+		const planTargetAmount = mustGet(
+			evaluation.usagePlan,
+			"usagePlan",
+		).planTargetAmount;
 		const link = {
 			reason: "USAGE_CORRECTION_SUPPLEMENT",
 			usageId: before.id,
@@ -1502,7 +1550,7 @@ export class CorrectionService {
 		tx: Prisma.TransactionClient,
 		evaluation: Evaluation,
 	): Promise<void> {
-		const effective = evaluation.afterHolding!;
+		const effective = mustGet(evaluation.afterHolding, "afterHolding");
 		// @org-scope-exempt: post-lock 主键更新（applyInTransaction 已持组织账本锁并经 loadTarget+orgWhere 校验归属）
 		await tx.initialHolding.update({
 			where: { id: effective.id },
@@ -1615,11 +1663,11 @@ export class CorrectionService {
 		const target =
 			beforeTarget.type === "TRANSACTION"
 				? this.serializeTransaction(
-						this.toEffectiveTransaction(beforeTarget.transaction!),
+						this.toEffectiveTransaction(beforeTarget.transaction),
 					)
 				: beforeTarget.type === "USAGE"
-					? this.serializeUsage(this.toEffectiveUsage(beforeTarget.usage!))
-					: this.serializeHolding(this.toEffectiveHolding(beforeTarget.holding!));
+					? this.serializeUsage(this.toEffectiveUsage(beforeTarget.usage))
+					: this.serializeHolding(this.toEffectiveHolding(beforeTarget.holding));
 		const correction = await this.prisma.correction.create({
 			data: {
 				organizationId: actor.organizationId,
@@ -1706,8 +1754,8 @@ export class CorrectionService {
 			}
 			const version =
 				target.type === "TRANSACTION"
-					? target.transaction!.version
-					: target.usage!.version;
+					? target.transaction.version
+					: target.usage.version;
 			if (version !== dto.baseVersion) {
 				throw new CorrectionTargetChangedException();
 			}
@@ -1721,7 +1769,7 @@ export class CorrectionService {
 		const expected = new Date(dto.baseUpdatedAt);
 		if (
 			Number.isNaN(expected.getTime()) ||
-			target.holding!.updatedAt.getTime() !== expected.getTime()
+			target.holding.updatedAt.getTime() !== expected.getTime()
 		) {
 			throw new CorrectionTargetChangedException();
 		}
@@ -1729,18 +1777,18 @@ export class CorrectionService {
 
 	/** 受影响币种解析（行锁与上下文加载范围；改币种 = 旧 + 新两个币种全量重放） */
 	private resolveAffectedCurrencies(
-		targetType: CorrectionTargetTypeValue,
+		_targetType: CorrectionTargetTypeValue,
 		target: LoadedTarget,
 		changes: CorrectionRequestDto["changes"],
 	): string[] {
-		if (targetType === "USAGE") {
+		if (target.type === "USAGE") {
 			// 使用更正无币种变更维度：恒为使用记录自身的币种
-			return [target.usage!.currencyCode];
+			return [target.usage.currencyCode];
 		}
 		const original =
-			targetType === "TRANSACTION"
-				? target.transaction!.currencyCode
-				: target.holding!.currencyCode;
+			target.type === "TRANSACTION"
+				? target.transaction.currencyCode
+				: target.holding.currencyCode;
 		const next =
 			typeof changes.currencyCode === "string"
 				? changes.currencyCode.trim().toUpperCase()

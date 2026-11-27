@@ -26,30 +26,31 @@ export function createPlanCostTool(
 		async (input) => {
 			const planId = input.planId?.trim();
 			const status = input.status;
-			if (status && !(VALID_STATUSES as readonly string[]).includes(status)) {
-				return formatAgentToolError(
-					"INVALID_REPORT_PARAMS",
-					"status 仅支持 ACTIVE、COMPLETED、CANCELLED。",
-				);
-			}
 			const currencyCode = input.currencyCode?.trim().toUpperCase();
-			if (currencyCode && !isSupportedCurrency(currencyCode)) {
-				return formatAgentToolError(
-					"INVALID_REPORT_PARAMS",
-					`不支持的币种 ${currencyCode}。`,
-				);
-			}
 
 			return guard({
 				toolName: PLAN_COST_TOOL_NAME,
 				scope: "organization",
 				requiredPermissions: ["agent.use", "agent.business_read", "report.read"],
 				auditDetail: {
-					...(planId ? { planId } : {}),
+					...(planId ? { planId: planId.slice(0, 64) } : {}),
 					...(status ? { status } : {}),
-					...(currencyCode ? { currencyCode } : {}),
+					...(currencyCode ? { currencyCode: currencyCode.slice(0, 16) } : {}),
 				},
 				run: async (freshActor) => {
+					if (status && !(VALID_STATUSES as readonly string[]).includes(status)) {
+						return formatAgentToolError(
+							"INVALID_REPORT_PARAMS",
+							"status 仅支持 ACTIVE、COMPLETED、CANCELLED。",
+						);
+					}
+					if (currencyCode && !isSupportedCurrency(currencyCode)) {
+						return formatAgentToolError(
+							"INVALID_REPORT_PARAMS",
+							`不支持的币种 ${currencyCode}。`,
+						);
+					}
+
 					if (planId) {
 						try {
 							const report = await reportService.detail(freshActor, planId);

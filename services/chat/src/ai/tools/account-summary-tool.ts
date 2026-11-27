@@ -22,21 +22,22 @@ export function createAccountSummaryTool(
 	return tool(
 		async (input) => {
 			const currencyCode = input.currencyCode?.trim().toUpperCase();
-			if (currencyCode !== undefined && currencyCode.length > 0) {
-				if (!isSupportedCurrency(currencyCode)) {
-					return formatAgentToolError(
-						"INVALID_ACCOUNT_CURRENCY",
-						`不支持的币种 ${currencyCode}，请向用户说明支持的币种范围。`,
-					);
-				}
-			}
 
 			return guard({
 				toolName: ACCOUNT_SUMMARY_TOOL_NAME,
 				scope: "organization",
 				requiredPermissions: ["agent.use", "agent.business_read", "account.read"],
-				auditDetail: currencyCode ? { currencyCode } : {},
+				auditDetail: currencyCode ? { currencyCode: currencyCode.slice(0, 16) } : {},
 				run: async (freshActor) => {
+					if (currencyCode !== undefined && currencyCode.length > 0) {
+						if (!isSupportedCurrency(currencyCode)) {
+							return formatAgentToolError(
+								"INVALID_ACCOUNT_CURRENCY",
+								`不支持的币种 ${currencyCode}，请向用户说明支持的币种范围。`,
+							);
+						}
+					}
+
 					if (currencyCode) {
 						try {
 							const detail = await accountService.detail(

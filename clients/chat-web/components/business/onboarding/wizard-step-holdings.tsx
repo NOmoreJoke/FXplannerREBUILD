@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import {
 	assertAmountLimit,
@@ -121,10 +121,23 @@ export function WizardStepHoldings({
 	const [internalRows, setInternalRows] = useState<HoldingRow[]>([
 		{ currencyCode: "", amount: "" },
 	]);
-	const rows = propsRows ?? internalRows;
+	const rawRows = propsRows ?? internalRows;
+	// 改本位币派生防护（UI-P1）：与新本位币冲突的行（币种 = 本位币）不再属于可选清单，
+	// 渲染与提交视图统一视为未选币种（金额保留），受控模式另在事件回调同步清空。
+	const rows = useMemo(
+		() =>
+			rawRows.map((row) =>
+				row.currencyCode === baseCurrency ? { ...row, currencyCode: "" } : row,
+			),
+		[rawRows, baseCurrency],
+	);
 	const setRows = (
 		next: HoldingRow[] | ((prev: HoldingRow[]) => HoldingRow[]),
 	) => {
+		const sanitize = (list: HoldingRow[]) =>
+			list.map((row) =>
+				row.currencyCode === baseCurrency ? { ...row, currencyCode: "" } : row,
+			);
 		if (propsRows !== undefined) {
 			onRowsChange?.(
 				typeof next === "function"
@@ -132,23 +145,14 @@ export function WizardStepHoldings({
 					: next,
 			);
 		} else {
-			setInternalRows(next);
+			setInternalRows((prev) => {
+				const sanitizedPrev = sanitize(prev);
+				return typeof next === "function"
+					? (next as (prev: HoldingRow[]) => HoldingRow[])(sanitizedPrev)
+					: next;
+			});
 		}
 	};
-
-	// 改本位币联动（UI-P1）：与新本位币冲突的行（币种 = 本位币）已不在可选清单，
-	// 保留会导致「下拉空白但核对区按 identity 照算且可提交」的矛盾态，清空行币种；
-	// 金额保留，重新选币种即可（金额不随币种变化失效的既有语义不变）
-	const prevBaseCurrencyRef = useRef(baseCurrency);
-	useEffect(() => {
-		if (prevBaseCurrencyRef.current === baseCurrency) return;
-		prevBaseCurrencyRef.current = baseCurrency;
-		setRows((prev) =>
-			prev.map((row) =>
-				row.currencyCode === baseCurrency ? { ...row, currencyCode: "" } : row,
-			),
-		);
-	}, [baseCurrency]);
 
 	/** 有效行：币种已选、金额已填且合法（参与取价与提交；空金额行仅提示不取价） */
 	const validRows = useMemo(

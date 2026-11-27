@@ -131,7 +131,12 @@ export function useChat() {
 	const orgId = useActiveOrgId();
 	const messagesQuery = useQuery({
 		queryKey: aiMessagesQueryKey(activeId ?? ""),
-		queryFn: () => chatApi.listMessages(activeId!),
+		queryFn: () => {
+			if (activeId === null) {
+				throw new Error("未选择会话，无法拉取消息");
+			}
+			return chatApi.listMessages(activeId);
+		},
 		enabled: activeId !== null && orgId !== null,
 		staleTime: 30_000,
 		retry: false,
@@ -275,17 +280,24 @@ export function useChat() {
 							break;
 						}
 						case "tool":
-							setToolActive(currentId!, event.state === "start", event.name);
+							if (currentId !== null) {
+								setToolActive(currentId, event.state === "start", event.name);
+							}
 							break;
 						case "draft":
-							setStreamDraft(currentId!, event.draft);
+							if (currentId !== null) {
+								setStreamDraft(currentId, event.draft);
+							}
 							break;
 						case "token":
-							appendStreamText(currentId!, event.delta);
+							if (currentId !== null) {
+								appendStreamText(currentId, event.delta);
+							}
 							break;
 						case "done": {
+							if (currentId === null) break;
 							// 助手消息已在服务端落库：乐观项剔除 + 追加，零延迟呈现
-							const key = messagesKey(currentId!);
+							const key = messagesKey(currentId);
 							const prev = queryClient.getQueryData<AiMessageListData>(key);
 							queryClient.setQueryData<AiMessageListData>(key, {
 								items: [
@@ -297,7 +309,9 @@ export function useChat() {
 						}
 						case "error":
 							// 用户消息保留可重发；错误固定文案（§4 错误信息纪律）
-							setError(currentId!, event.message);
+							if (currentId !== null) {
+								setError(currentId, event.message);
+							}
 							break;
 					}
 				}

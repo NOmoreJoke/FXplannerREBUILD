@@ -247,6 +247,13 @@ export class DataRequestViewDto {
 	@ApiProperty({ description: "是否可撤回（CLEAR PENDING / DELETION PENDING）", type: Boolean })
 	canCancel!: boolean;
 
+	@ApiProperty({
+		description:
+			"当前查看者是否为该请求的发起人本人（撤回与导出包下载仅限发起人本人操作；不暴露发起人 userId）",
+		type: Boolean,
+	})
+	isRequester!: boolean;
+
 	@ApiPropertyOptional({
 		description: "DELETION 撤回期截止（=dueAt），其余为 null",
 		type: String,

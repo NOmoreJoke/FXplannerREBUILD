@@ -193,7 +193,8 @@ export class AbcSource implements RateSource {
 		for (const target of targets) {
 			const entry = table.rows.get(target);
 			if (entry === undefined) continue; // 表内无此币种 → 币对不支持（由调用方标记）
-			const targetToCny = parseFixedPoint(entry.rate)!;
+			const targetToCny = parseFixedPoint(entry.rate);
+			if (targetToCny === undefined) continue;
 			quotes[target] = {
 				rate:
 					base === "CNY"
@@ -307,24 +308,24 @@ export class AbcSource implements RateSource {
 			// SellPrice 字段存在但为空串视为该行无卖出价；存在但不可解析/≤0 视为无效行
 			const hasSellPrice = row.SellPrice !== undefined && row.SellPrice !== "";
 			const sellPrice = hasSellPrice ? parsePrice(row.SellPrice) : undefined;
-			const invalid =
+			if (
 				observedAt === undefined ||
 				Number.isNaN(observedAt.getTime()) ||
 				observedAt.getTime() > deadline ||
 				rate === undefined ||
-				(hasSellPrice && sellPrice === undefined);
-			if (invalid) {
+				(hasSellPrice && sellPrice === undefined)
+			) {
 				invalidCodes.add(code);
 				continue;
 			}
 
 			rows.set(code, {
 				// 百外币单位 ÷ 100（定点运算，无浮点误差）
-				rate: divideFixed(rate!, { digits: 100n, scale: 0 }, 10),
+				rate: divideFixed(rate, { digits: 100n, scale: 0 }, 10),
 				...(sellPrice !== undefined
 					? { sellRate: divideFixed(sellPrice, { digits: 100n, scale: 0 }, 10) }
 					: {}),
-				observedAt: observedAt!,
+				observedAt,
 				raw: String(row.BenchMarkPrice),
 			});
 		}

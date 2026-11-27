@@ -189,29 +189,31 @@ export class RateProvider {
 			),
 		);
 
-		const merged: RateBatchQuote = {
-			source: MULTI_RATE_SOURCE,
-			quotes: {},
-			sources: {},
-			failures: {},
-		};
+		const sources: Record<string, string> = {};
+		const failures: Record<string, unknown> = {};
+		const quotes: RateBatchQuote["quotes"] = {};
 		for (const [index, outcome] of settled.entries()) {
 			const [source, groupTargets] = entries[index];
 			if (outcome.status === 'fulfilled') {
 				for (const target of groupTargets) {
 					const quote = outcome.value.quotes[target];
 					if (quote !== undefined) {
-						merged.quotes[target] = quote;
-						merged.sources![target] = source.source;
+						quotes[target] = quote;
+						sources[target] = source.source;
 					}
 					// 组内缺失目标：不进 failures → service 标记币对不支持（422）
 				}
 			} else {
 				for (const target of groupTargets) {
-					merged.failures![target] = outcome.reason;
+					failures[target] = outcome.reason;
 				}
 			}
 		}
-		return merged;
+		return {
+			source: MULTI_RATE_SOURCE,
+			quotes,
+			sources,
+			failures,
+		};
 	}
 }

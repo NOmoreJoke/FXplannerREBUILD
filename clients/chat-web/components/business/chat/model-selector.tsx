@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect } from "react";
 import { ChevronsUpDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,8 +9,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useModels } from "@/lib/hooks/use-models";
-import { useChatStore } from "@/lib/stores/chat-store";
+import { useModelSelection } from "@/lib/hooks/use-models";
 
 interface ModelSelectorProps {
 	/** 任意流进行中：禁用（单流交互约定，切换模型只对下一条消息生效） */
@@ -25,29 +23,10 @@ interface ModelSelectorProps {
  *
  * - null = 跟随服务端默认：触发器显示列表首项（后端按 costTier 升序返回，
  *   首项即默认模型 GPT-4.1 Mini），但不写入 key——服务端默认变更时自动跟随；
- * - 自愈逻辑：列表加载后发现 selectedModel 不在白名单中（白名单缩编后
- *   localStorage 残留）则 setSelectedModel(null) 回退默认。
+ * - 自愈逻辑已下沉至 useModelSelection() hook。
  */
 export function ModelSelector({ disabled = false }: ModelSelectorProps) {
-	const { data } = useModels();
-	const items = data?.items ?? [];
-	const selectedModel = useChatStore((s) => s.selectedModel);
-	const setSelectedModel = useChatStore((s) => s.setSelectedModel);
-
-	// 自愈：持久化的 key 已不在白名单（缩编/改名）→ 回退「跟随服务端默认」
-	useEffect(() => {
-		if (
-			data !== undefined &&
-			selectedModel !== null &&
-			!data.items.some((item) => item.key === selectedModel)
-		) {
-			setSelectedModel(null);
-		}
-	}, [data, selectedModel, setSelectedModel]);
-
-	// 触发器展示项：已选且仍在白名单 → 该项；否则列表首项（= 服务端默认）
-	const current =
-		items.find((item) => item.key === selectedModel) ?? items[0];
+	const { items, current, setSelectedModel } = useModelSelection();
 
 	return (
 		<DropdownMenu>

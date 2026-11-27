@@ -271,8 +271,18 @@ function OnboardingWizard() {
 							onChange={(patch) => {
 								if (patch.region !== undefined) setRegion(patch.region);
 								if (patch.locale !== undefined) setLocale(patch.locale);
-								if (patch.baseCurrency !== undefined)
-									setBaseCurrency(patch.baseCurrency);
+								if (patch.baseCurrency !== undefined) {
+									const nextBase = patch.baseCurrency;
+									setBaseCurrency(nextBase);
+									// 改本位币联动：清空与新本位币冲突的持仓行币种，金额保留
+									setWizardRows((prev) =>
+										prev.map((row) =>
+											row.currencyCode === nextBase
+												? { ...row, currencyCode: "" }
+												: row,
+										),
+									);
+								}
 							}}
 							onNext={() => setStep(2)}
 						/>

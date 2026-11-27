@@ -322,12 +322,13 @@ export function hasEffectiveChange(
 		return true;
 	if (
 		changes.principalAmount !== undefined &&
-		!changes.principalAmount.eq(original.principalAmount!)
+		(!original.principalAmount ||
+			!changes.principalAmount.eq(original.principalAmount))
 	)
 		return true;
 	if (
 		changes.quantity !== undefined &&
-		!changes.quantity.eq(original.quantity!)
+		(!original.quantity || !changes.quantity.eq(original.quantity))
 	)
 		return true;
 	if (changes.feeProvided) {
@@ -344,7 +345,10 @@ export function hasEffectiveChange(
 		changes.transactedAt.getTime() !== original.transactedAt?.getTime()
 	)
 		return true;
-	if (changes.amount !== undefined && !changes.amount.eq(original.amount!))
+	if (
+		changes.amount !== undefined &&
+		(!original.amount || !changes.amount.eq(original.amount))
+	)
 		return true;
 	if (
 		changes.usedAt !== undefined &&

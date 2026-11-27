@@ -21,29 +21,8 @@ export function createPlanExposureTool(
 	return tool(
 		async (input) => {
 			const status = input.status ?? "ACTIVE";
-			if (!(VALID_STATUSES as readonly string[]).includes(status)) {
-				return formatAgentToolError(
-					"INVALID_PLAN_PARAMS",
-					"status 仅支持 ACTIVE、COMPLETED、CANCELLED。",
-				);
-			}
 			const targetCurrency = input.targetCurrency?.trim().toUpperCase();
-			if (targetCurrency && !isSupportedCurrency(targetCurrency)) {
-				return formatAgentToolError(
-					"INVALID_PLAN_PARAMS",
-					`不支持的目标币种 ${targetCurrency}。`,
-				);
-			}
 			const withinDays = input.withinDays;
-			if (
-				withinDays !== undefined &&
-				(!Number.isInteger(withinDays) || withinDays < 1 || withinDays > 365)
-			) {
-				return formatAgentToolError(
-					"INVALID_PLAN_PARAMS",
-					"withinDays 必须是 1~365 的整数。",
-				);
-			}
 
 			return guard({
 				toolName: PLAN_EXPOSURE_TOOL_NAME,
@@ -51,10 +30,32 @@ export function createPlanExposureTool(
 				requiredPermissions: ["agent.use", "agent.business_read", "plan.read"],
 				auditDetail: {
 					status,
-					...(targetCurrency ? { targetCurrency } : {}),
+					...(targetCurrency ? { targetCurrency: targetCurrency.slice(0, 16) } : {}),
 					...(withinDays !== undefined ? { withinDays } : {}),
 				},
 				run: async (freshActor) => {
+					if (!(VALID_STATUSES as readonly string[]).includes(status)) {
+						return formatAgentToolError(
+							"INVALID_PLAN_PARAMS",
+							"status 仅支持 ACTIVE、COMPLETED、CANCELLED。",
+						);
+					}
+					if (targetCurrency && !isSupportedCurrency(targetCurrency)) {
+						return formatAgentToolError(
+							"INVALID_PLAN_PARAMS",
+							`不支持的目标币种 ${targetCurrency}。`,
+						);
+					}
+					if (
+						withinDays !== undefined &&
+						(!Number.isInteger(withinDays) || withinDays < 1 || withinDays > 365)
+					) {
+						return formatAgentToolError(
+							"INVALID_PLAN_PARAMS",
+							"withinDays 必须是 1~365 的整数。",
+						);
+					}
+
 					const list = await planService.list(freshActor, status);
 					const nowMs = Date.now();
 					const horizonMs =

@@ -156,6 +156,7 @@ const personalDeletion: DataRequestView = {
 	processedAt: null,
 	displayStatus: "WITHDRAWAL_PERIOD",
 	canCancel: true,
+	isRequester: true,
 	withdrawDeadline: "2026-09-24T00:00:00.000Z",
 	download: null,
 };
@@ -172,6 +173,7 @@ const organizationClear: DataRequestView = {
 	processedAt: null,
 	displayStatus: "SUBMITTED",
 	canCancel: true,
+	isRequester: true,
 	withdrawDeadline: null,
 	download: null,
 };

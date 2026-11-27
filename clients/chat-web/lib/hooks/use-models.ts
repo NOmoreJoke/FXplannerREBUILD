@@ -1,8 +1,10 @@
 "use client";
 
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { chatApi } from "@/lib/api/chat";
 import { queryKeys } from "@/lib/api/query-keys";
+import { useChatStore } from "@/lib/stores/chat-store";
 
 /**
  * 模型白名单消费层（ai-model-whitelist 方案 §5.2）：
@@ -23,4 +25,29 @@ export function useModels() {
 		staleTime: MODELS_STALE_TIME_MS,
 		retry: false, // 401 由 apiClient 统一处理；失败走错误分支
 	});
+}
+
+/**
+ * 模型选择器状态封装（含白名单自愈：持久化的 key 不再合法时回退「跟随服务端默认」）。
+ */
+export function useModelSelection() {
+	const { data } = useModels();
+	const items = data?.items ?? [];
+	const selectedModel = useChatStore((s) => s.selectedModel);
+	const setSelectedModel = useChatStore((s) => s.setSelectedModel);
+
+	useEffect(() => {
+		if (
+			data !== undefined &&
+			selectedModel !== null &&
+			!data.items.some((item) => item.key === selectedModel)
+		) {
+			setSelectedModel(null);
+		}
+	}, [data, selectedModel, setSelectedModel]);
+
+	const current =
+		items.find((item) => item.key === selectedModel) ?? items[0];
+
+	return { items, current, setSelectedModel };
 }

@@ -141,7 +141,14 @@ const LOCK_ROW_SELECT = {
 /** 请求行 → 视图所需的字段 */
 type RequestViewSource = Pick<
 	ActiveRequestRow,
-	"id" | "scope" | "organizationId" | "type" | "status" | "requestedAt" | "dueAt"
+	| "id"
+	| "requesterUserId"
+	| "scope"
+	| "organizationId"
+	| "type"
+	| "status"
+	| "requestedAt"
+	| "dueAt"
 > & { processedAt: Date | null; downloadExpiresAt: Date | null };
 
 function totalsEqual(
@@ -233,12 +240,13 @@ export class DataRequestService {
 			},
 			orderBy: { requestedAt: "desc" },
 		});
-		return request ? this.toView(request) : null;
+		return request ? this.toView(request, userId) : null;
 	}
 
 	/** 组织域当前请求（组织进度页）：当前组织最近 30 天内非 CANCELLED 的最新请求 */
 	async getOrganizationCurrentView(
 		organizationId: string,
+		viewerUserId: string,
 	): Promise<DataRequestViewDto | null> {
 		const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 		const request = await this.prisma.dataRequest.findFirst({
@@ -250,7 +258,7 @@ export class DataRequestService {
 			},
 			orderBy: { requestedAt: "desc" },
 		});
-		return request ? this.toView(request) : null;
+		return request ? this.toView(request, viewerUserId) : null;
 	}
 
 	/**
@@ -406,17 +414,18 @@ export class DataRequestService {
 				orderBy: { requestedAt: "desc" },
 			});
 			const resolution = resolveCreationConflict(dto.type, existing, now);
-			if (resolution.action === "block") {
-				throw new DataRequestConflictException(this.toView(existing!));
+			if (resolution.action === "block" && existing) {
+				throw new DataRequestConflictException(this.toView(existing, user.id));
 			}
 			// 幂等返回仅限同域同组织：个人导出不能顶替组织导出（反之亦然）。
 			// 个人域在此即可判定；组织域须等目标组织解析后再比对（见步骤 3）
 			if (
 				resolution.action === "return-existing" &&
+				existing &&
 				scope === "PERSONAL" &&
-				existing!.scope === "PERSONAL"
+				existing.scope === "PERSONAL"
 			) {
-				return this.toView(existing!);
+				return this.toView(existing, user.id);
 			}
 
 			// 2. 验证凭证校验（用途匹配 / 已消费 / 10 分钟内 / 本人邮箱 / 一次性）
@@ -466,7 +475,7 @@ export class DataRequestService {
 				});
 				if (organizationActive) {
 					throw new DataRequestConflictException(
-						this.toView(organizationActive),
+						this.toView(organizationActive, user.id),
 					);
 				}
 				// 组织数据请求以组织已建账为前提（本位币决定导出口径与清空后的记账起点）——
@@ -493,7 +502,7 @@ export class DataRequestService {
 						orderBy: { requestedAt: "desc" },
 					});
 					if (downloadable) {
-						return this.toView(downloadable);
+						return this.toView(downloadable, user.id);
 					}
 				}
 			} else if (dto.type === "DELETION") {
@@ -506,9 +515,12 @@ export class DataRequestService {
 
 			// 4. CLEAR：确认页数量快照与服务端重算一致（记录变化 → 重新确认）
 			if (dto.type === "CLEAR") {
+				if (!targetOrganizationId) {
+					throw new OrganizationNotFoundException();
+				}
 				const totals = await this.computeTotals(
 					tx,
-					await organizationLedgerScope(tx, targetOrganizationId!),
+					await organizationLedgerScope(tx, targetOrganizationId),
 				);
 				if (!totalsEqual(totals, dto.confirmedTotals)) {
 					throw new ImpactChangedException();
@@ -562,7 +574,7 @@ export class DataRequestService {
 			this.logger.log(
 				`[data-request] created scope=${scope} type=${dto.type} id=${created.id} userId=${user.id} organizationId=${created.organizationId ?? "-"} dueAt=${created.dueAt.toISOString()}`,
 			);
-			return this.toView(created);
+			return this.toView(created, user.id);
 		});
 	}
 
@@ -716,7 +728,7 @@ export class DataRequestService {
 		this.logger.log(
 			`[data-request] cancelled scope=${cancelled.scope} type=${cancelled.type} id=${cancelled.id} userId=${user.id}`,
 		);
-		return this.toView(cancelled);
+		return this.toView(cancelled, user.id);
 	}
 
 	// ─────────────────────────────────────────────────────────
@@ -1337,14 +1349,19 @@ export class DataRequestService {
 		challengeId: string,
 		now: Date,
 	): Promise<DataRequestViewDto> {
-		const zip =
-			scope === "ORGANIZATION"
-				? await buildOrganizationExportArchive(
-						await this.collectOrganizationExportData(tx, organizationId!),
-					)
-				: await buildPersonalExportArchive(
-						await this.collectPersonalExportData(tx, userId),
-					);
+		let zip: Buffer;
+		if (scope === "ORGANIZATION") {
+			if (!organizationId) {
+				throw new OrganizationNotFoundException();
+			}
+			zip = await buildOrganizationExportArchive(
+				await this.collectOrganizationExportData(tx, organizationId),
+			);
+		} else {
+			zip = await buildPersonalExportArchive(
+				await this.collectPersonalExportData(tx, userId),
+			);
+		}
 
 		// 先落盘再建行：行创建失败回滚并清理文件；文件名用随机 UUID（不依赖行 id）
 		await mkdir(this.exportDir, { recursive: true });
@@ -1380,7 +1397,7 @@ export class DataRequestService {
 		this.logger.log(
 			`[data-request] EXPORT COMPLETED scope=${scope} id=${created.id} userId=${userId} bytes=${zip.length}`,
 		);
-		return this.toView(created);
+		return this.toView(created, userId);
 	}
 
 	/**
@@ -1641,7 +1658,10 @@ export class DataRequestService {
 	}
 
 	/** 请求行 → 展示视图（方案 §7.3：映射/撤回可行性/下载入口由纯函数判定） */
-	private toView(request: RequestViewSource): DataRequestViewDto {
+	private toView(
+		request: RequestViewSource,
+		viewerUserId: string,
+	): DataRequestViewDto {
 		const cancelResolution = resolveCancel(request);
 		return {
 			id: request.id,
@@ -1654,6 +1674,9 @@ export class DataRequestService {
 			processedAt: request.processedAt,
 			displayStatus: toDisplayStatus(request.type, request.status),
 			canCancel: cancelResolution !== "not-allowed",
+			isRequester:
+				request.requesterUserId !== null &&
+				request.requesterUserId === viewerUserId,
 			withdrawDeadline:
 				request.type === "DELETION" && request.status === "PENDING"
 					? request.dueAt

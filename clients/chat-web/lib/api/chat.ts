@@ -151,7 +151,10 @@ export async function streamMessage(
 	params: StreamMessageParams,
 ): Promise<AsyncGenerator<AiStreamEvent, void, unknown>> {
 	const response = await openStreamResponse(params);
-	return parseSseStream(response.body!);
+	if (!response.body) {
+		throw new ApiError("流式响应体为空", response.status);
+	}
+	return parseSseStream(response.body);
 }
 
 /** 发请求 + 响应校验（401 清凭证、组织上下文失效、403 锁定跳转、非 2xx/非 event-stream → ApiError） */
@@ -328,7 +331,8 @@ export function parseSseStream(
 					buffer = buffer.slice(boundary).replace(/^\r?\n/, "");
 					handleLine(line);
 					while (queue.length > 0) {
-						yield queue.shift()!;
+						const event = queue.shift();
+						if (event) yield event;
 					}
 					boundary = buffer.search(/\r?\n/);
 				}
@@ -342,7 +346,8 @@ export function parseSseStream(
 			eventName = "";
 			dataLines = [];
 			while (queue.length > 0) {
-				yield queue.shift()!;
+				const event = queue.shift();
+				if (event) yield event;
 			}
 		} finally {
 			// 中断/提前退出：释放底层流（防连接泄漏；abort 时 cancel 以 AbortError 拒绝由调用方感知）

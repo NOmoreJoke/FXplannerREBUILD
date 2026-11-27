@@ -579,11 +579,11 @@ export class OnboardingService {
 			const rate = roundRateTo8(adopted);
 			const amount = new Prisma.Decimal(item.amount);
 			// 成本以本位币计价：按本位币精度舍一次（JPY/KRW 本位币取整），非持仓币种精度
-			const baseCurrencyInfo = getCurrency(baseCurrency);
+			const baseDecimalPlaces = getCurrency(baseCurrency)?.decimalPlaces ?? 2;
 			let cost: Prisma.Decimal;
 			try {
 				// 中间全精度 × 一次舍入；正数舍 0 / 非法值由 money 包拦截
-				cost = finalAmountOf(amount, rate, baseCurrencyInfo!.decimalPlaces);
+				cost = finalAmountOf(amount, rate, baseDecimalPlaces);
 				assertAmountLimit(cost);
 			} catch (error) {
 				this.warnFailure(actor.userId, "LIMIT", `币种 ${code} 折算成本被拒`);

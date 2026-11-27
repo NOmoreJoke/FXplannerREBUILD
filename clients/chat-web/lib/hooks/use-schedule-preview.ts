@@ -116,15 +116,31 @@ export function useSchedulePreview(
 	input: SchedulePreviewInput,
 ): SchedulePreviewState {
 	const [state, setState] = useState<SchedulePreviewState>(EMPTY_STATE);
+	const {
+		targetCurrency,
+		targetAmount,
+		expectUseDate,
+		prepLeadDays,
+		pacePreference,
+		allocatedAmount,
+	} = input;
 
 	useEffect(() => {
-		if (!isPreviewReady(input)) {
+		const normalizedInput: SchedulePreviewInput = {
+			targetCurrency,
+			targetAmount,
+			expectUseDate,
+			prepLeadDays,
+			pacePreference,
+			allocatedAmount,
+		};
+		if (!isPreviewReady(normalizedInput)) {
 			setState(EMPTY_STATE);
 			return;
 		}
 
 		// 计入已有外币已覆盖目标：不发请求，直接给提示态（创建将同因被后端拒）
-		const covered = coveredByAllocated(input);
+		const covered = coveredByAllocated(normalizedInput);
 		if (covered !== null) {
 			setState({ ...EMPTY_STATE, previewError: covered });
 			return;
@@ -137,14 +153,14 @@ export function useSchedulePreview(
 		const timer = setTimeout(() => {
 			plansApi
 				.preview({
-					targetCurrency: input.targetCurrency.trim(),
-					targetAmount: input.targetAmount.trim(),
+					targetCurrency: targetCurrency.trim(),
+					targetAmount: targetAmount.trim(),
 					expectUseDate: new Date(
-						`${input.expectUseDate.trim()}T00:00:00.000Z`,
+						`${expectUseDate.trim()}T00:00:00.000Z`,
 					).toISOString(),
-					prepLeadDays: Number(input.prepLeadDays.trim()),
-					pacePreference: input.pacePreference,
-					allocatedAmount: input.allocatedAmount.trim() || "0",
+					prepLeadDays: Number(prepLeadDays.trim()),
+					pacePreference,
+					allocatedAmount: allocatedAmount.trim() || "0",
 				})
 				.then((resp) => {
 					if (cancelled) return;
@@ -168,12 +184,12 @@ export function useSchedulePreview(
 			clearTimeout(timer);
 		};
 	}, [
-		input.targetCurrency,
-		input.targetAmount,
-		input.expectUseDate,
-		input.prepLeadDays,
-		input.pacePreference,
-		input.allocatedAmount,
+		targetCurrency,
+		targetAmount,
+		expectUseDate,
+		prepLeadDays,
+		pacePreference,
+		allocatedAmount,
 	]);
 
 	return state;

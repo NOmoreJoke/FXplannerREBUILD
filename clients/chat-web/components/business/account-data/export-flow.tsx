@@ -215,9 +215,10 @@ export function ExportDownloadButton({ view }: { view: DataRequestView }) {
 				: dataRequestsApi.downloadPersonal(view.id),
 		onError: (error: Error) => toast.error(error.message || "下载失败"),
 	});
-	// 组织导出的下载需 data.export：降权为 Operator / Viewer 后不再出现越权的下载按钮
-	// （后端对下载实时复验，这里只防误触）；个人导出是本人的数据，始终可下载
-	const permitted = view.scope === "PERSONAL" || can("data.export");
+	// 组织导出的下载需 data.export 且为发起人本人：降权为 Operator / Viewer 或非发起人
+	// 不再出现必然 403/404 的下载按钮（后端对下载实时复验）；个人导出始终可下载
+	const permitted =
+		view.scope === "PERSONAL" || (can("data.export") && view.isRequester);
 	if (!view.download || !permitted) return null;
 	return (
 		<Button
