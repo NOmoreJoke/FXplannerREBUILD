@@ -573,12 +573,15 @@ test.describe("【ToB R2 可控组织 Agent】隔离 / 角色授权 / 草稿人�
 			"OPERATOR",
 		);
 		const orgName = (await listOrganizations(owner.accessToken))[0]!.name;
+		const memberOrgName = (await listOrganizations(member.accessToken))[0]!.name;
 
 		await openChat(page, member.accessToken);
 		await pickOrganization(page, orgName);
 		await expect(page.getByTestId("chat-page")).toBeVisible();
+		await expect(page.getByTestId("chat-current-org")).toContainText(orgName);
 
-		// 移除成员后再次提问 → 前端接口收到 404/403 拦截，不得成功返回新回复
+		// 移除成员后再次提问 → 后端实时拦截并返回 404 ORGANIZATION_NOT_FOUND（不得是限流 429），
+		// 前端立即驱逐被移除组织并切回成员仅存的个人默认组织，不落任何助手回复
 		await api(`/api/organizations/current/members/${membershipId}`, {
 			method: "DELETE",
 			token: owner.accessToken,
@@ -586,10 +589,25 @@ test.describe("【ToB R2 可控组织 Agent】隔离 / 角色授权 / 草稿人�
 		});
 
 		await page.getByTestId("chat-input").fill("[R2-E2E] 查询当前账户持仓");
-		await page.getByTestId("chat-send").click();
-		await expect(page.getByTestId("chat-error")).toBeVisible({
-			timeout: 15_000,
+		const [sendResp] = await Promise.all([
+			page.waitForResponse(
+				(res) =>
+					new URL(res.url()).pathname === "/api/ai/conversations" &&
+					res.request().method() === "POST",
+			),
+			page.getByTestId("chat-send").click(),
+		]);
+		expect(sendResp.status()).toBe(404);
+		expect(await sendResp.json()).toMatchObject({
+			code: "ORGANIZATION_NOT_FOUND",
 		});
+
+		await expect(
+			page.getByTestId("organization-switcher-single"),
+		).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByTestId("chat-current-org")).toContainText(
+			memberOrgName,
+		);
 		await expect(page.getByTestId("message-assistant")).toHaveCount(0);
 		await saveScreenshot(page, "16-agent-organization", "GWT-13-removed-blocked");
 

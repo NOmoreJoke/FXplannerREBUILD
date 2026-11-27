@@ -59,11 +59,10 @@ import {
 	SendMessageDto,
 } from "./dto/ai.dto";
 import { OrganizationLockGuard } from "../authorization/guards/organization-lock.guard";
+import { env } from "../config/env";
 
 /** 发消息端点的 IP 级限流：路由级 @Throttle 覆盖全局配置（默认 5/min，E2E 经 AI_SEND_THROTTLE_LIMIT 放大） */
-const AI_SEND_THROTTLE_LIMIT = Number(
-	process.env.AI_SEND_THROTTLE_LIMIT ?? 5,
-);
+const AI_SEND_THROTTLE_LIMIT = env.AI_SEND_THROTTLE_LIMIT ?? 5;
 const AI_SEND_THROTTLE = {
 	default: { limit: AI_SEND_THROTTLE_LIMIT, ttl: 60_000 },
 } as const;

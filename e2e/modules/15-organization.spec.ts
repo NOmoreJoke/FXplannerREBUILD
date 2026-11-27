@@ -1130,7 +1130,7 @@ test.describe("【GWT-6..14】邀请边界 / 五角色权限 / 跨组织隔离 /
 		await expect(createBtn).toBeEnabled();
 		await createBtn.click();
 		await expect(page).toHaveURL(new RegExp(`${escapeRegExp(BASE_URL)}/home$`));
-		await expect(page.getByText(opPlanName)).toBeVisible();
+		await expect(page.getByRole("heading", { name: opPlanName })).toBeVisible();
 
 		await page.goto(`${BASE_URL}/transactions/new`);
 		await expect(
