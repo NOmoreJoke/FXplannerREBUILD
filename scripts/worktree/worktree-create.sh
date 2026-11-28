@@ -45,7 +45,7 @@ TARGET_DIR="$WORKTREE_BASE_DIR/$WORKTREE_NAME"
 get_ports_from_env() {
   local env_file="$1"
   if [[ -f "$env_file" ]]; then
-    grep -E '^(WEB_PORT|API_PORT)=' "$env_file" || true
+    grep -E '^(WEB_PORT|API_PORT|DEV_LOG_PORT)=' "$env_file" || true
   fi
 }
 
@@ -53,7 +53,8 @@ read_main_ports() {
   local main_env="$REPO_ROOT/.env.local"
   local web="$(get_ports_from_env "$main_env" | grep '^WEB_PORT=' | cut -d= -f2 | tail -n1)"
   local api="$(get_ports_from_env "$main_env" | grep '^API_PORT=' | cut -d= -f2 | tail -n1)"
-  echo "${web:-3001} ${api:-4001}"
+  local dev_log="$(get_ports_from_env "$main_env" | grep '^DEV_LOG_PORT=' | cut -d= -f2 | tail -n1)"
+  echo "${web:-3001} ${api:-4001} ${dev_log:-8787}"
 }
 
 # 检查端口是否实际被占用（lsof 返回非空表示占用）
@@ -62,14 +63,15 @@ port_in_use() {
   lsof -ti :"$port" >/dev/null 2>&1
 }
 
-# 收集所有 worktree 的 (web, api) 端口对
-# 输出格式：每行 "web api"
+# 收集所有 worktree 的 (web, api, dev_log) 端口三元组
+# 输出格式：每行 "web api dev_log"
 collect_used_ports() {
   local main_web="$1"
   local main_api="$2"
+  local main_dev_log="$3"
 
   # 主目录占用
-  echo "$main_web $main_api"
+  echo "$main_web $main_api $main_dev_log"
 
   # 所有 worktree 目录
   git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print $2}' | while read -r wt_dir; do
@@ -81,8 +83,9 @@ collect_used_ports() {
     if [[ -f "$wt_env" ]]; then
       local web="$(get_ports_from_env "$wt_env" | grep '^WEB_PORT=' | cut -d= -f2 | tail -n1)"
       local api="$(get_ports_from_env "$wt_env" | grep '^API_PORT=' | cut -d= -f2 | tail -n1)"
+      local dev_log="$(get_ports_from_env "$wt_env" | grep '^DEV_LOG_PORT=' | cut -d= -f2 | tail -n1)"
       if [[ -n "$web" && -n "$api" ]]; then
-        echo "$web $api"
+        echo "${web:-} ${api:-} ${dev_log:-8787}"
       fi
     fi
   done
@@ -91,29 +94,34 @@ collect_used_ports() {
 find_next_ports() {
   local main_web="$1"
   local main_api="$2"
+  local main_dev_log="$3"
 
   local web_start="$main_web"
   local api_start="$main_api"
+  local dev_log_start="$main_dev_log"
 
   # 收集已用端口到关联数组/集合
   local used_web=()
   local used_api=()
+  local used_dev_log=()
 
-  while read -r web api; do
+  while read -r web api dev_log; do
     [[ -z "$web" ]] && continue
     used_web+=("$web")
     used_api+=("$api")
-  done < <(collect_used_ports "$main_web" "$main_api")
+    used_dev_log+=("${dev_log:-8787}")
+  done < <(collect_used_ports "$main_web" "$main_api" "$main_dev_log")
 
   local candidate_web=$((web_start + 1))
   local candidate_api=$((api_start + 1))
+  local candidate_dev_log=$((dev_log_start + 1))
 
   while true; do
     local conflict=0
 
     # 1. 检查是否已被其他 worktree/主目录声明
     for i in "${!used_web[@]}"; do
-      if [[ "${used_web[$i]}" == "$candidate_web" || "${used_api[$i]}" == "$candidate_api" ]]; then
+      if [[ "${used_web[$i]}" == "$candidate_web" || "${used_api[$i]}" == "$candidate_api" || "${used_dev_log[$i]}" == "$candidate_dev_log" ]]; then
         conflict=1
         break
       fi
@@ -127,16 +135,20 @@ find_next_ports() {
       elif port_in_use "$candidate_api"; then
         echo "⚠️  API_PORT=$candidate_api 已被其他进程占用，跳过..." >&2
         conflict=1
+      elif port_in_use "$candidate_dev_log"; then
+        echo "⚠️  DEV_LOG_PORT=$candidate_dev_log 已被其他进程占用，跳过..." >&2
+        conflict=1
       fi
     fi
 
     if [[ "$conflict" -eq 0 ]]; then
-      echo "$candidate_web $candidate_api"
+      echo "$candidate_web $candidate_api $candidate_dev_log"
       return
     fi
 
     candidate_web=$((candidate_web + 1))
     candidate_api=$((candidate_api + 1))
+    candidate_dev_log=$((candidate_dev_log + 1))
   done
 }
 
@@ -147,6 +159,7 @@ generate_worktree_env() {
   local target="$1"
   local web_port="$2"
   local api_port="$3"
+  local dev_log_port="$4"
 
   local env_file="$target/.env.local"
   local main_env="$REPO_ROOT/.env.local"
@@ -172,26 +185,30 @@ generate_worktree_env() {
 # ---- 端口 ----
 API_PORT=$api_port
 WEB_PORT=$web_port
+DEV_LOG_PORT=$dev_log_port
 
 # ---- 跨服务通信 ----
 CORS_ORIGIN=http://localhost:$web_port
 NEXT_PUBLIC_API_BASE_URL=http://localhost:$api_port/api
 NEXT_PUBLIC_API_URL=http://localhost:$api_port/api
+NEXT_PUBLIC_DEV_LOG_URL=http://localhost:$dev_log_port/frontend-log
 EOF
-    echo "📝 已生成最小 worktree 专属 .env.local：WEB_PORT=$web_port, API_PORT=$api_port"
+    echo "📝 已生成最小 worktree 专属 .env.local：WEB_PORT=$web_port, API_PORT=$api_port, DEV_LOG_PORT=$dev_log_port"
     return
   fi
 
   # 复制源文件，并只覆盖端口相关字段
   sed -e "s/^WEB_PORT=.*/WEB_PORT=$web_port/" \
       -e "s/^API_PORT=.*/API_PORT=$api_port/" \
+      -e "s/^DEV_LOG_PORT=.*/DEV_LOG_PORT=$dev_log_port/" \
       -e "s|^CORS_ORIGIN=.*|CORS_ORIGIN=http://localhost:$web_port|" \
       -e "s|^NEXT_PUBLIC_API_BASE_URL=.*|NEXT_PUBLIC_API_BASE_URL=http://localhost:$api_port/api|" \
       -e "s|^NEXT_PUBLIC_API_URL=.*|NEXT_PUBLIC_API_URL=http://localhost:$api_port/api|" \
+      -e "s|^NEXT_PUBLIC_DEV_LOG_URL=.*|NEXT_PUBLIC_DEV_LOG_URL=http://localhost:$dev_log_port/frontend-log|" \
       "$source_env" > "$env_file"
 
   # 添加/更新 worktree 标识注释（放在文件顶部）
-  local marker="# === Worktree: $(basename "$target") | WEB_PORT=$web_port | API_PORT=$api_port ==="
+  local marker="# === Worktree: $(basename "$target") | WEB_PORT=$web_port | API_PORT=$api_port | DEV_LOG_PORT=$dev_log_port ==="
   if grep -q "^# === Worktree:" "$env_file"; then
     sed -i '' "s|^# === Worktree:.*|$marker|" "$env_file"
   else
@@ -205,21 +222,34 @@ EOF
     mv "$tmp" "$env_file"
   fi
 
-  echo "📝 已生成 worktree 专属 .env.local：WEB_PORT=$web_port, API_PORT=$api_port"
+  echo "📝 已生成 worktree 专属 .env.local：WEB_PORT=$web_port, API_PORT=$api_port, DEV_LOG_PORT=$dev_log_port"
+}
+
+# 复制子包的 .env.local（不软链接，保留各自隔离）
+copy_subpackage_env_files() {
+  local target="$1"
+  local rel_env
+  for rel_env in "services/chat/.env.local" "clients/chat-web/.env.local"; do
+    if [[ -f "$REPO_ROOT/$rel_env" && ! -e "$target/$rel_env" ]]; then
+      mkdir -p "$(dirname "$target/$rel_env")"
+      cp "$REPO_ROOT/$rel_env" "$target/$rel_env"
+      echo "📋 已复制子包环境文件: $rel_env"
+    fi
+  done
 }
 
 # ---------- 计算端口 ----------
-read -r MAIN_WEB MAIN_API < <(read_main_ports)
-echo "🔌 主项目端口: WEB_PORT=$MAIN_WEB, API_PORT=$MAIN_API"
+read -r MAIN_WEB MAIN_API MAIN_DEV_LOG < <(read_main_ports)
+echo "🔌 主项目端口: WEB_PORT=$MAIN_WEB, API_PORT=$MAIN_API, DEV_LOG_PORT=$MAIN_DEV_LOG"
 
-read -r NEXT_WEB NEXT_API < <(find_next_ports "$MAIN_WEB" "$MAIN_API")
+read -r NEXT_WEB NEXT_API NEXT_DEV_LOG < <(find_next_ports "$MAIN_WEB" "$MAIN_API" "$MAIN_DEV_LOG")
 
 # ---------- 创建 worktree ----------
 echo "=================================================="
 echo "  📦 分支名称: $BRANCH"
 echo "  📁 目标路径: $TARGET_DIR"
 echo "  🔗 软链接目录: $SYMLINK_DIRS"
-echo "  🔌 分配端口: WEB_PORT=$NEXT_WEB, API_PORT=$NEXT_API"
+echo "  🔌 分配端口: WEB_PORT=$NEXT_WEB, API_PORT=$NEXT_API, DEV_LOG_PORT=$NEXT_DEV_LOG"
 echo "=================================================="
 
 if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
@@ -231,7 +261,8 @@ else
 fi
 
 # ---------- 生成独立环境文件 ----------
-generate_worktree_env "$TARGET_DIR" "$NEXT_WEB" "$NEXT_API"
+generate_worktree_env "$TARGET_DIR" "$NEXT_WEB" "$NEXT_API" "$NEXT_DEV_LOG"
+copy_subpackage_env_files "$TARGET_DIR"
 
 # ---------- 建立软链接 ----------
 cd "$TARGET_DIR"
@@ -271,6 +302,12 @@ else
   echo "ℹ️  未检测到 package.json，跳过依赖安装。"
 fi
 
+# ---------- 生成 Prisma Client（worktree 独立 node_modules 不含生成的类型） ----------
+if [[ "$INSTALL_CMD" != "true" && -f "services/chat/prisma/schema.prisma" ]] && command -v bun >/dev/null 2>&1 && [[ -d "node_modules" ]]; then
+  echo "🔧 生成 Prisma Client..."
+  bun run --cwd services/chat prisma:generate || echo "⚠️  Prisma Client 生成失败，请手动执行 bun run --cwd services/chat prisma:generate"
+fi
+
 echo ""
 echo "=================================================="
 echo "  🎉 Worktree 创建完成！"
@@ -278,4 +315,5 @@ echo "  👉 cd $TARGET_DIR"
 echo "  🚀 启动命令: bun run dev"
 echo "  🌐 前端地址: http://localhost:$NEXT_WEB"
 echo "  🔌 后端地址: http://localhost:$NEXT_API"
+echo "  🪵 日志服务: http://127.0.0.1:$NEXT_DEV_LOG/frontend-log"
 echo "=================================================="
