@@ -4,6 +4,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { PrismaClient, type Prisma, type PrismaPromise } from "@prisma/client";
 import { resolveDefaultOrganizationId } from "../src/authorization/default-organization";
+import {
+	executeOrganizationRequest,
+	executePersonalDeletion,
+} from "../src/data-request/data-request-cleanup";
 import { deleteOrganizationsCascadeLedger } from "./helpers/test-app";
 
 const prisma = new PrismaClient();
@@ -1461,6 +1465,616 @@ describe("数据库基础设施测试", () => {
 			} finally {
 				await prisma.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${tempSchema}" CASCADE`);
 			}
+		});
+	});
+
+	describe("Stage 1 W40: LedgerRevision 触发器与 AgentProposal 约束", () => {
+		const w40UserIds: string[] = [];
+		const w40OrgIds: string[] = [];
+		const auditStub = {
+			recordInTx: async () => {},
+		};
+
+		afterAll(async () => {
+			if (w40OrgIds.length > 0) {
+				await prisma.$transaction(async (tx) => {
+					await deleteOrganizationsCascadeLedger(tx, w40OrgIds);
+					await tx.organization.deleteMany({
+						where: { id: { in: w40OrgIds } },
+					});
+				});
+			}
+			if (w40UserIds.length > 0) {
+				await prisma.dataRequest.deleteMany({
+					where: { requesterUserId: { in: w40UserIds } },
+				});
+				await prisma.user.deleteMany({ where: { id: { in: w40UserIds } } });
+			}
+		});
+
+		async function createW40User(label: string): Promise<string> {
+			const user = await prisma.user.create({
+				data: {
+					email: `w40-${label}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`,
+					passwordHash: "test-hash",
+					name: label,
+				},
+				select: { id: true },
+			});
+			w40UserIds.push(user.id);
+			return user.id;
+		}
+
+		async function createW40Org(ownerId: string, name: string): Promise<string> {
+			const org = await prisma.organization.create({
+				data: {
+					name,
+					memberships: {
+						create: { userId: ownerId, role: "OWNER", status: "ACTIVE" },
+					},
+					settings: {
+						create: {
+							baseCurrency: "CNY",
+							prepPreference: "balanced",
+							reminderEnabled: true,
+							ledgerStartedAt: new Date("2026-11-01T00:00:00.000Z"),
+						},
+					},
+				},
+				select: { id: true },
+			});
+			w40OrgIds.push(org.id);
+			return org.id;
+		}
+
+		async function getRevision(
+			organizationId: string,
+			currencyCode: string,
+		): Promise<bigint> {
+			const row = await prisma.ledgerRevision.findUnique({
+				where: { organizationId_currencyCode: { organizationId, currencyCode } },
+				select: { revision: true },
+			});
+			return row?.revision ?? 0n;
+		}
+
+		test("6+1 张账本表写入/修改/删除均逐表递增对应 (organization_id, currency_code) 的 revision", async () => {
+			const userId = await createW40User("triggers");
+			const orgId = await createW40Org(userId, "W40 触发器测试组织");
+			const t0 = new Date("2026-11-10T00:00:00.000Z");
+
+			expect(await getRevision(orgId, "USD")).toBe(0n);
+
+			// 1. accounts (INSERT / UPDATE / DELETE)
+			const account = await prisma.account.create({
+				data: { organizationId: orgId, createdById: userId, currencyCode: "USD", balance: "100" },
+			});
+			const revAfterAccIns = await getRevision(orgId, "USD");
+			expect(revAfterAccIns).toBe(1n);
+
+			await prisma.account.update({
+				where: { id: account.id },
+				data: { balance: "200" },
+			});
+			expect(await getRevision(orgId, "USD")).toBe(2n);
+
+			// 2. transactions (INSERT / UPDATE)
+			const txRow = await prisma.transaction.create({
+				data: {
+					organizationId: orgId,
+					createdById: userId,
+					currencyCode: "USD",
+					quantity: "100",
+					principalAmount: "720",
+					exchangeRate: "7.2",
+					rateSource: "abc",
+					rateObservedAt: t0,
+					transactedAt: t0,
+				},
+			});
+			expect(await getRevision(orgId, "USD")).toBe(3n);
+
+			await prisma.transaction.update({
+				where: { id: txRow.id },
+				data: { quantity: "120" },
+			});
+			expect(await getRevision(orgId, "USD")).toBe(4n);
+
+			// 3. initial_holdings (INSERT / UPDATE / DELETE)
+			const holding = await prisma.initialHolding.create({
+				data: {
+					organizationId: orgId,
+					createdById: userId,
+					currencyCode: "USD",
+					amount: "50",
+					rate: "7.1",
+					rawRate: "7.1",
+					rateSource: "abc",
+					rateObservedAt: t0,
+					cost: "355",
+					confirmedAt: t0,
+				},
+			});
+			expect(await getRevision(orgId, "USD")).toBe(5n);
+
+			await prisma.initialHolding.update({
+				where: { id: holding.id },
+				data: { amount: "60" },
+			});
+			expect(await getRevision(orgId, "USD")).toBe(6n);
+
+			// 4. cost_lots (INSERT / UPDATE / DELETE)
+			const lot = await prisma.costLot.create({
+				data: {
+					organizationId: orgId,
+					currencyCode: "USD",
+					sourceType: "PURCHASE",
+					sourceId: txRow.id,
+					quantity: "100",
+					remainingQty: "100",
+					unitCost: "7.2",
+					totalCost: "720",
+					acquiredAt: t0,
+				},
+			});
+			expect(await getRevision(orgId, "USD")).toBe(7n);
+
+			await prisma.costLot.update({
+				where: { id: lot.id },
+				data: { remainingQty: "80" },
+			});
+			expect(await getRevision(orgId, "USD")).toBe(8n);
+
+			// 5. plans (INSERT / UPDATE) + plan_allocations (INSERT / UPDATE)
+			const plan = await prisma.plan.create({
+				data: {
+					organizationId: orgId,
+					createdById: userId,
+					targetCurrency: "USD",
+					targetAmount: "500",
+					expectUseDate: new Date("2026-12-20T00:00:00.000Z"),
+					latestPrepDate: new Date("2026-12-17T00:00:00.000Z"),
+				},
+			});
+			expect(await getRevision(orgId, "USD")).toBe(9n);
+
+			const alloc = await prisma.planAllocation.create({
+				data: { planId: plan.id, amount: "100", usedAmount: "0" },
+			});
+			expect(await getRevision(orgId, "USD")).toBe(10n);
+
+			await prisma.planAllocation.update({
+				where: { id: alloc.id },
+				data: { amount: "150" },
+			});
+			expect(await getRevision(orgId, "USD")).toBe(11n);
+
+			// 6. usage_records (INSERT / UPDATE / DELETE)
+			const usage = await prisma.usageRecord.create({
+				data: {
+					organizationId: orgId,
+					createdById: userId,
+					planId: plan.id,
+					currencyCode: "USD",
+					amount: "20",
+					usedAt: t0,
+				},
+			});
+			expect(await getRevision(orgId, "USD")).toBe(12n);
+
+			await prisma.usageRecord.update({
+				where: { id: usage.id },
+				data: { amount: "25" },
+			});
+			expect(await getRevision(orgId, "USD")).toBe(13n);
+
+			await prisma.usageRecord.delete({ where: { id: usage.id } });
+			expect(await getRevision(orgId, "USD")).toBe(14n);
+
+			// DELETE 顺序清理验证剩余表触发器
+			await prisma.planAllocation.delete({ where: { id: alloc.id } });
+			await prisma.plan.delete({ where: { id: plan.id } });
+			expect(await getRevision(orgId, "USD")).toBe(15n);
+
+			await prisma.costLot.delete({ where: { id: lot.id } });
+			expect(await getRevision(orgId, "USD")).toBe(16n);
+
+			await prisma.initialHolding.delete({ where: { id: holding.id } });
+			expect(await getRevision(orgId, "USD")).toBe(17n);
+
+			await prisma.transaction.delete({ where: { id: txRow.id } });
+			expect(await getRevision(orgId, "USD")).toBe(18n);
+
+			await prisma.account.delete({ where: { id: account.id } });
+			expect(await getRevision(orgId, "USD")).toBe(19n);
+		});
+
+		test("负向与改币种：原生 $executeRaw 绕过 Service 写入同样递增；UPDATE 改币种同时递增新旧两币种", async () => {
+			const userId = await createW40User("raw-sql");
+			const orgId = await createW40Org(userId, "W40 原生SQL触发器组织");
+			const t0 = new Date("2026-11-11T00:00:00.000Z");
+			const rawTxId = `w40rawtx_${Date.now()}`;
+
+			await prisma.$executeRaw`
+				INSERT INTO transactions (
+					id, organization_id, created_by_id, currency_code,
+					quantity, principal_amount, exchange_rate,
+					rate_source, rate_observed_at, transacted_at, updated_at
+				) VALUES (
+					${rawTxId}, ${orgId}, ${userId}, 'JPY',
+					10000, 500, 0.05,
+					'abc', ${t0}, ${t0}, ${t0}
+				)`;
+			expect(await getRevision(orgId, "JPY")).toBe(1n);
+			expect(await getRevision(orgId, "EUR")).toBe(0n);
+
+			await prisma.$executeRaw`
+				UPDATE transactions SET currency_code = 'EUR' WHERE id = ${rawTxId}`;
+			expect(await getRevision(orgId, "JPY")).toBe(2n);
+			expect(await getRevision(orgId, "EUR")).toBe(1n);
+		});
+
+		test("ORGANIZATION CLEAR：ledger_revisions 单调不重置且活跃 PENDING/STALE 提案置为 INVALIDATED", async () => {
+			const userId = await createW40User("clear");
+			const orgId = await createW40Org(userId, "W40 清空单调组织");
+			const t0 = new Date("2026-11-12T00:00:00.000Z");
+
+			await prisma.account.create({
+				data: { organizationId: orgId, createdById: userId, currencyCode: "GBP", balance: "80" },
+			});
+			const revBeforeClear = await getRevision(orgId, "GBP");
+			expect(revBeforeClear).toBe(1n);
+
+			const pendingProposal = await prisma.agentProposal.create({
+				data: {
+					organizationId: orgId,
+					createdById: userId,
+					kind: "PLAN_CREATE",
+					status: "PENDING",
+					inputPayload: { targetCurrency: "GBP", targetAmount: "100" },
+					previewSnapshot: { latestPrepDate: t0.toISOString() },
+					baseRevisions: { GBP: "1" },
+					expiresAt: new Date("2026-11-13T00:00:00.000Z"),
+				},
+			});
+			const confirmedProposal = await prisma.agentProposal.create({
+				data: {
+					organizationId: orgId,
+					createdById: userId,
+					confirmedById: userId,
+					kind: "PLAN_CREATE",
+					status: "CONFIRMED",
+					inputPayload: { targetCurrency: "GBP", targetAmount: "50" },
+					previewSnapshot: { latestPrepDate: t0.toISOString() },
+					baseRevisions: { GBP: "1" },
+					expiresAt: new Date("2026-11-13T00:00:00.000Z"),
+					resolvedAt: t0,
+				},
+			});
+			const req = await prisma.dataRequest.create({
+				data: {
+					requesterUserId: userId,
+					scope: "ORGANIZATION",
+					organizationId: orgId,
+					type: "CLEAR",
+					status: "PENDING",
+					requestedAt: t0,
+					dueAt: t0,
+				},
+			});
+
+			const res = await prisma.$transaction((tx) =>
+				executeOrganizationRequest(
+					tx,
+					{
+						id: req.id,
+						requesterUserId: userId,
+						scope: "ORGANIZATION",
+						organizationId: orgId,
+						type: "CLEAR",
+					},
+					{ now: new Date("2026-11-12T01:00:00.000Z"), audit: auditStub },
+				),
+			);
+			expect(res.outcome).toBe("completed");
+			expect(res.stats.invalidatedProposals).toBe(1);
+
+			// 关键不变量：CLEAR 绝不删除 ledger_revisions，且删除账本行触发器使其严格递增
+			const revAfterClear = await getRevision(orgId, "GBP");
+			expect(revAfterClear).toBeGreaterThan(revBeforeClear);
+
+			const afterPending = await prisma.agentProposal.findUnique({
+				where: { id: pendingProposal.id },
+			});
+			const afterConfirmed = await prisma.agentProposal.findUnique({
+				where: { id: confirmedProposal.id },
+			});
+			expect(afterPending?.status).toBe("INVALIDATED");
+			expect(afterPending?.invalidReason).toBe("ORGANIZATION_CLEARED");
+			expect(afterConfirmed?.status).toBe("CONFIRMED");
+		});
+
+		test("PERSONAL DELETION：零级联断言放行且提案保留，author/conversation/message 优雅置 NULL", async () => {
+			const ownerId = await createW40User("owner-stay");
+			const memberId = await createW40User("member-leave");
+			const orgId = await createW40Org(ownerId, "W40 个人注销零级联组织");
+			await prisma.membership.create({
+				data: {
+					organizationId: orgId,
+					userId: memberId,
+					role: "FINANCE",
+					status: "ACTIVE",
+				},
+			});
+			await prisma.account.create({
+				data: { organizationId: orgId, createdById: ownerId, currencyCode: "SGD", balance: "300" },
+			});
+			const conv = await prisma.aiConversation.create({
+				data: { userId: memberId, organizationId: orgId, title: "个人注销保留提案验证" },
+			});
+			const msg = await prisma.aiMessage.create({
+				data: {
+					conversationId: conv.id,
+					role: "assistant",
+					content: "已生成预演单",
+					resolvedSlots: {
+						"acct.SGD.balance": {
+							key: "acct.SGD.balance",
+							value: "300.0000",
+							display: "300 SGD",
+							unit: "SGD",
+							source: "get_account_summary",
+							asOf: "2026-11-12T00:00:00.000Z",
+							baseRevision: "1",
+						},
+					},
+				},
+			});
+			const proposal = await prisma.agentProposal.create({
+				data: {
+					organizationId: orgId,
+					conversationId: conv.id,
+					messageId: msg.id,
+					createdById: memberId,
+					confirmedById: memberId,
+					kind: "PLAN_CREATE",
+					status: "CONFIRMED",
+					inputPayload: { targetCurrency: "SGD", targetAmount: "100" },
+					previewSnapshot: {},
+					baseRevisions: { SGD: "1" },
+					expiresAt: new Date("2026-11-13T00:00:00.000Z"),
+				},
+			});
+			const delReq = await prisma.dataRequest.create({
+				data: {
+					requesterUserId: memberId,
+					scope: "PERSONAL",
+					organizationId: null,
+					type: "DELETION",
+					status: "PENDING",
+					requestedAt: new Date("2026-11-12T00:00:00.000Z"),
+					dueAt: new Date("2026-11-12T00:00:00.000Z"),
+				},
+			});
+
+			const delResult = await prisma.$transaction((tx) =>
+				executePersonalDeletion(
+					tx,
+					{
+						id: delReq.id,
+						requesterUserId: memberId,
+						scope: "PERSONAL",
+						organizationId: null,
+						type: "DELETION",
+					},
+					{ now: new Date("2026-11-12T01:00:00.000Z") },
+				),
+			);
+			expect(delResult.outcome).toBe("user-deleted");
+
+			const survived = await prisma.agentProposal.findUnique({
+				where: { id: proposal.id },
+			});
+			expect(survived).not.toBeNull();
+			expect(survived?.organizationId).toBe(orgId);
+			expect(survived?.createdById).toBeNull();
+			expect(survived?.confirmedById).toBeNull();
+			expect(survived?.conversationId).toBeNull();
+			expect(survived?.messageId).toBeNull();
+		});
+
+		test("ORGANIZATION DELETION：触发器不报 FK 错且清理 agent_proposals 与 ledger_revisions", async () => {
+			const ownerId = await createW40User("org-del");
+			const orgId = await createW40Org(ownerId, "W40 组织删除清理验证");
+			await prisma.account.create({
+				data: { organizationId: orgId, createdById: ownerId, currencyCode: "CAD", balance: "120" },
+			});
+			await prisma.agentProposal.create({
+				data: {
+					organizationId: orgId,
+					createdById: ownerId,
+					kind: "PLAN_CREATE",
+					status: "PENDING",
+					inputPayload: { targetCurrency: "CAD", targetAmount: "100" },
+					previewSnapshot: {},
+					baseRevisions: { CAD: "1" },
+					expiresAt: new Date("2026-11-13T00:00:00.000Z"),
+				},
+			});
+			const req = await prisma.dataRequest.create({
+				data: {
+					requesterUserId: ownerId,
+					scope: "ORGANIZATION",
+					organizationId: orgId,
+					type: "DELETION",
+					status: "PENDING",
+					requestedAt: new Date("2026-11-12T00:00:00.000Z"),
+					dueAt: new Date("2026-11-12T00:00:00.000Z"),
+				},
+			});
+
+			const res = await prisma.$transaction((tx) =>
+				executeOrganizationRequest(
+					tx,
+					{
+						id: req.id,
+						requesterUserId: ownerId,
+						scope: "ORGANIZATION",
+						organizationId: orgId,
+						type: "DELETION",
+					},
+					{ now: new Date("2026-11-12T01:00:00.000Z"), audit: auditStub },
+				),
+			);
+			expect(res.outcome).toBe("completed");
+			expect(res.stats.agentProposals).toBe(1);
+			expect(await prisma.ledgerRevision.count({ where: { organizationId: orgId } })).toBe(0);
+			expect(await prisma.agentProposal.count({ where: { organizationId: orgId } })).toBe(0);
+		});
+
+		test("单语句多行批写（createMany / updateMany）：同币种仅递增 1 次，跨币种按升序无冲突递增", async () => {
+			const userId = await createW40User("batch-stmt");
+			const orgId = await createW40Org(userId, "W40 语句级批写去重组织");
+			const t0 = new Date("2026-11-11T00:00:00.000Z");
+
+			await prisma.account.createMany({
+				data: [
+					{ organizationId: orgId, createdById: userId, currencyCode: "AUD", balance: "10" },
+					{ organizationId: orgId, createdById: userId, currencyCode: "CHF", balance: "20" },
+				],
+			});
+			expect(await getRevision(orgId, "AUD")).toBe(1n);
+			expect(await getRevision(orgId, "CHF")).toBe(1n);
+
+			// 同语句向同币种插入 2 行成本批次，语句级触发器去重仅 +1
+			await prisma.costLot.createMany({
+				data: [
+					{
+						organizationId: orgId,
+						currencyCode: "AUD",
+						sourceType: "PURCHASE",
+						sourceId: `src1_${Date.now()}`,
+						quantity: "10",
+						remainingQty: "10",
+						unitCost: "4.8",
+						totalCost: "48",
+						acquiredAt: t0,
+					},
+					{
+						organizationId: orgId,
+						currencyCode: "AUD",
+						sourceType: "PURCHASE",
+						sourceId: `src2_${Date.now()}`,
+						quantity: "15",
+						remainingQty: "15",
+						unitCost: "4.9",
+						totalCost: "73.5",
+						acquiredAt: t0,
+					},
+				],
+			});
+			expect(await getRevision(orgId, "AUD")).toBe(2n);
+
+			// 批量 UPDATE 同命中 AUD 与 CHF 两币种，各递增 1 次
+			await prisma.account.updateMany({
+				where: { organizationId: orgId },
+				data: { balance: "99" },
+			});
+			expect(await getRevision(orgId, "AUD")).toBe(3n);
+			expect(await getRevision(orgId, "CHF")).toBe(2n);
+		});
+
+		test("CHECK 约束负向拦截 & ai_messages.plan_draft 幂等回填 LEGACY", async () => {
+			const userId = await createW40User("check-legacy");
+			const orgId = await createW40Org(userId, "W40 约束与回填验证");
+
+			await expect(
+				prisma.$executeRaw`
+					INSERT INTO agent_proposals (
+						id, organization_id, kind, status,
+						input_payload, preview_snapshot, base_revisions, expires_at
+					) VALUES (
+						${`badkind_${Date.now()}`}, ${orgId}, 'UNKNOWN_KIND', 'PENDING',
+						'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, CURRENT_TIMESTAMP
+					)`,
+			).rejects.toThrow(/agent_proposals_kind_check/);
+
+			await expect(
+				prisma.$executeRaw`
+					INSERT INTO agent_proposals (
+						id, organization_id, kind, status,
+						input_payload, preview_snapshot, base_revisions, expires_at
+					) VALUES (
+						${`badstatus_${Date.now()}`}, ${orgId}, 'PLAN_CREATE', 'BOGUS_STATUS',
+						'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, CURRENT_TIMESTAMP
+					)`,
+			).rejects.toThrow(/agent_proposals_status_check/);
+
+			const conv = await prisma.aiConversation.create({
+				data: { userId, organizationId: orgId, title: "存量草稿回填测试" },
+			});
+			const draftPayload = {
+				agentRunId: "run-legacy-001",
+				targetCurrency: "USD",
+				targetAmount: "1000",
+			};
+			const msg = await prisma.aiMessage.create({
+				data: {
+					conversationId: conv.id,
+					role: "assistant",
+					content: "存量草稿",
+					planDraft: draftPayload,
+				},
+			});
+
+			const runBackfill = () =>
+				prisma.$executeRaw`
+					INSERT INTO "agent_proposals" (
+						"id", "organization_id", "conversation_id", "message_id",
+						"agent_run_id", "created_by_id", "kind", "status",
+						"input_payload", "preview_snapshot", "base_revisions",
+						"expires_at", "created_at", "resolved_at"
+					)
+					SELECT
+						'legacy_' || m."id",
+						c."organization_id",
+						m."conversation_id",
+						m."id",
+						NULLIF(m."plan_draft"->>'agentRunId', ''),
+						c."user_id",
+						'PLAN_CREATE',
+						'LEGACY',
+						m."plan_draft",
+						m."plan_draft",
+						'{}'::jsonb,
+						m."created_at" + INTERVAL '24 hours',
+						m."created_at",
+						m."created_at"
+					FROM "ai_messages" m
+					INNER JOIN "ai_conversations" c ON c."id" = m."conversation_id"
+					WHERE m."id" = ${msg.id}
+						AND m."plan_draft" IS NOT NULL
+						AND NOT EXISTS (
+							SELECT 1 FROM "agent_proposals" ap WHERE ap."message_id" = m."id"
+						)`;
+
+			expect(await runBackfill()).toBe(1);
+			expect(await runBackfill()).toBe(0);
+
+			const legacyRow = await prisma.agentProposal.findUnique({
+				where: { id: `legacy_${msg.id}` },
+			});
+			expect(legacyRow).toMatchObject({
+				organizationId: orgId,
+				conversationId: conv.id,
+				messageId: msg.id,
+				agentRunId: "run-legacy-001",
+				createdById: userId,
+				kind: "PLAN_CREATE",
+				status: "LEGACY",
+				inputPayload: draftPayload,
+				previewSnapshot: draftPayload,
+			});
 		});
 	});
 });

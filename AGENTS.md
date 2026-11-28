@@ -77,7 +77,8 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  │  ├─ 20261120091000_rate_cache_canonical_write/ # 记录可信的汇率回源写入
 │  │  │  ├─ 20261126190000_tob_r1_mig_e_tighten_constraints/ # ToB R1 MIG-E：NOT NULL / ON DELETE RESTRICT / 删旧用户唯一索引
 │  │  │  ├─ 20261126191000_tob_r1_mig_f_drop_legacy_columns/ # ToB R1 MIG-F：删 8 表旧 user_id、UserSettings 旧账本列、reminders.read_at，重命名 requester_user_id
-│  │  │  └─ 20261127010000_tob_r2_ai_message_plan_draft/ # ToB R2：ai_messages.plan_draft 结构化计划草稿载荷列
+│  │  │  ├─ 20261127010000_tob_r2_ai_message_plan_draft/ # ToB R2：ai_messages.plan_draft 结构化计划草稿载荷列
+│  │  │  └─ 20261129090000_stage1_ledger_revisions_and_proposals/ # Stage 1 W40：ledger_revisions 6+1 表触发器、agent_proposals 8 态表、ai_messages.resolved_slots 及 LEGACY 回填
 │  │  ├─ rate-cache-migration/      # 旧汇率缓存迁移运维 CLI（B2；README 见目录内）
 │  │  └─ tob-r1-migration/          # ToB R1 MIG-B/E/F 回填、核对与 §14.5 P6 基准 CLI（benchmark-p6.ts / README 见目录内）
 │  └─ test/

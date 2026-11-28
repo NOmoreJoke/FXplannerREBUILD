@@ -105,10 +105,11 @@ export async function createTestUser(
  * 必须先按「子 → 父」顺序清掉全部引用行，否则外键拒绝。
  *
  * 顺序要求：
- * 1. 派生明细行（usage_lot_allocations / plan_allocations / plan_change_logs /
- *    plan_installments / reminder_reads / ai_messages）先于其父行；
+ * 1. 派生明细行（agent_proposals / usage_lot_allocations / plan_allocations /
+ *    plan_change_logs / plan_installments / reminder_reads / ai_messages）先于其父行；
  * 2. 账本行（reminders / usage_records / corrections / plans / cost_lots /
- *    transactions / initial_holdings / accounts）先于 organization_settings；
+ *    transactions / initial_holdings / accounts）删完后清 ledger_revisions
+ *    （防删账本表触发器重新插入行），随后删 ai_conversations 与 organization_settings；
  * 3. organization_settings / organization_invitations / data_requests /
  *    audit_logs 最后（均在组织删除前清）。
  */
@@ -149,6 +150,9 @@ export async function deleteOrganizationsCascadeLedger(
 	await tx.reminderRead.deleteMany({
 		where: { reminder: { organizationId: { in: orgIds } } },
 	});
+	await tx.agentProposal.deleteMany({
+		where: { organizationId: { in: orgIds } },
+	});
 	await tx.aiMessage.deleteMany({
 		where: { conversation: { organizationId: { in: orgIds } } },
 	});
@@ -162,6 +166,10 @@ export async function deleteOrganizationsCascadeLedger(
 	await tx.transaction.deleteMany({ where: { organizationId: { in: orgIds } } });
 	await tx.initialHolding.deleteMany({ where: { organizationId: { in: orgIds } } });
 	await tx.account.deleteMany({ where: { organizationId: { in: orgIds } } });
+	// 账本行全部删除后再清 ledger_revisions（避免删账本行触发器重新插入行）
+	await tx.ledgerRevision.deleteMany({
+		where: { organizationId: { in: orgIds } },
+	});
 	await tx.aiConversation.deleteMany({
 		where: { organizationId: { in: orgIds } },
 	});

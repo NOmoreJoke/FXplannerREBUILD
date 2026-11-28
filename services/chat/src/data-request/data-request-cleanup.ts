@@ -444,6 +444,15 @@ async function deleteOrphanedOrganizations(
 
 	add(
 		stats,
+		"orphanAgentProposals",
+		(
+			await tx.agentProposal.deleteMany({
+				where: { organizationId: { in: orphanIds } },
+			})
+		).count,
+	);
+	add(
+		stats,
 		"orphanDataRequests",
 		(
 			await tx.dataRequest.deleteMany({
@@ -698,6 +707,23 @@ export async function executeOrganizationRequest(
 
 	if (type === "CLEAR") {
 		await resetLedgerStartedAt(tx, organizationId);
+		// W40：CLEAR 严禁删除 ledger_revisions 行（删账本触发器会单调续增），仅失效活跃 Agent 提案
+		const invalidatedProposals = (
+			await tx.agentProposal.updateMany({
+				where: {
+					organizationId,
+					status: { in: ["PENDING", "STALE"] },
+				},
+				data: {
+					status: "INVALIDATED",
+					invalidReason: "ORGANIZATION_CLEARED",
+					resolvedAt: ctx.now,
+				},
+			})
+		).count;
+		if (invalidatedProposals > 0) {
+			add(stats, "invalidatedProposals", invalidatedProposals);
+		}
 		const executeAction = auditActionOf("ORGANIZATION", "CLEAR", "execute");
 		if (executeAction) {
 			await ctx.audit.recordInTx(tx, {
@@ -723,6 +749,11 @@ export async function executeOrganizationRequest(
 		where: { id: organizationId },
 		select: { name: true },
 	});
+	add(
+		stats,
+		"agentProposals",
+		(await tx.agentProposal.deleteMany({ where: { organizationId } })).count,
+	);
 	add(
 		stats,
 		"aiConversations",

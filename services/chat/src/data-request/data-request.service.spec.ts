@@ -1364,7 +1364,7 @@ describe("零残留引用断言的覆盖面（schema 推导 ↔ 数据库目录�
 		expect(fromCatalog).toHaveLength(6);
 		expect(fromSchema).toEqual(fromCatalog);
 
-		// W30（MIG-E/F）：8 张作者/发起人列为 ON DELETE SET NULL（confdeltype = 'n'），删用户不吞行
+		// W30（MIG-E/F）8 张作者/发起人列 + W40 agent_proposals 2 列为 ON DELETE SET NULL（confdeltype = 'n'），删用户不吞行
 		const setNullCatalog = await db.$queryRaw<Array<{ table: string; column: string }>>`
 			SELECT rel.relname AS "table", att.attname AS "column"
 			FROM pg_constraint con
@@ -1378,6 +1378,8 @@ describe("零残留引用断言的覆盖面（schema 推导 ↔ 数据库目录�
 			setNullCatalog.map((fk) => `${fk.table}.${fk.column}`).sort(),
 		).toEqual([
 			"accounts.created_by_id",
+			"agent_proposals.confirmed_by_id",
+			"agent_proposals.created_by_id",
 			"corrections.actor_user_id",
 			"data_requests.requester_user_id",
 			"initial_holdings.created_by_id",
