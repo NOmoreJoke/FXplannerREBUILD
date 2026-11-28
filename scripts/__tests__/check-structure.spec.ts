@@ -42,8 +42,8 @@ describe('checkRepositoryStructure', () => {
         '│  │  ├─ proposal/                  # 目标态未落地目录\n│  │  ├─ ai/',
       )
       .replace(
-        'check-org-scope / lint-observe',
-        'check-org-scope / check-compliance-copy / lint-observe',
+        /^├─\s+scripts\/\s+#\s+工程脚本（[^）]+）/m,
+        '├─ scripts/                         # 工程脚本（nonexistent-future-gate / lint-observe）',
       )
       .replace(
         '变更文档 `changes/product-harness-agent/`',
@@ -56,7 +56,7 @@ describe('checkRepositoryStructure', () => {
     });
 
     expect(errors.some((e) => e.includes('services/chat/src/proposal'))).toBe(true);
-    expect(errors.some((e) => e.includes('check-compliance-copy'))).toBe(true);
+    expect(errors.some((e) => e.includes('nonexistent-future-gate'))).toBe(true);
     expect(errors.some((e) => e.includes('clients/chat-web/components/business/collab'))).toBe(
       true,
     );
