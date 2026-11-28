@@ -140,7 +140,7 @@ function LedgerRow({
 					// 初始持仓更正入口（corrections M8 + ToB P1 能力门控）：仅具备 correction.apply 权限时展示
 					<Link
 						href={`/corrections/new?targetType=INITIAL_HOLDING&targetId=${item.id}`}
-						className="ml-2 inline-flex items-center gap-0.5 text-xs font-medium text-mint-700 hover:underline"
+						className="ml-2 inline-flex items-center gap-0.5 text-xs font-medium text-ink-700 hover:text-ink-900 hover:underline"
 						data-testid="initial-correction-entry"
 					>
 						<PenLine className="size-3" />
@@ -167,7 +167,7 @@ function LedgerRow({
 				{!item.feeKnown ? (
 					<Badge
 						variant="outline"
-						className="ml-2 border-cream-300 bg-cream-100 text-ink-600"
+						className="ml-2 border-caution bg-caution text-caution"
 					>
 						费用未明确
 					</Badge>

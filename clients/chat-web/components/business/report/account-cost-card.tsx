@@ -42,7 +42,7 @@ export function AccountCostCard({ baseCurrency, items }: AccountCostCardProps) {
 			className="rounded-2xl border border-border bg-white p-6"
 		>
 			<div className="flex items-center gap-2">
-				<Wallet className="size-4 text-mint-700" />
+				<Wallet className="size-4 text-ink-700" />
 				<h3 className="text-base font-bold text-foreground">账户成本摘要</h3>
 			</div>
 			<p className="mt-1 text-xs text-muted-foreground">

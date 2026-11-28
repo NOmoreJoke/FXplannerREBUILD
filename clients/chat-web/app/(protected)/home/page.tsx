@@ -128,7 +128,7 @@ function HomeSkeleton() {
 function HomeError({ onRetry }: { onRetry: () => void }) {
 	return (
 		<div className="mx-auto flex max-w-5xl flex-col items-center justify-center px-8 py-24 text-center">
-			<CircleAlert className="size-10 text-cream-300" />
+			<CircleAlert className="size-10 text-ink-300" />
 			<h1 className="mt-4 text-lg font-bold text-foreground">
 				首页状态加载失败
 			</h1>
@@ -136,7 +136,7 @@ function HomeError({ onRetry }: { onRetry: () => void }) {
 				无法获取账号当前状态，请检查网络后重试。
 			</p>
 			<Button
-				className="mt-6 bg-mint-700 text-white hover:bg-mint-700/90"
+				className="mt-6 bg-ink-900 text-white hover:bg-ink-900/90"
 				onClick={onRetry}
 			>
 				重试

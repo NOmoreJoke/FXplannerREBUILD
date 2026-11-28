@@ -127,7 +127,7 @@ export function WizardStepBaseCurrency({
 				</Select>
 				<p
 					data-testid="base-currency-lock-hint"
-					className="mt-2 flex items-center gap-2 rounded-lg bg-mint-50 px-3 py-2 text-sm font-medium text-mint-700"
+					className="mt-2 flex items-center gap-2 rounded-lg border border-caution bg-caution px-3 py-2 text-sm font-medium text-caution"
 				>
 					<Info className="size-4 shrink-0" aria-hidden="true" />
 					本位币完成建账后不可更换
@@ -168,7 +168,7 @@ export function WizardStepBaseCurrency({
 				data-testid="wizard-next"
 				disabled={!canProceed}
 				onClick={onNext}
-				className="w-full bg-mint-700 text-white hover:bg-mint-700/90"
+				className="w-full bg-ink-900 text-white hover:bg-ink-900/90"
 			>
 				下一步
 			</Button>

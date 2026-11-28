@@ -389,7 +389,7 @@ export function TransactionForm({
 						</p>
 					)
 				) : (
-					<p className="mt-4 rounded-lg bg-cream-100 px-3 py-2 text-sm text-ink-600">
+					<p className="mt-4 rounded-lg border border-caution bg-caution px-3 py-2 text-sm text-caution">
 						手续费未知：交易总成本将不完整（未知 ≠ 0），可在了解费用后补录。
 					</p>
 				)}

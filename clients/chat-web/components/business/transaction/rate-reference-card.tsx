@@ -91,7 +91,7 @@ export function RateReferenceCard({
 				<p className="mt-2 text-sm text-muted-foreground">正在获取参考汇率…</p>
 			) : query.isError || referenceRate === undefined ? (
 				<p
-					className="mt-2 rounded-lg bg-cream-100 px-3 py-2 text-sm text-ink-600"
+					className="mt-2 rounded-lg border border-caution bg-caution px-3 py-2 text-sm text-caution"
 					role="alert"
 				>
 					参考汇率获取失败，请填写实际成交数据。

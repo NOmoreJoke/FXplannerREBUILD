@@ -88,7 +88,7 @@ export default function PlanDetailPage() {
 			query.error instanceof ApiError && query.error.code === "PLAN_NOT_FOUND";
 		return (
 			<div className="mx-auto flex max-w-3xl flex-col items-center px-8 py-24 text-center">
-				<CircleAlert className="size-10 text-cream-300" />
+				<CircleAlert className="size-10 text-ink-300" />
 				<h1 className="mt-4 text-lg font-bold text-foreground">
 					{isNotFound ? "换汇计划不存在" : "计划详情加载失败"}
 				</h1>
@@ -99,7 +99,7 @@ export default function PlanDetailPage() {
 				</p>
 				<div className="mt-6 flex items-center gap-3">
 					<Button
-						className="bg-mint-700 text-white hover:bg-mint-700/90"
+						className="bg-ink-900 text-white hover:bg-ink-900/90"
 						onClick={() => query.refetch()}
 					>
 						重试
@@ -264,7 +264,7 @@ function DetailHeader({
 					)}
 					{plan.canModify && canRecordUsage ? (
 						<Button
-							className="bg-mint-700 text-white hover:bg-mint-700/90"
+							className="bg-ink-900 text-white hover:bg-ink-900/90"
 							onClick={() => setUsageOpen(true)}
 						>
 							记录使用
@@ -273,7 +273,7 @@ function DetailHeader({
 					{plan.canModify && canRecordTransaction ? (
 						<Button
 							asChild
-							className="bg-mint-700 text-white hover:bg-mint-700/90"
+							className="bg-ink-900 text-white hover:bg-ink-900/90"
 						>
 							{/* 自动关联本计划：录入页预填 planId + 币种（默认选好、可修改） */}
 							<Link
@@ -294,7 +294,7 @@ function DetailHeader({
 					) : null}
 					{plan.canReopen && canAdjust ? (
 						<Button
-							className="bg-mint-700 text-white hover:bg-mint-700/90"
+							className="bg-ink-900 text-white hover:bg-ink-900/90"
 							onClick={() => setAdjustOpen(true)}
 						>
 							重新开启
@@ -302,7 +302,7 @@ function DetailHeader({
 					) : null}
 					{plan.canComplete && canAdjust ? (
 						<Button
-							className="bg-mint-700 text-white hover:bg-mint-700/90"
+							className="bg-ink-900 text-white hover:bg-ink-900/90"
 							onClick={() => setCompleteOpen(true)}
 						>
 							完成确认
@@ -354,7 +354,7 @@ function DetailHeader({
 					<AlertDialogFooter>
 						<AlertDialogCancel>再想想</AlertDialogCancel>
 						<AlertDialogAction
-							className="bg-mint-700 text-white hover:bg-mint-700/90"
+							className="bg-commit text-white hover:bg-commit-hover"
 							disabled={completeMutation.isPending}
 							onClick={(event) => {
 								event.preventDefault(); // 阻止 AlertDialog 自动关闭，等待结果

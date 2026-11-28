@@ -46,7 +46,7 @@ export default function TransactionDetailPage() {
 			query.error.code === "TRANSACTION_NOT_FOUND";
 		return (
 			<div className="mx-auto flex max-w-3xl flex-col items-center px-8 py-24 text-center">
-				<CircleAlert className="size-10 text-cream-300" />
+				<CircleAlert className="size-10 text-ink-300" />
 				<h1 className="mt-4 text-lg font-bold text-foreground">
 					{isNotFound ? "交易记录不存在" : "交易详情加载失败"}
 				</h1>
@@ -57,7 +57,7 @@ export default function TransactionDetailPage() {
 				</p>
 				<div className="mt-6 flex items-center gap-3">
 					<Button
-						className="bg-mint-700 text-white hover:bg-mint-700/90"
+						className="bg-ink-900 text-white hover:bg-ink-900/90"
 						onClick={() => query.refetch()}
 					>
 						重试
@@ -84,7 +84,7 @@ export default function TransactionDetailPage() {
 				{can("transaction.create") ? (
 					<Link
 						href="/transactions/new"
-						className="text-sm text-mint-700 hover:underline"
+						className="text-sm text-ink-700 hover:text-ink-900 hover:underline"
 					>
 						再记一笔
 					</Link>

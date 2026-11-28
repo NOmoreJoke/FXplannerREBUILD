@@ -44,7 +44,7 @@ export default function PlansPage() {
 							onClick={() => setStatus(filter.value)}
 							className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
 								active
-									? "bg-mint-700 text-white"
+									? "bg-ink-900 text-white"
 									: "bg-muted text-ink-600 hover:bg-muted/70"
 							}`}
 						>

@@ -60,7 +60,7 @@ export function AccountDataSection({ onLogout }: { onLogout: () => void }) {
 				<Link
 					href={DATA_REQUESTS_PAGE_PATH}
 					data-testid="account-data-progress-link"
-					className="shrink-0 text-xs font-medium text-mint-700 underline-offset-2 hover:underline"
+					className="shrink-0 text-xs font-medium text-ink-700 underline-offset-2 hover:text-ink-900 hover:underline"
 				>
 					查看处理进度
 				</Link>
@@ -85,8 +85,8 @@ function SectionHeader({
 	return (
 		<div className="flex flex-wrap items-start justify-between gap-3">
 			<div className="flex items-start gap-3">
-				<div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-mint-100">
-					<Icon className="size-5 text-mint-700" aria-hidden="true" />
+				<div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-ink-100">
+					<Icon className="size-5 text-ink-700" aria-hidden="true" />
 				</div>
 				<div>
 					<h3 className="text-base font-bold text-foreground">{title}</h3>

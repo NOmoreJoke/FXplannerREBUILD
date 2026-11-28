@@ -61,16 +61,16 @@ export function PlanDraftCard({ draft }: PlanDraftCardProps) {
 	return (
 		<div
 			data-testid="plan-draft-card"
-			className="mt-3 rounded-xl border border-mint-300 bg-white p-3.5 text-foreground shadow-xs"
+			className="mt-3 rounded-xl border-proposal bg-surface-paper p-3.5 text-foreground shadow-xs"
 		>
 			<div className="flex flex-wrap items-center justify-between gap-2">
-				<div className="flex items-center gap-1.5 text-xs font-semibold text-mint-700">
+				<div className="flex items-center gap-1.5 text-xs font-semibold text-ink-900">
 					<FileCheck2 className="size-3.5 shrink-0" aria-hidden="true" />
 					<span>{draft.name || `${draft.targetCurrency} 换汇计划建议`}</span>
 				</div>
 				<span
 					data-testid="plan-draft-badge"
-					className="rounded-full bg-mint-50 px-2 py-0.5 text-[11px] font-medium text-mint-700"
+					className="rounded-full border border-neutral-note bg-neutral-note px-2 py-0.5 text-[11px] font-medium text-ink-700"
 				>
 					计划草稿 · 未保存
 				</span>
@@ -138,7 +138,7 @@ export function PlanDraftCard({ draft }: PlanDraftCardProps) {
 					<div className="flex flex-wrap items-center gap-2">
 						<Button
 							size="sm"
-							className="h-8 bg-mint-700 text-xs text-white hover:bg-mint-700/90"
+							className="h-8 bg-ink-900 text-xs text-white hover:bg-ink-900/90"
 							asChild
 						>
 							<Link

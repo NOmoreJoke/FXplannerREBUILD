@@ -110,7 +110,7 @@ export function RegisterForm() {
 					{/* 头部 */}
 					<div className="mb-8 text-center">
 						<div className="mb-3 flex items-center justify-center gap-2.5">
-							<div className="flex size-8 items-center justify-center rounded-lg bg-mint-700 text-xs font-bold text-white">
+							<div className="flex size-8 items-center justify-center rounded-lg bg-brand text-xs font-bold text-white">
 								FX
 							</div>
 							<h1 className="font-display text-2xl font-semibold text-foreground">
@@ -135,7 +135,7 @@ export function RegisterForm() {
 								type="email"
 								autoComplete="email"
 								{...register("email")}
-								className="w-full rounded-lg border border-border px-4 py-2 focus:border-mint-500 focus:ring-2 focus:ring-mint-500"
+								className="w-full rounded-lg border border-border px-4 py-2 focus:border-ink-900 focus:ring-2 focus:ring-ink-900/20"
 								placeholder="your@email.com"
 								disabled={isLoading}
 							/>
@@ -201,7 +201,7 @@ export function RegisterForm() {
 										setConsentTouched(true);
 										setAge18Confirmed(event.target.checked);
 									}}
-									className="mt-0.5 size-4 shrink-0 cursor-pointer accent-mint-700"
+									className="mt-0.5 size-4 shrink-0 cursor-pointer accent-ink-900"
 								/>
 								<span>已满 18 周岁</span>
 							</label>
@@ -214,7 +214,7 @@ export function RegisterForm() {
 										setConsentTouched(true);
 										setTermsConfirmed(event.target.checked);
 									}}
-									className="mt-0.5 size-4 shrink-0 cursor-pointer accent-mint-700"
+									className="mt-0.5 size-4 shrink-0 cursor-pointer accent-ink-900"
 								/>
 								<span>已阅读并同意服务条款与隐私说明</span>
 							</label>
@@ -232,7 +232,7 @@ export function RegisterForm() {
 						<button
 							type="submit"
 							disabled={isLoading}
-							className="w-full rounded-lg bg-mint-700 px-4 py-2 font-medium text-white transition-colors hover:bg-mint-700/90 disabled:cursor-not-allowed disabled:opacity-50"
+							className="w-full rounded-lg bg-ink-900 px-4 py-2 font-medium text-white transition-colors hover:bg-ink-900/90 disabled:cursor-not-allowed disabled:opacity-50"
 						>
 							{isLoading ? "注册中..." : "注册"}
 						</button>
@@ -247,7 +247,7 @@ export function RegisterForm() {
 									? `/login?redirect=${encodeURIComponent(redirect)}`
 									: "/login"
 							}
-							className="font-medium text-mint-700 transition-colors hover:text-mint-900"
+							className="font-medium text-ink-700 transition-colors hover:text-ink-900"
 						>
 							立即登录
 						</Link>

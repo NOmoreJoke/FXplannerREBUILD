@@ -41,13 +41,13 @@ export function TransactionDetail({ detail }: TransactionDetailProps) {
 		<div className="space-y-6">
 			{!detail.feeKnown && (
 				<section
-					className="flex items-start gap-3 rounded-xl bg-cream-100 px-5 py-4"
+					className="flex items-start gap-3 rounded-xl border border-caution bg-caution px-5 py-4 text-caution"
 					role="alert"
 				>
-					<CircleAlert className="mt-0.5 size-5 shrink-0 text-cream-300" />
+					<CircleAlert className="mt-0.5 size-5 shrink-0 text-caution" />
 					<div>
-						<p className="text-sm font-semibold text-foreground">费用未明确</p>
-						<p className="mt-0.5 text-xs leading-5 text-ink-600">
+						<p className="text-sm font-semibold">费用未明确</p>
+						<p className="mt-0.5 text-xs leading-5">
 							本笔交易手续费未知（未知 ≠ 0），交易总成本不完整；
 							{canCorrect
 								? "了解实际费用后可通过更正功能补录。"
@@ -61,7 +61,7 @@ export function TransactionDetail({ detail }: TransactionDetailProps) {
 				<div className="flex items-start justify-between">
 					<h2 className="text-base font-bold text-foreground">买入详情</h2>
 					<div className="flex items-center gap-2">
-						<span className="rounded-full bg-mint-50 px-3 py-1.5 text-xs font-medium text-mint-700">
+						<span className="rounded-full border border-neutral-note bg-neutral-note px-3 py-1.5 text-xs font-medium text-ink-700">
 							{detail.currencyCode}
 							{currencyName ? ` · ${currencyName}` : ""}
 						</span>
@@ -117,7 +117,7 @@ export function TransactionDetail({ detail }: TransactionDetailProps) {
 								/* FE-02 修复：跳计划详情（原死链 /plans）；planId 缺失时降级纯文本 */
 								<Link
 									href={`/plans/${detail.planId}`}
-									className="text-mint-700 hover:underline"
+									className="text-ink-700 hover:text-ink-900 hover:underline"
 								>
 									{detail.planName}
 								</Link>

@@ -141,7 +141,7 @@ export function MemberTable() {
 								<span
 									className={
 										member.status === "ACTIVE"
-											? "text-mint-700"
+											? "font-medium text-ink-900"
 											: "text-muted-foreground"
 									}
 								>

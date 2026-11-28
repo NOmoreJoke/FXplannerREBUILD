@@ -158,7 +158,7 @@ export function RateChartPanel({
 				data-testid="market-chart-loading"
 				className="flex h-80 flex-col items-center justify-center gap-3 rounded-xl border border-border bg-background text-sm text-muted-foreground"
 			>
-				<Spinner className="size-6 text-mint-700" />
+				<Spinner className="size-6 text-ink-500" />
 				正在加载历史数据…
 			</div>
 		);

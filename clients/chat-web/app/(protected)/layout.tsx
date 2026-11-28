@@ -126,7 +126,7 @@ export default function ProtectedLayout({
 					title="回到首页"
 					className="flex items-center gap-2.5 px-5 pb-1 pt-6 transition-opacity hover:opacity-80"
 				>
-					<div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-mint-700 text-xs font-bold text-white">
+					<div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand text-xs font-bold text-white">
 						FX
 					</div>
 					<span className="font-display text-lg font-semibold text-foreground">
@@ -156,7 +156,7 @@ export default function ProtectedLayout({
 								className={cn(
 									"flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
 									active
-										? "bg-mint-700 font-medium text-white shadow-sm"
+										? "bg-ink-900 font-medium text-white shadow-sm"
 										: "text-ink-500 hover:bg-muted hover:text-foreground",
 								)}
 							>

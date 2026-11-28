@@ -55,7 +55,7 @@ export function OrganizationSwitcher() {
 				data-testid="organization-switcher-single"
 				className="mx-3 mt-4 flex items-center gap-2 rounded-lg border border-border px-3 py-2"
 			>
-				<Building2 className="size-4 shrink-0 text-mint-700" aria-hidden />
+				<Building2 className="size-4 shrink-0 text-ink-600" aria-hidden />
 				<span className="truncate text-sm font-medium text-foreground">
 					{single?.name ?? displayName}
 				</span>
@@ -72,7 +72,7 @@ export function OrganizationSwitcher() {
 				onClick={() => setOpen((v) => !v)}
 				className="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-left transition-colors hover:bg-muted"
 			>
-				<Building2 className="size-4 shrink-0 text-mint-700" aria-hidden />
+				<Building2 className="size-4 shrink-0 text-ink-600" aria-hidden />
 				<span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
 					{displayName}
 				</span>
@@ -105,7 +105,7 @@ export function OrganizationSwitcher() {
 									{org.role}
 								</span>
 								{org.id === activeOrganizationId && (
-									<Check className="size-3.5 shrink-0 text-mint-700" aria-hidden />
+									<Check className="size-3.5 shrink-0 text-ink-900" aria-hidden />
 								)}
 							</button>
 						</li>
@@ -201,7 +201,7 @@ export function OrganizationPicker() {
 										type="button"
 										disabled={!newName.trim() || createMutation.isPending}
 										onClick={submitCreate}
-										className="flex-1 rounded-lg bg-mint-700 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+										className="flex-1 rounded-lg bg-ink-900 px-3 py-2 text-sm font-medium text-white hover:bg-ink-900/90 disabled:opacity-50"
 										data-testid="organization-create-submit"
 									>
 										{createMutation.isPending ? "创建中…" : "创建组织"}
@@ -269,7 +269,7 @@ export function OrganizationRoutingError({ onRetry }: { onRetry: () => void }) {
 					<button
 						type="button"
 						onClick={onRetry}
-						className="inline-flex items-center gap-2 rounded-lg bg-mint-700 px-4 py-2 text-sm font-medium text-white"
+						className="inline-flex items-center gap-2 rounded-lg bg-ink-900 px-4 py-2 text-sm font-medium text-white hover:bg-ink-900/90"
 						data-testid="organization-routing-retry"
 					>
 						<RefreshCw className="size-4" aria-hidden />

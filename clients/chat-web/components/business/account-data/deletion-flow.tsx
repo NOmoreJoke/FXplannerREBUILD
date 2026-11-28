@@ -166,14 +166,14 @@ export function DeletionFlow({
 						</p>
 						{hasActiveRequest && (
 							<div
-								className="rounded-lg border border-cream-300 bg-cream-100 p-3 text-sm text-foreground"
+								className="rounded-lg border border-caution bg-caution p-3 text-sm text-caution"
 								role="alert"
 								data-testid="deletion-conflict"
 							>
 								你已有进行中的数据请求，完成或撤回后才能注销账号。
 								<Link
 									href={DATA_REQUESTS_PAGE_PATH}
-									className="ml-1 font-medium text-mint-700 underline-offset-2 hover:underline"
+									className="ml-1 font-medium text-ink-700 underline-offset-2 hover:text-ink-900 hover:underline"
 								>
 									查看处理进度
 								</Link>
@@ -236,14 +236,14 @@ export function DeletionFlow({
 				{step === "blocked" && (
 					<div className="space-y-4" data-testid="deletion-blocked">
 						<div
-							className="flex items-start gap-2 rounded-lg border border-cream-300 bg-cream-100 p-3"
+							className="flex items-start gap-2 rounded-lg border border-caution bg-caution p-3 text-caution"
 							role="alert"
 						>
 							<ShieldAlert
-								className="mt-0.5 size-4 shrink-0 text-foreground"
+								className="mt-0.5 size-4 shrink-0 text-caution"
 								aria-hidden="true"
 							/>
-							<div className="text-sm text-foreground">
+							<div className="text-sm text-caution">
 								<p className="font-semibold">暂时无法注销账号</p>
 								<p className="mt-1 leading-6">
 									你仍是下列组织的唯一所有者。组织不能没有所有者，请先把所有权转移给其他成员，

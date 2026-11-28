@@ -88,7 +88,7 @@ export function CorrectionHistoryList({
 							<div className="min-w-0 flex-1">
 								<p className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
 									{item.status === "APPLIED" ? (
-										<CircleCheck className="size-4 shrink-0 text-mint-700" />
+										<CircleCheck className="size-4 shrink-0 text-commit" />
 									) : (
 										<CircleX className="size-4 shrink-0 text-destructive" />
 									)}

@@ -40,8 +40,8 @@ export function HomeEmptyState() {
 			<div className="grid gap-4 lg:grid-cols-3">
 				{/* 中央大卡片：从目标或持仓开始 */}
 				<section className="flex flex-col items-center justify-center rounded-2xl border border-border bg-white p-10 text-center lg:col-span-2">
-					<div className="flex size-16 items-center justify-center rounded-full bg-mint-100">
-						<Wallet className="size-8 text-mint-700" />
+					<div className="flex size-16 items-center justify-center rounded-full bg-ink-100">
+						<Wallet className="size-8 text-ink-700" />
 					</div>
 					<h2 className="mt-5 text-lg font-bold text-foreground">
 						从目标或持仓开始
@@ -54,7 +54,7 @@ export function HomeEmptyState() {
 							{can("plan.create") && (
 								<Button
 									data-testid="home-empty-create-plan"
-									className="bg-mint-700 text-white hover:bg-mint-700/90"
+									className="bg-ink-900 text-white hover:bg-ink-900/90"
 									onClick={() => router.push("/plans/new")}
 								>
 									创建第一个目标
@@ -81,7 +81,7 @@ export function HomeEmptyState() {
 					<ol className="mt-5 space-y-5">
 						{STEPS.map((step, index) => (
 							<li key={step} className="flex items-start gap-3">
-								<span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-mint-700 text-xs font-semibold text-white">
+								<span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-ink-900 text-xs font-semibold text-white">
 									{index + 1}
 								</span>
 								<span className="pt-0.5 text-sm text-ink-600">{step}</span>

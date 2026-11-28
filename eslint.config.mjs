@@ -36,6 +36,27 @@ const LEGACY_USE_EFFECT_FILES = [
   'clients/chat-web/components/business/report/plan-report-print-view.tsx',
 ];
 
+const NO_RAW_PALETTE_TOKEN_RULE = {
+  selector:
+    'Literal[value=/\\b(?:mint|cream|jade|lilac)-(?:[0-9]+|subtle|hover|rule)\\b/], TemplateElement[value.raw=/\\b(?:mint|cream|jade|lilac)-(?:[0-9]+|subtle|hover|rule)\\b/]',
+  message:
+    '[设计底座红线] 禁止在页面与业务组件中直写 mint-* / cream-* / jade-* / lilac-* 原始色阶；请改用 design-harness/foundations/colors.md 定义的语义类（bg-commit / border-l-fact / bg-brand / bg-caution / bg-danger / bg-neutral-note / bg-surface-paper）或中性色 ink-*。',
+};
+
+const NO_IMPERATIVE_TIMER_RULE = {
+  selector:
+    "CallExpression[callee.name=/^(setTimeout|requestAnimationFrame|requestIdleCallback)$/], CallExpression[callee.object.name='window'][callee.property.name=/^(setTimeout|requestAnimationFrame|requestIdleCallback)$/]",
+  message:
+    '[根因修复] 禁止在页面/业务组件中使用 setTimeout/rAF/rIC 打时序补丁，请修复状态流、事件回调或交由受控 hook 处理。',
+};
+
+const NO_RAW_USE_EFFECT_RULE = {
+  selector:
+    "CallExpression[callee.name='useEffect'], CallExpression[callee.object.name='React'][callee.property.name='useEffect']",
+  message:
+    '[架构护栏] 新建页面/业务组件禁止裸写 useEffect。请优先使用派生状态、事件处理、React Query/Zustand，或封装到 clients/chat-web/hooks/。',
+};
+
 export default [
   {
     ignores: [
@@ -149,7 +170,15 @@ export default [
       ],
     },
   },
-  // 前端禁止使用命令式定时器打时序补丁
+  // 前端禁止直接写 mint-* / cream-* / jade-* / lilac-* 原始色阶（注意 flat config 同名规则按块整体覆盖，需逐层自包含）
+  {
+    files: ['clients/chat-web/app/**/*.{ts,tsx}', 'clients/chat-web/components/**/*.{ts,tsx}'],
+    ignores: ['clients/chat-web/components/ui/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-syntax': ['error', NO_RAW_PALETTE_TOKEN_RULE],
+    },
+  },
+  // 前端禁止使用命令式定时器打时序补丁（叠加原始色阶禁令）
   {
     files: ['clients/chat-web/app/**/*.{ts,tsx}', 'clients/chat-web/components/**/*.{ts,tsx}'],
     ignores: [
@@ -160,16 +189,12 @@ export default [
     rules: {
       'no-restricted-syntax': [
         'error',
-        {
-          selector:
-            "CallExpression[callee.name=/^(setTimeout|requestAnimationFrame|requestIdleCallback)$/], CallExpression[callee.object.name='window'][callee.property.name=/^(setTimeout|requestAnimationFrame|requestIdleCallback)$/]",
-          message:
-            '[根因修复] 禁止在页面/业务组件中使用 setTimeout/rAF/rIC 打时序补丁，请修复状态流、事件回调或交由受控 hook 处理。',
-        },
+        NO_RAW_PALETTE_TOKEN_RULE,
+        NO_IMPERATIVE_TIMER_RULE,
       ],
     },
   },
-  // 前端新页面与业务组件禁止裸写 useEffect（存量白名单逐步清零）
+  // 前端新页面与业务组件禁止裸写 useEffect（存量白名单逐步清零；叠加原始色阶与定时器禁令）
   {
     files: ['clients/chat-web/app/**/*.{ts,tsx}', 'clients/chat-web/components/**/*.{ts,tsx}'],
     ignores: [
@@ -179,18 +204,9 @@ export default [
     rules: {
       'no-restricted-syntax': [
         'error',
-        {
-          selector:
-            "CallExpression[callee.name=/^(setTimeout|requestAnimationFrame|requestIdleCallback)$/], CallExpression[callee.object.name='window'][callee.property.name=/^(setTimeout|requestAnimationFrame|requestIdleCallback)$/]",
-          message:
-            '[根因修复] 禁止在页面/业务组件中使用 setTimeout/rAF/rIC 打时序补丁，请修复状态流、事件回调或交由受控 hook 处理。',
-        },
-        {
-          selector:
-            "CallExpression[callee.name='useEffect'], CallExpression[callee.object.name='React'][callee.property.name='useEffect']",
-          message:
-            '[架构护栏] 新建页面/业务组件禁止裸写 useEffect。请优先使用派生状态、事件处理、React Query/Zustand，或封装到 clients/chat-web/hooks/。',
-        },
+        NO_RAW_PALETTE_TOKEN_RULE,
+        NO_IMPERATIVE_TIMER_RULE,
+        NO_RAW_USE_EFFECT_RULE,
       ],
     },
   },

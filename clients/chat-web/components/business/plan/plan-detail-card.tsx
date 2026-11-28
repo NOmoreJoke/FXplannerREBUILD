@@ -84,8 +84,8 @@ export function PlanDetailCard({ plan }: { plan: PlanDetail }) {
 						<Badge
 							className={
 								plan.fundStatus === "PREPARING"
-									? "border-cream-300 bg-cream-100 text-foreground"
-									: "border-mint-200 bg-mint-50 text-mint-700"
+									? "border-caution bg-caution text-caution"
+									: "border-commit bg-commit-subtle text-commit"
 							}
 						>
 							{FUND_STATUS_LABEL[plan.fundStatus]}
@@ -150,8 +150,8 @@ export function PlanDetailCard({ plan }: { plan: PlanDetail }) {
 					<div
 						className={`mt-5 rounded-xl px-4 py-3 text-sm ${
 							plan.fundStatus === "PREPARING"
-								? "bg-cream-100 text-foreground"
-								: "bg-mint-50 text-mint-700"
+								? "border border-caution bg-caution text-caution"
+								: "border border-fact border-l-fact bg-commit-subtle text-commit"
 						}`}
 					>
 						{plan.fundStatus === "READY" ? (
@@ -243,7 +243,7 @@ export function PlanCompleteHint({ plan }: { plan: PlanDetail }) {
 		return null;
 	}
 	return (
-		<p className="flex items-center gap-1.5 text-xs text-mint-700">
+		<p className="flex items-center gap-1.5 text-xs text-commit">
 			<CircleCheck className="size-3.5" />
 			已使用金额等于目标金额且剩余分配为 0，可进行完成确认。
 		</p>

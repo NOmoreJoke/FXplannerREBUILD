@@ -139,14 +139,14 @@ export default function AccountDetailPage() {
 function AccountNotFound() {
 	return (
 		<div className="mx-auto flex max-w-3xl flex-col items-center px-8 py-24 text-center">
-			<CircleAlert className="size-10 text-cream-300" />
+			<CircleAlert className="size-10 text-ink-300" />
 			<h1 className="mt-4 text-lg font-bold text-foreground">账户不存在</h1>
 			<p className="mt-2 text-sm text-muted-foreground">
 				该币种账户不存在或不属于当前账号。
 			</p>
 			<Link
 				href="/accounts"
-				className="mt-6 text-sm font-medium text-mint-700 hover:underline"
+				className="mt-6 text-sm font-medium text-ink-700 hover:text-ink-900 hover:underline"
 			>
 				返回账户列表
 			</Link>
@@ -158,7 +158,7 @@ function AccountNotFound() {
 function DetailError({ onRetry }: { onRetry: () => void }) {
 	return (
 		<div className="mx-auto flex max-w-5xl flex-col items-center justify-center px-8 py-24 text-center">
-			<CircleAlert className="size-10 text-cream-300" />
+			<CircleAlert className="size-10 text-ink-300" />
 			<h1 className="mt-4 text-lg font-bold text-foreground">
 				账户详情加载失败
 			</h1>
@@ -167,7 +167,7 @@ function DetailError({ onRetry }: { onRetry: () => void }) {
 			</p>
 			<div className="mt-6 flex items-center gap-3">
 				<Button
-					className="bg-mint-700 text-white hover:bg-mint-700/90"
+					className="bg-ink-900 text-white hover:bg-ink-900/90"
 					onClick={onRetry}
 				>
 					重试

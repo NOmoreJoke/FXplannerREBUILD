@@ -117,7 +117,7 @@ export function InviteForm() {
 					type="button"
 					disabled={!email.trim() || mutation.isPending}
 					onClick={() => mutation.mutate()}
-					className="rounded-lg bg-mint-700 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+					className="rounded-lg bg-ink-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-ink-900/90 disabled:opacity-50"
 					data-testid="invite-submit"
 				>
 					{mutation.isPending ? "邀请中…" : "发送邀请"}

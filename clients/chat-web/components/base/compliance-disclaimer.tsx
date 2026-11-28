@@ -15,8 +15,8 @@ export const COMPLIANCE_DISCLAIMER_TEXT =
 
 export function ComplianceDisclaimer() {
 	return (
-		<div className="flex items-center gap-2 rounded-xl bg-mint-50 px-4 py-3">
-			<ShieldCheck className="size-4 shrink-0 text-mint-700" />
+		<div className="flex items-center gap-2 rounded-xl border border-neutral-note bg-neutral-note px-4 py-3">
+			<ShieldCheck className="size-4 shrink-0 text-ink-600" />
 			<p className="text-xs leading-5 text-ink-600">
 				{COMPLIANCE_DISCLAIMER_TEXT}
 			</p>

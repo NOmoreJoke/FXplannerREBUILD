@@ -255,9 +255,9 @@ export function UsageRecordDialog({
 					</div>
 
 					{summary ? (
-						<div className="rounded-xl bg-cream-100 px-4 py-3 text-xs text-foreground">
+						<div className="rounded-xl border border-caution bg-caution px-4 py-3 text-xs text-caution">
 							<p className="font-medium">确认后将产生以下变化：</p>
-							<ul className="mt-1.5 space-y-1 text-muted-foreground">
+							<ul className="mt-1.5 space-y-1">
 								<li>
 									账户余额减少 {displayAmount(summary.balance)}{" "}
 									{plan.targetCurrency}
@@ -306,7 +306,7 @@ export function UsageRecordDialog({
 						取消
 					</Button>
 					<Button
-						className="bg-mint-700 text-white hover:bg-mint-700/90"
+						className="bg-commit text-white hover:bg-commit-hover"
 						disabled={mutation.isPending || !canRecord}
 						onClick={handleSubmit}
 					>

@@ -31,7 +31,7 @@ import type { ReportPlanListItem, ReportListStatus } from "@/lib/api/contract";
 const STATUS_BADGE: Record<string, { label: string; className: string }> = {
 	ACTIVE: {
 		label: "进行中",
-		className: "bg-mint-50 text-mint-700 border-mint-200",
+		className: "border-commit bg-commit-subtle text-commit",
 	},
 	COMPLETED: {
 		label: "已完成",
@@ -113,7 +113,7 @@ export function ReportPlanList({ onDownload }: ReportPlanListProps) {
 								onClick={() => setStatus(filter.value)}
 								className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
 									active
-										? "bg-mint-700 text-white"
+										? "bg-ink-900 text-white"
 										: "bg-muted text-ink-600 hover:bg-muted/70"
 								}`}
 							>
@@ -132,7 +132,7 @@ export function ReportPlanList({ onDownload }: ReportPlanListProps) {
 							onClick={() => setCurrencyCode(undefined)}
 							className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
 								currencyCode === undefined
-									? "bg-mint-700 text-white"
+									? "bg-ink-900 text-white"
 									: "bg-muted text-ink-600 hover:bg-muted/70"
 							}`}
 						>
@@ -149,7 +149,7 @@ export function ReportPlanList({ onDownload }: ReportPlanListProps) {
 									onClick={() => setCurrencyCode(active ? undefined : code)}
 									className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
 										active
-											? "bg-mint-700 text-white"
+											? "bg-ink-900 text-white"
 											: "bg-muted text-ink-600 hover:bg-muted/70"
 									}`}
 								>
@@ -169,7 +169,7 @@ export function ReportPlanList({ onDownload }: ReportPlanListProps) {
 				</div>
 			) : query.isError ? (
 				<div className="flex flex-col items-center rounded-2xl border border-border bg-white px-8 py-16 text-center">
-					<CircleAlert className="size-10 text-cream-300" />
+					<CircleAlert className="size-10 text-ink-300" />
 					<h2 className="mt-4 text-base font-bold text-foreground">
 						报告加载失败
 					</h2>
@@ -177,7 +177,7 @@ export function ReportPlanList({ onDownload }: ReportPlanListProps) {
 						网络异常或服务暂不可用，请稍后重试。
 					</p>
 					<Button
-						className="mt-6 bg-mint-700 text-white hover:bg-mint-700/90"
+						className="mt-6 bg-ink-900 text-white hover:bg-ink-900/90"
 						onClick={() => {
 							void query.refetch();
 						}}
@@ -223,7 +223,7 @@ function ReportEmptyState({ canCreatePlan }: { canCreatePlan: boolean }) {
 					href="/plans/new"
 					data-testid="reports-empty-create"
 					className={buttonVariants({
-						className: "mt-6 bg-mint-700 text-white hover:bg-mint-700/90",
+						className: "mt-6 bg-ink-900 text-white hover:bg-ink-900/90",
 					})}
 				>
 					<Plus className="size-4" />

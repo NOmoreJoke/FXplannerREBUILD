@@ -29,7 +29,7 @@ const STATUS_BADGE: Record<
 > = {
 	ACTIVE: {
 		label: "进行中",
-		className: "bg-mint-50 text-mint-700 border-mint-200",
+		className: "border-commit bg-commit-subtle text-commit",
 	},
 	COMPLETED: {
 		label: "已完成",
@@ -91,7 +91,7 @@ export function PlanList({
 						href="/plans/new"
 						data-testid="plan-create-entry"
 						className={buttonVariants({
-							className: "bg-mint-700 text-white hover:bg-mint-700/90",
+							className: "bg-ink-900 text-white hover:bg-ink-900/90",
 						})}
 					>
 						<Plus className="size-4" />
@@ -108,7 +108,7 @@ export function PlanList({
 				</div>
 			) : isError ? (
 				<div className="flex flex-col items-center rounded-2xl border border-border bg-white px-8 py-16 text-center">
-					<CircleAlert className="size-10 text-cream-300" />
+					<CircleAlert className="size-10 text-ink-300" />
 					<h2 className="mt-4 text-base font-bold text-foreground">
 						计划列表加载失败
 					</h2>
@@ -116,7 +116,7 @@ export function PlanList({
 						网络异常或服务暂不可用，请稍后重试。
 					</p>
 					<Button
-						className="mt-6 bg-mint-700 text-white hover:bg-mint-700/90"
+						className="mt-6 bg-ink-900 text-white hover:bg-ink-900/90"
 						onClick={onRetry}
 					>
 						重试
@@ -134,7 +134,7 @@ export function PlanList({
 						<Link
 							href="/plans/new"
 							className={buttonVariants({
-								className: "mt-6 bg-mint-700 text-white hover:bg-mint-700/90",
+								className: "mt-6 bg-ink-900 text-white hover:bg-ink-900/90",
 							})}
 						>
 							<Plus className="size-4" />
@@ -165,7 +165,7 @@ function PlanCard({ plan }: { plan: PlanDetail | PlanListItem }) {
 	return (
 		<Link
 			href={`/plans/${plan.id}`}
-			className="block rounded-2xl border border-border bg-white p-5 transition-colors hover:border-mint-300"
+			className="block rounded-2xl border border-border bg-white p-5 transition-colors hover:border-ink-300"
 		>
 			<div className="flex items-start justify-between gap-3">
 				<div className="min-w-0">
@@ -178,7 +178,7 @@ function PlanCard({ plan }: { plan: PlanDetail | PlanListItem }) {
 				</div>
 				<div className="flex shrink-0 items-center gap-2">
 					{isPrepared ? (
-						<Badge className="border-mint-200 bg-mint-50 text-mint-700">
+						<Badge className="border-neutral-note bg-neutral-note text-ink-700">
 							钱已备齐
 						</Badge>
 					) : null}

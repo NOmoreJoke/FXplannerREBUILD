@@ -42,8 +42,8 @@ function PanelHeader({
 }) {
 	return (
 		<div className="flex items-start gap-3">
-			<div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-mint-100">
-				<Icon className="size-5 text-mint-700" aria-hidden="true" />
+			<div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-ink-100">
+				<Icon className="size-5 text-ink-700" aria-hidden="true" />
 			</div>
 			<div className="min-w-0">
 				<h2 className="text-base font-bold text-foreground">{title}</h2>

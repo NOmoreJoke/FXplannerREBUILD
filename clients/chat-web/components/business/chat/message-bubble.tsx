@@ -48,7 +48,7 @@ export function MessageBubble({
 				className={cn(
 					"max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words",
 					isUser
-						? "bg-mint-700 text-white"
+						? "bg-ink-900 text-white"
 						: "border border-border bg-muted/50 text-foreground",
 				)}
 			>

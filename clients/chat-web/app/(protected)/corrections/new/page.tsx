@@ -197,7 +197,7 @@ function CorrectionEditor({
 					</p>
 				</header>
 
-				<section className="rounded-2xl border border-border bg-cream-50 p-5">
+				<section className="rounded-2xl border border-border bg-surface-paper p-5">
 					<h2 className="text-sm font-bold text-foreground">原内容</h2>
 					<OriginalSummary
 						targetType={form.target.targetType}
@@ -216,10 +216,10 @@ function CorrectionEditor({
 
 				{form.stale ? (
 					<p
-						className="flex items-center gap-2 rounded-xl bg-cream-100 px-4 py-3 text-xs text-ink-600"
+						className="flex items-center gap-2 rounded-xl border border-caution bg-caution px-4 py-3 text-xs text-caution"
 						role="alert"
 					>
-						<CircleAlert className="size-4 shrink-0 text-cream-300" />
+						<CircleAlert className="size-4 shrink-0 text-caution" />
 						{form.target.targetType === "USAGE"
 							? "请重新查看影响，确认最新预览后再提交。"
 							: "该记录刚被其他修改更新，已为您重新加载最新内容，请重新查看影响后再提交。"}
@@ -258,7 +258,7 @@ function CorrectionEditor({
 						{form.previewing ? "正在计算影响…" : "查看影响"}
 					</Button>
 					<Button
-						className="bg-mint-700 text-white hover:bg-mint-700/90"
+						className="bg-commit text-white hover:bg-commit-hover"
 						onClick={() => void onConfirm()}
 						disabled={!canSubmit}
 						data-testid="correction-confirm-button"
@@ -372,11 +372,11 @@ function PageShell({
 function InvalidParams({ message }: { message: string }) {
 	return (
 		<div className="mx-auto flex max-w-3xl flex-col items-center py-24 text-center">
-			<CircleAlert className="size-10 text-cream-300" />
+			<CircleAlert className="size-10 text-ink-300" />
 			<h2 className="mt-4 text-lg font-bold text-foreground">无法发起更正</h2>
 			<p className="mt-2 text-sm text-muted-foreground">{message}</p>
 			<Button
-				className="mt-6 bg-mint-700 text-white hover:bg-mint-700/90"
+				className="mt-6 bg-ink-900 text-white hover:bg-ink-900/90"
 				onClick={() => {
 					window.location.href = "/home";
 				}}

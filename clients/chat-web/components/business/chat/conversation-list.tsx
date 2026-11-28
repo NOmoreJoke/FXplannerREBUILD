@@ -82,7 +82,7 @@ export function ConversationList({
 								className={cn(
 									"group flex items-center gap-1 rounded-lg px-1 transition-colors",
 									active
-										? "bg-mint-700 text-white"
+										? "bg-ink-900 text-white"
 										: "text-ink-500 hover:bg-muted hover:text-foreground",
 								)}
 							>

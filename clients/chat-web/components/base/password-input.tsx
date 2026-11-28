@@ -25,7 +25,7 @@ export const PasswordInput = forwardRef<
 				type={visible ? "text" : "password"}
 				disabled={disabled}
 				className={cn(
-					"w-full rounded-lg border border-border px-4 py-2 pr-10 focus:border-mint-500 focus:ring-2 focus:ring-mint-500",
+					"w-full rounded-lg border border-border px-4 py-2 pr-10 focus:border-ink-900 focus:ring-2 focus:ring-ink-900/20",
 					className,
 				)}
 			/>
