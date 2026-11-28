@@ -375,7 +375,7 @@ function SettingsEditor({
 					data-testid="settings-save"
 					disabled={!dirty || saveMutation.isPending}
 					onClick={() => saveMutation.mutate()}
-					className="bg-mint-700 text-white hover:bg-mint-700/90"
+					className="bg-ink-900 text-white hover:bg-ink-900/90"
 				>
 					{saveMutation.isPending ? "保存中…" : "保存"}
 				</Button>
@@ -422,7 +422,7 @@ function OrganizationSettingsBody({
 				{canEdit && (
 					<Button
 						asChild
-						className="mt-4 bg-mint-700 text-white hover:bg-mint-700/90"
+						className="mt-4 bg-ink-900 text-white hover:bg-ink-900/90"
 					>
 						<Link href="/onboarding">去建账</Link>
 					</Button>
@@ -468,7 +468,7 @@ function OrganizationSettingsBody({
 				data-testid="settings-organization-error"
 				className="mt-5 flex flex-col items-center rounded-xl border border-border px-6 py-8 text-center"
 			>
-				<CircleAlert className="size-6 text-cream-300" aria-hidden="true" />
+				<CircleAlert className="size-6 text-ink-300" aria-hidden="true" />
 				<p className="mt-3 text-sm text-muted-foreground">
 					{settings.error instanceof Error
 						? settings.error.message
@@ -562,7 +562,7 @@ function OrganizationSettingsBody({
 						checked={reminderEnabled === true}
 						disabled={!canEdit}
 						onChange={(event) => onReminderEnabledChange(event.target.checked)}
-						className="size-4 cursor-pointer accent-mint-700 disabled:cursor-not-allowed"
+						className="size-4 cursor-pointer accent-ink-900 disabled:cursor-not-allowed"
 					/>
 					准备提醒
 				</label>
@@ -593,13 +593,13 @@ function PanelError({
 }) {
 	return (
 		<div className="flex flex-col items-center rounded-2xl border border-border bg-white px-8 py-12 text-center">
-			<CircleAlert className="size-8 text-cream-300" />
+			<CircleAlert className="size-8 text-ink-300" />
 			<h2 className="mt-3 text-base font-bold text-foreground">
 				设置加载失败
 			</h2>
 			<p className="mt-2 text-sm text-muted-foreground">{message}</p>
 			<Button
-				className="mt-5 bg-mint-700 text-white hover:bg-mint-700/90"
+				className="mt-5 bg-ink-900 text-white hover:bg-ink-900/90"
 				onClick={onRetry}
 			>
 				重试

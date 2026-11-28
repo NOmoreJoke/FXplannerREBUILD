@@ -45,14 +45,14 @@ const STATUS_TEXT: Record<DataRequestDisplayStatus, string> = {
 	FAILED: "处理异常",
 };
 
-/** 状态徽标配色（令牌色；异常用 destructive，进行中用品牌紫，终态降为中性） */
+/** 状态徽标配色（异常用 destructive，进行中用中性胶囊，已完成用已入账事实语义） */
 const STATUS_BADGE_CLASS: Record<DataRequestDisplayStatus, string> = {
 	FAILED: "border border-destructive/30 bg-destructive/10 text-destructive",
-	COMPLETED: "border border-mint-200 bg-mint-50 text-mint-700",
+	COMPLETED: "border border-commit bg-commit-subtle text-commit",
 	CANCELLED: "bg-muted text-muted-foreground",
-	SUBMITTED: "bg-lilac-50 text-lilac-700",
-	WITHDRAWAL_PERIOD: "bg-lilac-50 text-lilac-700",
-	PROCESSING: "bg-lilac-50 text-lilac-700",
+	SUBMITTED: "border border-neutral-note bg-neutral-note text-ink-700",
+	WITHDRAWAL_PERIOD: "border border-neutral-note bg-neutral-note text-ink-700",
+	PROCESSING: "border border-neutral-note bg-neutral-note text-ink-700",
 };
 
 function formatTime(value: string | null | undefined): string {
@@ -89,7 +89,7 @@ export function RequestPanelError({
 			role="alert"
 			className="flex flex-col items-center rounded-xl border border-border px-6 py-6 text-center"
 		>
-			<CircleAlert className="size-6 text-cream-300" aria-hidden="true" />
+			<CircleAlert className="size-6 text-ink-300" aria-hidden="true" />
 			<p className="mt-3 text-sm text-muted-foreground">
 				{error instanceof Error && error.message
 					? error.message
@@ -213,7 +213,7 @@ export function RequestProgress({ view }: { view: DataRequestView }) {
 					</div>
 					<a
 						href="mailto:support@fxplanner.app"
-						className="inline-flex items-center gap-1.5 text-sm text-mint-700 underline-offset-2 hover:underline"
+						className="inline-flex items-center gap-1.5 text-sm text-ink-700 underline-offset-2 hover:text-ink-900 hover:underline"
 						data-testid="request-support-link"
 					>
 						<LifeBuoy className="size-4" aria-hidden="true" />

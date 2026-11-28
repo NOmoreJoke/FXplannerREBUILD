@@ -32,7 +32,7 @@ const STATUS_BADGE: Record<
 > = {
 	ACTIVE: {
 		label: "进行中",
-		className: "bg-mint-50 text-mint-700 border-mint-200",
+		className: "border-commit bg-commit-subtle text-commit",
 	},
 	COMPLETED: {
 		label: "已完成",
@@ -118,7 +118,7 @@ function AllocationRow({ item }: { item: AccountPlanAllocation }) {
 				<div className="flex items-center gap-2">
 					<Link
 						href={`/plans/${item.planId}`}
-						className="text-sm font-medium text-foreground hover:text-mint-700 hover:underline"
+						className="text-sm font-medium text-foreground hover:text-ink-900 hover:underline"
 					>
 						{item.planName ?? "未命名计划"}
 					</Link>

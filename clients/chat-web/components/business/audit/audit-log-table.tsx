@@ -118,7 +118,7 @@ export function AuditLogTable() {
 									<span
 										className={
 											log.result === "SUCCESS"
-												? "text-mint-700"
+												? "text-commit"
 												: log.result === "DENIED"
 													? "text-amber-600"
 													: "text-red-600"

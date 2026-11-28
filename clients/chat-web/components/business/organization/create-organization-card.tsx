@@ -50,7 +50,7 @@ export function CreateOrganizationCard() {
 					type="button"
 					disabled={!name.trim() || create.isPending}
 					onClick={submit}
-					className="inline-flex items-center gap-1.5 rounded-lg bg-mint-700 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+					className="inline-flex items-center gap-1.5 rounded-lg bg-ink-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-ink-900/90 disabled:opacity-50"
 					data-testid="create-organization-submit"
 				>
 					<Plus className="size-4" aria-hidden />

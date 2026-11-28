@@ -181,7 +181,7 @@ function NewTransactionPageContent() {
 
 			<div className="mt-6">
 				<Button
-					className="bg-mint-700 text-white hover:bg-mint-700/90"
+					className="bg-commit text-white hover:bg-commit-hover"
 					disabled={!canCreate}
 					onClick={handleCreate}
 				>

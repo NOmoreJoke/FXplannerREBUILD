@@ -270,7 +270,7 @@ export function WizardStepHoldings({
 							data-testid="holdings-skip"
 							disabled={submitting}
 							onClick={() => onSubmit([])}
-							className="rounded-2xl border border-border bg-white p-5 text-left transition-colors hover:border-mint-300 disabled:cursor-not-allowed disabled:opacity-50"
+							className="rounded-2xl border border-border bg-white p-5 text-left transition-colors hover:border-ink-300 disabled:cursor-not-allowed disabled:opacity-50"
 						>
 							<p className="text-sm font-semibold text-foreground">
 								没有，直接开始
@@ -284,7 +284,7 @@ export function WizardStepHoldings({
 							data-testid="holdings-fill"
 							disabled={submitting}
 							onClick={() => setView("fill")}
-							className="rounded-2xl border border-border bg-white p-5 text-left transition-colors hover:border-mint-300 disabled:cursor-not-allowed disabled:opacity-50"
+							className="rounded-2xl border border-border bg-white p-5 text-left transition-colors hover:border-ink-300 disabled:cursor-not-allowed disabled:opacity-50"
 						>
 							<p className="text-sm font-semibold text-foreground">有，填写</p>
 							<p className="mt-1 text-xs text-muted-foreground">
@@ -296,7 +296,7 @@ export function WizardStepHoldings({
 						<Button
 							type="button"
 							data-testid="holdings-submit"
-							className="flex-1 bg-mint-700 text-white hover:bg-mint-700/90"
+							className="flex-1 bg-commit text-white hover:bg-commit-hover"
 							disabled={submitting}
 							onClick={() => onSubmit([])}
 						>
@@ -424,7 +424,7 @@ export function WizardStepHoldings({
 						)}
 						{review.status === "error" && (
 							<p
-								className="mt-4 rounded-lg bg-cream-100 px-3 py-2 text-sm text-ink-600"
+								className="mt-4 rounded-lg border border-caution bg-caution px-3 py-2 text-sm text-caution"
 								role="alert"
 							>
 								汇率获取失败，请稍后重试
@@ -469,7 +469,7 @@ export function WizardStepHoldings({
 						<Button
 							type="button"
 							data-testid="holdings-submit"
-							className="flex-1 bg-mint-700 text-white hover:bg-mint-700/90"
+							className="flex-1 bg-commit text-white hover:bg-commit-hover"
 							disabled={!canSubmitFill}
 							onClick={submitFill}
 						>

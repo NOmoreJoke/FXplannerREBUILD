@@ -56,7 +56,7 @@ export default function RemindersPage() {
 						disabled={markAllRead.isPending}
 						onClick={() => markAllRead.mutate()}
 						variant="outline"
-						className="border-mint-300 text-mint-700 hover:bg-mint-50"
+						className="border-ink-200 text-ink-700 hover:bg-ink-50"
 					>
 						{markAllRead.isPending ? "处理中…" : "全部标为已读"}
 					</Button>
@@ -68,7 +68,7 @@ export default function RemindersPage() {
 					data-testid="reminders-gate-blocked"
 					className="rounded-2xl border border-dashed border-border bg-white px-8 py-14 text-center"
 				>
-					<BellOff className="mx-auto size-8 text-cream-300" />
+					<BellOff className="mx-auto size-8 text-ink-300" />
 					<h2 className="mt-4 text-base font-bold text-foreground">
 						{deletionLocked ? "组织正在删除处理中" : "当前组织尚未完成建账"}
 					</h2>
@@ -79,7 +79,7 @@ export default function RemindersPage() {
 					</p>
 					{deletionLocked && (
 						<Button
-							className="mt-6 bg-mint-700 text-white hover:bg-mint-700/90"
+							className="mt-6 bg-ink-900 text-white hover:bg-ink-900/90"
 							asChild
 						>
 							<Link href={DATA_REQUESTS_PAGE_PATH}>查看处理进度</Link>
@@ -96,7 +96,7 @@ export default function RemindersPage() {
 					data-testid="reminders-disabled"
 					className="rounded-2xl border border-dashed border-border bg-white px-8 py-14 text-center"
 				>
-					<BellOff className="mx-auto size-8 text-cream-300" />
+					<BellOff className="mx-auto size-8 text-ink-300" />
 					<h2 className="mt-4 text-base font-bold text-foreground">
 						站内提醒已关闭
 					</h2>
@@ -104,7 +104,7 @@ export default function RemindersPage() {
 						关闭期间不再产生新提醒；计划页仍会显示日期、缺口与进度。
 					</p>
 					<Button
-						className="mt-6 bg-mint-700 text-white hover:bg-mint-700/90"
+						className="mt-6 bg-ink-900 text-white hover:bg-ink-900/90"
 						asChild
 					>
 						<Link href="/settings">前往偏好设置</Link>
@@ -112,7 +112,7 @@ export default function RemindersPage() {
 				</div>
 			) : isError ? (
 				<div className="flex flex-col items-center justify-center px-8 py-24 text-center">
-					<CircleAlert className="size-10 text-cream-300" />
+					<CircleAlert className="size-10 text-ink-300" />
 					<h2 className="mt-4 text-lg font-bold text-foreground">
 						提醒加载失败
 					</h2>
@@ -120,7 +120,7 @@ export default function RemindersPage() {
 						无法获取提醒列表，请检查网络后重试。
 					</p>
 					<Button
-						className="mt-6 bg-mint-700 text-white hover:bg-mint-700/90"
+						className="mt-6 bg-ink-900 text-white hover:bg-ink-900/90"
 						onClick={() => refetch()}
 					>
 						重试
@@ -131,7 +131,7 @@ export default function RemindersPage() {
 					data-testid="reminders-empty"
 					className="rounded-2xl border border-dashed border-border bg-white px-8 py-14 text-center"
 				>
-					<BellOff className="mx-auto size-8 text-cream-300" />
+					<BellOff className="mx-auto size-8 text-ink-300" />
 					<h2 className="mt-4 text-base font-bold text-foreground">暂无提醒</h2>
 					<p className="mt-2 text-sm text-muted-foreground">
 						到了准备日或使用日，提醒会出现在这里。

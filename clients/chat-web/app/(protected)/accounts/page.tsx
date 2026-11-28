@@ -66,7 +66,7 @@ export default function AccountsPage() {
 						href="/transactions/new"
 						data-testid="accounts-create-transaction"
 						className={buttonVariants({
-							className: "bg-mint-700 text-white hover:bg-mint-700/90",
+							className: "bg-ink-900 text-white hover:bg-ink-900/90",
 						})}
 					>
 						<Plus className="size-4" />
@@ -121,7 +121,7 @@ function AccountsTable({ accounts }: { accounts: AccountListItem[] }) {
 							<TableCell className="text-right">
 								<Link
 									href={`/accounts/${account.currencyCode}`}
-									className="text-sm font-medium text-mint-700 hover:underline"
+									className="text-sm font-medium text-ink-700 hover:text-ink-900 hover:underline"
 								>
 									查看账户
 								</Link>
@@ -155,7 +155,7 @@ function AccountsEmpty({
 					href="/transactions/new"
 					data-testid="accounts-empty-create-transaction"
 					className={buttonVariants({
-						className: "mt-6 bg-mint-700 text-white hover:bg-mint-700/90",
+						className: "mt-6 bg-ink-900 text-white hover:bg-ink-900/90",
 					})}
 				>
 					<Plus className="size-4" />
@@ -189,7 +189,7 @@ function AccountsSkeleton() {
 function AccountsError({ onRetry }: { onRetry: () => void }) {
 	return (
 		<div className="mx-auto flex max-w-5xl flex-col items-center justify-center px-8 py-24 text-center">
-			<CircleAlert className="size-10 text-cream-300" />
+			<CircleAlert className="size-10 text-ink-300" />
 			<h1 className="mt-4 text-lg font-bold text-foreground">
 				外汇账户加载失败
 			</h1>
@@ -197,7 +197,7 @@ function AccountsError({ onRetry }: { onRetry: () => void }) {
 				网络异常或服务暂不可用，请稍后重试。
 			</p>
 			<Button
-				className="mt-6 bg-mint-700 text-white hover:bg-mint-700/90"
+				className="mt-6 bg-ink-900 text-white hover:bg-ink-900/90"
 				onClick={onRetry}
 			>
 				重试

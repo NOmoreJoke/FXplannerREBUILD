@@ -28,8 +28,8 @@ export function InitialBackfillCard() {
 		>
 			<div className="flex items-start justify-between gap-4">
 				<div className="flex items-start gap-3">
-					<div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-mint-100">
-						<PiggyBank className="size-5 text-mint-700" aria-hidden="true" />
+					<div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-ink-100">
+						<PiggyBank className="size-5 text-ink-700" aria-hidden="true" />
 					</div>
 					<div>
 						<h3 className="text-base font-bold text-foreground">
@@ -44,7 +44,7 @@ export function InitialBackfillCard() {
 					<Link
 						href="/onboarding?backfill=1"
 						data-testid="initial-backfill-cta"
-						className="flex shrink-0 items-center gap-1.5 rounded-lg bg-mint-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-mint-700/90"
+						className="flex shrink-0 items-center gap-1.5 rounded-lg bg-ink-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-ink-900/90"
 					>
 						去补录
 						<ArrowRight className="size-4" aria-hidden="true" />

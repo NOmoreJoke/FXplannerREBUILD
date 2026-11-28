@@ -202,9 +202,9 @@ function NewPlanForm({
 			{fromDraft && (
 				<div
 					data-testid="plan-draft-confirm-banner"
-					className="mb-6 rounded-2xl border border-mint-300 bg-mint-50 px-4 py-3 text-sm text-foreground"
+					className="mb-6 rounded-2xl border-proposal bg-surface-paper px-4 py-3 text-sm text-foreground"
 				>
-					<div className="font-semibold text-mint-700">
+					<div className="font-semibold text-ink-900">
 						正在复核 AI 助手生成的计划草稿（尚未入账）
 					</div>
 					<p className="mt-1 text-xs text-muted-foreground">
@@ -261,7 +261,7 @@ function NewPlanForm({
 			<div className="mt-6 flex items-center gap-3">
 				<Button
 					data-testid="plan-create-submit"
-					className="bg-mint-700 text-white hover:bg-mint-700/90"
+					className="bg-commit text-white hover:bg-commit-hover"
 					disabled={!canCreate}
 					onClick={handleCreate}
 				>

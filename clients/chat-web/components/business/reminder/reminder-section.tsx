@@ -45,7 +45,7 @@ export function ReminderSection() {
 				<span>站内提醒已关闭，可在</span>
 				<Link
 					href="/settings"
-					className="font-medium text-mint-700 underline-offset-2 hover:underline"
+					className="font-medium text-ink-700 underline-offset-2 hover:text-ink-900 hover:underline"
 				>
 					偏好设置
 				</Link>
@@ -74,7 +74,7 @@ export function ReminderSection() {
 	return (
 		<section
 			data-testid="reminder-section"
-			className="mb-6 rounded-2xl border border-mint-200 bg-white p-5"
+			className="mb-6 rounded-2xl border border-caution bg-surface-paper p-5"
 		>
 			<div className="mb-3 flex items-center justify-between">
 				<h2 className="text-base font-bold text-foreground">今日提醒</h2>

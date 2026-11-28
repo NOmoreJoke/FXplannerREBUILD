@@ -81,7 +81,7 @@ export default function MarketPage() {
 					</p>
 					{can("settings.update") && (
 						<Button
-							className="mt-4 bg-mint-700 text-white hover:bg-mint-700/90"
+							className="mt-4 bg-ink-900 text-white hover:bg-ink-900/90"
 							onClick={() => router.push("/onboarding")}
 						>
 							去建账

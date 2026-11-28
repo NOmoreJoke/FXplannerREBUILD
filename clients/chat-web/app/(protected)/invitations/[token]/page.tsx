@@ -84,7 +84,7 @@ export default function InvitationTokenPage({
 						</p>
 						<Link
 							href="/home"
-							className="inline-block rounded-lg bg-mint-700 px-4 py-2 text-sm font-medium text-white"
+							className="inline-block rounded-lg bg-ink-900 px-4 py-2 text-sm font-medium text-white hover:bg-ink-900/90"
 						>
 							进入工作台
 						</Link>
@@ -154,7 +154,7 @@ export default function InvitationTokenPage({
 										type="button"
 										disabled={decide.isPending}
 										onClick={() => decide.mutate("accept")}
-										className="flex-1 rounded-lg bg-mint-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+										className="flex-1 rounded-lg bg-ink-900 px-4 py-2 text-sm font-medium text-white hover:bg-ink-900/90 disabled:opacity-50"
 										data-testid="invitation-accept"
 									>
 										{decide.isPending ? "处理中…" : "接受邀请"}

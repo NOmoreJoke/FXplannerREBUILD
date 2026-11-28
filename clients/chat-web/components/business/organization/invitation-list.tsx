@@ -78,7 +78,7 @@ export function InvitationList() {
 					<span
 						className={
 							invitation.status === "OPEN"
-								? "text-xs text-mint-700"
+								? "text-xs text-ink-700"
 								: "text-xs text-muted-foreground"
 						}
 					>

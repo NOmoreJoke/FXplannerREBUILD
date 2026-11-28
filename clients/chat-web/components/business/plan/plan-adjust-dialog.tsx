@@ -100,7 +100,7 @@ export function PlanAdjustDialog({
 				{/* 提交结果不明提示（核对完成后展示，供用户核对最新数据） */}
 				{adjust.unknownOutcome ? (
 					<p
-						className="rounded-lg bg-cream-100 px-3 py-2 text-sm text-foreground"
+						className="rounded-lg border border-caution bg-caution px-3 py-2 text-sm text-caution"
 						role="alert"
 					>
 						刚才的提交结果不明（网络异常），已为你核对最新数据，请确认计划当前状态后再操作。
@@ -130,7 +130,7 @@ export function PlanAdjustDialog({
 								取消
 							</Button>
 							<Button
-								className="bg-mint-700 text-white hover:bg-mint-700/90"
+								className="bg-ink-900 text-white hover:bg-ink-900/90"
 								disabled={isBusy}
 								onClick={() => {
 									void adjust.runPreview();
@@ -159,7 +159,7 @@ export function PlanAdjustDialog({
 								返回修改
 							</Button>
 							<Button
-								className="bg-mint-700 text-white hover:bg-mint-700/90"
+								className="bg-commit text-white hover:bg-commit-hover"
 								disabled={isBusy}
 								onClick={() => {
 									void adjust.confirm().then((detail) => {
@@ -468,7 +468,7 @@ function SnapshotBlock({
 	return (
 		<div
 			className={`rounded-xl border px-3 py-2.5 ${
-				highlight ? "border-mint-300 bg-mint-50/60" : "border-border bg-white"
+				highlight ? "border-caution bg-caution" : "border-border bg-white"
 			}`}
 		>
 			<h5 className="text-xs font-semibold text-muted-foreground">{title}</h5>

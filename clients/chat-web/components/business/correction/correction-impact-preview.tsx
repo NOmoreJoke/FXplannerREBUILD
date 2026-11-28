@@ -166,9 +166,9 @@ export function CorrectionImpactPreview({
 			{preview.impacts.warnings.map((warning) => (
 				<p
 					key={warning}
-					className="flex items-start gap-2 rounded-xl bg-cream-100 px-4 py-3 text-xs leading-5 text-ink-600"
+					className="flex items-start gap-2 rounded-xl border border-caution bg-caution px-4 py-3 text-xs leading-5 text-caution"
 				>
-					<Info className="mt-0.5 size-4 shrink-0 text-cream-300" />
+					<Info className="mt-0.5 size-4 shrink-0 text-caution" />
 					{warning}
 				</p>
 			))}

@@ -69,8 +69,8 @@ export function ReminderCard({ item, href }: ReminderCardProps) {
 			className={cn(
 				"w-full rounded-xl border p-4 text-left transition-colors",
 				unread
-					? "border-mint-300 bg-mint-50 hover:border-mint-400"
-					: "border-border bg-white hover:border-mint-200",
+					? "border-caution bg-caution hover:border-caution-rule"
+					: "border-border bg-white hover:border-ink-300",
 			)}
 		>
 			<div className="flex items-start justify-between gap-3">
@@ -79,7 +79,7 @@ export function ReminderCard({ item, href }: ReminderCardProps) {
 						<span
 							data-testid="reminder-unread-dot"
 							aria-label="未读"
-							className="size-2 rounded-full bg-mint-600"
+							className="size-2 rounded-full bg-caution-rule"
 						/>
 					)}
 					<span className="text-sm font-semibold text-foreground">
@@ -102,7 +102,7 @@ export function ReminderCard({ item, href }: ReminderCardProps) {
 						key={`${matter.kind}-${index}`}
 						className="flex items-start gap-1.5 text-sm leading-6 text-ink-600"
 					>
-						<BellRing className="mt-1 size-3.5 shrink-0 text-mint-700" />
+						<BellRing className="mt-1 size-3.5 shrink-0 text-caution" />
 						{matterText(matter, item.targetCurrency)}
 					</li>
 				))}

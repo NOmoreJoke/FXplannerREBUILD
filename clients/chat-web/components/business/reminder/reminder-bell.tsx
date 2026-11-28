@@ -31,7 +31,7 @@ export function ReminderBell() {
 			href="/reminders"
 			data-testid="reminder-bell"
 			aria-label={`提醒中心${showBadge ? `（${unreadCount} 条未读）` : ""}`}
-			className="relative flex size-9 items-center justify-center rounded-full border border-border bg-white text-ink-600 transition-colors hover:border-mint-300 hover:text-mint-700"
+			className="relative flex size-9 items-center justify-center rounded-full border border-border bg-white text-ink-600 transition-colors hover:border-ink-300 hover:text-ink-900"
 		>
 			<Bell className="size-4" />
 			{showBadge && (

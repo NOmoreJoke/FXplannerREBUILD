@@ -102,7 +102,7 @@ export function ChatWorkspace() {
 						)}
 						<span
 							data-testid="chat-org-tools-status"
-							className="rounded-full bg-mint-50 px-2.5 py-1 font-medium text-mint-700"
+							className="rounded-full border border-neutral-note bg-neutral-note px-2.5 py-1 font-medium text-ink-700"
 						>
 							{orgToolsStatusText}
 						</span>

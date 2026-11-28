@@ -4,21 +4,21 @@ import { ComplianceDisclaimer } from "@/components/base";
 
 /**
  * 公开落地页（纯静态服务端组件）
- * 品牌视觉与工作台侧边栏同源：mint 方块 Logo + font-display 字标
+ * 品牌视觉与工作台侧边栏同源：Jade 品牌方块 Logo + font-display 字标
  */
 export default function HomePage() {
 	return (
 		<main className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background px-6">
-			{/* 顶部 mint 品牌渐变点缀 */}
+			{/* 顶部 Jade 品牌渐变点缀 */}
 			<div
 				aria-hidden="true"
-				className="pointer-events-none absolute inset-x-0 top-0 h-72 bg-gradient-to-b from-mint-50 to-transparent"
+				className="pointer-events-none absolute inset-x-0 top-0 h-72 bg-gradient-to-b from-brand-subtle to-transparent"
 			/>
 
 			<div className="relative flex flex-col items-center text-center">
 				{/* Logo：与工作台侧边栏同源 */}
 				<div className="mb-8 flex items-center gap-2.5">
-					<div className="flex size-10 items-center justify-center rounded-lg bg-mint-700 text-sm font-bold text-white">
+					<div className="flex size-10 items-center justify-center rounded-lg bg-brand text-sm font-bold text-white">
 						FX
 					</div>
 					<span className="font-display text-2xl font-semibold text-foreground">

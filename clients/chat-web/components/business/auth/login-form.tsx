@@ -190,7 +190,7 @@ export function LoginForm() {
 				<div className="rounded-lg bg-card p-8 shadow-panel">
 					<div className="mb-8 text-center">
 						<div className="mb-3 flex items-center justify-center gap-2.5">
-							<div className="flex size-8 items-center justify-center rounded-lg bg-mint-700 text-xs font-bold text-white">
+							<div className="flex size-8 items-center justify-center rounded-lg bg-brand text-xs font-bold text-white">
 								FX
 							</div>
 							<h1 className="font-display text-2xl font-semibold text-foreground">
@@ -241,7 +241,7 @@ export function LoginForm() {
 								data-testid="consent-age18"
 								checked={age18Confirmed}
 								onChange={(event) => setAge18Confirmed(event.target.checked)}
-								className="mt-0.5 size-4 shrink-0 cursor-pointer accent-mint-700"
+								className="mt-0.5 size-4 shrink-0 cursor-pointer accent-ink-900"
 							/>
 							<span>已满 18 周岁</span>
 						</label>
@@ -251,7 +251,7 @@ export function LoginForm() {
 								data-testid="consent-terms"
 								checked={termsConfirmed}
 								onChange={(event) => setTermsConfirmed(event.target.checked)}
-								className="mt-0.5 size-4 shrink-0 cursor-pointer accent-mint-700"
+								className="mt-0.5 size-4 shrink-0 cursor-pointer accent-ink-900"
 							/>
 							<span>已阅读并同意服务条款与隐私说明</span>
 						</label>
@@ -282,7 +282,7 @@ export function LoginForm() {
 									type="email"
 									autoComplete="email"
 									{...register("email")}
-									className="w-full rounded-lg border border-border px-4 py-2 focus:border-mint-500 focus:ring-2 focus:ring-mint-500"
+									className="w-full rounded-lg border border-border px-4 py-2 focus:border-ink-900 focus:ring-2 focus:ring-ink-900/20"
 									placeholder="your@email.com"
 									disabled={isLoading}
 								/>
@@ -318,7 +318,7 @@ export function LoginForm() {
 								type="submit"
 								data-testid="password-login-submit"
 								disabled={isLoading || !consentsGiven}
-								className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-mint-700 px-4 py-2 font-medium text-white transition-colors hover:bg-mint-700/90 disabled:cursor-not-allowed disabled:opacity-50"
+								className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-ink-900 px-4 py-2 font-medium text-white transition-colors hover:bg-ink-900/90 disabled:cursor-not-allowed disabled:opacity-50"
 							>
 								{isLoading ? "登录中..." : "登录"}
 							</button>
@@ -343,7 +343,7 @@ export function LoginForm() {
 										setChallengeId(null);
 										setOtpCode("");
 									}}
-									className="w-full rounded-lg border border-border px-4 py-2 focus:border-mint-500 focus:ring-2 focus:ring-mint-500"
+									className="w-full rounded-lg border border-border px-4 py-2 focus:border-ink-900 focus:ring-2 focus:ring-ink-900/20"
 									placeholder="your@email.com"
 									disabled={isLoading || isSendingOtp}
 								/>
@@ -370,7 +370,7 @@ export function LoginForm() {
 												event.target.value.replace(/\D/g, "").slice(0, 6),
 											)
 										}
-										className="min-w-0 flex-1 rounded-lg border border-border px-4 py-2 tracking-[0.2em] focus:border-mint-500 focus:ring-2 focus:ring-mint-500"
+										className="min-w-0 flex-1 rounded-lg border border-border px-4 py-2 tracking-[0.2em] focus:border-ink-900 focus:ring-2 focus:ring-ink-900/20"
 										placeholder="6 位数字"
 										disabled={isLoading}
 									/>
@@ -393,7 +393,7 @@ export function LoginForm() {
 								type="submit"
 								data-testid="otp-login-submit"
 								disabled={isLoading || !challengeId || !consentsGiven}
-								className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-mint-700 px-4 py-2 font-medium text-white transition-colors hover:bg-mint-700/90 disabled:cursor-not-allowed disabled:opacity-50"
+								className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-ink-900 px-4 py-2 font-medium text-white transition-colors hover:bg-ink-900/90 disabled:cursor-not-allowed disabled:opacity-50"
 							>
 								{isLoading ? "验证中..." : "验证并登录"}
 							</button>
@@ -408,7 +408,7 @@ export function LoginForm() {
 									? `/register?redirect=${encodeURIComponent(redirect)}`
 									: "/register"
 							}
-							className="font-medium text-mint-700 transition-colors hover:text-mint-900"
+							className="font-medium text-ink-700 transition-colors hover:text-ink-900"
 						>
 							立即注册
 						</Link>

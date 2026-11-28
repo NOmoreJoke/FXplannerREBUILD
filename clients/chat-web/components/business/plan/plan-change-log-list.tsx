@@ -50,7 +50,7 @@ export function PlanChangeLogList({ logs }: { logs: PlanChangeLog[] }) {
 						<div className="flex items-center justify-between gap-3">
 							<Badge
 								variant="outline"
-								className="shrink-0 border-mint-200 bg-mint-50 text-mint-700"
+								className="shrink-0 border-commit bg-commit-subtle text-commit"
 							>
 								{label}
 							</Badge>

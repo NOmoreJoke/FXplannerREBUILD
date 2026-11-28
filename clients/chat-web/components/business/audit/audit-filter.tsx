@@ -117,7 +117,7 @@ export function AuditFilter({
 			<button
 				type="button"
 				onClick={apply}
-				className="rounded-lg bg-mint-700 px-3 py-1 text-xs font-medium text-white"
+				className="rounded-lg bg-ink-900 px-3 py-1 text-xs font-medium text-white hover:bg-ink-900/90"
 				data-testid="audit-filter-apply"
 			>
 				应用筛选
