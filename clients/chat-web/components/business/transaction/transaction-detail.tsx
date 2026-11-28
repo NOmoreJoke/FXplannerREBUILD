@@ -15,9 +15,8 @@ import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabi
  * feeKnown=false —— 显示「费用未明确」提示与「成本不完整」，绝不当 0 计算。
  *
  * 单位口径（FE-01 修复）：到账数量为买入外币（currencyCode）；本金/手续费/
- * 交易总成本按后端契约（TransactionDto @description）一律为「本位币」，当前
- * 系统本位币建账后锁定为 CNY（CompleteOnboardingDto），故标注 CNY；
- * 若未来放开多本位币，应改为读组织设置 baseCurrency。
+ * 交易总成本按后端契约一律为「本位币」，由父级从当前组织设置动态传入 baseCurrency；
+ * 未就绪时省略币种后缀，不硬编码 CNY。
  *
  * 能力门控（Goal #3B W28）：「更正」入口需 correction.apply（Operator / Viewer 不显示，
  * 后端仍强制校验）。修改记录（含失败尝试）对所有可读角色照常展示。
@@ -25,6 +24,8 @@ import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabi
 
 export interface TransactionDetailProps {
 	detail: TransactionDto;
+	/** 当前组织本位币；缺省时省略本金/手续费/总成本后缀 */
+	baseCurrency?: string | null;
 }
 
 /** ISO 8601 UTC 时间戳 → yyyy-MM-dd（交易日期按用户所选日期语义落库，直接取日期部分） */
@@ -32,10 +33,14 @@ function formatDisplayDate(isoDate: string): string {
 	return isoDate.slice(0, 10);
 }
 
-export function TransactionDetail({ detail }: TransactionDetailProps) {
+export function TransactionDetail({
+	detail,
+	baseCurrency = null,
+}: TransactionDetailProps) {
 	const currencyName = getCurrencyName(detail.currencyCode);
 	const { can } = useOrganizationCapabilities();
 	const canCorrect = can("correction.apply");
+	const baseUnit = baseCurrency ? ` ${baseCurrency}` : "";
 
 	return (
 		<div className="space-y-6">
@@ -83,13 +88,13 @@ export function TransactionDetail({ detail }: TransactionDetailProps) {
 						label="到账数量"
 						value={`${detail.quantity} ${detail.currencyCode}`}
 					/>
-					<DetailRow label="本金" value={`${detail.principalAmount} CNY`} />
+					<DetailRow label="本金" value={`${detail.principalAmount}${baseUnit}`} />
 					<DetailRow
 						label="手续费"
 						value={
 							detail.feeAmount === null
 								? "未知（未明确，不当 0 计算）"
-								: `${detail.feeAmount} CNY`
+								: `${detail.feeAmount}${baseUnit}`
 						}
 						muted={detail.feeAmount === null}
 					/>
@@ -98,7 +103,7 @@ export function TransactionDetail({ detail }: TransactionDetailProps) {
 						value={
 							detail.totalCost === null
 								? "不完整（费用未明确）"
-								: `${detail.totalCost} CNY`
+								: `${detail.totalCost}${baseUnit}`
 						}
 						muted={detail.totalCost === null}
 					/>
@@ -135,7 +140,7 @@ export function TransactionDetail({ detail }: TransactionDetailProps) {
 			<section className="rounded-2xl border border-border bg-white p-6">
 				<h2 className="text-base font-bold text-foreground">修改记录</h2>
 				<p className="mb-4 mt-1 text-xs text-muted-foreground">
-					含失败的更正尝试；所有记录永久保留、不可删除。
+					含失败的更正尝试；单笔更正保留原记录及修改历史，整套数据清理按账号与组织数据规则处理。
 				</p>
 				<CorrectionHistoryList targetType="TRANSACTION" targetId={detail.id} />
 			</section>

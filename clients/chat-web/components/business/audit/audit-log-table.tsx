@@ -7,6 +7,11 @@ import { queryKeys, withOrgScope } from "@/lib/api/query-keys";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import { useCurrentOrganization } from "@/lib/hooks/use-organizations";
 import { AuditFilter, type AuditFilterQuery } from "./audit-filter";
+import {
+	formatAuditActionLabel,
+	formatAuditResultLabel,
+	formatAuditTargetLabel,
+} from "./audit-labels";
 import { PageLoading } from "@/components/base";
 
 /**
@@ -100,35 +105,44 @@ export function AuditLogTable() {
 						</tr>
 					</thead>
 					<tbody>
-						{(data?.items ?? []).map((log) => (
-							<tr key={log.id} className="border-t border-border">
-								<td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">
-									{log.createdAt.slice(0, 19).replace("T", " ")}
-								</td>
-								<td className="px-4 py-2.5 text-xs">
-									{log.actorUserId?.slice(0, 8) ?? "系统"}
-								</td>
-								<td className="px-4 py-2.5 text-xs text-foreground">
-									{log.action}
-								</td>
-								<td className="px-4 py-2.5 text-xs text-muted-foreground">
-									{log.targetType ?? "—"}
-								</td>
-								<td className="px-4 py-2.5 text-xs">
-									<span
-										className={
-											log.result === "SUCCESS"
-												? "text-commit"
-												: log.result === "DENIED"
-													? "text-amber-600"
-													: "text-red-600"
-										}
-									>
-										{log.result}
-									</span>
-								</td>
-							</tr>
-						))}
+						{(data?.items ?? []).map((log) => {
+							const actionLabel = formatAuditActionLabel(log.action);
+							return (
+								<tr key={log.id} className="border-t border-border">
+									<td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">
+										{log.createdAt.slice(0, 19).replace("T", " ")}
+									</td>
+									<td className="px-4 py-2.5 text-xs">
+										{log.actorUserId?.slice(0, 8) ?? "系统"}
+									</td>
+									<td className="px-4 py-2.5 text-xs text-foreground">
+										<span>{actionLabel}</span>
+										{actionLabel !== log.action && (
+											<span className="ml-1.5 font-mono text-[11px] text-muted-foreground">
+												{log.action}
+											</span>
+										)}
+									</td>
+									<td className="px-4 py-2.5 text-xs text-muted-foreground">
+										{formatAuditTargetLabel(log.targetType)}
+									</td>
+									<td className="px-4 py-2.5 text-xs">
+										<span
+											data-result={log.result}
+											className={
+												log.result === "SUCCESS"
+													? "font-medium text-commit"
+													: log.result === "DENIED"
+														? "font-medium text-caution"
+														: "font-medium text-danger"
+											}
+										>
+											{formatAuditResultLabel(log.result)}
+										</span>
+									</td>
+								</tr>
+							);
+						})}
 						{data?.items.length === 0 && (
 							<tr>
 								<td

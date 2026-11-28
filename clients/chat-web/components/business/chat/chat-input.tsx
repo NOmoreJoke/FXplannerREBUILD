@@ -9,6 +9,10 @@ import { ModelSelector } from "./model-selector";
 interface ChatInputProps {
 	/** 任意流进行中：禁发，发送钮切换为停止钮（单流交互约定） */
 	streaming: boolean;
+	/** 整体禁用（如 AI 服务未配置或未开放 503） */
+	disabled?: boolean;
+	/** 整体禁用时的占位文案 */
+	disabledPlaceholder?: string;
 	onSend: (content: string) => void;
 	onStop: () => void;
 }
@@ -18,9 +22,16 @@ interface ChatInputProps {
  * 输入法组词态）；流式中禁发并可停止生成。内容 trim 后为空不发（hook 再兜底）。
  * 左侧嵌模型选择器（ai-model-whitelist 方案 §5.2，流式中同步禁用）。
  */
-export function ChatInput({ streaming, onSend, onStop }: ChatInputProps) {
+export function ChatInput({
+	streaming,
+	disabled = false,
+	disabledPlaceholder,
+	onSend,
+	onStop,
+}: ChatInputProps) {
 	const [value, setValue] = useState("");
-	const canSend = value.trim().length > 0 && !streaming;
+	const inputDisabled = streaming || disabled;
+	const canSend = value.trim().length > 0 && !inputDisabled;
 
 	const submit = () => {
 		if (!canSend) return;
@@ -32,7 +43,7 @@ export function ChatInput({ streaming, onSend, onStop }: ChatInputProps) {
 		<div className="border-t border-border p-3">
 			<div className="flex items-end gap-2">
 				<div className="pb-1.5">
-					<ModelSelector disabled={streaming} />
+					<ModelSelector disabled={inputDisabled} />
 				</div>
 				<Textarea
 					data-testid="chat-input"
@@ -50,11 +61,13 @@ export function ChatInput({ streaming, onSend, onStop }: ChatInputProps) {
 						}
 					}}
 					placeholder={
-						streaming
-							? "回复生成中…"
-							: "向 AI 助手提问，Enter 发送，Shift+Enter 换行"
+						disabled
+							? (disabledPlaceholder ?? "AI 服务暂不可用")
+							: streaming
+								? "回复生成中…"
+								: "向 AI 助手提问，Enter 发送，Shift+Enter 换行"
 					}
-					disabled={streaming}
+					disabled={inputDisabled}
 					className="max-h-40 min-h-11 resize-none"
 				/>
 				{streaming ? (

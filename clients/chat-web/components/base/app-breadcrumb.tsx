@@ -50,6 +50,25 @@ export function resolveCrumbs(pathname: string): Crumb[] {
 		case "transactions":
 			if (second === "new") return [{ label: "快速录入" }];
 			return [{ label: "交易详情" }];
+		case "corrections":
+			if (second === "new") return [{ label: "发起更正" }];
+			return [{ label: "账本更正" }];
+		case "reports":
+			return [{ label: "我的报告" }];
+		case "market":
+			return [{ label: "汇率行情" }];
+		case "chat":
+			return [{ label: "AI 助手" }];
+		case "reminders":
+			return [{ label: "提醒中心" }];
+		case "onboarding":
+			return [{ label: "首次建账" }];
+		case "settings":
+			return [{ label: "设置" }];
+		case "data-requests":
+			return [{ label: "数据请求进度" }];
+		case "projects":
+			return [{ label: "项目" }];
 		case "invitations":
 			// 邀请 token 是一次性凭证：不得出现在面包屑/截图/无障碍朗读里（外部评审前端批次）
 			return [{ label: "加入组织" }];

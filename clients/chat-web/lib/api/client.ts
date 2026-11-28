@@ -146,6 +146,7 @@ export async function consumeDataRequestLock(
  * - 403 PERMISSION_DENIED：角色无对应权限点（后端拒绝了一次越权写，前端门控的兜底）
  * - 400 ORGANIZATION_REQUIRED / 404 ORGANIZATION_NOT_FOUND：ToB 组织上下文语义
  *   （选择失效/权限变化由组织路由层接管，W20）
+ * - 503 AI_NOT_CONFIGURED / AI_DISABLED：AI 服务未配置或暂未开放（/chat 渲染温和降级卡片，不上报错误）
  */
 export function isExpectedControlFlowApiError(
 	status: number,
@@ -156,6 +157,9 @@ export function isExpectedControlFlowApiError(
 	if (status === 403 && code === "PERMISSION_DENIED") return true;
 	if (status === 400 && code === "ORGANIZATION_REQUIRED") return true;
 	if (status === 404 && code === "ORGANIZATION_NOT_FOUND") return true;
+	if (status === 503 && (code === "AI_NOT_CONFIGURED" || code === "AI_DISABLED")) {
+		return true;
+	}
 	return false;
 }
 

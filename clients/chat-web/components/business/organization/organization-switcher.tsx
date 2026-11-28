@@ -16,6 +16,7 @@ import {
 } from "@/lib/hooks/use-organizations";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import { useLogoutAndRedirect } from "@/lib/query/hooks/use-auth";
+import { formatOrganizationRole } from "./role-select";
 import { cn } from "@/lib/utils";
 
 /**
@@ -101,8 +102,11 @@ export function OrganizationSwitcher() {
 								}}
 							>
 								<span className="min-w-0 flex-1 truncate">{org.name}</span>
-								<span className="shrink-0 text-xs text-muted-foreground">
-									{org.role}
+								<span
+									className="shrink-0 text-xs text-muted-foreground"
+									data-role={org.role}
+								>
+									{formatOrganizationRole(org.role)}
 								</span>
 								{org.id === activeOrganizationId && (
 									<Check className="size-3.5 shrink-0 text-ink-900" aria-hidden />
@@ -171,8 +175,11 @@ export function OrganizationPicker() {
 									<span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
 										{org.name}
 									</span>
-									<span className="ml-3 shrink-0 text-xs text-muted-foreground">
-										{org.role}
+									<span
+										className="ml-3 shrink-0 text-xs text-muted-foreground"
+										data-role={org.role}
+									>
+										{formatOrganizationRole(org.role)}
 										{org.onboardingCompleted ? "" : " · 待建账"}
 									</span>
 								</button>

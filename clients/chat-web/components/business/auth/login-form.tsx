@@ -267,6 +267,7 @@ export function LoginForm() {
 
 					{mode === "password" ? (
 						<form
+							key="password"
 							onSubmit={handleSubmit(onPasswordSubmit)}
 							className="space-y-6"
 						>
@@ -283,7 +284,7 @@ export function LoginForm() {
 									autoComplete="email"
 									{...register("email")}
 									className="w-full rounded-lg border border-border px-4 py-2 focus:border-ink-900 focus:ring-2 focus:ring-ink-900/20"
-									placeholder="your@email.com"
+									placeholder="请输入邮箱地址"
 									disabled={isLoading}
 								/>
 								{errors.email && (
@@ -324,7 +325,7 @@ export function LoginForm() {
 							</button>
 						</form>
 					) : (
-						<form onSubmit={loginWithOtp} className="space-y-6">
+						<form key="otp" onSubmit={loginWithOtp} className="space-y-6">
 							<div>
 								<label
 									htmlFor="otpTarget"
@@ -344,7 +345,7 @@ export function LoginForm() {
 										setOtpCode("");
 									}}
 									className="w-full rounded-lg border border-border px-4 py-2 focus:border-ink-900 focus:ring-2 focus:ring-ink-900/20"
-									placeholder="your@email.com"
+									placeholder="请输入邮箱地址"
 									disabled={isLoading || isSendingOtp}
 								/>
 							</div>

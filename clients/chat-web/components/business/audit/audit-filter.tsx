@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { AuditLogsQuery } from "@/lib/api/organizations";
+import { formatAuditResultLabel } from "./audit-labels";
 
 /** 结果枚举（与后端 AUDIT_RESULTS 同源） */
 const RESULT_OPTIONS = ["", "SUCCESS", "DENIED", "FAILED"] as const;
@@ -84,15 +85,15 @@ export function AuditFilter({
 				onChange={(e) =>
 					setDraft((d) => ({ ...d, actorUserId: e.target.value }))
 				}
-				placeholder="操作者 userId"
-				aria-label="操作者 userId"
+				placeholder="操作者 ID"
+				aria-label="操作者 ID"
 				className="min-w-36 flex-1 rounded-lg border border-border px-2 py-1 text-xs"
 				data-testid="audit-filter-actor"
 			/>
 			<input
 				value={draft.action}
 				onChange={(e) => setDraft((d) => ({ ...d, action: e.target.value }))}
-				placeholder="动作（如 member.update）"
+				placeholder="动作编码（如 plan.create）"
 				aria-label="动作"
 				className="min-w-40 flex-1 rounded-lg border border-border px-2 py-1 text-xs"
 				data-testid="audit-filter-action"
@@ -110,7 +111,7 @@ export function AuditFilter({
 			>
 				{RESULT_OPTIONS.map((option) => (
 					<option key={option} value={option}>
-						{option === "" ? "全部结果" : option}
+						{option === "" ? "全部结果" : formatAuditResultLabel(option)}
 					</option>
 				))}
 			</select>

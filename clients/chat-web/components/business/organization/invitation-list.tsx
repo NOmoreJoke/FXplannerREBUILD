@@ -9,6 +9,7 @@ import {
 } from "@/lib/api/query-keys";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import { useCurrentOrganization } from "@/lib/hooks/use-organizations";
+import { formatOrganizationRole } from "./role-select";
 
 const STATUS_LABELS: Record<string, string> = {
 	OPEN: "待接受",
@@ -68,7 +69,12 @@ export function InvitationList() {
 					<span className="min-w-0 flex-1 truncate font-medium text-foreground">
 						{invitation.email}
 					</span>
-					<span className="text-xs text-muted-foreground">{invitation.role}</span>
+					<span
+						className="text-xs text-muted-foreground"
+						data-role={invitation.role}
+					>
+						{formatOrganizationRole(invitation.role)}
+					</span>
 					<span className="text-xs text-muted-foreground">
 						{invitation.invitedByName ?? "—"}
 					</span>

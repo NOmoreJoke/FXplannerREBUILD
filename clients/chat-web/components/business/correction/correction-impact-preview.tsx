@@ -9,6 +9,38 @@ import type { CorrectionPreview } from "@/lib/api/contract";
  * 展示逐字段变更、余额、资金来源、成本和拦截原因。
  */
 
+const CORRECTION_FIELD_LABELS: Record<string, string> = {
+	currencyCode: "币种",
+	principalAmount: "本金金额",
+	quantity: "到账数量",
+	feeAmount: "手续费",
+	totalCost: "交易总成本",
+	transactedAt: "交易日期",
+	planId: "关联计划",
+	amount: "金额",
+	rate: "采用汇率",
+	cost: "折算成本",
+	usedAt: "使用日期",
+};
+
+const RATE_SOURCE_LABELS: Record<string, string> = {
+	abc: "中国农业银行",
+	"er-api": "ExchangeRate-API 参考源",
+	frankfurter: "欧洲央行参考源（Frankfurter）",
+	"frankfurter-v2-reference": "欧洲央行参考源（Frankfurter）",
+	identity: "同币种恒等",
+};
+
+/** 将后端更正 diff 字段名映射为中文业务字段名（未登记字段回退原值） */
+export function formatCorrectionFieldLabel(field: string): string {
+	return CORRECTION_FIELD_LABELS[field] ?? field;
+}
+
+/** 将后端汇率源代号映射为中文来源名称（未登记代号回退原值） */
+export function formatRateSourceLabel(source: string): string {
+	return RATE_SOURCE_LABELS[source] ?? source;
+}
+
 export interface CorrectionImpactPreviewProps {
 	preview: CorrectionPreview;
 }
@@ -61,7 +93,9 @@ export function CorrectionImpactPreview({
 								key={item.field}
 								className="flex items-center justify-between px-4 py-2.5 text-sm"
 							>
-								<dt className="text-muted-foreground">{item.field}</dt>
+								<dt className="text-muted-foreground">
+									{formatCorrectionFieldLabel(item.field)}
+								</dt>
 								<dd
 									className={
 										hasBlockers
@@ -83,7 +117,7 @@ export function CorrectionImpactPreview({
 					<p className="mt-2 text-sm text-ink-600 tabular-nums">
 						{quote.rate}
 						{quote.rawRate !== `${quote.rate}00` && `（原始报价 ${quote.rawRate}）`}
-						{" · 来源 "}{quote.source}{" · "}
+						{" · 来源 "}{formatRateSourceLabel(quote.source)}{" · "}
 						<time dateTime={quote.observedAt}>
 							{new Date(quote.observedAt).toLocaleString("zh-CN", {
 								timeZone: "Asia/Shanghai",

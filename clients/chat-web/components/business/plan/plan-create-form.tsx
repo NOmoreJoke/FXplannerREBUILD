@@ -34,7 +34,7 @@ const PACE_CHOICES: ReadonlyArray<{
 	{
 		value: "conservative",
 		title: "安心 · 首批 50%",
-		hint: "先换一半锁定成本，剩余两批从容跟进",
+		hint: "前期多准备：按 50% / 30% / 20% 分批安排",
 	},
 	{
 		value: "balanced",
@@ -44,7 +44,7 @@ const PACE_CHOICES: ReadonlyArray<{
 	{
 		value: "aggressive",
 		title: "主动 · 首批 20%",
-		hint: "首批轻仓试探，后续逢低加码",
+		hint: "后期多准备：按 20% / 30% / 50% 分批安排（仅调整资金分布，不预测汇率）",
 	},
 ];
 
@@ -81,7 +81,7 @@ function FieldShell({
 			<Label htmlFor={htmlFor}>{label}</Label>
 			{children}
 			{error ? (
-				<p className="text-xs text-red-600" role="alert">
+				<p className="text-xs text-danger" role="alert">
 					{error}
 				</p>
 			) : hint ? (
@@ -181,7 +181,7 @@ export function PlanCreateForm({
 						label="提前准备天数"
 						htmlFor="plan-prep-lead-days"
 						error={getError("prepLeadDays")}
-						hint="用途日期前开始准备的天数（1~30）"
+						hint="在用途日期前提前备齐的天数（1~30 天）"
 					>
 						<Input
 							id="plan-prep-lead-days"

@@ -29,7 +29,7 @@ test("T-CORR-005 历史报价变动后须重新预览并确认初始持仓更正
 		const confirm = page.getByTestId("correction-confirm-button");
 		await preview.click();
 		await expect(page.getByRole("heading", { name: "采用的历史报价" })).toBeVisible();
-		await expect(page.getByText(/0\.21000000 · 来源 abc/)).toBeVisible();
+		await expect(page.getByText(/0\.21000000 · 来源 中国农业银行/)).toBeVisible();
 		await expect(confirm).toBeEnabled();
 
 		await fixture.replaceSellRate();
@@ -49,7 +49,7 @@ test("T-CORR-005 历史报价变动后须重新预览并确认初始持仓更正
 		expect(await fixture.readHolding()).toEqual({ currencyCode: "USD", cost: "7248.0000" });
 
 		await preview.click();
-		await expect(page.getByText(/0\.23000000 · 来源 abc/)).toBeVisible();
+		await expect(page.getByText(/0\.23000000 · 来源 中国农业银行/)).toBeVisible();
 		await expect(confirm).toBeEnabled();
 		const [applied] = await Promise.all([
 			page.waitForResponse(isCorrectionApply),

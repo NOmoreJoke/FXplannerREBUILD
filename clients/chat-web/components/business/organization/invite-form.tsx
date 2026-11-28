@@ -6,6 +6,7 @@ import { invitationsApi } from "@/lib/api/organizations";
 import type { components } from "@/lib/api/schema.gen";
 import { invalidateBusinessKey, queryKeys } from "@/lib/api/query-keys";
 import { useCurrentOrganization } from "@/lib/hooks/use-organizations";
+import { ROLE_LABELS } from "./role-select";
 
 type InvitableRole = components["schemas"]["CreateInvitationDto"]["role"];
 
@@ -15,13 +16,6 @@ const INVITABLE_ROLES = [
 	"OPERATOR",
 	"VIEWER",
 ] as const satisfies readonly InvitableRole[];
-
-const ROLE_LABELS: Record<string, string> = {
-	ADMIN: "管理员",
-	FINANCE: "财务",
-	OPERATOR: "操作员",
-	VIEWER: "查看者",
-};
 
 /**
  * 操作者可邀请的角色（与后端 canManage 同口径）：Owner 可邀全部可分配角色；

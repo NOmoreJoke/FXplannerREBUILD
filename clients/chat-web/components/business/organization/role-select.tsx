@@ -16,13 +16,18 @@ const ASSIGNABLE_ROLES = [
 	"VIEWER",
 ] as const satisfies readonly AssignableRole[];
 
-const ROLE_LABELS: Record<string, string> = {
+export const ROLE_LABELS: Record<string, string> = {
 	OWNER: "所有者",
 	ADMIN: "管理员",
 	FINANCE: "财务",
 	OPERATOR: "操作员",
 	VIEWER: "查看者",
 };
+
+/** 将组织角色枚举映射为中文展示名（未知角色安全回退原值） */
+export function formatOrganizationRole(role: string): string {
+	return ROLE_LABELS[role] ?? role;
+}
 
 /**
  * 操作者可把成员调整成哪些角色（与后端 canManage 的新角色侧同口径）：

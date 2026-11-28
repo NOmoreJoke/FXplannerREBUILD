@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { transactionsApi } from "@/lib/api/transactions";
 import { useActiveOrgId } from "@/lib/hooks/use-active-org";
 import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
+import { useCurrentOrganization } from "@/lib/hooks/use-organizations";
 
 /**
  * 交易详情页（changes/transaction-entry/技术方案.md §5.2）
@@ -25,6 +26,7 @@ export default function TransactionDetailPage() {
 	const params = useParams<{ id: string }>();
 	const id = params?.id;
 	const { can } = useOrganizationCapabilities();
+	const { data: currentOrg } = useCurrentOrganization();
 	// 组织作用域缓存键 + 未选组织不发业务请求（评审 R2-I07）
 	const orgId = useActiveOrgId();
 
@@ -90,7 +92,10 @@ export default function TransactionDetailPage() {
 					</Link>
 				) : null}
 			</header>
-			<TransactionDetail detail={query.data} />
+			<TransactionDetail
+				detail={query.data}
+				baseCurrency={currentOrg?.baseCurrency ?? null}
+			/>
 		</div>
 	);
 }
