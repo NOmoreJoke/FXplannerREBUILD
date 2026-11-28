@@ -11,7 +11,8 @@ const playfairDisplay = localFont({
 	weight: "400 900",
 	style: "normal",
 	display: "swap",
-	fallback: ["Songti SC", "STSong", "Noto Serif CJK SC", "serif"],
+	// 中文衬线按 OS 优雅降级，跨平台字重与兜底策略见 design-harness/foundations/typography.md
+	fallback: ["Songti SC", "STSong", "Source Han Serif SC", "Noto Serif CJK SC", "SimSun", "serif"],
 });
 
 export const metadata = {
