@@ -56,7 +56,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │  │  ├─ authorization/             # ToB R1：ActorContext、纯函数权限策略、组织上下文/权限/双锁 Guard 与白名单装饰器
 │  │  ├─ audit/                     # ToB R1：审计同事务 writer 与只读分页查询（无 update/delete 接口）
 │  │  ├─ account/                   # 账户与分配只读视图
-│  │  ├─ ai/                        # AI 助手（按 userId+organizationId 隔离会话、配额、公共汇率与组织只读/计划草稿工具、工具级实时鉴权与审计）
+│  │  ├─ ai/                        # AI 助手（按 userId+organizationId 隔离会话、配额、公共汇率、compliance/ 同源封杀词词库与组织只读/计划草稿工具、工具级实时鉴权与审计）
 │  │  ├─ correction/                # 更正与账本重放（FIFO）
 │  │  ├─ currency/                  # 币种清单下发
 │  │  ├─ data-request/              # 数据请求与双锁判定实现（个人账号锁 / 组织数据锁；导出/清空/注销）
@@ -100,7 +100,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 │     └─ playwright-report/         # HTML 报告
 │
 ├─ infra/compose/                   # Docker Compose + Dockerfile
-├─ scripts/                         # 工程脚本（init / test / worktree / check-structure / check-org-scope / lint-observe）+ __tests__/（bun test：工具链与跨包一致性对照）
+├─ scripts/                         # 工程脚本（init / test / worktree / check-structure / check-org-scope / check-compliance-copy / lint-observe）+ __tests__/（bun test：工具链与跨包一致性对照）
 ├─ design-harness/                  # 前端 Design Harness 四层设计底座（foundations / intelligence / components / commands；语义色、知禾语气与存折手账感规范真源）
 ├─ changes/                         # ⛔ 变更文档唯一位置（需求/方案/验收），按功能名称分目录
 │  ├─ product-harness-agent/        # 产品即 Harness × 知禾 Agent × 双模存折工作台需求与技术方案
@@ -143,7 +143,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | 单元测试         | 与源码同目录`<被测文件>.spec.ts`                                          |
 | E2E 用例         | `e2e/modules/<编号>-<模块>.spec.ts`                                       |
 | ToB 组织工作台与 Agent 规划 | `changes/tob-agent-workspace/` |
-| 产品即 Harness × 知禾 Agent × 双模工作台 | 变更文档 `changes/product-harness-agent/`；前端设计底座 `design-harness/{foundations,intelligence,components,commands}/`；自托管拉丁衬线子集字体与许可证 `clients/chat-web/public/fonts/`（含 `OFL.txt`） |
+| 产品即 Harness × 知禾 Agent × 双模工作台 | 变更文档 `changes/product-harness-agent/`；前端设计底座 `design-harness/{foundations,intelligence,components,commands}/`；自托管拉丁衬线子集字体与许可证 `clients/chat-web/public/fonts/`（含 `OFL.txt`）；同源合规封杀词与静态门禁 `services/chat/src/ai/compliance/` + `scripts/check-compliance-copy.ts` |
 | ToB R2 组织 Agent 工具与草稿闭环 | 工具目录 `services/chat/src/ai/tools/`（经 `tool-guard.ts` 统一实时校验双锁、`Membership`、独立开关 `AI_ORG_TOOLS_ENABLED`、`can(freshRole, permission)` 并写 `AuditLog(actorType="AGENT", agentRunId)`）；前端草稿卡 `clients/chat-web/components/business/chat/plan-draft-card.tsx`（经 `components/business/chat/index.ts` 导出）；组织 Agent 授权集成测试 `services/chat/test/integration/agent-tool-authorization.spec.ts`；组织 Agent E2E `e2e/modules/16-agent-organization.spec.ts` |
 | ToB R1 后端新模块（组织/成员/邀请/设置、权限策略与 Guard、审计） | `services/chat/src/{organization,authorization,audit}/`，在 `app.module.ts` 唯一注册；`authorization/` 仅纯函数与类型（IO 在 Guard/Service 层） |
 | 双域数据请求与双锁守卫 | `services/chat/src/data-request/`：个人域 `/api/data-requests/*`（`DataRequestController`，仅 `JwtAuthGuard`）+ 组织域 `/api/organizations/current/data-requests/*`（`OrganizationDataRequestController`，类级 `@SkipOrganizationLock()`，`JwtAuthGuard → OrganizationContextGuard → OrganizationLockGuard → PermissionGuard`）；`PersonalAccountLockGuard`（全局 `APP_GUARD`，未挂组织锁守卫的路由走个人域单查）/ `OrganizationLockGuard`（**横切守卫，契约与实现分离**：守卫 + `ORGANIZATION_LOCK_RESOLVER` 契约在 `services/chat/src/authorization/guards/organization-lock.guard.ts`，真实判定在 `data-request/organization-lock-resolver.ts`，经全局 `DataRequestModule` 导出后注入——`authorization/` 与 `audit/` 均禁止引入业务记账模块）；双锁白名单装饰器统一在 `services/chat/src/authorization/guards/data-lock.decorators.ts` |
@@ -178,7 +178,7 @@ Bun + Turbo + Next.js + NestJS + Prisma + Playwright + Vitest
 | 汇率缓存迁移完成记录与行归属 DDL | `services/chat/prisma/migrations/20261120090000_rate_cache_migration_receipt/` |
 | 汇率回源方向标记 DDL | `services/chat/prisma/migrations/20261120091000_rate_cache_canonical_write/` |
 | 验证与防回归规范 | `docs/VERIFY.md`（验证分级、属性/差分测试、Diff 触发检查）、`docs/FEATURE-MAP.md`（用户视角功能地图） |
-| 确定性静态护栏 | `eslint.config.mjs`（架构边界/禁定时器/禁新裸写 `useEffect`：业务组件白名单已清零，受控 DOM 副作用封装在 `clients/chat-web/hooks/`/money 零 IO）、`scripts/lint-observe.ts --enforce`（Goal #5 升级为全包 `0 error, 0 warning` 硬阻断，覆盖 `clients/chat-web` 与 `services/chat`）、`scripts/check-structure.ts`（目录红线 / 子包 README / OpenAPI 契约头 / AGENTS.md 路径真源 / 自托管字体许可证守卫）、`scripts/check-org-scope.ts`（`check:org-scope`：12 业务模块 `ts-morph` 租户隔离静态守卫） |
+| 确定性静态护栏 | `eslint.config.mjs`（架构边界/禁定时器/禁新裸写 `useEffect`：业务组件白名单已清零，受控 DOM 副作用封装在 `clients/chat-web/hooks/`/money 零 IO）、`scripts/lint-observe.ts --enforce`（Goal #5 升级为全包 `0 error, 0 warning` 硬阻断，覆盖 `clients/chat-web` 与 `services/chat`）、`scripts/check-structure.ts`（目录红线 / 子包 README / OpenAPI 契约头 / AGENTS.md 路径真源 / 自托管字体许可证守卫）、`scripts/check-org-scope.ts`（`check:org-scope`：12 业务模块 `ts-morph` 租户隔离静态守卫）、`scripts/check-compliance-copy.ts`（`check:compliance-copy`：同源合规封杀词静态文案门禁） |
 | 前端 / 服务端脱敏规则对照 | `clients/chat-web/lib/dev-log/mask.ts` 与 `packages/dev-log-server/src/mask.ts` 的邀请规则手工同步；`scripts/__tests__/mask-parity.spec.ts` 用同一组向量跑两份实现，改一处必须让对照用例通过 |
 | 迭代路线与工作流手册 | `docs/ITERATION-REFACTOR-ROADMAP-20261119.md`、`docs/VIBE-CODING-PLAYBOOK.md` |
 | 跨会话交接文档   | `docs/handoff/`（夜间批次产出：OVERNIGHT-* / 接力目标提示词：GOAL-* / 状态快照；需求/方案/验收仍归 `changes/`） |

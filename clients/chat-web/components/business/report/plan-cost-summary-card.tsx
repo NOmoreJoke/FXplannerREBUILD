@@ -212,7 +212,7 @@ export function PlanCostSummaryCard({
 						className="mt-4 flex items-center justify-between rounded-xl border border-dashed border-border px-4 py-3"
 					>
 						<span className="text-xs font-semibold text-foreground">
-							收益比较
+							收益比较{/* compliance-allow: 需求 5.4 收益比较占位标题（算法定稿前不出数值） */}
 						</span>
 						<span className="text-xs text-muted-foreground">
 							{YIELD_TEXT[yieldSection.displayType]}
