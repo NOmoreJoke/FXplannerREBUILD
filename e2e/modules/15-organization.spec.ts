@@ -540,7 +540,7 @@ test.describe("【GWT-1..5】默认组织 / 新建隔离 / 跨页切换 / 延迟
 		await expect(page.getByTestId("organization-switcher-single")).toContainText(
 			defaultOrg!.name,
 		);
-		await expect(page.getByTestId("organization-form")).toContainText("OWNER");
+		await expect(page.getByTestId("organization-form")).toContainText("所有者");
 		await expect(page.getByTestId("organization-form")).toContainText(
 			"已建账（本位币 CNY）",
 		);
@@ -1199,7 +1199,7 @@ test.describe("【GWT-6..14】邀请边界 / 五角色权限 / 跨组织隔离 /
 		expect(viewerPlanRes.json.code).toBe("PERMISSION_DENIED");
 
 		await openProtected(page, "/organization/audit", owner.accessToken);
-		await expect(page.getByTestId("audit-log-table")).toContainText("DENIED");
+		await expect(page.getByTestId("audit-log-table")).toContainText("已拒绝");
 		await expect(page.getByTestId("audit-log-table")).toContainText(
 			"permission.denied",
 		);
@@ -1519,7 +1519,7 @@ test.describe("【GWT-6..14】邀请边界 / 五角色权限 / 跨组织隔离 /
 			await pickOrganization(newOwnerPage, orgName);
 			await expect(
 				newOwnerPage.getByTestId("organization-form"),
-			).toContainText("OWNER");
+			).toContainText("所有者");
 			await newOwnerPage.goto(`${BASE_URL}/organization/members`);
 			await expect(
 				newOwnerPage
@@ -1749,7 +1749,7 @@ test.describe("【GWT-15..18】共享账本一致性 / 并发更正冲突 / 使�
 			.filter({ hasText: "correction.apply" })
 			.first();
 		await expect(auditRow).toContainText(finance.userId.slice(0, 8));
-		await expect(auditRow).toContainText("SUCCESS");
+		await expect(auditRow).toContainText("成功");
 	});
 
 	test("GWT-18: 双成员个人 ReminderRead 互不清除——Owner 已读后 Finance 仍未读", async ({
@@ -2088,7 +2088,7 @@ test.describe("【GWT-26..30】组织清空隔离 / 最后 Owner 注销 / 导出
 		}
 		await expect(table).toContainText(owner.userId.slice(0, 8));
 		await expect(table).toContainText(finance.userId.slice(0, 8));
-		await expect(table).toContainText("SUCCESS");
+		await expect(table).toContainText("成功");
 
 		// UI 无任何修改/删除按钮
 		await expect(

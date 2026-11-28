@@ -4,6 +4,7 @@ import { use, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invitationsApi } from "@/lib/api/organizations";
+import { formatOrganizationRole } from "@/components/business/organization";
 import { queryKeys } from "@/lib/api/query-keys";
 import { getToken } from "@/lib/auth/token";
 import { useSwitchOrganization } from "@/lib/hooks/use-organizations";
@@ -116,7 +117,9 @@ export default function InvitationTokenPage({
 								</div>
 								<div className="flex justify-between gap-3">
 									<dt className="text-muted-foreground">角色</dt>
-									<dd className="text-foreground">{summary.role}</dd>
+									<dd className="text-foreground" data-role={summary.role}>
+										{formatOrganizationRole(summary.role)}
+									</dd>
 								</div>
 								<div className="flex justify-between gap-3">
 									<dt className="text-muted-foreground">邀请人</dt>

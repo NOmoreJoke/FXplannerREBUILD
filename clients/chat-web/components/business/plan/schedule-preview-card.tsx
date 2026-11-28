@@ -89,17 +89,21 @@ export function SchedulePreviewCard({
 	targetCurrency,
 }: SchedulePreviewCardProps) {
 	const hasResult = installments.length > 0;
+	const summaryCopy =
+		installments.length >= 3
+			? `按所选节奏拆分为 ${installments.length} 批，以下预览不落库，实际以创建后的计划为准。`
+			: hasResult
+				? `因可用准备日期不足 3 天，已按规则自动缩减为 ${installments.length} 批；以下预览不落库，实际以创建后的计划为准。`
+				: "按所选节奏生成分批预览（默认最多 3 批，日期较近时自动缩批），以下预览不落库。";
 
 	return (
 		<section className="rounded-2xl border border-border bg-white p-6">
 			<h2 className="text-base font-bold text-foreground">分批排期预览</h2>
-			<p className="mt-1 text-xs text-muted-foreground">
-				按所选节奏拆分为 3 批，以下预览不落库，实际以创建后的计划为准。
-			</p>
+			<p className="mt-1 text-xs text-muted-foreground">{summaryCopy}</p>
 
 			{previewError ? (
 				<p
-					className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600"
+					className="mt-4 rounded-lg border border-danger bg-danger px-3 py-2 text-sm text-danger"
 					role="alert"
 				>
 					{previewError}
@@ -120,7 +124,7 @@ export function SchedulePreviewCard({
 				</div>
 			) : (
 				<p className="mt-4 text-sm text-muted-foreground">
-					填写完整目标信息后，将自动生成 3 批排期预览。
+					填写完整目标信息后，将自动生成分批排期预览。
 				</p>
 			)}
 		</section>

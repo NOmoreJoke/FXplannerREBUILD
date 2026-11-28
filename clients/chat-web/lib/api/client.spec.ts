@@ -329,8 +329,8 @@ describe("apiClient & isExpectedControlFlowApiError", () => {
 	});
 });
 
-describe("isExpectedControlFlowApiError（六种预期控制流，状态码与错误码须同时匹配）", () => {
-	it("完整包含：409 未建账 / 403 双锁 / 403 权限不足 / 400 缺组织 / 404 组织不可达", async () => {
+describe("isExpectedControlFlowApiError（预期控制流，状态码与错误码须同时匹配）", () => {
+	it("完整包含：409 未建账 / 403 双锁 / 403 权限不足 / 400 缺组织 / 404 组织不可达 / 503 AI 未配置或关闭", async () => {
 		const { isExpectedControlFlowApiError } = await import("@/lib/api/client");
 
 		expect(isExpectedControlFlowApiError(409, "ONBOARDING_NOT_COMPLETED")).toBe(true);
@@ -339,6 +339,8 @@ describe("isExpectedControlFlowApiError（六种预期控制流，状态码与�
 		expect(isExpectedControlFlowApiError(403, "PERMISSION_DENIED")).toBe(true);
 		expect(isExpectedControlFlowApiError(400, "ORGANIZATION_REQUIRED")).toBe(true);
 		expect(isExpectedControlFlowApiError(404, "ORGANIZATION_NOT_FOUND")).toBe(true);
+		expect(isExpectedControlFlowApiError(503, "AI_NOT_CONFIGURED")).toBe(true);
+		expect(isExpectedControlFlowApiError(503, "AI_DISABLED")).toBe(true);
 	});
 
 	it.each([
@@ -346,6 +348,8 @@ describe("isExpectedControlFlowApiError（六种预期控制流，状态码与�
 		[500, "PERMISSION_DENIED"],
 		[403, "ORGANIZATION_REQUIRED"],
 		[400, "ORGANIZATION_NOT_FOUND"],
+		[500, "AI_NOT_CONFIGURED"],
+		[503, "SERVICE_UNAVAILABLE"],
 		[403, undefined],
 		[409, "LAST_OWNER_REQUIRED"],
 		[409, "DATA_REQUEST_CONFLICT"],

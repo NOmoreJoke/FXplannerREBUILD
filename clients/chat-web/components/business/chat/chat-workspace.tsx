@@ -1,7 +1,8 @@
 "use client";
 
-import { Building2 } from "lucide-react";
+import { Building2, Info } from "lucide-react";
 import { PageLoading } from "@/components/base";
+import { ApiError } from "@/lib/api/client";
 import { ChatInput } from "./chat-input";
 import { ConversationList } from "./conversation-list";
 import { MessageList } from "./message-list";
@@ -14,6 +15,16 @@ import { useModels } from "@/lib/hooks/use-models";
 import { useOrganizationCapabilities } from "@/lib/hooks/use-organization-capabilities";
 import { useCurrentOrganization } from "@/lib/hooks/use-organizations";
 import { useChatStore } from "@/lib/stores/chat-store";
+
+function resolveAiServiceUnavailableCode(
+	error: unknown,
+): "AI_NOT_CONFIGURED" | "AI_DISABLED" | null {
+	if (!(error instanceof ApiError) || error.status !== 503) return null;
+	if (error.code === "AI_NOT_CONFIGURED" || error.code === "AI_DISABLED") {
+		return error.code;
+	}
+	return null;
+}
 
 /**
  * 聊天工作台（ai-assistant 方案 §3.2/§5.2 + ToB R2 §10.2）：
@@ -28,7 +39,13 @@ export function ChatWorkspace() {
 	const streamingIds = useChatStore((s) => s.streamingIds);
 	const { data: currentOrg, isError: orgError } = useCurrentOrganization();
 	const { can, isLoading: capabilitiesLoading } = useOrganizationCapabilities();
-	const { data: modelsData } = useModels();
+	const modelsQuery = useModels();
+	const modelsData = modelsQuery.data;
+
+	const unavailableCode =
+		resolveAiServiceUnavailableCode(conversationsQuery.error) ??
+		resolveAiServiceUnavailableCode(modelsQuery.error);
+	const isAiUnavailable = unavailableCode !== null;
 
 	const handleDelete = (id: string) => {
 		deleteMutation.mutate(id, {
@@ -53,19 +70,23 @@ export function ChatWorkspace() {
 					: null;
 
 	const orgToolsStatusText =
-		modelsData?.orgToolsEnabled === false
-			? "组织工具已临时关闭（仅公共汇率可用）"
-			: orgError
-				? "组织上下文加载失败"
-				: !currentOrg || capabilitiesLoading
-					? "组织工具检查中…"
-					: !currentOrg.onboardingCompleted
-						? "当前组织未建账（可查公共汇率）"
-						: can("agent.draft")
-							? "组织只读与草稿工具已就绪"
-							: can("agent.business_read")
-								? "组织只读工具已就绪（无草稿保存权限）"
-								: "当前角色仅可用公共汇率查询";
+		unavailableCode === "AI_DISABLED"
+			? "AI 助手暂未开放"
+			: unavailableCode === "AI_NOT_CONFIGURED"
+				? "AI 服务待配置"
+				: modelsData?.orgToolsEnabled === false
+					? "组织工具已临时关闭（仅公共汇率可用）"
+					: orgError
+						? "组织上下文加载失败"
+						: !currentOrg || capabilitiesLoading
+							? "组织工具检查中…"
+							: !currentOrg.onboardingCompleted
+								? "当前组织未建账（可查公共汇率）"
+								: can("agent.draft")
+									? "组织只读与草稿工具已就绪"
+									: can("agent.business_read")
+										? "组织只读工具已就绪（无草稿保存权限）"
+										: "当前角色仅可用公共汇率查询";
 
 	return (
 		<div data-testid="chat-page" className="flex h-[calc(100dvh-3.5rem)]">
@@ -109,7 +130,31 @@ export function ChatWorkspace() {
 					</div>
 				</header>
 
-				{chat.isLoadingMessages ? (
+				{isAiUnavailable ? (
+					<div className="flex flex-1 items-center justify-center p-8">
+						<div
+							data-testid="chat-service-unavailable"
+							className="max-w-md rounded-2xl border border-neutral-note bg-surface-paper p-6 text-left shadow-xs"
+						>
+							<div className="flex items-start gap-3">
+								<Info
+									className="mt-0.5 size-5 shrink-0 text-ink-600"
+									aria-hidden="true"
+								/>
+								<div className="space-y-2">
+									<h2 className="text-sm font-semibold text-foreground">
+										{unavailableCode === "AI_DISABLED"
+											? "AI 助手功能暂未开放"
+											: "当前环境尚未配置 AI 模型服务"}
+									</h2>
+									<p className="text-xs leading-relaxed text-ink-600">
+										你的外汇账户、换汇计划与账本记录均不受任何影响，可照常在左侧菜单使用全部账本功能；配置服务端模型密钥后刷新即可启用对话。
+									</p>
+								</div>
+							</div>
+						</div>
+					</div>
+				) : chat.isLoadingMessages ? (
 					<PageLoading />
 				) : (
 					<MessageList
@@ -122,11 +167,11 @@ export function ChatWorkspace() {
 					/>
 				)}
 
-				{chat.error !== null && (
+				{!isAiUnavailable && chat.error !== null && (
 					<div
 						data-testid="chat-error"
 						role="alert"
-						className="mx-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700"
+						className="mx-4 rounded-lg border border-danger bg-danger px-4 py-2.5 text-sm text-danger"
 					>
 						{chat.error}
 					</div>
@@ -134,6 +179,8 @@ export function ChatWorkspace() {
 
 				<ChatInput
 					streaming={chat.anyStreaming}
+					disabled={isAiUnavailable}
+					disabledPlaceholder="AI 模型服务未就绪，暂无法发送消息"
 					onSend={(content) => void chat.send(content)}
 					onStop={chat.stop}
 				/>

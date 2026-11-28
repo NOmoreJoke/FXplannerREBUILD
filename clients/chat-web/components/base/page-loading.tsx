@@ -23,8 +23,8 @@ export function PageLoading({
       role="status"
       aria-live="polite"
     >
-      <Spinner className="size-10 text-blue-600" />
-      {text && <p className="text-sm text-gray-500">{text}</p>}
+      <Spinner className="size-10 text-ink-600" />
+      {text && <p className="text-sm text-muted-foreground">{text}</p>}
     </div>
   );
 }

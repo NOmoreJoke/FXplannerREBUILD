@@ -6,6 +6,7 @@ import { useCurrentOrganization } from "@/lib/hooks/use-organizations";
 import { organizationsApi } from "@/lib/api/organizations";
 import { invalidateBusinessKey, queryKeys } from "@/lib/api/query-keys";
 import { PageLoading } from "@/components/base";
+import { formatOrganizationRole } from "./role-select";
 
 /**
  * 组织信息与改名表单（需求 ORG-01.3/ORG-03；W21）：
@@ -105,7 +106,9 @@ export function OrganizationForm() {
 			<dl className="grid grid-cols-2 gap-x-4 gap-y-2 border-t border-border pt-3 text-sm">
 				<div>
 					<dt className="text-xs text-muted-foreground">我的角色</dt>
-					<dd className="text-foreground">{current.role}</dd>
+					<dd className="text-foreground" data-role={current.role}>
+						{formatOrganizationRole(current.role)}
+					</dd>
 				</div>
 				<div>
 					<dt className="text-xs text-muted-foreground">建账状态</dt>

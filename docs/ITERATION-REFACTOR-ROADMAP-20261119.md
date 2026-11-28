@@ -141,4 +141,4 @@ Phase 4 (ToB R2: 组织只读 Agent 工具 + 草稿人工确认闭环)
 1. **P7 组织只读 Agent**：`AiConversation` 绑定 `organizationId`；工具工厂闭包注入不可被模型修改的 `ActorContext`（工具入参 zod schema 禁止出现 `userId`/`organizationId`/`role`）；每次工具调用前实时重查 `Membership` 与权限并写 `AuditLog`；上线 4 个只读工具 + 独立 AI 降级开关；补 Prompt Injection 与流中途移除成员集成测试。
 2. **P8 计划草稿与人工确认闭环**：新增只读 `draft_fx_plan` 工具（禁止模型直接调 `create_plan`）；草稿确认页复用 `/plans/schedule-preview` 与 `POST /plans` 实时重算。
 
-**明确后置（Defer，不挡个人版与 ToB R1/R2）**：i18n、单计划 PDF 直接下载、doc 12 收益比较数值、修改计划日期（功能 29）、电商订单实时同步、收款卖出账本、真实换汇执行与 SSO。
+**明确后置（Defer，不挡个人版与 ToB R1/R2）**：i18n、单计划 PDF 直接下载、doc 12 收益比较数值、修改计划日期（功能 29）、电商订单实时同步、收款卖出账本、真实换汇执行与 SSO；以及 2026-11-28 拍板确认后置的「设置内变更本位币与停旧建新状态机（原 `SM05` / `STOPPED`，现阶段维持建账后锁定）」与「独立静态 `/terms`、`/privacy` 法务正文页（原 `WEB-03`，待正式运营主体信息落定后补齐，现阶段保持登录/注册勾选门槛）」。
