@@ -116,4 +116,30 @@ describe('checkRepositoryStructure', () => {
     });
     expect(validErrors).toEqual([]);
   });
+
+  it('allows gitignored .env.local references in CI checkouts while still rejecting missing .env.example', () => {
+    const root = createTempRepoFixture();
+    const baseTree = [
+      '```',
+      '├─ services/chat/',
+      '│  └─ src/',
+      '│     └─ auth/',
+      '├─ packages/money/',
+      '├─ scripts/                         # 工程脚本（check-structure）',
+      '```',
+      '',
+    ].join('\n');
+
+    const withLocalEnvRef = `${baseTree}本地环境变量见 \`services/chat/.env.local\`。\n`;
+    expect(checkRepositoryStructure({ rootDir: root, agentsMdContent: withLocalEnvRef })).toEqual(
+      [],
+    );
+
+    const withMissingExampleRef = `${baseTree}示例环境变量见 \`services/chat/.env.example\`。\n`;
+    const missingExampleErrors = checkRepositoryStructure({
+      rootDir: root,
+      agentsMdContent: withMissingExampleRef,
+    });
+    expect(missingExampleErrors.some((e) => e.includes('services/chat/.env.example'))).toBe(true);
+  });
 });

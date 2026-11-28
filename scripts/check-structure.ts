@@ -13,6 +13,7 @@ const BACKTICK_REPO_PATH_PATTERN =
   /`((?:clients|services|packages|scripts|e2e|design-harness|changes|docs|infra)\/[^`\s]+)`/g;
 const LEGACY_DOC_ONLY_TREE_PATHS = new Set<string>(['clients/chat-web/app/(protected)/projects']);
 const LEGACY_DOC_ONLY_SCRIPT_TOKENS = new Set<string>(['init']);
+const GITIGNORED_ENV_PATH_PATTERN = /(?:^|\/)\.env(?:\.(?!example$)[^/]+)?$/;
 
 function existsInRoot(rootDir: string, relPath: string): boolean {
   const normalized = relPath.replace(/\/+$/, '');
@@ -160,6 +161,7 @@ function checkAgentsMdTruthSource(rootDir: string, agentsMd: string, errors: str
       if (relPath.includes('<')) continue;
       if (relPath === 'e2e/test-results' || relPath.startsWith('e2e/test-results/')) continue;
       if (LEGACY_DOC_ONLY_TREE_PATHS.has(relPath)) continue;
+      if (GITIGNORED_ENV_PATH_PATTERN.test(relPath)) continue;
 
       if (!existsInRoot(rootDir, relPath)) {
         errors.push(
@@ -224,6 +226,7 @@ function checkAgentsMdTruthSource(rootDir: string, agentsMd: string, errors: str
         if (!cleanPath || /[*<…$]/.test(cleanPath)) continue;
         if (cleanPath === 'e2e/test-results' || cleanPath.startsWith('e2e/test-results/')) continue;
         if (LEGACY_DOC_ONLY_TREE_PATHS.has(cleanPath)) continue;
+        if (GITIGNORED_ENV_PATH_PATTERN.test(cleanPath)) continue;
 
         if (!existsInRoot(rootDir, cleanPath)) {
           errors.push(
