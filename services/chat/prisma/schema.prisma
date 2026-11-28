@@ -34,6 +34,9 @@ model User {
   actedPlanChangeLogs    PlanChangeLog[] @relation("PlanChangeLogActor")
   // AI 会话仍是个人所有（会话所有者），随个人清理级联
   aiConversations AiConversation[]
+  // 知禾 Agent 提案（W40：个人注销零级联红线——可空且 ON DELETE SET NULL）
+  createdAgentProposals   AgentProposal[] @relation("AgentProposalCreatedBy")
+  confirmedAgentProposals AgentProposal[] @relation("AgentProposalConfirmedBy")
   // 数据权利请求的发起人（可空：用户注销后保留请求记录，ON DELETE SET NULL）
   requesterDataRequests DataRequest[] @relation("DataRequestRequester")
 
@@ -70,6 +73,9 @@ model Organization {
   reminders       Reminder[]
   // AI 会话随组织删除级联清理
   aiConversations AiConversation[]
+  // 账本修订号与 Agent 提案随组织删除级联清理（CLEAR 时单调保留 ledger_revisions）
+  ledgerRevisions LedgerRevision[]
+  agentProposals  AgentProposal[]
 
   @@map("organizations")
 }
@@ -579,9 +585,10 @@ model AiConversation {
   lastMessageAt  DateTime     @default(now()) @map("last_message_at")
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @updatedAt @map("updated_at")
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   messages       AiMessage[]
+  agentProposals AgentProposal[]
 
   @@index([userId, updatedAt(sort: Desc)], map: "idx_user_updated")
   @@index([userId, organizationId, updatedAt(sort: Desc)])
@@ -592,17 +599,71 @@ model AiConversation {
 
 /// AI 助手消息（role："user" | "assistant"；助手消息只在流式成功后落库，无 status 列）
 model AiMessage {
-  id             String         @id @default(cuid())
-  conversationId String         @map("conversation_id")
-  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  id             String          @id @default(cuid())
+  conversationId String          @map("conversation_id")
+  conversation   AiConversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   role           String
-  content        String         @db.Text
+  content        String          @db.Text
   /// assistant 消息所用的白名单 key（如 "gpt-4.1-mini"，ai-model-whitelist 技术方案 §3.2）；user 消息为 NULL，存量行为 NULL
   model          String?
   /// ToB R2（P8）：assistant 调用 draft_fx_plan 生成的结构化计划草稿（仅建议，未保存）
-  planDraft      Json?          @map("plan_draft")
-  createdAt      DateTime       @default(now()) @map("created_at")
+  planDraft      Json?           @map("plan_draft")
+  /// Stage 1（W40/W42）：消息落库时冻结的槽位快照 { [slotKey]: ResolvedSlot }，历史回看只读此列
+  resolvedSlots  Json?           @map("resolved_slots")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  agentProposals AgentProposal[]
 
   @@index([conversationId, createdAt], map: "idx_conversation_created")
   @@map("ai_messages")
+}
+
+/// 组织×币种单调账本修订号（Stage 1 W40：6+1 张账本表语句级触发器自动递增，CLEAR 不重置）
+model LedgerRevision {
+  organizationId String       @map("organization_id")
+  currencyCode   String       @map("currency_code")
+  revision       BigInt       @default(1)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, currencyCode])
+  @@map("ledger_revisions")
+}
+
+/// 知禾 Agent 账本提案（Stage 1 W40：8 态生命周期，绝不越过人类确认直接写入账本）
+/// 个人注销零级联红线：createdBy / confirmedBy / conversation / message 全部可空且 ON DELETE SET NULL
+model AgentProposal {
+  id                  String          @id @default(cuid())
+  organizationId      String          @map("organization_id")
+  conversationId      String?         @map("conversation_id")
+  messageId           String?         @map("message_id")
+  agentRunId          String?         @map("agent_run_id")
+  createdById         String?         @map("created_by_id")
+  confirmedById       String?         @map("confirmed_by_id")
+  /// PLAN_CREATE | PLAN_ADJUST | TX_BUY | USAGE_RECORD | CORRECTION_APPLY
+  kind                String
+  /// PENDING | STALE | CONFIRMED | DISMISSED | EXPIRED | SUPERSEDED | INVALIDATED | LEGACY
+  status              String          @default("PENDING")
+  invalidReason       String?         @map("invalid_reason")
+  supersedeKey        String?         @map("supersede_key")
+  inputPayload        Json            @map("input_payload")
+  previewSnapshot     Json            @map("preview_snapshot")
+  baseRevisions       Json            @map("base_revisions")
+  targetVersion       Int?            @map("target_version")
+  quoteAt             DateTime?       @map("quote_at") @db.Timestamptz(3)
+  expiresAt           DateTime        @map("expires_at") @db.Timestamptz(3)
+  committedTargetType String?         @map("committed_target_type")
+  committedTargetId   String?         @map("committed_target_id")
+  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  resolvedAt          DateTime?       @map("resolved_at") @db.Timestamptz(3)
+  organization        Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation        AiConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  message             AiMessage?      @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  createdBy           User?           @relation("AgentProposalCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  confirmedBy         User?           @relation("AgentProposalConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdById, status, createdAt(sort: Desc)])
+  @@index([organizationId, conversationId, createdAt(sort: Desc)])
+  @@index([organizationId, supersedeKey, status])
+  @@index([messageId])
+  @@map("agent_proposals")
 }
